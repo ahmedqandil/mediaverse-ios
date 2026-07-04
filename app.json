@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "Mediaverse",
+    "slug": "mediaverse",
+    "version": "1.0.0",
+    "scheme": "mediaverse",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0a0a0f",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a0f"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "bundleIdentifier": "com.mediaverse.app",
+      "supportsTablet": true,
+      "infoPlist": {
+        "UIBackgroundModes": ["audio", "fetch"],
+        "NSCameraUsageDescription": "Mediaverse uses the camera for profile photos.",
+        "NSPhotoLibraryUsageDescription": "Mediaverse uses photos for uploads."
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-video",
+      [
+        "expo-notifications",
+        {
+          "color": "#00e676"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "apiBaseUrl": "https://your-production-domain.com"
+    }
+  }
+}
