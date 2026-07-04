@@ -54,6 +54,7 @@ export default function AppLayout() {
       />
       {/* Hidden routes — not tabs */}
       <Tabs.Screen name="watch/[id]"                         options={{ href: null }} />
+      <Tabs.Screen name="watch/episode/[id]"                 options={{ href: null }} />
       <Tabs.Screen name="backstage/network/[id]/index"       options={{ href: null }} />
       <Tabs.Screen name="backstage/network/[id]/members"     options={{ href: null }} />
       <Tabs.Screen name="backstage/network/[id]/revenue"     options={{ href: null }} />

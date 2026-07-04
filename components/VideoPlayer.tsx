@@ -1,5 +1,5 @@
 /**
- * Native video player with custom controls, HLS, progress bar, and Like Moment.
+ * Native video player with custom controls, seek bar, Like Moment, and resume.
  * Uses expo-video (VideoView + useVideoPlayer).
  */
 import { useRef, useState, useCallback, useEffect } from 'react';
@@ -13,35 +13,40 @@ import { C } from '@/lib/constants';
 const { width: SW } = Dimensions.get('window');
 
 interface Props {
-  src:            string;
-  poster?:        string;
-  autoPlay?:      boolean;
-  style?:         ViewStyle;
-  onEnded?:       () => void;
-  onTimeUpdate?:  (current: number, duration: number) => void;
-  onLikeMoment?:  (sec: number) => void;
+  src:               string;
+  poster?:           string;
+  autoPlay?:         boolean;
+  initialTime?:      number;  // seek to this position on load (for resume)
+  style?:            ViewStyle;
+  onEnded?:          () => void;
+  onTimeUpdate?:     (current: number, duration: number) => void;
+  onLikeMoment?:     (sec: number) => void;
+  onNext?:           () => void;  // navigate to next video/episode
   userLikedSeconds?: number[];
 }
 
 function fmt(s: number) {
   if (!isFinite(s) || s < 0) return '0:00';
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
+  const h   = Math.floor(s / 3600);
+  const m   = Math.floor((s % 3600) / 60);
   const sec = Math.floor(s % 60);
   if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
   return `${m}:${String(sec).padStart(2, '0')}`;
 }
 
 export function VideoPlayer({
-  src, autoPlay = true, style,
-  onEnded, onTimeUpdate, onLikeMoment, userLikedSeconds = [],
+  src, autoPlay = true, initialTime = 0, style,
+  onEnded, onTimeUpdate, onLikeMoment, onNext, userLikedSeconds = [],
 }: Props) {
-  const [playing,     setPlaying]     = useState(autoPlay);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration,    setDuration]    = useState(0);
-  const [showCtrl,    setShowCtrl]    = useState(true);
-  const [fullscreen,  setFullscreen]  = useState(false);
-  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [playing,      setPlaying]      = useState(autoPlay);
+  const [currentTime,  setCurrentTime]  = useState(0);
+  const [duration,     setDuration]     = useState(0);
+  const [showCtrl,     setShowCtrl]     = useState(true);
+  const [fullscreen,   setFullscreen]   = useState(false);
+  const [ended,        setEnded]        = useState(false);
+
+  const seekedRef    = useRef(false);   // only seek to initialTime once
+  const hideTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const progressAnim = useRef(new Animated.Value(0)).current;
 
   const player = useVideoPlayer(src, p => {
@@ -49,25 +54,41 @@ export function VideoPlayer({
     if (autoPlay) p.play();
   });
 
-  // Poll currentTime
+  // Seek to resume position once duration is known
+  useEffect(() => {
+    if (!seekedRef.current && initialTime > 10 && duration > 0) {
+      seekedRef.current = true;
+      player.currentTime = Math.min(initialTime, duration * 0.95);
+    }
+  }, [duration, initialTime, player]);
+
+  // Poll currentTime + detect end
   useEffect(() => {
     const id = setInterval(() => {
       if (!player) return;
-      const ct = player.currentTime ?? 0;
-      const dur = player.duration ?? 0;
+      const ct  = player.currentTime ?? 0;
+      const dur = player.duration    ?? 0;
       setCurrentTime(ct);
       setDuration(dur);
       onTimeUpdate?.(ct, dur);
+
       if (dur > 0) {
         Animated.timing(progressAnim, {
           toValue: ct / dur,
           duration: 100,
           useNativeDriver: false,
         }).start();
+
+        // Fire onEnded when within 0.5s of end
+        if (!ended && ct > 0 && dur - ct < 0.5) {
+          setEnded(true);
+          setPlaying(false);
+          onEnded?.();
+        }
       }
     }, 250);
     return () => clearInterval(id);
-  }, [player, onTimeUpdate, progressAnim]);
+  }, [player, onTimeUpdate, progressAnim, onEnded, ended]);
 
   // Auto-hide controls
   const resetHide = useCallback(() => {
@@ -80,7 +101,7 @@ export function VideoPlayer({
 
   const togglePlay = () => {
     if (playing) { player.pause(); setPlaying(false); }
-    else         { player.play();  setPlaying(true);  }
+    else         { player.play();  setPlaying(true);  setEnded(false); }
     resetHide();
   };
 
@@ -90,23 +111,25 @@ export function VideoPlayer({
   };
 
   // Seek bar pan
-  const barRef = useRef<View>(null);
-  const [barX, setBarX] = useState(0);
   const [barW, setBarW] = useState(SW);
+  const [barX, setBarX] = useState(0);
+  const barRef = useRef<View>(null);
+
   const panResponder = PanResponder.create({
     onStartShouldSetPanResponder: () => true,
-    onPanResponderGrant: (e) => {
+    onPanResponderGrant: e => {
       const pct = Math.max(0, Math.min(1, (e.nativeEvent.pageX - barX) / barW));
       player.currentTime = pct * duration;
+      setEnded(false);
       resetHide();
     },
-    onPanResponderMove: (e) => {
+    onPanResponderMove: e => {
       const pct = Math.max(0, Math.min(1, (e.nativeEvent.pageX - barX) / barW));
       player.currentTime = pct * duration;
     },
   });
 
-  const pct = duration > 0 ? currentTime / duration : 0;
+  const pct     = duration > 0 ? currentTime / duration : 0;
   const isLiked = userLikedSeconds.includes(Math.floor(currentTime));
 
   return (
@@ -129,7 +152,7 @@ export function VideoPlayer({
         <Animated.View
           style={[
             styles.alwaysProgress,
-            { width: progressAnim.interpolate({ inputRange: [0,1], outputRange: ['0%','100%'] }) },
+            { width: progressAnim.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }) },
           ]}
         />
       </View>
@@ -137,7 +160,7 @@ export function VideoPlayer({
       {/* Controls overlay */}
       {showCtrl && (
         <View style={styles.overlay}>
-          {/* Gradient scrim */}
+          {/* Scrim */}
           <View style={styles.scrim} />
 
           {/* Transport row */}
@@ -153,14 +176,15 @@ export function VideoPlayer({
             </TouchableOpacity>
           </View>
 
-          {/* Bottom section: seek bar + time + like */}
+          {/* Bottom: seek + time + actions */}
           <View style={styles.bottom}>
-
             {/* Seek bar */}
             <View
               ref={barRef}
-              onLayout={e => { setBarW(e.nativeEvent.layout.width); }}
-              onStartShouldSetResponder={() => false}
+              onLayout={e => {
+                setBarW(e.nativeEvent.layout.width);
+                barRef.current?.measure((_x, _y, _w, _h, pageX) => setBarX(pageX));
+              }}
               style={styles.seekTrack}
               {...panResponder.panHandlers}
             >
@@ -168,24 +192,29 @@ export function VideoPlayer({
               <View style={[styles.seekThumb, { left: `${pct * 100}%` as unknown as number }]} />
             </View>
 
-            {/* Time + Like moment */}
+            {/* Time + Like moment + Next + Fullscreen */}
             <View style={styles.timeRow}>
               <Text style={styles.time}>{fmt(currentTime)} / {fmt(duration)}</Text>
               <View style={styles.spacer} />
+
               {onLikeMoment && (
                 <TouchableOpacity
                   onPress={() => onLikeMoment(Math.floor(currentTime))}
-                  style={[styles.likeBtn, isLiked && styles.likeBtnActive]}
+                  style={[styles.iconBtn, isLiked && styles.iconBtnActive]}
                 >
                   <HeartIcon filled={isLiked} />
-                  <Text style={[styles.likeTxt, isLiked && { color: C.watch }]}>
-                    Moment
-                  </Text>
                 </TouchableOpacity>
               )}
+
+              {onNext && (
+                <TouchableOpacity onPress={onNext} style={styles.iconBtn}>
+                  <NextIcon />
+                </TouchableOpacity>
+              )}
+
               <TouchableOpacity
                 onPress={() => setFullscreen(f => !f)}
-                style={styles.ctrlBtn}
+                style={styles.iconBtn}
               >
                 <FullscreenIcon on={fullscreen} />
               </TouchableOpacity>
@@ -197,7 +226,7 @@ export function VideoPlayer({
   );
 }
 
-// ── Icons ─────────────────────────────────────────────────────────────────────
+// ── Icons ──────────────────────────────────────────────────────────────────────
 
 function PlayIcon() {
   return (
@@ -213,9 +242,12 @@ function SkipIcon({ back }: { back?: boolean }) {
   return <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 16 }}>{back ? '⏮' : '⏭'}</Text>;
 }
 function HeartIcon({ filled }: { filled: boolean }) {
-  return <Text style={{ fontSize: 13, color: filled ? C.watch : 'rgba(255,255,255,0.75)' }}>
+  return <Text style={{ fontSize: 14, color: filled ? C.watch : 'rgba(255,255,255,0.75)' }}>
     {filled ? '♥' : '♡'}
   </Text>;
+}
+function NextIcon() {
+  return <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14 }}>⏭</Text>;
 }
 function FullscreenIcon({ on }: { on: boolean }) {
   return <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14 }}>{on ? '⊡' : '⊞'}</Text>;
@@ -224,7 +256,7 @@ function FullscreenIcon({ on }: { on: boolean }) {
 // ── Styles ─────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: { backgroundColor: '#000', aspectRatio: 16/9, width: '100%' },
+  container: { backgroundColor: '#000', aspectRatio: 16 / 9, width: '100%' },
   alwaysBar: {
     position: 'absolute', bottom: 0, left: 0, right: 0, height: 2,
     backgroundColor: 'rgba(255,255,255,0.15)', zIndex: 5,
@@ -235,17 +267,16 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   scrim: {
-    position: 'absolute', bottom: 0, left: 0, right: 0, height: 150,
-    // Simulate gradient with opacity layers
+    position: 'absolute', bottom: 0, left: 0, right: 0, height: 160,
     backgroundColor: 'rgba(0,0,0,0.55)',
   },
   transport: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 24, marginBottom: 12,
+    gap: 24, marginBottom: 10,
   },
-  ctrlBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  playBtn: { width: 52, height: 52 },
-  bottom: { paddingHorizontal: 14, paddingBottom: 12 },
+  ctrlBtn:  { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  playBtn:  { width: 52, height: 52 },
+  bottom:   { paddingHorizontal: 14, paddingBottom: 12 },
   seekTrack: {
     height: 20, justifyContent: 'center', marginBottom: 6, position: 'relative',
   },
@@ -262,15 +293,11 @@ const styles = StyleSheet.create({
   timeRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   time: { color: 'rgba(255,255,255,0.7)', fontSize: 11, fontVariant: ['tabular-nums'] },
   spacer: { flex: 1 },
-  likeBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: 10, paddingVertical: 6,
-    borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.10)',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
+  iconBtn: {
+    width: 32, height: 32, alignItems: 'center', justifyContent: 'center',
+    borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.10)',
   },
-  likeBtnActive: {
+  iconBtnActive: {
     backgroundColor: `${C.watch}22`,
-    borderColor: `${C.watch}77`,
   },
-  likeTxt: { fontSize: 11, fontWeight: '600', color: 'rgba(255,255,255,0.75)' },
 });
