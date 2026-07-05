@@ -70,6 +70,7 @@ struct HomeView: View {
     @State private var isLoadingMore                            = false
     @State private var searchPresented                          = false
     @State private var didStartInitialLoad                      = false
+    @State private var isLoadTaskRunning                        = false
 
     // Feed config — drives carousel ordering, interleave interval, and slot count.
     // Loaded from /api/feed-config on every refresh; falls back to .default offline.
@@ -578,15 +579,22 @@ struct HomeView: View {
 
     @MainActor
     private func load() async {
+        guard !isLoadTaskRunning else { return }
+        isLoadTaskRunning = true
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            isLoadTaskRunning = false
+        }
 
         heroLooper = nil
         heroPlayer?.pause()
         heroPlayer = nil
 
         do {
-            let response = try await APIClient.shared.fetchFeed()
+            let response = try await withTimeout(seconds: 15) {
+                try await APIClient.shared.fetchFeed()
+            }
             let videos = uniqueByID(response.videos)
             feed = videos
             cursor = response.nextCursor
@@ -595,6 +603,27 @@ struct HomeView: View {
             print("Home feed failed:", error)
             feed = []
             cursor = nil
+        }
+    }
+
+    private func withTimeout<T: Sendable>(
+        seconds: UInt64,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                throw CancellationError()
+            }
+
+            guard let value = try await group.next() else {
+                throw CancellationError()
+            }
+            group.cancelAll()
+            return value
         }
     }
 
