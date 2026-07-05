@@ -1,0 +1,266 @@
+# Mediaverse iOS Implementation Progress
+
+## Standing Directive
+- Use `IOS_PORTING_DIRECTIVE.md` before every feature slice.
+- Requirements source: `/Users/ahmedqandil/Dropbox/Mac (2)/Claude/Projects/Mediaverse/docs`
+- Web source: `/Users/ahmedqandil/Dropbox/Mac (2)/mediaverse`
+- Do not change backend unless explicitly requested.
+
+## Current Slice: App-wide viewer/API parity audit
+
+### Completed
+- Completed Auth & Session parity pass.
+- Completed Backstage Upload native upload flow up to the current backend contract.
+- Completed Home Feed parity fix for remaining configured carousel slots.
+- Audited Watch Player docs, web implementation, and backend routes.
+- Fixed progress restore/write contract:
+  - single-item restore uses `/api/progress?videoId=` or `/api/progress?episodeId=`
+  - writes send `seconds` and `percent`
+  - episode progress writes use `episodeId`
+  - Continue Watching decodes the live raw-array backend response
+- Added timed player marker parity:
+  - `PlayerMarker` model
+  - video/episode marker API helpers
+  - 20-second top-right marker pill overlays
+  - dismiss action
+  - native internal navigation and external URL fallback
+- Fixed episode entitlement fallback so signed-out AVOD does not get stuck on a spinner.
+- Audited Shorts docs, web player, `/api/shorts`, and subscribe behavior.
+- Fixed Shorts backend state parity:
+  - decoded `reason` from `/api/shorts`
+  - rendered backend-driven empty states
+  - fetched initial follow status per card
+  - used typed channel follow toggle result
+  - encoded shorts query params
+- Audited Microdramas docs, web detail/player, episode access route, and ad-unlock route.
+- Fixed Microdrama parity/runtime issues:
+  - episode rows now open the selected episode number
+  - watch load honors `startEpisodeNumber`
+  - active slide is the only slide that creates/plays an `AVPlayer`
+  - removed state mutation from slide `body`
+  - ad unlock in the watch player reloads episodes so the unredacted `videoUrl` is available
+- Audited Search docs, web page, suggest route, and full search route.
+- Fixed Search parity:
+  - trimmed query checks match backend min-length logic
+  - suggestions navigate via backend `href` instead of only running a title search
+  - unknown hrefs fall back to full search
+- Audited Channels & Shows docs, web channel/show clients, and public playlist/show APIs.
+- Fixed Channels & Shows parity:
+  - channel playlist cards now navigate instead of rendering as static cards
+  - show playlist cards now navigate instead of rendering as static cards
+  - playlist cards prefer the first playlist video route and fall back to playlist detail when empty, matching the web “play directly” behavior for video playlists
+  - show hero Watch CTA now targets the first backend-playable episode instead of blindly targeting episode 1
+  - show episode rows no longer navigate when the backend has removed `videoUrl` or the episode is coming soon
+  - gated show episode rows display subscribe/rent lock copy and open the web show page for checkout, matching the existing web checkout fallback
+- Audited Collections & Playlists docs, web pages, and API routes.
+- Fixed Collections & Playlists parity:
+  - added native collection detail route/screen
+  - added My Collections / Communities tabs
+  - public collections now load from `/api/collections?public=true`
+  - collection cards navigate to detail
+  - collection detail supports public follow, owner typed add/search, item links, and owner removal
+  - collection thumbnails now respect show/poster, shorts/vertical, and clips/video aspect ratios
+  - search/native routing now handles `/collections/{id}`
+- Audited Social docs, following/notifications web pages, PostSection, and social API routes.
+- Fixed Social parity:
+  - linked notifications now navigate internally or open external URLs like web
+  - notification route parsing includes collection links
+  - post share URLs now use watch links with `t` and `out` clip query params
+- Audited Profile and History native screens against web profile/history behavior and API routes.
+- Fixed Profile/History polish:
+  - Collections profile row now opens native Collections
+  - Edit Profile now opens a native name/bio sheet backed by `/api/me/profile`
+  - profile header updates after save
+- Audited Browse & Discovery docs/web/API for channels and category pages.
+- Fixed Browse channels parity:
+  - added native Channels row to Browse
+  - added `ChannelBrowseCard` and `/api/channels` helper
+  - added `ChannelsBrowseView` matching web `/channels`: search, inactive filtering, full channel cards, follow/following control, stats, and native channel navigation
+  - removed nested `NavigationStack` from `BrowseView` so child route links use the tab-level route destination
+  - ran design parity check against `ChannelCard` and `/channels/page.tsx`
+- Fixed Shows browse parity:
+  - expanded `ShowBrowseCard` to carry hero/card fields used by web
+  - switched browse show loading from `/api/search` to `/api/shows?take=80` with optional `q`/`genre`
+  - rebuilt `ShowsBrowseView` with featured hero, Browse header, rounded search, submitted search mode, New & Popular carousel, genre carousels, poster metadata, rating badges, entitlement badges, and native show routing
+  - ran design parity check against `/shows/page.tsx` and `ShowsPageClient.tsx`
+- Fixed Movies browse parity:
+  - added movie duration decoding from nested first episode data
+  - switched movie loading from `/api/search` to `/api/shows?take=80` with backend visibility, q, and genre filtering
+  - aligned movie types with web (`movie`, `documentary`, `special`)
+  - rebuilt `MoviesBrowseView` with Watch eyebrow, genre pills, dense poster grid, fallback posters, rating badges, entitlement badges, and year/duration/genre metadata
+  - ran design parity check against `/movies/page.tsx`
+- Fixed Microdramas browse parity:
+  - rebuilt `MicrodramasBrowseView` with web page header/subtitle, skeleton loading, rounded hero with description/actions, empty state, Trending/New rows, duplicate-safe genre rows, 9:16 cards, and season badges
+  - ran design parity check against `/microdramas/page.tsx`
+- Audited Billing & Entitlements docs, checkout modal, show CTAs, episode watch paywall, and checkout API routes.
+- Fixed Billing & Entitlements parity:
+  - expanded checkout response decoding for `networkSubscriptionId` and `redirectUrl`
+  - show hero Subscribe/Rent now opens native checkout instead of opening the web show page
+  - locked show episode-row CTA now opens native checkout with the relevant season for PPV
+  - checkout success reloads show detail, matching web `router.refresh()`
+  - episode watch paywall now includes Rent/Subscribe action and reloads the episode after checkout
+  - provider redirects open externally; unsupported `clientSecret` native confirmation is surfaced as a clear limitation
+- Audited Scheduling docs, web show episode rows, episode watch gate, and schedule window payloads.
+- Fixed Scheduling parity:
+  - episode rows now compute true coming-soon from schedule premiere dates like web
+  - worldwide premiere window is preferred before first window
+  - due premiere dates override cron-lagged `comingSoon=true`
+  - row navigation, duration display, opacity, overlay, and premiere labels all use the computed state
+- Audited Network Studio/Admin docs, web studio productions root, and `/api/backstage/studio/productions`.
+- Started Network Studio native implementation:
+  - added Studio models and production list/create API helpers
+  - added `StudioView` with AI Studio header, production cards, status/genre/language badges, scene previews/counts, loading/empty/error states, and create-production sheet
+  - added Profile `AI Studio` navigation row
+  - ran design parity check against `/backstage/studio/productions/page.tsx`
+- Continued Network Studio production detail:
+  - added production detail and breakdown API helpers
+  - production cards navigate to native production detail
+  - added production metadata header, breakdown concept form, cultural constraints toggle, episode length slider, scene list/empty state
+  - breakdown POST reloads production detail after completion
+  - ran design parity check against `/backstage/studio/productions/[id]/page.tsx`
+- Continued Network Studio scene detail:
+  - added scene/shot/dialogue models and scene fetch API helper
+  - scene rows navigate to native scene detail
+  - scene detail shows metadata, visual brief, shot cards, location/action/duration/emotion/status, character IDs, and Arabic/English dialogue blocks
+  - ran design parity check against scene detail portions of `/backstage/studio/productions/[id]/page.tsx`
+- Re-audited non-Studio app loading/API contracts against the web repo and backend routes.
+- Fixed Shorts follow state/actions:
+  - `/api/channels/[handle]/subscribe` is handle-based
+  - Shorts now uses `short.channel.handle` instead of `short.channel.id`
+  - invalid/missing handles no-op instead of firing a guaranteed failing request
+- Fixed Home Continue Watching decode:
+  - `/api/progress` returns compact nested video/episode payloads
+  - added compact `ProgressVideoItem` and `ProgressEpisodeItem`
+  - `ProgressItem` no longer decodes those nested payloads as full `FeedVideo` / `EpisodeNavItem`
+- Fixed Profile load/save API contract:
+  - `/api/me/profile` GET returns `{ user, history, likes, collections, channels, counts }`, not `{ profile }`
+  - `ProfileResponse` now decodes both `{ profile }` and `{ user }`
+  - profile edits now call `PATCH /api/me/profile`, matching the backend route
+- Applied compile-only Studio wrapper cleanup after the previous decoder safety change:
+  - Studio response wrappers now conform to `Decodable` instead of `Codable`
+  - no new Studio behavior was implemented in this audit pass
+- Design/style parity check:
+  - no visible layout changes were introduced in this pass
+  - Home continue cards, Shorts action rail, and Profile edit sheet retain existing native/web-mirrored visual structure
+- Validation:
+  - live Xcode diagnostics clean for `Models`, `APIClient`, `HomeView`, `ShortsView`, and `ProfileView`
+  - full Xcode build passed: `/var/folders/bt/mrgclqgx5wjgh1s_0rs3njrh0000gn/T/ActionArtifacts/840B781E-C1E9-4E19-A01D-BA5500D95EC5/BuildProject/BuildProject-Log-20260705-175057.txt`
+- Fixed reported Show/Shorts/Browse runtime and layout issues:
+  - added `C.mediaURL(_:)` to resolve absolute and backend-relative media URLs
+  - Shorts video, thumbnail, avatar, and linked-card media now resolve relative URLs before rendering/playing
+  - Shorts tab is now wrapped in a `NavigationStack` with the same route destinations as other tabs
+  - Show video/short/related cards now use fixed-ratio containers so images fill/clamp instead of stretching grid rows
+  - Browse category images now use the shared media URL resolver for Shows, Movies, Microdramas, and Channels
+  - design parity check completed: no visual redesign, only corrected media loading and stable aspect-ratio sizing
+  - full Xcode build passed: `/var/folders/bt/mrgclqgx5wjgh1s_0rs3njrh0000gn/T/ActionArtifacts/840B781E-C1E9-4E19-A01D-BA5500D95EC5/BuildProject/BuildProject-Log-20260705-175800.txt`
+- Fixed show/watch player media playback:
+  - `VideoWatchView`, `EpisodeWatchView`, and `MicrodramaWatchView` now pass resolved absolute media URLs into AVPlayer
+  - this fixes backend-relative `videoUrl` values not playing from show episode/video routes
+  - design parity unchanged; native player UI is preserved
+  - full Xcode build passed: `/var/folders/bt/mrgclqgx5wjgh1s_0rs3njrh0000gn/T/ActionArtifacts/840B781E-C1E9-4E19-A01D-BA5500D95EC5/BuildProject/BuildProject-Log-20260705-180830.txt`
+- Completed navigation/content-loading pass:
+  - audited typed route coverage across main tabs, search, notifications, watch markers, browse cards, collections, playlists, channels, shows, microdramas, following, history, and upload completion
+  - Browse landing direct destination links are valid concrete subview pushes; routed child links use the tab-level `NavigationStack`
+  - added visible error/retry states for Show and Channel primary-load failures instead of blank pages
+  - normalized visible media loading across Home, Search, Following, History, Collections, Playlists, Channel, Show, Watch, Profile, Upload lookup, and Microdrama surfaces with `C.mediaURL`
+  - verified no remaining raw `AsyncImage(url: URL(string: ...media...))` or raw `videoUrl` player setup remains in view code
+  - design parity check completed: no redesign, only content-load reliability and native retry states
+  - full Xcode build passed: `/var/folders/bt/mrgclqgx5wjgh1s_0rs3njrh0000gn/T/ActionArtifacts/840B781E-C1E9-4E19-A01D-BA5500D95EC5/BuildProject/BuildProject-Log-20260705-181355.txt`
+- Fixed Shorts black/proportion regression:
+  - live `/api/shorts` returns content, so the issue was in the native render surface rather than the backend
+  - replaced `containerRelativeFrame` card sizing with an explicit tab-viewport `GeometryReader` pager and restored `currentID` if SwiftUI loses scroll selection
+  - constrained each short to the same centered 9:16 pillar used by mobile web, with blurred thumbnail backdrop filling the surrounding area
+  - fixed the comments drawer to pin to the bottom of the visible 9:16 short and use 76% of that card height, matching mobile web
+  - fixed the play/pause overlay to stay centered after the 9:16 pillar change
+  - fixed the drawer background/content frame so comments no longer float in the middle of the Shorts screen
+  - added drag-down-to-close on the Shorts comments drawer handle/header
+  - design parity check completed against `/src/app/shorts/ShortsPlayer.tsx`
+  - live diagnostics clean for `ShortsView`
+  - full Xcode build passed: `/var/folders/bt/mrgclqgx5wjgh1s_0rs3njrh0000gn/T/ActionArtifacts/840B781E-C1E9-4E19-A01D-BA5500D95EC5/BuildProject/BuildProject-Log-20260705-183134.txt`
+- Completed full comment-module parity pass:
+  - audited web `CommentThread.tsx`, `CommentSection.tsx`, shared `/api/comments`, video comments, and post comment routes
+  - expanded `Comment` decoding for `_count.replies`
+  - added shared comment API helpers for collection comments, replies, comment likes, and comment flags
+  - added native `CommentThreadView` with top/bottom composer modes, nested replies, reply composer, optimistic comment/reply likes, reply liking, flag/report, loading/error/empty states, and backend notification-triggering endpoint calls
+  - wired Video, Episode, Shorts drawer, and public Collection discussion to the shared thread
+  - kept post comments on their post-specific API because notifications and likes are implemented through `/api/posts/[id]/comments`, then tightened the native UI to support recursive nested replies, reply likes, and normalized avatar media URLs
+  - removed the old lightweight watch `CommentRow` so all watch/video/episode/shorts/collection comments use the full shared thread
+  - fixed comment/post-comment time rendering so failed date parses no longer fall back to `Date()` and show fake `0s`; timestamps now parse fractional/non-fractional ISO strings and show `just now` only for true fresh comments
+  - design parity check completed against web `CommentThread.tsx` and `CommentSection.tsx`
+  - full Xcode build passed: `/var/folders/bt/mrgclqgx5wjgh1s_0rs3njrh0000gn/T/ActionArtifacts/840B781E-C1E9-4E19-A01D-BA5500D95EC5/BuildProject/BuildProject-Log-20260705-183605.txt`
+- Completed watch/episode player skin parity pass:
+  - audited web `VideoPlayer.tsx`, `WatchClient.tsx`, and `07-watch-player.md`
+  - added shared native `WatchPlayerChrome` for both video and episode playback
+  - replaced plain AVKit inline playback with a web-mirrored custom skin: 16:9 black surface, top/bottom gradient scrims, center play/pause, bottom progress/seek bar, buffered/played track, time labels, mute, speed/settings menu, fullscreen/theatre action, auto-hide controls, and marker overlay slot
+  - tightened the player after simulator parity review: center overlay now appears only while paused, top controls are smaller, and the separate below-player moment strip was removed from video and episode pages
+  - moved top moments into the player seek area like web: heatmap wave, current-position needle, liked-second ticks, compact in-player `Moment` button, optimistic moment-like callback, and rising heart animation at the current seek position
+  - thinned the shared player seek bar and smaller thumb/ticks to better match the mobile web control weight
+  - added end-of-playback replay behavior for both videos and episodes: cancelling the watch-next countdown leaves a replay card, and completed items with no next item also show replay
+  - changed progress restore for both videos and episodes so saved progress at 95% or later is treated as watched and starts from the beginning on the next open
+  - added player clipping parity from web `VideoPlayer.tsx` / `WatchClient.tsx`:
+    - scissors control appears in the shared player chrome for authenticated users
+    - clip mode pauses playback, shows mark-in/mark-out range handles on the seek bar, supports dragging the nearest handle, and has `Set in` / `Set out` shortcuts
+    - clip panel supports caption entry and the episode/show spoiler toggle
+    - saves to the existing backend contracts: `POST /api/videos/{id}/posts` and `POST /api/episodes/{id}/posts`
+    - video and episode clip reaction lists reload and expand after a new clip is saved
+    - simulator design review correction: constrained the track capsule height, hid the center play overlay while clipping, reduced clip handles, and compressed the clip editor into a compact bottom panel
+    - watch-page interaction pass: video and episode players are pinned above the scrollable detail content; inline comments and clip reactions show only two items, then a `Show more` row with remaining count opens a full under-player Comments or Clip reactions panel
+    - new clip posts are inserted into the visible reactions list immediately from the create-post response; post cards decode media video URLs and generate thumbnails from the clipped `markIn` frame when available
+    - added YouTube-style watch minimization: native navigation bars are hidden on video/episode watch pages so the player starts at the top, a custom in-player back affordance is shown, and dragging the full player downward hands the live `AVPlayer` to an app-level floating mini-player, dismisses the watch page, and allows normal tab/app navigation underneath; tapping mini-player reopens the watch route
+    - refined collapse interaction to behave more like YouTube: the full player now follows the downward drag, scales and moves toward the mini-player corner, fades/slides the page content during the gesture, then either snaps back or completes into the app-level mini-player
+  - kept fullscreen playback through native `AVPlayerViewController`
+  - removed duplicate fullscreen buttons from the below-player action rows so fullscreen lives in the player chrome like mobile web
+  - aligned video and episode autoplay countdown to the documented/web 10-second behavior
+  - retained existing player markers, progress restore/write, paywall, rental info, and autoplay navigation logic
+  - native quality selection remains delegated to AVPlayer adaptive playback because the current iOS model/API does not expose web HLS quality levels as selectable variants
+  - design parity check completed against web `VideoPlayer.tsx`
+  - full Xcode build passed: `/var/folders/bt/mrgclqgx5wjgh1s_0rs3njrh0000gn/T/ActionArtifacts/840B781E-C1E9-4E19-A01D-BA5500D95EC5/BuildProject/BuildProject-Log-20260705-184014.txt`
+  - follow-up full Xcode build passed after integrated moment/end-state/clipping/watch-panel/app-level-mini-player fixes: `/var/folders/bt/mrgclqgx5wjgh1s_0rs3njrh0000gn/T/ActionArtifacts/840B781E-C1E9-4E19-A01D-BA5500D95EC5/BuildProject/BuildProject-Log-20260705-193627.txt`
+
+### Previously Completed Upload Work
+- Audited docs `03-backstage-admin.md` and `04-content-pipeline.md`.
+- Audited web routes:
+  - `/api/me/upload-contexts`
+  - `/api/video/cf-stream-upload`
+  - `/api/upload`
+  - `/api/video/[id]/stream-status`
+  - backstage channel/show video link endpoints
+- Added native `UploadView`.
+- Added Profile navigation row: `Upload Content`.
+- Wired Cloudflare Stream TUS upload, server-side upload limit enforcement, `/api/upload` record creation, stream-status polling, optional playlist, and short link fields.
+- Added backend-compatible thumbnail persistence for Cloudflare uploads by sending `https://videodelivery.net/{streamId}/thumbnails/thumbnail.jpg?time=1s` as `/api/upload.thumbnailUrl`.
+- Fixed native upload progress/notification parity so progress does not jump to complete before Cloudflare transcoding is ready, and `Video ready` is only sent after `/api/video/[id]/stream-status` reports `ready: true`.
+- Ran the required mobile-web design/style parity audit against `/app/upload/page.tsx` and tightened the native screen:
+  - Video file and thumbnail are now separate sections like mobile web.
+  - Empty video state now uses the large dashed select area.
+  - Selected video state now has file card, remove action, extracting state, and orientation/frame status.
+  - Thumbnail preview now uses video/short aspect ratios.
+  - Submit copy now mirrors mobile web disabled states.
+  - Sticky submit bar is compact-width only, matching the web mobile sticky bar.
+- Fixed destination and playlist selectors to mirror the web lookup/search controls instead of simple native pickers:
+  - Destination opens a searchable grouped lookup for Channels and Shows.
+  - Playlist opens a searchable lookup with the web-equivalent `None - don't add to a playlist` option.
+  - Current selections are shown inline in bordered lookup rows.
+
+### Known Gap To Continue
+- Web thumbnail upload uses `@vercel/blob/client`, which is browser-only, and lets the user persist the selected extracted frame. Native currently generates a local thumbnail preview and persists a Cloudflare Stream thumbnail URL. Exact selected-frame Blob parity still needs either a Swift implementation of the Vercel Blob client protocol or a backend-native thumbnail endpoint, only with explicit approval.
+- Web fallback video upload also uses `@vercel/blob/client`. Existing `/api/video/local-upload` is admin-only local filesystem storage and does not mirror `/app/upload`, so it is intentionally not used in iOS creator upload.
+- Audited `@vercel/blob/client` internals. The browser path calls `/api/upload/blob-token` for a scoped client token and then uses Blob SDK control-plane PUT behavior. This is not a stable ordinary REST upload route, so native exact parity should be implemented only with an approved backend-native endpoint or a documented native Blob client contract.
+- Native routing does not yet have a list-aware Shorts route equivalent to `/shorts/{firstId}?list={playlistId}`. Public shorts playlist cards currently route to the first video id through the existing native watch route, while empty playlists fall back to playlist detail.
+- Native collection community comments are not implemented yet; web uses `CommentThread` for `targetType=\"collection\"`.
+- Native collection edit fields are not implemented yet; owner delete is available and create/detail/add/remove/follow are implemented.
+- Native create-clip-post controls are not implemented yet; existing posts, likes, comments, share, and delete are supported.
+- Full native profile edit parity still needs approved native image upload/Blob support and additional profile fields beyond the current `name`/`bio` API helper.
+- Shows page admin row configuration is not exposed through a public mobile API; native derives rows from `/api/shows` until backend exposes that config.
+- Movies browse still lacks exact web `hasAccess` entitlement-badge state because the web SSR path computes user access summary server-side.
+- Native Billing still lacks full web plan picker parity for multiple SVOD products.
+- Real payment-provider `clientSecret` confirmation needs a native payment confirmation surface or hosted redirect contract. Placeholder-provider checkout is implemented.
+- Native show hero does not yet display full season-level release date badges because the current native model does not expose complete season schedule metadata.
+- Network Studio is only partially native: productions root/create, production detail/breakdown, and scene detail readout are done; cast, jobs, pipeline streaming, status polling, cancellation, assets, visual brief/stitch/review actions, and costs remain.
+- Broader Backstage/Admin remains mostly web-only: analytics, schedules, contracts, products, members, billing admin, platform admin, inspector, cleanup, debugger.
+
+### Next Steps
+1. Continue Network Studio with pipeline controls: `/api/backstage/studio/pipeline`, status polling, cancel, jobs, assets, visual brief, stitch, and review actions.
+2. Continue Watch Player audit later for web-only custom controls that may still need native equivalents: player markers are done; speed/quality/captions/clip tooling remain to be evaluated against iOS requirements and backend support.
+3. Keep the Upload Blob gap parked until a backend-native endpoint or documented native Blob contract is approved.
+4. Keep the Shorts show-owner fallback gap parked until `/api/shorts` includes `show` data or an approved backend contract exists.
