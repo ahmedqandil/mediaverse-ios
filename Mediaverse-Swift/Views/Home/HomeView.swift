@@ -148,7 +148,7 @@ struct HomeView: View {
                     .tint(C.watch)
                     .id("home-loading")
             } else {
-                mainFeed
+                feedContent
                     .id("home-feed")
             }
         }
@@ -173,10 +173,6 @@ struct HomeView: View {
     }
 
     // MARK: - Main feed
-
-    private var mainFeed: some View {
-        feedContent
-    }
 
     private var emptyState: some View {
         VStack(spacing: 20) {
@@ -409,7 +405,18 @@ struct HomeView: View {
             // Fallback: first feed video as hero
             NavigationLink(value: AppRoute.media(id: v.id, type: v.type, showId: v.show?.id, channelId: v.channel?.id)) {
                 ZStack(alignment: .bottomLeading) {
-                    HomeRemoteImage(url: C.mediaURL(v.thumbnailUrl ?? v.show?.coverUrl), title: v.title)
+                    AsyncImage(url: C.mediaURL(v.thumbnailUrl ?? v.show?.coverUrl)) { phase in
+                        switch phase {
+                        case .success(let img):
+                            img.resizable().scaledToFill()
+                        default:
+                            LinearGradient(
+                                colors: [C.watch.opacity(0.18), C.bg],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        }
+                    }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
                     .overlay { Color.black.opacity(0.35) }
@@ -701,7 +708,14 @@ private struct VideoCarouselCard: View {
         VStack(alignment: .leading, spacing: 6) {
             // ── Thumbnail ─────────────────────────────────────────────────────
             ZStack(alignment: .bottomTrailing) {
-                HomeRemoteImage(url: C.mediaURL(video.thumbnailUrl ?? video.show?.coverUrl), title: video.title)
+                AsyncImage(url: C.mediaURL(video.thumbnailUrl ?? video.show?.coverUrl)) { phase in
+                    switch phase {
+                    case .success(let img):
+                        img.resizable().scaledToFill()
+                    default:
+                        Color.white.opacity(0.07)
+                    }
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
 
@@ -800,7 +814,14 @@ private struct HomeVideoCard: View {
             // proposes unbounded height, causing Liquid Glass compositor crash on iOS 26.
             ZStack(alignment: .bottomTrailing) {
                 // Static thumbnail (fades out when video plays)
-                HomeRemoteImage(url: C.mediaURL(video.thumbnailUrl ?? video.show?.coverUrl), title: video.title)
+                AsyncImage(url: C.mediaURL(video.thumbnailUrl ?? video.show?.coverUrl)) { phase in
+                    switch phase {
+                    case .success(let img):
+                        img.resizable().scaledToFill()
+                    default:
+                        Color.white.opacity(0.07)
+                    }
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
 
@@ -892,88 +913,6 @@ private struct HomeVideoCard: View {
         if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
         if n >= 1_000     { return String(format: "%.1fK", Double(n) / 1_000) }
         return String(n)
-    }
-}
-
-private struct HomeRemoteImage: View {
-    let url: URL?
-    let title: String
-
-    @State private var image: UIImage?
-    @State private var didFail = false
-
-    var body: some View {
-        ZStack {
-            placeholder
-
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .transition(.opacity)
-            } else if !didFail {
-                ProgressView()
-                    .tint(C.watch)
-                    .scaleEffect(0.82)
-                    .opacity(0.75)
-            }
-        }
-        .task(id: url) {
-            await loadImage()
-        }
-    }
-
-    private var placeholder: some View {
-        LinearGradient(
-            colors: [C.elevated, C.surface, C.bg],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-        .overlay {
-            if didFail {
-                VStack(spacing: 8) {
-                    Image(systemName: "photo")
-                        .font(.system(size: 22, weight: .semibold))
-                    Text(title)
-                        .font(.system(size: 12, weight: .semibold))
-                        .lineLimit(2)
-                        .multilineTextAlignment(.center)
-                }
-                .foregroundStyle(C.textMuted)
-                .padding(20)
-            }
-        }
-    }
-
-    @MainActor
-    private func loadImage() async {
-        image = nil
-        didFail = false
-
-        guard let url else {
-            didFail = true
-            return
-        }
-
-        do {
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 12
-            request.cachePolicy = .returnCacheDataElseLoad
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard
-                let http = response as? HTTPURLResponse,
-                (200..<300).contains(http.statusCode),
-                let loaded = UIImage(data: data)
-            else {
-                didFail = true
-                return
-            }
-            withAnimation(.easeOut(duration: 0.18)) {
-                image = loaded
-            }
-        } catch {
-            didFail = true
-        }
     }
 }
 
