@@ -69,6 +69,7 @@ struct HomeView: View {
     @State private var isLoading                                = true
     @State private var isLoadingMore                            = false
     @State private var searchPresented                          = false
+    @State private var didStartInitialLoad                      = false
 
     // Feed config — drives carousel ordering, interleave interval, and slot count.
     // Loaded from /api/feed-config on every refresh; falls back to .default offline.
@@ -169,7 +170,7 @@ struct HomeView: View {
             }
         }
         .sheet(isPresented: $searchPresented) { SearchView() }
-        .task { await load() }
+        .task { await loadInitialFeedIfNeeded() }
     }
 
     // MARK: - Main feed
@@ -569,6 +570,13 @@ struct HomeView: View {
     // MARK: - Data loading
 
     @MainActor
+    private func loadInitialFeedIfNeeded() async {
+        guard !didStartInitialLoad else { return }
+        didStartInitialLoad = true
+        await load()
+    }
+
+    @MainActor
     private func load() async {
         isLoading = true
         defer { isLoading = false }
@@ -625,7 +633,7 @@ struct HomeView: View {
 
     @MainActor
     private func loadMore() async {
-        guard let cur = cursor, !isLoadingMore else { return }
+        guard let cur = cursor, !isLoading, !isLoadingMore else { return }
         isLoadingMore = true
         defer { isLoadingMore = false }
 
