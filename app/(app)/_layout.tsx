@@ -1,63 +1,28 @@
-import { Tabs } from 'expo-router';
-import { Text } from 'react-native';
+import { Stack } from 'expo-router';
 import { C } from '@/lib/constants';
 
-function TabIcon({ icon, focused }: { icon: string; focused: boolean }) {
-  return (
-    <Text style={{ fontSize: 22, opacity: focused ? 1 : 0.4 }}>{icon}</Text>
-  );
-}
-
+/**
+ * App-level Stack navigator.
+ *
+ * (tabs)/ → all tab screens (home, shorts, backstage, profile)
+ * watch/[id] and watch/episode/[id] → full-screen detail screens,
+ *   pushed on top of tabs so the tab bar disappears and back nav works.
+ * backstage/network/[id]/* → backstage detail Stack screens.
+ */
 export default function AppLayout() {
   return (
-    <Tabs
+    <Stack
       screenOptions={{
         headerShown: false,
-        tabBarStyle: {
-          backgroundColor: C.surface,
-          borderTopColor:  C.border,
-          borderTopWidth:  1,
-        },
-        tabBarActiveTintColor:   C.watch,
-        tabBarInactiveTintColor: C.textMuted,
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
+        contentStyle: { backgroundColor: C.bg },
       }}
     >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Home',
-          tabBarIcon: ({ focused }) => <TabIcon icon="🏠" focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
-        name="shorts"
-        options={{
-          title: 'Shorts',
-          tabBarIcon: ({ focused }) => <TabIcon icon="▶" focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
-        name="backstage"
-        options={{
-          title: 'Backstage',
-          tabBarIcon: ({ focused }) => <TabIcon icon="🎬" focused={focused} />,
-          href: '/(app)/backstage',
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          title: 'Profile',
-          tabBarIcon: ({ focused }) => <TabIcon icon="👤" focused={focused} />,
-        }}
-      />
-      {/* Hidden routes — not tabs */}
-      <Tabs.Screen name="watch/[id]"                         options={{ href: null }} />
-      <Tabs.Screen name="watch/episode/[id]"                 options={{ href: null }} />
-      <Tabs.Screen name="backstage/network/[id]/index"       options={{ href: null }} />
-      <Tabs.Screen name="backstage/network/[id]/members"     options={{ href: null }} />
-      <Tabs.Screen name="backstage/network/[id]/revenue"     options={{ href: null }} />
-    </Tabs>
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="watch/[id]" />
+      <Stack.Screen name="watch/episode/[id]" />
+      <Stack.Screen name="backstage/network/[id]/index" />
+      <Stack.Screen name="backstage/network/[id]/members" />
+      <Stack.Screen name="backstage/network/[id]/revenue" />
+    </Stack>
   );
 }
