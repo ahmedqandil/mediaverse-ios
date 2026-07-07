@@ -1020,15 +1020,38 @@ struct StoryCreatorCoordinator: View {
             publishPhase = .idle
             publishProgress = 0
         } catch StoriesError.serverMessage(let message) {
-            errorText = message
+            errorText = "\(publishFailureContext): \(message)"
+            step = .metadata
+            publishPhase = .idle
+            publishProgress = 0
+        } catch let StoriesError.serverUnavailable(statusCode) {
+            let suffix = statusCode.map { " HTTP \($0)." } ?? ""
+            errorText = "\(publishFailureContext): Stories are temporarily unavailable.\(suffix)"
             step = .metadata
             publishPhase = .idle
             publishProgress = 0
         } catch {
-            errorText = error.localizedDescription
+            errorText = "\(publishFailureContext): \(error.localizedDescription)"
             step = .metadata
             publishPhase = .idle
             publishProgress = 0
+        }
+    }
+
+    private var publishFailureContext: String {
+        switch publishPhase {
+        case .idle:
+            return "Story publish"
+        case .rendering:
+            return "Rendering story"
+        case .preparingUpload:
+            return "Preparing upload"
+        case .uploading:
+            return "Uploading media"
+        case .publishing:
+            return "Creating story"
+        case .complete:
+            return "Story publish"
         }
     }
 

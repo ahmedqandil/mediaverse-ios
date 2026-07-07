@@ -154,7 +154,7 @@ actor StoriesAPIClient {
         case 404:
             throw serverMessage.map { StoriesError.serverMessage($0) } ?? StoriesError.notFound
         case 500..<600:
-            throw serverMessage.map { StoriesError.serverMessage($0) } ?? StoriesError.serverUnavailable
+            throw serverMessage.map { StoriesError.serverMessage($0) } ?? StoriesError.serverUnavailable(statusCode: http.statusCode)
         default:
             throw serverMessage.map { StoriesError.serverMessage($0) } ?? StoriesError.http(http.statusCode)
         }
@@ -230,7 +230,7 @@ enum StoriesError: LocalizedError {
     case notSignedIn
     case notAllowed
     case notFound
-    case serverUnavailable
+    case serverUnavailable(statusCode: Int? = nil)
     case decodingFailed
     case http(Int)
     case serverMessage(String)
@@ -245,7 +245,10 @@ enum StoriesError: LocalizedError {
             return "You do not have permission to manage this story."
         case .notFound:
             return "This story is no longer available."
-        case .serverUnavailable:
+        case .serverUnavailable(let statusCode):
+            if let statusCode {
+                return "Stories are temporarily unavailable. Server returned HTTP \(statusCode)."
+            }
             return "Stories are temporarily unavailable."
         case .decodingFailed:
             return "Stories returned an unexpected response."
