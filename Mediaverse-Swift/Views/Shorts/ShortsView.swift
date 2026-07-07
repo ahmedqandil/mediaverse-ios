@@ -9,6 +9,26 @@ private enum ShortsFeed: String, CaseIterable {
     var label: String { self == .forYou ? "For You" : "Following" }
 }
 
+@MainActor
+final class ShortNavigationCache {
+    static let shared = ShortNavigationCache()
+
+    private var seededShort: Short?
+
+    private init() {}
+
+    func seed(_ short: Short) {
+        seededShort = short
+    }
+
+    func take(id: String?) -> Short? {
+        guard let id, seededShort?.id == id else { return nil }
+        let short = seededShort
+        seededShort = nil
+        return short
+    }
+}
+
 // MARK: - ShortsView (root)
 
 struct ShortsView: View {
@@ -17,14 +37,15 @@ struct ShortsView: View {
     let contextShowId: String?
     let contextChannelId: String?
 
+    @AppStorage("playerMuted") private var isMuted: Bool = false
     @State private var shorts:       [Short]     = []
     @State private var currentID:    String?     = nil   // scrollPosition id
-    @State private var isMuted:      Bool        = true
     @State private var nextCursor:   String?     = nil
     @State private var isLoading:    Bool        = false
     @State private var feed:         ShortsFeed  = .forYou
     @State private var emptyReason:  String?     = nil
     @State private var loadError:    String?     = nil
+    @State private var feedMovesForward = true
     @EnvironmentObject private var auth: AuthManager
 
     init(initialShortId: String? = nil, contextShowId: String? = nil, contextChannelId: String? = nil) {
@@ -37,30 +58,55 @@ struct ShortsView: View {
         ZStack(alignment: .top) {
             Color.black.ignoresSafeArea()
 
-            if isLoading && shorts.isEmpty {
-                ProgressView().tint(C.watch)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let err = loadError {
-                // Decode/network error — show it so we can diagnose
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle").font(.system(size: 32)).foregroundStyle(.white.opacity(0.4))
-                    Text(err).font(.system(size: 12)).foregroundStyle(.white.opacity(0.55))
-                        .multilineTextAlignment(.center).padding(.horizontal, 24)
-                    Button {
-                        loadError = nil
-                        Task { await loadInitial() }
-                    } label: {
-                        Text("Retry").font(.system(size: 13, weight: .semibold))
-                            .padding(.horizontal, 20).padding(.vertical, 8)
-                            .background(.white.opacity(0.15)).clipShape(Capsule())
-                            .foregroundStyle(.white)
-                    }
-                }
+            feedContent
+                .id(feed)
+                .transition(feedTransition)
+
+            // Feed tabs pinned at top
+            feedTabs
+        }
+        .simultaneousGesture(feedSwipeGesture)
+        .statusBar(hidden: true)
+        .navigationBarHidden(true)
+        .task { await loadInitial() }
+    }
+
+    // MARK: - Feed tabs
+
+    private var feedTransition: AnyTransition {
+        .asymmetric(
+            insertion: .move(edge: feedMovesForward ? .trailing : .leading).combined(with: .opacity),
+            removal: .move(edge: feedMovesForward ? .leading : .trailing).combined(with: .opacity)
+        )
+    }
+
+    @ViewBuilder
+    private var feedContent: some View {
+        if isLoading && shorts.isEmpty {
+            ProgressView().tint(C.watch)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if shorts.isEmpty {
-                emptyState
-            } else {
-                GeometryReader { geo in
+        } else if let err = loadError {
+            // Decode/network error — show it so we can diagnose
+            VStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle").font(.system(size: 32)).foregroundStyle(.white.opacity(0.4))
+                Text(err).font(.system(size: 12)).foregroundStyle(.white.opacity(0.55))
+                    .multilineTextAlignment(.center).padding(.horizontal, 24)
+                Button {
+                    loadError = nil
+                    Task { await loadInitial() }
+                } label: {
+                    Text("Retry").font(.system(size: 13, weight: .semibold))
+                        .padding(.horizontal, 20).padding(.vertical, 8)
+                        .background(.white.opacity(0.15)).clipShape(Capsule())
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if shorts.isEmpty {
+            emptyState
+        } else {
+            GeometryReader { geo in
+                ScrollViewReader { reader in
                     ScrollView(.vertical) {
                         LazyVStack(spacing: 0) {
                             ForEach(shorts) { short in
@@ -82,33 +128,41 @@ struct ShortsView: View {
                         if currentID == nil {
                             currentID = shorts.first?.id
                         }
+                        scrollToCurrentShort(with: reader)
                     }
                     .onChange(of: shorts.count) { _, _ in
                         if currentID == nil {
                             currentID = shorts.first?.id
                         }
+                        scrollToCurrentShort(with: reader)
                     }
                     .onChange(of: currentID) { _, id in
                         guard let id else { return }
-                        // Pagination: load more when near end
+                        reader.scrollTo(id, anchor: .top)
                         if let idx = shorts.firstIndex(where: { $0.id == id }),
                            idx >= shorts.count - 2 {
                             Task { await loadMore() }
                         }
                     }
                 }
-                .ignoresSafeArea(edges: .top)
             }
-
-            // Feed tabs pinned at top
-            feedTabs
+            .ignoresSafeArea(edges: .top)
         }
-        .statusBar(hidden: true)
-        .navigationBarHidden(true)
-        .task { await loadInitial() }
     }
 
-    // MARK: - Feed tabs
+    private var feedSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 28)
+            .onEnded { value in
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                guard abs(horizontal) > 72, abs(horizontal) > abs(vertical) * 1.35 else { return }
+                if horizontal < 0, feed == .forYou {
+                    Task { await switchFeed(.following) }
+                } else if horizontal > 0, feed == .following {
+                    Task { await switchFeed(.forYou) }
+                }
+            }
+    }
 
     private var feedTabs: some View {
         HStack(spacing: 28) {
@@ -136,13 +190,6 @@ struct ShortsView: View {
             }
         }
         .padding(.top, 52) // below status bar
-        .background(
-            LinearGradient(
-                colors: [.black.opacity(0.65), .clear],
-                startPoint: .top, endPoint: .bottom
-            )
-            .ignoresSafeArea(edges: .top)
-        )
     }
 
     // MARK: - Empty state
@@ -184,6 +231,12 @@ struct ShortsView: View {
 
     private func loadInitial() async {
         guard !isLoading else { return }
+        let seededShort = ShortNavigationCache.shared.take(id: initialShortId)
+        if let seededShort {
+            shorts = [seededShort]
+            currentID = seededShort.id
+            emptyReason = nil
+        }
         isLoading = true
         loadError = nil
         do {
@@ -193,9 +246,13 @@ struct ShortsView: View {
                 channelId: contextChannelId,
                 showId: contextShowId
             )
-            let uniqueShorts = uniqueByID(resp.shorts)
+            let resolved = try await resolveInitialShorts(
+                firstPage: resp,
+                seededShort: seededShort
+            )
+            let uniqueShorts = prioritizeInitialShort(in: uniqueByID(resolved.shorts))
             shorts = uniqueShorts
-            nextCursor = resp.nextCursor
+            nextCursor = resolved.nextCursor
             emptyReason = uniqueShorts.isEmpty ? (resp.reason ?? "empty") : nil
             currentID = initialShortId.flatMap { id in
                 uniqueShorts.contains(where: { $0.id == id }) ? id : nil
@@ -204,6 +261,42 @@ struct ShortsView: View {
             loadError = error.localizedDescription
         }
         isLoading = false
+    }
+
+    private func resolveInitialShorts(
+        firstPage: ShortsResponse,
+        seededShort: Short?
+    ) async throws -> (shorts: [Short], nextCursor: String?) {
+        var allShorts = [Short]()
+        if let seededShort {
+            allShorts.append(seededShort)
+        }
+        allShorts.append(contentsOf: firstPage.shorts)
+
+        guard let initialShortId,
+              !allShorts.contains(where: { $0.id == initialShortId })
+        else {
+            return (allShorts, firstPage.nextCursor)
+        }
+
+        var nextCursor = firstPage.nextCursor
+        for _ in 0..<4 {
+            guard let cursor = nextCursor else { break }
+            let resp = try await APIClient.shared.fetchShorts(
+                feed: feed.rawValue,
+                cursor: cursor,
+                limit: 10,
+                channelId: contextChannelId,
+                showId: contextShowId
+            )
+            allShorts.append(contentsOf: resp.shorts)
+            nextCursor = resp.nextCursor
+            if allShorts.contains(where: { $0.id == initialShortId }) {
+                break
+            }
+        }
+
+        return (allShorts, nextCursor)
     }
 
     private func loadMore() async {
@@ -225,11 +318,14 @@ struct ShortsView: View {
 
     private func switchFeed(_ newFeed: ShortsFeed) async {
         guard newFeed != feed else { return }
-        feed = newFeed
-        shorts = []
-        nextCursor = nil
-        emptyReason = nil
-        isLoading = true
+        feedMovesForward = newFeed == .following
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.9)) {
+            feed = newFeed
+            shorts = []
+            nextCursor = nil
+            emptyReason = nil
+            isLoading = true
+        }
         do {
             let resp = try await APIClient.shared.fetchShorts(
                 feed: newFeed.rawValue,
@@ -245,7 +341,27 @@ struct ShortsView: View {
         } catch {
             loadError = error.localizedDescription
         }
-        isLoading = false
+        withAnimation(.easeInOut(duration: 0.16)) {
+            isLoading = false
+        }
+    }
+
+    private func prioritizeInitialShort(in items: [Short]) -> [Short] {
+        guard let initialShortId,
+              let index = items.firstIndex(where: { $0.id == initialShortId })
+        else { return items }
+
+        var reordered = items
+        let selected = reordered.remove(at: index)
+        reordered.insert(selected, at: 0)
+        return reordered
+    }
+
+    private func scrollToCurrentShort(with reader: ScrollViewProxy) {
+        guard let currentID else { return }
+        DispatchQueue.main.async {
+            reader.scrollTo(currentID, anchor: .top)
+        }
     }
 
     private func uniqueByID<T: Identifiable>(_ items: [T]) -> [T] where T.ID == String {
@@ -277,6 +393,7 @@ private struct ShortCardView: View {
     @State private var lastTap:         Date     = .distantPast
     @State private var endObserver:     NSObjectProtocol?
     @State private var progressTask:    Task<Void, Never>?
+    @State private var showSaveSheet:   Bool     = false
 
     @EnvironmentObject private var auth: AuthManager
 
@@ -333,6 +450,9 @@ private struct ShortCardView: View {
             if active { resumePlay() } else { player?.pause() }
         }
         .onChange(of: isMuted) { _, muted in player?.isMuted = muted }
+        .sheet(isPresented: $showSaveSheet) {
+            SaveToCollectionSheet(videoId: short.id, targetKind: .short)
+        }
     }
 
     private var cardContent: some View {
@@ -375,8 +495,11 @@ private struct ShortCardView: View {
 
             // ── Center pause icon ──────────────────────────────────────────
             if isPaused || showPauseIcon {
-                Image(systemName: isPaused ? "play.fill" : "pause.fill")
-                    .font(.system(size: 28))
+                shortsIcon(
+                    name: isPaused ? "play" : "pause",
+                    fallback: isPaused ? "play.fill" : "pause.fill"
+                )
+                    .frame(width: 28, height: 28)
                     .foregroundStyle(.white)
                     .frame(width: 72, height: 72)
                     .background(.black.opacity(0.52))
@@ -388,8 +511,11 @@ private struct ShortCardView: View {
             Button {
                 isMuted.toggle()
             } label: {
-                Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .font(.system(size: 14))
+                shortsIcon(
+                    name: isMuted ? "volume-x" : "volume",
+                    fallback: isMuted ? "speaker.slash" : "speaker.wave.2"
+                )
+                    .frame(width: 16, height: 16)
                     .foregroundStyle(.white)
                     .frame(width: 38, height: 38)
                     .background(.black.opacity(0.42))
@@ -474,7 +600,8 @@ private struct ShortCardView: View {
         return VStack(alignment: .center, spacing: 18) {
             // Like
             actionBtn(
-                icon:       isLiked ? "heart.fill" : "heart",
+                assetIcon:  isLiked ? "heart-filled" : "heart",
+                fallbackIcon: isLiked ? "heart.fill" : "heart",
                 color:      isLiked ? likeRed : .white,
                 bgColor:    isLiked ? likeRed.opacity(0.35) : .black.opacity(0.35),
                 label:      likeCount > 0 ? fmtCount(likeCount) : nil,
@@ -483,38 +610,51 @@ private struct ShortCardView: View {
 
             // Dislike — matches web IcThumbDown
             actionBtn(
-                icon:    isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown",
+                assetIcon: "thumbs-down",
+                fallbackIcon: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown",
                 color:   isDisliked ? Color(white: 0.67) : .white,
                 bgColor: .black.opacity(0.35),
                 label:   nil
             ) { Task { await handleDislike() } }
 
             // Comment
-            actionBtn(icon: "bubble.left.fill", color: .white, bgColor: .black.opacity(0.35), label: nil) {
+            actionBtn(assetIcon: "message-square", fallbackIcon: "bubble.left", color: .white, bgColor: .black.opacity(0.35), label: nil) {
                 withAnimation(.spring(duration: 0.34)) { showComments = true }
             }
 
             // Share
-            actionBtn(icon: "paperplane.fill", color: .white, bgColor: .black.opacity(0.35), label: "Share") {
+            actionBtn(assetIcon: "share", fallbackIcon: "square.and.arrow.up", color: .white, bgColor: .black.opacity(0.35), label: "Share") {
                 shareShort()
             }
 
             // Bookmark / Save — matches web IcBookmark
             actionBtn(
-                icon:    isBookmarked ? "bookmark.fill" : "bookmark",
+                assetIcon: "bookmark",
+                fallbackIcon: isBookmarked ? "bookmark.fill" : "bookmark",
                 color:   isBookmarked ? C.watch : .white,
                 bgColor: isBookmarked ? C.watch.opacity(0.30) : .black.opacity(0.35),
                 label:   "Save",
                 labelColor: isBookmarked ? C.watch : .white.opacity(0.85)
-            ) { isBookmarked.toggle() }
+            ) {
+                showSaveSheet = true
+                isBookmarked = true
+            }
         }
     }
 
-    private func actionBtn(icon: String, color: Color, bgColor: Color, label: String?, labelColor: Color = .white.opacity(0.85), action: @escaping () -> Void) -> some View {
+    private func actionBtn(
+        assetIcon: String,
+        fallbackIcon: String,
+        color: Color,
+        bgColor: Color,
+        label: String?,
+        labelColor: Color = .white.opacity(0.85),
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             VStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 22))
+                shortsIcon(name: assetIcon, fallback: fallbackIcon)
+                    .frame(width: 22, height: 22)
                     .foregroundStyle(color)
                     .frame(width: 50, height: 50)
                     .background(bgColor)
@@ -527,6 +667,10 @@ private struct ShortCardView: View {
                 }
             }
         }
+    }
+
+    private func shortsIcon(name: String, fallback: String) -> some View {
+        MediaverseIcon(name: name, fallbackSystemName: fallback)
     }
 
     // MARK: - Bottom info
@@ -662,8 +806,8 @@ private struct ShortCardView: View {
                     }
                 }
                 Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10))
+                MediaverseIcon(name: "chevron-right", fallbackSystemName: "chevron.right")
+                    .frame(width: 10, height: 10)
                     .foregroundStyle(.white.opacity(0.4))
             }
             .padding(.horizontal, 10).padding(.vertical, 6).padding(.leading, 6)
@@ -684,6 +828,7 @@ private struct ShortCardView: View {
         let item   = AVPlayerItem(url: url)
         let p      = AVPlayer(playerItem: item)
         p.isMuted  = isMuted
+        p.volume = 1
         p.actionAtItemEnd = .none
         player = p
 
@@ -849,8 +994,8 @@ private struct HeartBurstView: View {
     @State private var offsetY: CGFloat = 0
 
     var body: some View {
-        Image(systemName: "heart.fill")
-            .font(.system(size: 88))
+        MediaverseIcon(name: "heart-filled", fallbackSystemName: "heart.fill")
+            .frame(width: 88, height: 88)
             .foregroundStyle(Color(red: 1, green: 0.28, blue: 0.34))
             .scaleEffect(scale)
             .opacity(opacity)
@@ -925,8 +1070,8 @@ private struct CommentsDrawer: View {
                     .foregroundStyle(.white)
                 Spacer()
                 Button { onClose() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .semibold))
+                    MediaverseIcon(name: "xmark", fallbackSystemName: "xmark")
+                        .frame(width: 14, height: 14)
                         .foregroundStyle(.white)
                 }
             }

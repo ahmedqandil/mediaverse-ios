@@ -1,8 +1,8 @@
 import Foundation
 
 /// Simple, persistent JWT storage backed by UserDefaults.
-/// The stored token is injected as a `Cookie` header on every API request,
-/// bypassing iOS HTTPCookieStorage which struggles with `__Secure-` prefixed names.
+/// The stored token is injected as `Authorization: Bearer <token>` on authenticated
+/// API requests, with cookies kept only for backend compatibility.
 enum SessionStorage {
     private static let key = "westreem.sessionJWT"
 

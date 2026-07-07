@@ -293,11 +293,16 @@ private struct PostCommentsView: View {
     private func loadComments() async {
         loading = true; fetchError = false
         do {
-            comments = try await APIClient.shared.fetchPostComments(postId: postId)
+            let fetchedComments = try await APIClient.shared.fetchPostComments(postId: postId)
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+                comments = fetchedComments
+            }
         } catch {
             fetchError = true
         }
-        loading = false
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+            loading = false
+        }
     }
 
     private func submitComment() async {
@@ -307,15 +312,19 @@ private struct PostCommentsView: View {
         do {
             let c = try await APIClient.shared.createPostComment(postId: postId, content: text)
             await MainActor.run {
-                comments.append(c)
-                newText = ""
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+                    comments.append(c)
+                    newText = ""
+                }
             }
         } catch {}
         submitting = false
     }
 
     private func addReply(parentId: String, reply: PostComment) {
-        comments = comments.map { $0.addingReply(reply, to: parentId) }
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+            comments = comments.map { $0.addingReply(reply, to: parentId) }
+        }
     }
 }
 
@@ -381,11 +390,16 @@ private struct PostCard: View {
             // Collapsible comments
             if showComments {
                 PostCommentsView(postId: post.id)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal: .opacity
+                    ))
             }
         }
         .background(C.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay { RoundedRectangle(cornerRadius: 12).stroke(C.border, lineWidth: 0.5) }
+        .animation(.spring(response: 0.28, dampingFraction: 0.9), value: showComments)
     }
 
     // MARK: Thumbnail
@@ -508,31 +522,34 @@ private struct PostCard: View {
             // Caption
             if let caption = post.caption, !caption.isEmpty {
                 Text(caption)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.white.opacity(0.55))
-                    .lineLimit(2)
-                    .lineSpacing(2)
-                    .padding(.horizontal, 12).padding(.top, 4)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.72))
+                    .lineLimit(3)
+                    .lineSpacing(3)
+                    .padding(.horizontal, 12).padding(.top, 6)
             }
 
             Spacer(minLength: 4)
 
             // Action strip
-            HStack(spacing: 0) {
+            HStack(spacing: 2) {
                 // Like
                 Button {
                     onLikeToggle(post.id)
                 } label: {
-                    HStack(spacing: 4) {
+                    HStack(alignment: .center, spacing: 5) {
                         Image(systemName: post.myLike ? "heart.fill" : "heart")
-                            .font(.system(size: 11))
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 18, height: 18, alignment: .center)
                         if post.likeCount > 0 {
                             Text("\(post.likeCount)")
-                                .font(.system(size: 10))
+                                .font(.system(size: 13, weight: .semibold))
+                                .frame(height: 18, alignment: .center)
                         }
                     }
-                    .foregroundStyle(post.myLike ? Color(red: 1, green: 0.28, blue: 0.34) : Color.white.opacity(0.35))
-                    .padding(.horizontal, 8).padding(.vertical, 6)
+                    .frame(height: 22, alignment: .center)
+                    .foregroundStyle(post.myLike ? Color(red: 1, green: 0.28, blue: 0.34) : Color.white.opacity(0.48))
+                    .padding(.horizontal, 10).padding(.vertical, 8)
                 }
                 .buttonStyle(.plain)
 
@@ -541,9 +558,10 @@ private struct PostCard: View {
                     withAnimation(.easeInOut(duration: 0.2)) { showComments.toggle() }
                 } label: {
                     Image(systemName: "bubble.left")
-                        .font(.system(size: 11))
-                        .foregroundStyle(showComments ? Color.white.opacity(0.8) : Color.white.opacity(0.35))
-                        .padding(.horizontal, 8).padding(.vertical, 6)
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 22, height: 22, alignment: .center)
+                        .foregroundStyle(showComments ? Color.white.opacity(0.86) : Color.white.opacity(0.48))
+                        .padding(.horizontal, 10).padding(.vertical, 8)
                 }
                 .buttonStyle(.plain)
 
@@ -551,10 +569,11 @@ private struct PostCard: View {
                 Button {
                     sharePost()
                 } label: {
-                    Image(systemName: "paperplane")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.white.opacity(0.35))
-                        .padding(.horizontal, 8).padding(.vertical, 6)
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 22, height: 22, alignment: .center)
+                        .foregroundStyle(Color.white.opacity(0.48))
+                        .padding(.horizontal, 10).padding(.vertical, 8)
                 }
                 .buttonStyle(.plain)
 
@@ -565,9 +584,10 @@ private struct PostCard: View {
                         onDelete(post.id)
                     } label: {
                         Image(systemName: "trash")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Color.white.opacity(0.2))
-                            .padding(.horizontal, 8).padding(.vertical, 6)
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 22, height: 22, alignment: .center)
+                            .foregroundStyle(Color.white.opacity(0.28))
+                            .padding(.horizontal, 10).padding(.vertical, 8)
                     }
                     .buttonStyle(.plain)
                 }
@@ -610,11 +630,10 @@ private struct ClipFrameThumbnail: View {
             } else {
                 Color.black.opacity(0.4)
                     .overlay {
-                        if !failed {
-                            ProgressView()
-                                .tint(.white.opacity(0.5))
-                                .scaleEffect(0.6)
-                        }
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(.white.opacity(failed ? 0.22 : 0.34))
+                            .offset(x: 1)
                     }
             }
         }
@@ -668,6 +687,10 @@ struct PostSectionView: View {
     @State private var visibleCount = 12
 
     @EnvironmentObject private var auth: AuthManager
+
+    private var contentAnimation: Animation {
+        .spring(response: 0.32, dampingFraction: 0.88)
+    }
 
     init(
         target: PostSectionTarget,
@@ -753,9 +776,14 @@ struct PostSectionView: View {
                                     .frame(height: 83)
                                     .overlay { RoundedRectangle(cornerRadius: 12).stroke(C.border, lineWidth: 0.5) }
                             }
+                            .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
                         } else {
                             ForEach(visiblePosts) { post in
                                 PostCard(post: post, target: target, onSeek: onSeek, onDelete: deletePost, onLikeToggle: toggleLike)
+                                    .transition(.asymmetric(
+                                        insertion: .move(edge: .bottom).combined(with: .opacity),
+                                        removal: .opacity
+                                    ))
                             }
 
                             // Load more
@@ -798,6 +826,9 @@ struct PostSectionView: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
+            .animation(contentAnimation, value: expanded)
+            .animation(contentAnimation, value: loading)
+            .animation(contentAnimation, value: postIdentity)
             .task { await loadPosts() }
             .onChange(of: reloadToken) { _, _ in
                 Task { await loadPosts(expandAfterLoad: true) }
@@ -816,25 +847,46 @@ struct PostSectionView: View {
         return Array(posts.prefix(visibleCount))
     }
 
+    private var postIdentity: String {
+        posts.map(\.id).joined(separator: "|")
+    }
+
+    @MainActor
     private func loadPosts(expandAfterLoad: Bool = false) async {
-        loading = true
+        withAnimation(.easeOut(duration: 0.16)) {
+            loading = true
+        }
         do {
+            let fetchedPosts: [UserPost]
             switch target {
-            case .video(let id):   posts = try await APIClient.shared.fetchPosts(videoId: id)
-            case .episode(let id): posts = try await APIClient.shared.fetchPosts(episodeId: id)
+            case .video(let id):
+                fetchedPosts = try await APIClient.shared.fetchPosts(videoId: id)
+            case .episode(let id):
+                fetchedPosts = try await APIClient.shared.fetchPosts(episodeId: id)
             }
-            if expandAfterLoad, !posts.isEmpty {
-                expanded = true
-                visibleCount = max(visibleCount, min(pageSize, posts.count))
+            withAnimation(contentAnimation) {
+                posts = fetchedPosts
+                if expandAfterLoad, !fetchedPosts.isEmpty {
+                    expanded = true
+                    visibleCount = max(visibleCount, min(pageSize, fetchedPosts.count))
+                }
+                loading = false
             }
-        } catch {}
-        loading = false
+        } catch {
+            withAnimation(contentAnimation) {
+                loading = false
+            }
+        }
     }
 
     private func deletePost(_ id: String) {
         Task {
             try? await APIClient.shared.deletePost(postId: id)
-            await MainActor.run { posts.removeAll { $0.id == id } }
+            await MainActor.run {
+                withAnimation(contentAnimation) {
+                    posts.removeAll { $0.id == id }
+                }
+            }
         }
     }
 
@@ -880,11 +932,13 @@ struct PostSectionView: View {
     }
 
     private func upsertInsertedPost(_ post: UserPost) {
-        posts.removeAll { $0.id == post.id }
-        posts.append(post)
-        posts.sort { $0.markIn < $1.markIn }
-        expanded = true
-        visibleCount = max(visibleCount, min(pageSize, posts.count))
-        loading = false
+        withAnimation(contentAnimation) {
+            posts.removeAll { $0.id == post.id }
+            posts.append(post)
+            posts.sort { $0.markIn < $1.markIn }
+            expanded = true
+            visibleCount = max(visibleCount, min(pageSize, posts.count))
+            loading = false
+        }
     }
 }

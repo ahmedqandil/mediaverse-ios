@@ -11,6 +11,7 @@ struct ShowView: View {
     let showId: String
     @EnvironmentObject private var auth: AuthManager
     @Environment(\.openURL) private var openURL
+    @Environment(\.dismiss) private var dismiss
 
     // API data
     @State private var showResp:    ShowPageResponse?
@@ -28,6 +29,7 @@ struct ShowView: View {
     @State private var checkoutProduct: ShowCheckoutProduct?
     @State private var checkoutMode: ShowCheckoutMode = .svod
     @State private var checkoutMessage: String?
+    @State private var showSaveSheet: Bool = false
 
     enum STab: String, CaseIterable, Identifiable {
         case episodes, videos, shorts, allVideos, playlists, related, info
@@ -79,6 +81,10 @@ struct ShowView: View {
         clip.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "short"
     }
 
+    private func seasonAnchorId(_ seasonId: String) -> String {
+        "season-\(seasonId)"
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -94,6 +100,7 @@ struct ShowView: View {
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .task { await load() }
         .sheet(item: $checkoutProduct) { product in
             ShowCheckoutSheet(
@@ -104,6 +111,9 @@ struct ShowView: View {
             )
             .presentationDetents([.medium])
             .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showSaveSheet) {
+            SaveToCollectionSheet(showId: showId)
         }
         .alert("Checkout", isPresented: Binding(
             get: { checkoutMessage != nil },
@@ -120,23 +130,51 @@ struct ShowView: View {
     private func showContent(_ sh: ShowData) -> some View {
         GeometryReader { proxy in
             let pageWidth = proxy.size.width
+            let topInset = proxy.safeAreaInsets.top
 
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 0) {
-                    heroSection(sh, width: pageWidth)
-                    tabBarSection(sh)
-                        .frame(width: pageWidth)
-                    tabContentSection(sh, width: pageWidth)
-                        .padding(.top, 20)
-                        .padding(.bottom, 40)
+            ZStack(alignment: .topLeading) {
+                ScrollViewReader { pageScrollProxy in
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(spacing: 0) {
+                            heroSection(sh, width: pageWidth)
+                            showDescriptionSection(sh)
+                                .frame(width: pageWidth)
+                            tabBarSection(sh)
+                                .frame(width: pageWidth)
+                            tabContentSection(sh, width: pageWidth, pageScrollProxy: pageScrollProxy)
+                                .padding(.top, 12)
+                                .padding(.bottom, 40)
+                        }
+                        .frame(width: pageWidth, alignment: .topLeading)
+                    }
+                    .scrollClipDisabled(false)
+                    .ignoresSafeArea(edges: .top)
                 }
-                .frame(width: pageWidth, alignment: .topLeading)
+
+                heroBackButton()
+                    .padding(.leading, 16)
+                    .padding(.top, max(12, topInset - 6))
             }
-            .scrollClipDisabled(false)
         }
     }
 
     // MARK: - Hero
+
+    private func heroBackButton() -> some View {
+        Button {
+            dismiss()
+        } label: {
+            MediaverseIcon(name: "chevron-left", fallbackSystemName: "chevron.left")
+                .frame(width: 22, height: 22)
+                .foregroundStyle(.white)
+                .frame(width: 52, height: 52)
+                .background(.black.opacity(0.30))
+                .clipShape(Circle())
+                .overlay { Circle().stroke(.white.opacity(0.16), lineWidth: 1) }
+                .shadow(color: .black.opacity(0.35), radius: 12, y: 5)
+        }
+        .buttonStyle(.plain)
+    }
 
     private func heroSection(_ sh: ShowData, width: CGFloat) -> some View {
         let heroHeight: CGFloat = isNonSerialized ? 400 : 320
@@ -209,28 +247,6 @@ struct ShowView: View {
             // Metadata pills row
             metadataRow(sh)
 
-            // Synopsis
-            if let desc = sh.description, !desc.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(desc)
-                        .font(.caption)
-                        .foregroundStyle(C.text.opacity(0.75))
-                        .lineLimit(synopsisExpanded ? nil : 3)
-                        .lineSpacing(3)
-                    if desc.count > 160 {
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                synopsisExpanded.toggle()
-                            }
-                        } label: {
-                            Text(synopsisExpanded ? "Show less" : "More")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(C.watch)
-                        }
-                    }
-                }
-            }
-
             // CTA buttons
             heroCTAs(sh)
         }
@@ -297,6 +313,38 @@ struct ShowView: View {
 
     private enum BadgeStyle { case bordered, pill }
 
+    @ViewBuilder
+    private func showDescriptionSection(_ sh: ShowData) -> some View {
+        if let desc = sh.description?.trimmingCharacters(in: .whitespacesAndNewlines), !desc.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(desc)
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(C.text.opacity(0.82))
+                    .lineLimit(synopsisExpanded ? nil : 3)
+                    .lineSpacing(4)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if desc.count > 160 {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            synopsisExpanded.toggle()
+                        }
+                    } label: {
+                        Text(synopsisExpanded ? "Show less" : "More")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(C.watch)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, C.pagePad)
+            .padding(.top, 10)
+            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(C.bg)
+        }
+    }
+
     private func heroCTAs(_ sh: ShowData) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
@@ -343,6 +391,19 @@ struct ShowView: View {
                     UIActivityViewController(activityItems: [url], applicationActivities: nil).presentFromRoot()
                 } label: {
                     Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 14))
+                        .foregroundStyle(C.text)
+                        .frame(width: 40, height: 40)
+                        .background(.white.opacity(0.12))
+                        .clipShape(Circle())
+                        .overlay { Circle().stroke(.white.opacity(0.15), lineWidth: 1) }
+                }
+
+                // Save show
+                Button {
+                    showSaveSheet = true
+                } label: {
+                    Image(systemName: "bookmark")
                         .font(.system(size: 14))
                         .foregroundStyle(C.text)
                         .frame(width: 40, height: 40)
@@ -475,7 +536,9 @@ struct ShowView: View {
                 }
                 .padding(.horizontal, C.pagePad)
             }
+            .frame(height: 46)
         }
+        .frame(height: 46)
         .background(C.bg)
         .overlay(alignment: .bottom) {
             Divider().background(C.border)
@@ -485,10 +548,10 @@ struct ShowView: View {
     // MARK: - Tab content
 
     @ViewBuilder
-    private func tabContentSection(_ sh: ShowData, width: CGFloat) -> some View {
+    private func tabContentSection(_ sh: ShowData, width: CGFloat, pageScrollProxy: ScrollViewProxy) -> some View {
         switch activeTab {
         case .episodes:
-            episodesTab(sh)
+            episodesTab(sh, pageScrollProxy: pageScrollProxy)
                 .frame(width: width - (C.pagePad * 2), alignment: .leading)
                 .padding(.horizontal, C.pagePad)
                 .frame(width: width, alignment: .leading)
@@ -507,10 +570,8 @@ struct ShowView: View {
             .frame(width: width, alignment: .leading)
 
         case .shorts:
-            let cols3 = [GridItem(.flexible(), spacing: 8),
-                         GridItem(.flexible(), spacing: 8),
-                         GridItem(.flexible(), spacing: 8)]
-            LazyVGrid(columns: cols3, spacing: 10) {
+            let cols = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+            LazyVGrid(columns: cols, spacing: 16) {
                 ForEach(shortsList) { v in
                     NavigationLink(value: AppRoute.short(v.id, showId: sh.id, channelId: nil)) {
                         ShowClipCard(clip: v, style: .short)
@@ -544,7 +605,7 @@ struct ShowView: View {
     // MARK: - Episodes tab
 
     @ViewBuilder
-    private func episodesTab(_ sh: ShowData) -> some View {
+    private func episodesTab(_ sh: ShowData, pageScrollProxy: ScrollViewProxy) -> some View {
         let seasons = sh.seasons.filter { !$0.episodes.isEmpty }
         if allEpisodes.isEmpty {
             emptyState(icon: "play.rectangle.fill", title: "No episodes yet",
@@ -557,7 +618,9 @@ struct ShowView: View {
                         HStack(spacing: 8) {
                             ForEach(seasons) { s in
                                 Button {
-                                    // Ideally scroll to the season heading — approximated with tab switch
+                                    withAnimation(.easeInOut(duration: 0.22)) {
+                                        pageScrollProxy.scrollTo(seasonAnchorId(s.id), anchor: .top)
+                                    }
                                 } label: {
                                     Text("Season \(s.seasonNumber)\(s.title != nil ? " — \(s.title!)" : "")")
                                         .font(.system(size: 12, weight: .semibold))
@@ -585,6 +648,7 @@ struct ShowView: View {
                                 .tracking(1.2)
                                 .padding(.bottom, 12)
                                 .padding(.top, 8)
+                                .id(seasonAnchorId(season.id))
 
                             ForEach(season.episodes) { ep in
                                 EpisodeRowView(
@@ -651,10 +715,8 @@ struct ShowView: View {
                                 .tracking(1.2)
                                 .padding(.horizontal, C.pagePad)
 
-                            let cols3 = [GridItem(.flexible(), spacing: 8),
-                                         GridItem(.flexible(), spacing: 8),
-                                         GridItem(.flexible(), spacing: 8)]
-                            LazyVGrid(columns: cols3, spacing: 10) {
+                            let cols = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+                            LazyVGrid(columns: cols, spacing: 16) {
                                 ForEach(shortsList) { v in
                                     NavigationLink(value: AppRoute.short(v.id, showId: sh.id, channelId: nil)) {
                                         ShowClipCard(clip: v, style: .short)
@@ -765,20 +827,15 @@ struct ShowView: View {
     private func load() async {
         isLoading = true
         loadError = nil
-        async let respTask   = APIClient.shared.fetchShow(id: showId)
-        async let followTask = APIClient.shared.fetchShowFollowStatus(id: showId)
-        async let clipsTask  = APIClient.shared.fetchShowClips(id: showId)
-        async let plsTask    = APIClient.shared.fetchShowPlaylists(id: showId)
 
         do {
-            showResp = try await respTask
+            showResp = try await APIClient.shared.fetchShow(id: showId)
         } catch {
             showResp = nil
             loadError = error.localizedDescription
+            isLoading = false
+            return
         }
-        followStatus = try? await followTask
-        clips        = (try? await clipsTask) ?? []
-        playlists    = (try? await plsTask) ?? []
 
         // Set initial tab
         if show != nil {
@@ -791,6 +848,21 @@ struct ShowView: View {
             }
         }
         isLoading = false
+        Task { await loadSecondaryShowContent() }
+    }
+
+    private func loadSecondaryShowContent() async {
+        async let followTask = APIClient.shared.fetchShowFollowStatus(id: showId)
+        async let clipsTask = APIClient.shared.fetchShowClips(id: showId)
+        async let plsTask = APIClient.shared.fetchShowPlaylists(id: showId)
+
+        followStatus = try? await followTask
+        clips = (try? await clipsTask) ?? []
+        playlists = (try? await plsTask) ?? []
+
+        if show != nil, activeTab == .info, videosList.isEmpty, clips?.isEmpty == false {
+            activeTab = .shorts
+        }
     }
 
     private var loadFailureView: some View {
@@ -1280,10 +1352,7 @@ private struct ShowClipCard: View {
         case short
 
         var aspectRatio: CGFloat {
-            switch self {
-            case .video: return 16.0 / 9.0
-            case .short: return 9.0 / 16.0
-            }
+            16.0 / 9.0
         }
     }
 
@@ -1291,32 +1360,38 @@ private struct ShowClipCard: View {
     let style: CardStyle
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            C.surface
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let height = width / style.aspectRatio
 
-            if let url = C.mediaURL(clip.thumbnailUrl) {
-                AsyncImage(url: url) { img in
-                    img.resizable().scaledToFill()
-                } placeholder: {
-                    C.surface
+            ZStack(alignment: .bottomTrailing) {
+                C.surface
+
+                if let url = C.mediaURL(clip.thumbnailUrl) {
+                    AsyncImage(url: url) { img in
+                        img.resizable().scaledToFill()
+                    } placeholder: {
+                        C.surface
+                    }
+                    .frame(width: width, height: height)
+                    .clipped()
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-            }
 
-            if let dur = clip.duration, dur > 0 {
-                Text(fmtDuration(dur))
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 5).padding(.vertical, 2)
-                    .background(.black.opacity(0.72))
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
-                    .padding(5)
+                if let dur = clip.duration, dur > 0 {
+                    Text(fmtDuration(dur))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(.black.opacity(0.72))
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                        .padding(5)
+                }
             }
+            .frame(width: width, height: height)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipped()
         }
         .aspectRatio(style.aspectRatio, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .clipped()
     }
 
     private func fmtDuration(_ s: Double) -> String {
@@ -1366,44 +1441,90 @@ private struct ChannelPlaylistCard2: View {
     private var count: Int { playlist._count.items }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .bottomTrailing) {
                 mosaicThumbnail
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .aspectRatio(16/9, contentMode: .fit)
+                    .aspectRatio(16/9, contentMode: .fill)
+                    .frame(maxWidth: .infinity)
+                    .clipped()
 
-                Text("\(count) \(count == 1 ? "video" : "videos")")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(.black.opacity(0.80))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.68)],
+                    startPoint: .center,
+                    endPoint: .bottom
+                )
+
+                playlistCountBadge
                     .padding(8)
             }
+            .aspectRatio(16/9, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay { RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.08), lineWidth: 1) }
 
-            Text(playlist.title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(C.text)
-                .lineLimit(2)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(playlist.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(C.text)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(minHeight: 34, alignment: .topLeading)
+
+                HStack(spacing: 5) {
+                    MediaverseIcon(name: "playlist", fallbackSystemName: "play.rectangle.on.rectangle")
+                        .frame(width: 11, height: 11)
+                    Text("Playlist")
+                    Text("·")
+                    Text("\(count)")
+                }
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(C.textMuted)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
         }
+        .background(C.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay { RoundedRectangle(cornerRadius: 14).stroke(C.border, lineWidth: 1) }
+    }
+
+    private var playlistCountBadge: some View {
+        let itemName = playlist.type == "short" ? "short" : "video"
+
+        return Text("\(count) \(itemName)\(count == 1 ? "" : "s")")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(.black.opacity(0.76))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     @ViewBuilder
     private var mosaicThumbnail: some View {
-        if thumbnails.count >= 4 {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 0), GridItem(.flexible(), spacing: 0)], spacing: 0) {
-                ForEach(thumbnails.prefix(4), id: \.self) { t in
-                    AsyncImage(url: C.mediaURL(t)) { img in img.resizable().scaledToFill() } placeholder: { C.surface }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .aspectRatio(1, contentMode: .fit)
-                        .clipped()
+        let visibleThumbs = Array(thumbnails.prefix(4))
+
+        if visibleThumbs.count >= 4 {
+            GeometryReader { geo in
+                let cellWidth = geo.size.width / 2
+                let cellHeight = geo.size.height / 2
+
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        mosaicImage(visibleThumbs[0])
+                            .frame(width: cellWidth, height: cellHeight)
+                        mosaicImage(visibleThumbs[1])
+                            .frame(width: cellWidth, height: cellHeight)
+                    }
+                    HStack(spacing: 0) {
+                        mosaicImage(visibleThumbs[2])
+                            .frame(width: cellWidth, height: cellHeight)
+                        mosaicImage(visibleThumbs[3])
+                            .frame(width: cellWidth, height: cellHeight)
+                    }
                 }
             }
-        } else if let t = thumbnails.first {
-            AsyncImage(url: C.mediaURL(t)) { img in img.resizable().scaledToFill() } placeholder: { C.surface }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .aspectRatio(16/9, contentMode: .fit)
-                .clipped()
+        } else if let t = visibleThumbs.first {
+            mosaicImage(t)
         } else {
             C.surface
                 .overlay {
@@ -1412,6 +1533,15 @@ private struct ChannelPlaylistCard2: View {
                         .foregroundStyle(C.textMuted)
                 }
         }
+    }
+
+    private func mosaicImage(_ url: String) -> some View {
+        AsyncImage(url: C.mediaURL(url)) { img in
+            img.resizable().scaledToFill()
+        } placeholder: {
+            C.surface
+        }
+        .clipped()
     }
 }
 

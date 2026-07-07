@@ -45,6 +45,24 @@ private enum HomeItem: Identifiable {
     }
 }
 
+private enum HomeFeedLoadError: Error {
+    case timedOut
+    case noResponse
+}
+
+private struct StoryViewerPresentation: Identifiable {
+    let groupId: String
+    var id: String { groupId }
+}
+
+private struct HomeVideoFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
 // MARK: - Press scale effect (matches web hover → tap scale)
 
 private struct CardPressStyle: ButtonStyle {
@@ -63,14 +81,23 @@ struct HomeView: View {
 
     // MARK: State
 
+    @AppStorage("playerMuted") private var playerMuted = false
     @State private var feed:               [FeedVideo]          = []
+    @State private var renderItems:        [HomeItem]           = []
     @State private var continueItems:      [ProgressItem]       = []
     @State private var cursor:             String?              = nil
-    @State private var isLoading                                = true
+    @State private var isLoading                                = false
     @State private var isLoadingMore                            = false
+    @State private var isPullRefreshing                         = false
     @State private var searchPresented                          = false
+    @State private var notificationsPresented                   = false
+    @State private var unreadNotificationCount                  = 0
     @State private var didStartInitialLoad                      = false
     @State private var isLoadTaskRunning                        = false
+    @State private var initialLoadTask: Task<Void, Never>?       = nil
+    @State private var activePreviewVideoId: String?            = nil
+    @StateObject private var storiesRepository                  = StoriesRepository()
+    @State private var storyViewerPresentation: StoryViewerPresentation? = nil
 
     // Feed config — drives carousel ordering, interleave interval, and slot count.
     // Loaded from /api/feed-config on every refresh; falls back to .default offline.
@@ -89,20 +116,22 @@ struct HomeView: View {
     @State private var heroLooper: AVPlayerLooper? = nil
 
     @EnvironmentObject private var auth: AuthManager
+    @EnvironmentObject private var miniPlayer: MiniPlayerManager
+    @EnvironmentObject private var platformConfig: PlatformConfigManager
 
     // MARK: - Computed: interleaved render list
 
     /// Builds the feed list with carousels interleaved every mobileCarouselEvery
     /// videos, capped at mobileCarouselCount strips — all values come from
     /// /api/feed-config so the layout exactly matches the web HomeFeedClient.
-    private var renderItems: [HomeItem] {
+    private func makeRenderItems(from videos: [FeedVideo]) -> [HomeItem] {
         var result  = [HomeItem]()
         var slotIdx = 0
         let everyN  = max(1, feedConfig.mobileCarouselEvery)
         let slotCap = max(0, feedConfig.mobileCarouselCount)
         let slots   = Array(feedConfig.carouselSlots.prefix(slotCap))
 
-        for (i, video) in uniqueByID(feed).enumerated() {
+        for (i, video) in uniqueByID(videos).enumerated() {
             result.append(.video(video))
             if (i + 1) % everyN == 0, slotIdx < slots.count {
                 let slot = slots[slotIdx]
@@ -134,9 +163,79 @@ struct HomeView: View {
         }
     }
 
+    private var feedVideoIdsInOrder: [String] {
+        renderItems.compactMap { item in
+            if case .video(let video) = item {
+                return video.id
+            }
+            return nil
+        }
+    }
+
     private func uniqueByID<T: Identifiable>(_ items: [T]) -> [T] where T.ID == String {
         var seen = Set<String>()
         return items.filter { seen.insert($0.id).inserted }
+    }
+
+    private func route(for video: FeedVideo) -> AppRoute {
+        AppRoute.media(id: video.id, type: video.type, showId: video.show?.id, channelId: video.channel?.id)
+    }
+
+    private func sourceRoute(for video: FeedVideo) -> AppRoute? {
+        if let channel = video.channel {
+            return .channel(channel.handle ?? channel.id)
+        }
+        if let show = video.show {
+            return .show(show.id)
+        }
+        return nil
+    }
+
+    private var isHomeAutoplayBlocked: Bool {
+        miniPlayer.item != nil || miniPlayer.isExpansionHandoffActive
+    }
+
+    private var homeHeroHeight: CGFloat {
+        min(660, max(560, UIScreen.main.bounds.height * 0.68))
+    }
+
+    private func canReplaceMiniPlayer(with video: FeedVideo) -> Bool {
+        guard miniPlayer.item != nil, C.mediaURL(video.videoUrl) != nil else { return false }
+        if case .video = route(for: video) {
+            return true
+        }
+        return false
+    }
+
+    private func replaceMiniPlayerAndExpand(with video: FeedVideo) {
+        guard let url = C.mediaURL(video.videoUrl) else { return }
+        let player = AVPlayer(url: url)
+        player.isMuted = playerMuted
+        player.volume = 1
+        miniPlayer.replaceAndExpand(player: player, title: video.title, route: route(for: video))
+    }
+
+    private func updateActivePreview(from frames: [String: CGRect]) {
+        guard !isHomeAutoplayBlocked else {
+            activePreviewVideoId = nil
+            return
+        }
+
+        let switchY: CGFloat = 88
+        let orderedVisibleFrames = feedVideoIdsInOrder.compactMap { id -> (id: String, frame: CGRect)? in
+            guard let frame = frames[id], frame.maxY > 0 else { return nil }
+            return (id, frame)
+        }
+
+        let candidate = orderedVisibleFrames.first { item in
+            item.frame.minY >= switchY
+        } ?? orderedVisibleFrames.first { item in
+            item.frame.maxY > switchY
+        }
+
+        if activePreviewVideoId != candidate?.id {
+            activePreviewVideoId = candidate?.id
+        }
     }
 
     // MARK: - Body
@@ -145,7 +244,7 @@ struct HomeView: View {
         ZStack {
             C.bg.ignoresSafeArea()
 
-            if isLoading {
+            if isLoading && feed.isEmpty && featuredShows.isEmpty && continueItems.isEmpty {
                 ProgressView()
                     .tint(C.watch)
                     .id("home-loading")
@@ -156,30 +255,122 @@ struct HomeView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                Text("Mediaverse")
-                    .font(.system(size: 17, weight: .bold))
-                    .fontDesign(.rounded)
-                    .foregroundStyle(C.watch)
+            ToolbarItem(placement: .topBarLeading) {
+                homeHeaderTitle
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button { searchPresented = true } label: {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(C.text)
-                        .frame(width: 36, height: 36)
-                }
+                homeHeaderActions
             }
         }
         .sheet(isPresented: $searchPresented) { SearchView() }
-        .task { await loadInitialFeedIfNeeded() }
+        .sheet(isPresented: $notificationsPresented) {
+            NotificationsView { unreadCount in
+                unreadNotificationCount = unreadCount
+            }
+        }
+        .fullScreenCover(item: $storyViewerPresentation, onDismiss: {
+            guard platformConfig.storiesFeedEnabled else { return }
+            Task { await storiesRepository.refresh(force: true) }
+        }) { presentation in
+            StoryViewerView(repository: storiesRepository, initialGroupId: presentation.groupId)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .storiesDidChange)) { _ in
+            guard platformConfig.storiesFeedEnabled else { return }
+            Task { await storiesRepository.refresh(force: true) }
+        }
+        .onChange(of: notificationsPresented) { _, isPresented in
+            if !isPresented {
+                Task { await loadNotificationCount() }
+            }
+        }
+        .onAppear {
+            startInitialLoadIfNeeded()
+            Task {
+                await loadNotificationCount()
+                if platformConfig.storiesFeedEnabled {
+                    await storiesRepository.refresh()
+                }
+            }
+        }
+        .onDisappear {
+            initialLoadTask = nil
+            stopHeroTrailer()
+        }
+        .onChange(of: isHomeAutoplayBlocked) { _, isBlocked in
+            if isBlocked {
+                activePreviewVideoId = nil
+                stopHeroTrailer()
+            } else {
+                startHeroTrailerIfAvailable()
+            }
+        }
+    }
+
+    private var homeHeaderTitle: some View {
+        HStack(spacing: 8) {
+            Text("WeStreem")
+                .font(.system(size: 18, weight: .black))
+                .fontDesign(.rounded)
+                .foregroundStyle(C.watch)
+
+            Text("Home")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(C.textMuted)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(C.elevated.opacity(0.75))
+                .clipShape(Capsule())
+        }
+    }
+
+    private var homeHeaderActions: some View {
+        HStack(spacing: 6) {
+            Button { notificationsPresented = true } label: {
+                notificationBell
+            }
+            .disabled(!auth.isAuthenticated)
+            .opacity(auth.isAuthenticated ? 1 : 0.45)
+            .accessibilityLabel("Notifications")
+
+            Button { searchPresented = true } label: {
+                toolbarIcon("search", fallback: "magnifyingglass")
+            }
+            .accessibilityLabel("Search")
+        }
+    }
+
+    private func toolbarIcon(_ iconName: String, fallback: String) -> some View {
+        MediaverseIcon(name: iconName, fallbackSystemName: fallback)
+            .frame(width: 20, height: 20)
+            .foregroundStyle(C.text)
+            .frame(width: 34, height: 34)
+    }
+
+    private var notificationBell: some View {
+        toolbarIcon("notification", fallback: "bell")
+            .overlay(alignment: .topTrailing) {
+                if unreadNotificationCount > 0 {
+                    Text(unreadNotificationCount > 9 ? "9+" : "\(unreadNotificationCount)")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .frame(minWidth: 18, minHeight: 18)
+                        .background(Color.red)
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(C.bg, lineWidth: 1.5))
+                        .offset(x: 4, y: 1)
+                        .zIndex(2)
+                }
+            }
+        .frame(width: 44, height: 38)
     }
 
     // MARK: - Main feed
 
     private var emptyState: some View {
         VStack(spacing: 20) {
-            Image(systemName: "play.rectangle.on.rectangle")
-                .font(.system(size: 48))
+            MediaverseIcon(name: "short", fallbackSystemName: "play.rectangle.on.rectangle")
+                .frame(width: 48, height: 48)
                 .foregroundStyle(Color.white.opacity(0.15))
             Text("Nothing here yet")
                 .font(.system(size: 18, weight: .bold))
@@ -207,32 +398,41 @@ struct HomeView: View {
     }
 
     private var feedContent: some View {
-        let items = renderItems
-
-        return ScrollView {
-            VStack(spacing: 0) {
-                feedBodyContent(items)
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                feedBodyContent
             }
         }
-        .refreshable { await load() }
+        .coordinateSpace(name: "homeFeedScroll")
+        .onPreferenceChange(HomeVideoFramePreferenceKey.self) { frames in
+            updateActivePreview(from: frames)
+        }
+        .refreshable { await refreshHome() }
     }
 
     @ViewBuilder
-    private func feedBodyContent(_ items: [HomeItem]) -> some View {
-        if feed.isEmpty && featuredShows.isEmpty && continueItems.isEmpty {
+    private var feedBodyContent: some View {
+        if feed.isEmpty && featuredShows.isEmpty && continueItems.isEmpty && storiesRepository.groups.isEmpty {
             emptyState
         } else {
+            refreshAffordance
             heroSection
 
             if !continueItems.isEmpty {
                 continueWatchingSection
             }
 
+            if platformConfig.storiesFeedEnabled {
+                StoryTrayView(repository: storiesRepository) { group in
+                    storyViewerPresentation = StoryViewerPresentation(groupId: group.id)
+                }
+            }
+
             if !feed.isEmpty {
                 feedHeader
             }
 
-            feedList(items)
+            feedList
 
             if cursor != nil {
                 paginationSentinel
@@ -242,6 +442,23 @@ struct HomeView: View {
                 endOfFeedText
             }
         }
+    }
+
+    private var refreshAffordance: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 10, weight: .bold))
+            Text("Pull to refresh")
+                .font(.system(size: 11, weight: .semibold))
+        }
+        .foregroundStyle(C.textMuted.opacity(0.72))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.white.opacity(0.055))
+        .clipShape(Capsule())
+        .frame(maxWidth: .infinity)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
     }
 
     private var feedHeader: some View {
@@ -277,8 +494,8 @@ struct HomeView: View {
             .padding(.vertical, 32)
     }
 
-    private func feedList(_ items: [HomeItem]) -> some View {
-        ForEach(items, id: \.id) { item in
+    private var feedList: some View {
+        ForEach(renderItems, id: \.id) { item in
             feedItemView(item)
         }
     }
@@ -287,11 +504,15 @@ struct HomeView: View {
     private func feedItemView(_ item: HomeItem) -> some View {
         switch item {
         case .video(let v):
-            NavigationLink(value: AppRoute.media(id: v.id, type: v.type, showId: v.show?.id, channelId: v.channel?.id)) {
-                HomeVideoCard(video: v)
-                    .padding(.horizontal, C.pagePad)
-            }
-            .buttonStyle(CardPressStyle())
+            HomeVideoCard(
+                video: v,
+                mediaRoute: route(for: v),
+                sourceRoute: sourceRoute(for: v),
+                activePreviewVideoId: $activePreviewVideoId,
+                isAutoplayBlocked: isHomeAutoplayBlocked,
+                replaceMediaAction: canReplaceMiniPlayer(with: v) ? { replaceMiniPlayerAndExpand(with: v) } : nil
+            )
+            .padding(.horizontal, C.pagePad)
             .padding(.bottom, 24)
 
         case .carousel(let slot):
@@ -319,7 +540,9 @@ struct HomeView: View {
                     AsyncImage(url: C.mediaURL(show.coverUrl)) { phase in
                         switch phase {
                         case .success(let img):
-                            img.resizable().scaledToFill()
+                            img.resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         case .failure:
                             C.bg
                         default:
@@ -371,7 +594,8 @@ struct HomeView: View {
                         HStack(spacing: 12) {
                             // "Watch Trailer" when trailer exists, "Watch Now" otherwise — matches web
                             HStack(spacing: 6) {
-                                Image(systemName: "play.fill").font(.system(size: 11))
+                                MediaverseIcon(name: "play", fallbackSystemName: "play")
+                                    .frame(width: 11, height: 11)
                                 Text(show.trailerUrl != nil ? "Watch Trailer" : "Watch Now")
                                     .font(.system(size: 14, weight: .semibold))
                             }
@@ -395,9 +619,8 @@ struct HomeView: View {
                     .padding(.bottom, 28)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                // Sizing: ZStack gets explicit 16:9 frame — children fill it.
                 .frame(maxWidth: .infinity)
-                .aspectRatio(16 / 9, contentMode: .fit)
+                .frame(height: homeHeroHeight)
                 .clipped()
                 .background(C.bg)
             }
@@ -439,7 +662,8 @@ struct HomeView: View {
                             .foregroundStyle(.white)
                             .lineLimit(2)
                         HStack(spacing: 6) {
-                            Image(systemName: "play.fill").font(.system(size: 11))
+                            MediaverseIcon(name: "play", fallbackSystemName: "play")
+                                .frame(width: 11, height: 11)
                             Text("Watch Now").font(.system(size: 14, weight: .semibold))
                         }
                         .foregroundStyle(C.bg)
@@ -535,9 +759,12 @@ struct HomeView: View {
         case "shorts":
             CarouselWrapper(title: slot.label, accentColor: accent) {
                 ForEach(uniqueByID(carouselShorts).prefix(10)) { short in
-                    NavigationLink(value: AppRoute.short(short.id, showId: short.showId, channelId: short.channelId ?? short.channel?.id)) {
-                        ShortCarouselCard(short: short)
+                    NavigationLink(value: AppRoute.short(short.id, showId: nil, channelId: nil)) {
+                        ShortCarouselCard(short: short, isAutoplayBlocked: isHomeAutoplayBlocked)
                     }
+                    .simultaneousGesture(TapGesture().onEnded {
+                        ShortNavigationCache.shared.seed(short)
+                    })
                     .buttonStyle(CardPressStyle())
                 }
             }
@@ -546,10 +773,19 @@ struct HomeView: View {
             // Videos carousel shows a landscape strip of regular feed videos.
             CarouselWrapper(title: slot.label, accentColor: accent) {
                 ForEach(uniqueByID(carouselVideos).prefix(8)) { video in
-                    NavigationLink(value: AppRoute.media(id: video.id, type: video.type, showId: video.show?.id, channelId: video.channel?.id)) {
-                        VideoCarouselCard(video: video)
+                    if canReplaceMiniPlayer(with: video) {
+                        Button {
+                            replaceMiniPlayerAndExpand(with: video)
+                        } label: {
+                            VideoCarouselCard(video: video)
+                        }
+                        .buttonStyle(CardPressStyle())
+                    } else {
+                        NavigationLink(value: route(for: video)) {
+                            VideoCarouselCard(video: video)
+                        }
+                        .buttonStyle(CardPressStyle())
                     }
-                    .buttonStyle(CardPressStyle())
                 }
             }
 
@@ -570,60 +806,148 @@ struct HomeView: View {
 
     // MARK: - Data loading
 
+    private func startInitialLoadIfNeeded() {
+        if feed.isEmpty && featuredShows.isEmpty && continueItems.isEmpty && !isLoadTaskRunning {
+            didStartInitialLoad = false
+            initialLoadTask = nil
+        }
+
+        guard !didStartInitialLoad, initialLoadTask == nil else {
+            return
+        }
+        initialLoadTask = Task {
+            await load()
+        }
+    }
+
     @MainActor
-    private func loadInitialFeedIfNeeded() async {
-        guard !didStartInitialLoad else { return }
-        didStartInitialLoad = true
-        await load()
+    private func refreshHome() async {
+        guard !isPullRefreshing else { return }
+        isPullRefreshing = true
+        activePreviewVideoId = nil
+        stopHeroTrailer()
+        async let homeLoad: Void = load()
+        if platformConfig.storiesFeedEnabled {
+            async let storiesLoad: Void = storiesRepository.refresh(force: true)
+            _ = await (homeLoad, storiesLoad)
+        } else {
+            await homeLoad
+        }
+        isPullRefreshing = false
     }
 
     @MainActor
     private func load() async {
-        guard !isLoadTaskRunning else { return }
+        guard !isLoadTaskRunning else {
+            return
+        }
+        let hadContent = !feed.isEmpty || !renderItems.isEmpty || !featuredShows.isEmpty || !continueItems.isEmpty
+        didStartInitialLoad = true
         isLoadTaskRunning = true
         isLoading = true
         defer {
             isLoading = false
             isLoadTaskRunning = false
+            initialLoadTask = nil
         }
 
-        heroLooper = nil
-        heroPlayer?.pause()
-        heroPlayer = nil
-
         do {
-            let response = try await withTimeout(seconds: 15) {
-                try await APIClient.shared.fetchFeed()
-            }
+            async let configTask = APIClient.shared.fetchFeedConfig()
+            async let feedTask = fetchFeedWithTimeout()
+            async let showsTask = APIClient.shared.fetchShowsHome()
+            async let continueTask = APIClient.shared.fetchContinueWatching()
+            async let shortsTask = APIClient.shared.fetchShorts(limit: 12)
+            async let microdramasTask = APIClient.shared.fetchMicrodramas(section: "trending", limit: 12)
+
+            let config = (try? await configTask) ?? .default
+            let response = try await feedTask
             let videos = uniqueByID(response.videos)
-            feed = videos
-            cursor = response.nextCursor
-            rebuildDerivedFeedCarousels(from: videos)
+            let refreshedShows = (try? await showsTask) ?? featuredShows
+            let refreshedContinueItems = ((try? await continueTask)?.items ?? continueItems)
+            let refreshedShorts = ((try? await shortsTask)?.shorts ?? carouselShorts)
+            let refreshedMicrodramas = (try? await microdramasTask) ?? carouselMicrodramas
+
+            guard !videos.isEmpty || !hadContent else {
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    feedConfig = config
+                    featuredShows = refreshedShows
+                    continueItems = refreshedContinueItems
+                    carouselShorts = refreshedShorts
+                    carouselMicrodramas = refreshedMicrodramas
+                }
+                startHeroTrailerIfAvailable()
+                return
+            }
+
+            stopHeroTrailer()
+
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                feedConfig = config
+                feed = videos
+                cursor = response.nextCursor
+                featuredShows = refreshedShows
+                continueItems = refreshedContinueItems
+                carouselShorts = refreshedShorts
+                carouselMicrodramas = refreshedMicrodramas
+                rebuildDerivedFeedCarousels(from: videos)
+                renderItems = makeRenderItems(from: videos)
+            }
+            startHeroTrailerIfAvailable()
         } catch {
             print("Home feed failed:", error)
-            feed = []
-            cursor = nil
+            didStartInitialLoad = hadContent
+            if !hadContent {
+                feed = []
+                cursor = nil
+                renderItems = []
+            }
         }
     }
 
-    private func withTimeout<T: Sendable>(
-        seconds: UInt64,
-        operation: @escaping @Sendable () async throws -> T
-    ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
+    @MainActor
+    private func loadNotificationCount() async {
+        guard auth.isAuthenticated else {
+            unreadNotificationCount = 0
+            return
+        }
+
+        if let counts = try? await APIClient.shared.fetchNotificationCounts(),
+           let unread = notificationUnreadCount(from: counts) {
+            unreadNotificationCount = unread
+            return
+        }
+
+        let notifications = (try? await APIClient.shared.fetchNotifications()) ?? []
+        unreadNotificationCount = notifications.filter { !$0.read }.count
+    }
+
+    private func notificationUnreadCount(from counts: [String: Int]) -> Int? {
+        for key in ["unread", "unreadCount", "unread_count", "totalUnread"] {
+            if let value = counts[key] { return value }
+        }
+        return nil
+    }
+
+    private func fetchFeedWithTimeout() async throws -> FeedResponse {
+        try await withThrowingTaskGroup(of: FeedResponse.self) { group in
             group.addTask {
-                try await operation()
+                try await APIClient.shared.fetchFeed()
             }
             group.addTask {
-                try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
-                throw CancellationError()
+                try await Task.sleep(nanoseconds: 8_000_000_000)
+                throw HomeFeedLoadError.timedOut
             }
 
-            guard let value = try await group.next() else {
-                throw CancellationError()
+            guard let response = try await group.next() else {
+                group.cancelAll()
+                throw HomeFeedLoadError.noResponse
             }
             group.cancelAll()
-            return value
+            return response
         }
     }
 
@@ -649,15 +973,23 @@ struct HomeView: View {
 
     @MainActor
     private func startHeroTrailerIfAvailable() {
-        guard let url = C.mediaURL(featuredShows.first?.trailerUrl) else { return }
-        try? AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+        guard !isHomeAutoplayBlocked,
+              heroPlayer == nil,
+              let url = C.mediaURL(featuredShows.first?.trailerUrl) else { return }
         let item = AVPlayerItem(url: url)
         let player = AVQueuePlayer()
-        player.isMuted = true
-        player.volume = 0
+        player.isMuted = playerMuted
+        player.volume = 1
         heroLooper = AVPlayerLooper(player: player, templateItem: item)
         heroPlayer = player
         player.play()
+    }
+
+    @MainActor
+    private func stopHeroTrailer() {
+        heroPlayer?.pause()
+        heroLooper = nil
+        heroPlayer = nil
     }
 
     @MainActor
@@ -667,8 +999,11 @@ struct HomeView: View {
         defer { isLoadingMore = false }
 
         if let r = try? await APIClient.shared.fetchFeed(cursor: cur) {
-            feed = uniqueByID(feed + r.videos)
+            let videos = uniqueByID(feed + r.videos)
+            feed = videos
             cursor = r.nextCursor
+            rebuildDerivedFeedCarousels(from: videos)
+            renderItems = makeRenderItems(from: videos)
         }
     }
 }
@@ -815,8 +1150,8 @@ private struct CarouselWrapper<Content: View>: View {
                 HStack(spacing: 3) {
                     Text("See all")
                         .font(.system(size: 13))
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
+                    MediaverseIcon(name: "chevron-right", fallbackSystemName: "chevron.right")
+                        .frame(width: 11, height: 11)
                 }
                 .foregroundStyle(accentColor)
             }
@@ -838,65 +1173,58 @@ private struct CarouselWrapper<Content: View>: View {
 }
 
 // MARK: - Home video card (single-column, avatar + title + channel + views)
-// Static thumbnail card. Feed preview autoplay is disabled while launch freezes are isolated.
 
 private struct HomeVideoCard: View {
     let video: FeedVideo
+    let mediaRoute: AppRoute
+    let sourceRoute: AppRoute?
+    @Binding var activePreviewVideoId: String?
+    let isAutoplayBlocked: Bool
+    let replaceMediaAction: (() -> Void)?
+
+    @State private var previewPlayer: AVQueuePlayer?
+    @State private var previewLooper: AVPlayerLooper?
+    @State private var isVisible = false
+    @State private var isPreviewReady = false
+    @State private var previewStartTask: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // ── Thumbnail / preview area ──────────────────────────────────────
-            // SIZING: aspectRatio(.fit) on ZStack container; children fill ZStack with
-            // maxHeight: .infinity. Using .fill on AsyncImage inside vertical ScrollView
-            // proposes unbounded height, causing Liquid Glass compositor crash on iOS 26.
-            ZStack(alignment: .bottomTrailing) {
-                // Static thumbnail (fades out when video plays)
-                AsyncImage(url: C.mediaURL(video.thumbnailUrl ?? video.show?.coverUrl)) { phase in
-                    switch phase {
-                    case .success(let img):
-                        img.resizable().scaledToFill()
-                    default:
-                        Color.white.opacity(0.07)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-
-                if let dur = video.duration {
-                    Text(fmtDur(dur))
-                        .font(.system(size: 10, weight: .semibold))
-                        .fontDesign(.monospaced)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 5).padding(.vertical, 2)
-                        .background(Color.black.opacity(0.80))
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                        .padding(6)
-                }
+            mediaTarget {
+                thumbnailPreviewArea
             }
-            .frame(maxWidth: .infinity)
-            .aspectRatio(16 / 9, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .clipped()
+            .buttonStyle(CardPressStyle())
             // ── Avatar + text row ─────────────────────────────────────────────
             HStack(alignment: .top, spacing: 10) {
-                avatarView
-                    .frame(width: 36, height: 36)
-                    .clipShape(Circle())
+                sourceTarget {
+                    avatarView
+                        .frame(width: 36, height: 36)
+                        .clipShape(Circle())
+                }
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(video.title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(2)
+                    mediaTarget {
+                        Text(video.title)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
 
                     if let ch = video.channel {
-                        Text(ch.name)
-                            .font(.system(size: 12))
-                            .foregroundStyle(C.textMuted)
+                        sourceTarget {
+                            Text(ch.name)
+                                .font(.system(size: 12))
+                                .foregroundStyle(C.textMuted)
+                                .lineLimit(1)
+                        }
                     } else if let show = video.show {
-                        Text(show.title)
-                            .font(.system(size: 12))
-                            .foregroundStyle(C.textMuted)
+                        sourceTarget {
+                            Text(show.title)
+                                .font(.system(size: 12))
+                                .foregroundStyle(C.textMuted)
+                                .lineLimit(1)
+                        }
                     }
 
                     Text("\(fmtViews(video.views)) views")
@@ -906,9 +1234,130 @@ private struct HomeVideoCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .background {
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: HomeVideoFramePreferenceKey.self,
+                    value: [video.id: proxy.frame(in: .named("homeFeedScroll"))]
+                )
+            }
+        }
     }
 
     // MARK: - Sub-views
+
+    @ViewBuilder
+    private func mediaTarget<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        if let replaceMediaAction {
+            Button(action: replaceMediaAction) {
+                content()
+            }
+            .buttonStyle(.plain)
+        } else {
+            NavigationLink(value: mediaRoute) {
+                content()
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder
+    private func sourceTarget<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        if let sourceRoute {
+            NavigationLink(value: sourceRoute) {
+                content()
+            }
+            .buttonStyle(.plain)
+        } else {
+            content()
+        }
+    }
+
+    private var thumbnailPreviewArea: some View {
+        // SIZING: aspectRatio(.fit) on ZStack container; children fill ZStack with
+        // maxHeight: .infinity. Using .fill on AsyncImage inside vertical ScrollView
+        // proposes unbounded height, causing Liquid Glass compositor crash on iOS 26.
+        ZStack(alignment: .bottomTrailing) {
+            // Static thumbnail (fades out when video plays)
+            AsyncImage(url: C.mediaURL(video.thumbnailUrl ?? video.show?.coverUrl)) { phase in
+                switch phase {
+                case .success(let img):
+                    img.resizable().scaledToFill()
+                default:
+                    Color.white.opacity(0.07)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+
+            if !isAutoplayBlocked, let previewPlayer {
+                LoopingVideoLayer(player: previewPlayer)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .opacity(isPreviewReady ? 1 : 0)
+                    .allowsHitTesting(false)
+            }
+
+            if !isAutoplayBlocked && activePreviewVideoId == video.id {
+                HStack(spacing: 6) {
+                    MediaverseIcon(name: "play", fallbackSystemName: "play")
+                        .frame(width: 10, height: 10)
+                    Text("Tap to watch")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.black.opacity(0.68))
+                .clipShape(Capsule())
+                .overlay { Capsule().stroke(.white.opacity(0.14), lineWidth: 1) }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                .padding(8)
+                .allowsHitTesting(false)
+            }
+
+            if let dur = video.duration {
+                Text(fmtDur(dur))
+                    .font(.system(size: 10, weight: .semibold))
+                    .fontDesign(.monospaced)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5).padding(.vertical, 2)
+                    .background(Color.black.opacity(0.80))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .padding(6)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .aspectRatio(16 / 9, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipped()
+        .onAppear {
+            isVisible = true
+            if activePreviewVideoId == video.id && !isAutoplayBlocked {
+                startPreviewIfNeeded()
+            }
+        }
+        .onDisappear {
+            isVisible = false
+            if activePreviewVideoId == video.id {
+                activePreviewVideoId = nil
+            }
+            stopPreview()
+        }
+        .onChange(of: activePreviewVideoId) { _, activeId in
+            if activeId == video.id && !isAutoplayBlocked {
+                startPreviewIfNeeded()
+            } else {
+                stopPreview()
+            }
+        }
+        .onChange(of: isAutoplayBlocked) { _, isBlocked in
+            if isBlocked {
+                stopPreview()
+            } else if isVisible && activePreviewVideoId == video.id {
+                startPreviewIfNeeded()
+            }
+        }
+    }
 
     // Computed outside @ViewBuilder to avoid iOS 26 instability with `let` bindings
     // inside ViewBuilder closures (local `let` inside @ViewBuilder can confuse the
@@ -938,6 +1387,44 @@ private struct HomeVideoCard: View {
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(Color.white.opacity(0.4))
             }
+    }
+
+    private func startPreviewIfNeeded() {
+        guard !isAutoplayBlocked,
+              previewPlayer == nil,
+              previewStartTask == nil,
+              activePreviewVideoId == video.id,
+              let url = C.mediaURL(video.videoUrl) else { return }
+        previewStartTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled,
+                  !isAutoplayBlocked,
+                  isVisible,
+                  activePreviewVideoId == video.id,
+                  previewPlayer == nil else {
+                previewStartTask = nil
+                return
+            }
+
+            let item = AVPlayerItem(url: url)
+            let player = AVQueuePlayer()
+            player.isMuted = true
+            player.volume = 0
+            previewLooper = AVPlayerLooper(player: player, templateItem: item)
+            previewPlayer = player
+            isPreviewReady = true
+            player.play()
+            previewStartTask = nil
+        }
+    }
+
+    private func stopPreview() {
+        previewStartTask?.cancel()
+        previewStartTask = nil
+        previewPlayer?.pause()
+        previewLooper = nil
+        previewPlayer = nil
+        isPreviewReady = false
     }
 
     private func fmtDur(_ s: Double) -> String {
@@ -1030,6 +1517,7 @@ private struct ShowCarouselCard: View {
             }
         }
         .frame(width: 100)
+        .contentShape(Rectangle())
     }
 }
 
@@ -1037,6 +1525,11 @@ private struct ShowCarouselCard: View {
 
 private struct ShortCarouselCard: View {
     let short: Short
+    let isAutoplayBlocked: Bool
+
+    @State private var previewPlayer: AVQueuePlayer?
+    @State private var previewLooper: AVPlayerLooper?
+    @State private var isPreviewReady = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1048,10 +1541,16 @@ private struct ShortCarouselCard: View {
                 }
                 .aspectRatio(9 / 16, contentMode: .fill)
                 .frame(width: 100)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
                 .clipped()
 
-                // "Short" badge
+                if !isAutoplayBlocked, let previewPlayer {
+                    LoopingVideoLayer(player: previewPlayer)
+                        .frame(width: 100)
+                        .aspectRatio(9 / 16, contentMode: .fill)
+                        .opacity(isPreviewReady ? 1 : 0)
+                        .allowsHitTesting(false)
+                }
+
                 Text("Short")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.white)
@@ -1060,7 +1559,6 @@ private struct ShortCarouselCard: View {
                     .clipShape(RoundedRectangle(cornerRadius: 3))
                     .padding(6)
 
-                // Duration badge (bottom right)
                 if let dur = short.duration {
                     Text(fmtDur(dur))
                         .font(.system(size: 9, weight: .semibold))
@@ -1074,6 +1572,18 @@ private struct ShortCarouselCard: View {
                 }
             }
             .frame(width: 100)
+            .aspectRatio(9 / 16, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipped()
+            .onAppear { startPreviewIfNeeded() }
+            .onDisappear { stopPreview() }
+            .onChange(of: isAutoplayBlocked) { _, isBlocked in
+                if isBlocked {
+                    stopPreview()
+                } else {
+                    startPreviewIfNeeded()
+                }
+            }
 
             Text(short.title)
                 .font(.system(size: 11, weight: .medium))
@@ -1088,6 +1598,27 @@ private struct ShortCarouselCard: View {
             }
         }
         .frame(width: 100)
+    }
+
+    private func startPreviewIfNeeded() {
+        guard !isAutoplayBlocked,
+              previewPlayer == nil,
+              let url = C.mediaURL(short.videoUrl) else { return }
+        let item = AVPlayerItem(url: url)
+        let player = AVQueuePlayer()
+        player.isMuted = true
+        player.volume = 0
+        previewLooper = AVPlayerLooper(player: player, templateItem: item)
+        previewPlayer = player
+        isPreviewReady = true
+        player.play()
+    }
+
+    private func stopPreview() {
+        previewPlayer?.pause()
+        previewLooper = nil
+        previewPlayer = nil
+        isPreviewReady = false
     }
 
     private func fmtDur(_ s: Double) -> String {

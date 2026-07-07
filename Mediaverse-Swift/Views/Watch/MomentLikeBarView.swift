@@ -33,6 +33,10 @@ struct MomentLikeBarView: View {
         likedSeconds.contains(currentSec)
     }
 
+    private var uniqueLikedSeconds: [Int] {
+        Array(Set(likedSeconds)).sorted()
+    }
+
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
 
@@ -75,15 +79,12 @@ struct MomentLikeBarView: View {
                             Capsule().fill(C.watch)
                                 .frame(width: max(0, CGFloat(pct) * w), height: TRACK_H)
                         }
-                        // Liked-second ticks
+                        // User-liked moment markers
                         if duration > 0 {
-                            ForEach(likedSeconds, id: \.self) { sec in
+                            ForEach(uniqueLikedSeconds, id: \.self) { sec in
                                 let x = min(1.0, Double(sec) / duration) * w
-                                RoundedRectangle(cornerRadius: 1)
-                                    .fill(C.watch)
-                                    .frame(width: 3, height: 8)
-                                    .offset(x: CGFloat(x) - 1.5,
-                                            y: -(8 - TRACK_H) / 2)
+                                likedMomentMarker(isCurrent: sec == currentSec)
+                                    .offset(x: CGFloat(x) - 5, y: -8)
                             }
                         }
                     }
@@ -138,6 +139,14 @@ struct MomentLikeBarView: View {
             }
         }
         .padding(.horizontal, C.pagePad)
+    }
+
+    private func likedMomentMarker(isCurrent: Bool) -> some View {
+        Image(systemName: "heart.fill")
+            .font(.system(size: isCurrent ? 10 : 9, weight: .bold))
+            .foregroundStyle(C.watch.opacity(isCurrent ? 0.38 : 0.22))
+            .frame(width: 10, height: 10)
+            .accessibilityLabel("Liked moment")
     }
 
     // MARK: - Wave drawing (mirrors VideoPlayer.tsx bezier math exactly)

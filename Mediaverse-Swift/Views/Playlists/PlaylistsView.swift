@@ -309,58 +309,52 @@ struct PlaylistsView: View {
     private func playlistCard(_ pl: Playlist) -> some View {
         VStack(alignment: .leading, spacing: 0) {
 
-            // ── Thumbnail area → navigate to detail
             NavigationLink(value: AppRoute.playlist(pl.id)) {
                 ZStack(alignment: .bottomTrailing) {
                     thumbnailMosaic(thumbURLs: pl.thumbItems.compactMap { $0.video?.thumbnailUrl })
-                        .aspectRatio(16/9, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .aspectRatio(16/9, contentMode: .fill)
+                        .frame(maxWidth: .infinity)
+                        .clipped()
 
-                    // Dark gradient at bottom
                     LinearGradient(
-                        colors: [.clear, .black.opacity(0.55)],
+                        colors: [.clear, .black.opacity(0.68)],
                         startPoint: .center,
                         endPoint: .bottom
                     )
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
 
-                    // Item count badge
-                    Text("\(pl.itemCount) video\(pl.itemCount != 1 ? "s" : "")")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(Color.black.opacity(0.72))
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                    playlistCountBadge(count: pl.itemCount, type: pl.type)
                         .padding(8)
                 }
+                .aspectRatio(16/9, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay { RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.08), lineWidth: 1) }
             }
             .buttonStyle(.plain)
 
-            // ── Info row
-            HStack(alignment: .top, spacing: 6) {
-
-                // Title + visibility → navigate to detail
+            HStack(alignment: .top, spacing: 8) {
                 NavigationLink(value: AppRoute.playlist(pl.id)) {
-                    VStack(alignment: .leading, spacing: 3) {
+                    VStack(alignment: .leading, spacing: 5) {
                         Text(pl.title)
-                            .font(.subheadline.weight(.semibold))
+                            .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(C.text)
-                            .lineLimit(1)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                            .frame(minHeight: 34, alignment: .topLeading)
 
-                        HStack(spacing: 4) {
+                        HStack(spacing: 5) {
                             Image(systemName: visibilityIcon(pl.visibility))
-                                .font(.system(size: 9))
+                                .font(.system(size: 9, weight: .semibold))
                             Text(visibilityLabel(pl.visibility))
-                                .font(.caption2)
+                            Text("·")
+                            Text("\(pl.itemCount)")
                         }
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(C.textMuted)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.plain)
 
-                // ⋯ menu — NOT inside NavigationLink
                 Menu {
                     Button {
                         editingPlaylist = pl
@@ -377,19 +371,33 @@ struct PlaylistsView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.system(size: 14))
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(C.textMuted)
-                        .frame(width: 32, height: 32)
-                        .contentShape(Rectangle())
+                        .frame(width: 34, height: 34)
+                        .background(Color.white.opacity(0.06))
+                        .clipShape(Circle())
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(10)
         }
         .background(C.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay { RoundedRectangle(cornerRadius: 12).stroke(C.border, lineWidth: 1) }
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay { RoundedRectangle(cornerRadius: 14).stroke(C.border, lineWidth: 1) }
+    }
+
+    private func playlistCountBadge(count: Int, type: String) -> some View {
+        let normalizedType = type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let itemName = normalizedType == "short" ? "short" : "video"
+
+        return Text("\(count) \(itemName)\(count == 1 ? "" : "s")")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(.black.opacity(0.76))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     // MARK: - Thumbnail mosaic (mirrors PlaylistThumb in web)
@@ -399,29 +407,27 @@ struct PlaylistsView: View {
         let urls = Array(thumbURLs.prefix(4))
 
         if urls.count >= 4 {
-            LazyVGrid(
-                columns: [GridItem(.flexible(), spacing: 0), GridItem(.flexible(), spacing: 0)],
-                spacing: 0
-            ) {
-                ForEach(Array(urls.enumerated()), id: \.offset) { _, url in
-                    AsyncImage(url: C.mediaURL(url)) { phase in
-                        switch phase {
-                        case .success(let img): img.resizable().scaledToFill()
-                        default: Rectangle().fill(Color.white.opacity(0.08))
-                        }
+            GeometryReader { geo in
+                let cellWidth = geo.size.width / 2
+                let cellHeight = geo.size.height / 2
+
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        mosaicImage(urls[0])
+                            .frame(width: cellWidth, height: cellHeight)
+                        mosaicImage(urls[1])
+                            .frame(width: cellWidth, height: cellHeight)
                     }
-                    .aspectRatio(16/9, contentMode: .fit)
-                    .clipped()
+                    HStack(spacing: 0) {
+                        mosaicImage(urls[2])
+                            .frame(width: cellWidth, height: cellHeight)
+                        mosaicImage(urls[3])
+                            .frame(width: cellWidth, height: cellHeight)
+                    }
                 }
             }
         } else if let first = urls.first {
-            AsyncImage(url: C.mediaURL(first)) { phase in
-                switch phase {
-                case .success(let img): img.resizable().scaledToFill()
-                default: Rectangle().fill(Color.white.opacity(0.08))
-                }
-            }
-            .clipped()
+            mosaicImage(first)
         } else {
             ZStack {
                 Color.white.opacity(0.05)
@@ -430,6 +436,16 @@ struct PlaylistsView: View {
                     .foregroundStyle(Color.white.opacity(0.2))
             }
         }
+    }
+
+    private func mosaicImage(_ url: String) -> some View {
+        AsyncImage(url: C.mediaURL(url)) { phase in
+            switch phase {
+            case .success(let img): img.resizable().scaledToFill()
+            default: Rectangle().fill(Color.white.opacity(0.08))
+            }
+        }
+        .clipped()
     }
 
     // MARK: - Skeleton card

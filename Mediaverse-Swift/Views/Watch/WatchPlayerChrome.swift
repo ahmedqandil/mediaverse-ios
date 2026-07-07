@@ -1,6 +1,13 @@
 import SwiftUI
 import AVKit
 
+struct PlayerRelatedItem: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String?
+    let thumbnailUrl: String?
+}
+
 struct WatchPlayerChrome<MarkerOverlay: View>: View {
     let player: AVPlayer
     let heatmapBuckets: [Int]
@@ -10,9 +17,15 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
     let showSpoilerToggle: Bool
     let onClipRequest: ((Int, Int, String, Bool) async throws -> Void)?
     var markers: MarkerOverlay
+    var onPrevious: (() -> Void)?
+    var onNext: (() -> Void)?
     var onBack: (() -> Void)?
     var onFullscreen: () -> Void
+    let isFullscreenPresentation: Bool
+    let relatedItems: [PlayerRelatedItem]
+    let onSelectRelated: ((PlayerRelatedItem) -> Void)?
 
+    @AppStorage("playerMuted") private var storedPlayerMuted = false
     @State private var isPlaying = false
     @State private var isMuted = false
     @State private var currentTime: Double = 0
@@ -35,6 +48,10 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
 
     private let speeds: [Float] = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
 
+    private var uniqueLikedSeconds: [Int] {
+        Array(Set(likedSeconds)).sorted()
+    }
+
     init(
         player: AVPlayer,
         heatmapBuckets: [Int] = [],
@@ -43,8 +60,13 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
         onLikeMoment: ((Int) -> Void)? = nil,
         showSpoilerToggle: Bool = false,
         onClipRequest: ((Int, Int, String, Bool) async throws -> Void)? = nil,
+        onPrevious: (() -> Void)? = nil,
+        onNext: (() -> Void)? = nil,
         onBack: (() -> Void)? = nil,
         onFullscreen: @escaping () -> Void,
+        isFullscreenPresentation: Bool = false,
+        relatedItems: [PlayerRelatedItem] = [],
+        onSelectRelated: ((PlayerRelatedItem) -> Void)? = nil,
         @ViewBuilder markers: () -> MarkerOverlay
     ) {
         self.player = player
@@ -54,8 +76,13 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
         self.onLikeMoment = onLikeMoment
         self.showSpoilerToggle = showSpoilerToggle
         self.onClipRequest = onClipRequest
+        self.onPrevious = onPrevious
+        self.onNext = onNext
         self.onBack = onBack
         self.onFullscreen = onFullscreen
+        self.isFullscreenPresentation = isFullscreenPresentation
+        self.relatedItems = relatedItems
+        self.onSelectRelated = onSelectRelated
         self.markers = markers()
     }
 
@@ -88,7 +115,10 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
         .clipped()
         .onAppear { attachObservers() }
         .onDisappear { detachObservers() }
-        .onChange(of: isMuted) { _, muted in player.isMuted = muted }
+        .onChange(of: isMuted) { _, muted in
+            player.isMuted = muted
+            storedPlayerMuted = muted
+        }
         .onChange(of: playbackRate) { _, rate in
             if isPlaying { player.rate = rate }
         }
@@ -107,8 +137,8 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
                 Button {
                     togglePlayback()
                 } label: {
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 24, weight: .bold))
+                    MediaverseIcon(name: "play", fallbackSystemName: "play")
+                        .frame(width: 24, height: 24)
                         .foregroundStyle(.white)
                         .frame(width: 58, height: 58)
                         .background(.black.opacity(0.42))
@@ -124,8 +154,8 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
                         Button {
                             onBack()
                         } label: {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 18, weight: .bold))
+                            MediaverseIcon(name: "chevron-down", fallbackSystemName: "chevron.down")
+                                .frame(width: 18, height: 18)
                                 .foregroundStyle(.white)
                                 .frame(width: 42, height: 42)
                                 .background(.black.opacity(0.36))
@@ -135,14 +165,28 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
                         .buttonStyle(.plain)
                     }
 
+                    if let onPrevious {
+                        chromeButton(iconName: "skip-back", fallbackSystemName: "backward.end") {
+                            onPrevious()
+                            scheduleHide()
+                        }
+                    }
+
+                    if let onNext {
+                        chromeButton(iconName: "skip-forward", fallbackSystemName: "forward.end") {
+                            onNext()
+                            scheduleHide()
+                        }
+                    }
+
                     Spacer()
-                    chromeButton(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill") {
+                    chromeButton(iconName: isMuted ? "mute" : "volume", fallbackSystemName: isMuted ? "speaker.slash" : "speaker.wave.2") {
                         isMuted.toggle()
                         scheduleHide()
                     }
 
                     ZStack(alignment: .topTrailing) {
-                        chromeButton(systemName: "gearshape.fill", active: showSpeedMenu || playbackRate != 1) {
+                        chromeButton(iconName: "settings", fallbackSystemName: "gearshape", active: showSpeedMenu || playbackRate != 1) {
                             withAnimation(.easeOut(duration: 0.16)) { showSpeedMenu.toggle() }
                             scheduleHide()
                         }
@@ -152,17 +196,24 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
                         }
                     }
 
-                    chromeButton(systemName: "arrow.up.left.and.arrow.down.right") {
+                    chromeButton(
+                        iconName: isFullscreenPresentation ? "fullscreen-exit" : "fullscreen",
+                        fallbackSystemName: isFullscreenPresentation ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
+                    ) {
                         onFullscreen()
                     }
                 }
-                .padding(.top, onBack == nil ? 10 : 48)
+                .padding(.top, 10)
                 .padding(.horizontal, onBack == nil ? 10 : 16)
 
                 Spacer()
 
                 VStack(spacing: hasHeatmap ? 6 : 8) {
                     heatmapProgressBar
+
+                    if isFullscreenPresentation && !relatedItems.isEmpty {
+                        relatedStrip
+                    }
 
                     if clipMode {
                         clipEditor
@@ -172,8 +223,8 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
                         Button {
                             togglePlayback()
                         } label: {
-                            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                                .font(.system(size: 16, weight: .bold))
+                            MediaverseIcon(name: isPlaying ? "pause" : "play", fallbackSystemName: isPlaying ? "pause" : "play")
+                                .frame(width: 16, height: 16)
                                 .foregroundStyle(.white)
                                 .frame(width: 36, height: 32)
                         }
@@ -207,6 +258,76 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
         .onAppear { scheduleHide() }
     }
 
+    private var relatedStrip: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Up next")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white.opacity(0.65))
+                .textCase(.uppercase)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(relatedItems.prefix(8)) { item in
+                        Button {
+                            onSelectRelated?(item)
+                            scheduleHide()
+                        } label: {
+                            relatedCard(item)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.trailing, 2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func relatedCard(_ item: PlayerRelatedItem) -> some View {
+        HStack(spacing: 8) {
+            AsyncImage(url: C.mediaURL(item.thumbnailUrl)) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().scaledToFill()
+                default:
+                    Color.white.opacity(0.08)
+                }
+            }
+            .frame(width: 86, height: 48)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(alignment: .center) {
+                Circle()
+                    .fill(.black.opacity(0.42))
+                    .frame(width: 22, height: 22)
+                    .overlay {
+                        MediaverseIcon(name: "play", fallbackSystemName: "play")
+                            .frame(width: 8, height: 8)
+                            .foregroundStyle(.white)
+                    }
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .frame(width: 118, alignment: .leading)
+
+                if let subtitle = item.subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.56))
+                        .lineLimit(1)
+                        .frame(width: 118, alignment: .leading)
+                }
+            }
+        }
+        .padding(6)
+        .background(.black.opacity(0.48))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay { RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.12), lineWidth: 1) }
+    }
+
     private var heatmapProgressBar: some View {
         GeometryReader { geo in
             let width = max(1, geo.size.width)
@@ -219,8 +340,8 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
                 if hasHeatmap {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 4) {
-                            Image(systemName: "star.fill")
-                                .font(.system(size: 7, weight: .bold))
+                            MediaverseIcon(name: "star", fallbackSystemName: "star")
+                                .frame(width: 7, height: 7)
                             Text("Top Moments")
                                 .font(.system(size: 9, weight: .bold))
                                 .textCase(.uppercase)
@@ -244,12 +365,10 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
                         .frame(width: playedWidth, height: 2)
 
                     if duration > 0 {
-                        ForEach(likedSeconds, id: \.self) { sec in
-                            let tickX = width * CGFloat(min(max(Double(sec) / duration, 0), 1))
-                            RoundedRectangle(cornerRadius: 1)
-                                .fill(C.watch)
-                                .frame(width: 2, height: 7)
-                                .offset(x: max(0, tickX - 1), y: -2)
+                        ForEach(uniqueLikedSeconds, id: \.self) { sec in
+                            let markerX = width * CGFloat(min(max(Double(sec) / duration, 0), 1))
+                            transparentHeartMarker(isCurrent: sec == Int(currentTime.rounded(.down)))
+                                .offset(x: min(width - 10, max(0, markerX - 5)), y: -8)
                         }
                     }
 
@@ -311,6 +430,15 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
         .frame(height: hasHeatmap ? 42 : 18)
     }
 
+    private func transparentHeartMarker(isCurrent: Bool) -> some View {
+        Image(systemName: "heart.fill")
+            .font(.system(size: isCurrent ? 10 : 9, weight: .bold))
+            .foregroundStyle(C.watch.opacity(isCurrent ? 0.38 : 0.22))
+            .frame(width: 10, height: 10)
+            .allowsHitTesting(false)
+            .accessibilityLabel("Liked moment")
+    }
+
     private func clipHandleView(label: String) -> some View {
         VStack(spacing: 1) {
             Text(label)
@@ -334,8 +462,8 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
                 likeCurrentMoment()
             } label: {
                 HStack(spacing: 5) {
-                    Image(systemName: isLiked ? "heart.fill" : "heart")
-                        .font(.system(size: 12, weight: .semibold))
+                    MediaverseIcon(name: isLiked ? "heart-filled" : "heart", fallbackSystemName: "heart")
+                        .frame(width: 12, height: 12)
                     Text("Moment")
                         .font(.system(size: 11, weight: .bold))
                 }
@@ -359,8 +487,8 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
             Button {
                 toggleClipMode()
             } label: {
-                Image(systemName: clipMode ? "scissors.circle.fill" : "scissors")
-                    .font(.system(size: 13, weight: .semibold))
+                MediaverseIcon(name: "cut", fallbackSystemName: "scissors")
+                    .frame(width: 13, height: 13)
                     .foregroundStyle(clipMode ? C.watch : .white.opacity(0.78))
                     .frame(width: 30, height: 28)
                     .background(clipMode ? C.watch.opacity(0.18) : .white.opacity(0.10))
@@ -394,7 +522,8 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
                         clipIsSpoiler.toggle()
                     } label: {
                         HStack(spacing: 5) {
-                            Image(systemName: clipIsSpoiler ? "eye.slash.fill" : "eye")
+                            MediaverseIcon(name: clipIsSpoiler ? "eye-off" : "eye", fallbackSystemName: clipIsSpoiler ? "eye.slash" : "eye")
+                                .frame(width: 12, height: 12)
                             Text("Spoiler")
                         }
                         .font(.system(size: 10, weight: .semibold))
@@ -495,8 +624,8 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
                             .foregroundStyle(speed == playbackRate ? C.watch : .white.opacity(0.82))
                         Spacer(minLength: 12)
                         if speed == playbackRate {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 10, weight: .bold))
+                            MediaverseIcon(name: "check", fallbackSystemName: "checkmark")
+                                .frame(width: 10, height: 10)
                                 .foregroundStyle(C.watch)
                         }
                     }
@@ -515,10 +644,10 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
         .zIndex(20)
     }
 
-    private func chromeButton(systemName: String, active: Bool = false, action: @escaping () -> Void) -> some View {
+    private func chromeButton(iconName: String, fallbackSystemName: String, active: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 14, weight: .semibold))
+            MediaverseIcon(name: iconName, fallbackSystemName: fallbackSystemName)
+                .frame(width: 14, height: 14)
                 .foregroundStyle(active ? C.watch : .white.opacity(0.88))
                 .frame(width: 34, height: 34)
                 .background(.black.opacity(0.38))
@@ -534,7 +663,8 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
 
     private func attachObservers() {
         detachObservers()
-        isMuted = player.isMuted
+        player.isMuted = storedPlayerMuted
+        isMuted = storedPlayerMuted
         isPlaying = player.rate > 0
         duration = player.currentItem?.duration.seconds.validTime ?? 0
         buffered = bufferedEnd(from: player.currentItem)
@@ -556,8 +686,12 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
     }
 
     private func toggleControlsOrPlayback() {
+        hideTask?.cancel()
+        isPlaying = player.rate > 0
         withAnimation(.easeOut(duration: 0.18)) { showControls = true }
-        scheduleHide()
+        if isPlaying {
+            scheduleHide()
+        }
     }
 
     private func togglePlayback() {
@@ -578,7 +712,7 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
         guard isPlaying, !clipMode else { return }
         hideTask = Task { @MainActor in
             do {
-                try await Task.sleep(nanoseconds: 3_200_000_000)
+                try await Task.sleep(nanoseconds: 4_000_000_000)
             } catch {
                 return
             }
@@ -774,8 +908,8 @@ private struct MomentHeartBurstView: View {
     @State private var scale = 0.8
 
     var body: some View {
-        Image(systemName: "heart.fill")
-            .font(.system(size: 20, weight: .bold))
+        MediaverseIcon(name: "heart-filled", fallbackSystemName: "heart")
+            .frame(width: 20, height: 20)
             .foregroundStyle(C.watch)
             .scaleEffect(scale)
             .offset(y: y)
@@ -824,48 +958,88 @@ struct MiniWatchPlayer: View {
     let onExpand: () -> Void
     let onClose: () -> Void
 
+    @State private var isPlaying = false
+
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 10) {
             WatchPlayerSurface(player: player)
-                .frame(width: 150, height: 84)
+                .frame(width: 148, height: 84)
                 .background(Color.black)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .clipShape(RoundedRectangle(cornerRadius: 11))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 11)
+                        .stroke(.white.opacity(0.12), lineWidth: 1)
+                }
                 .onTapGesture(perform: onExpand)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text(title)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .frame(maxWidth: 128, alignment: .leading)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Now playing")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(C.watch)
+                        .textCase(.uppercase)
 
-                HStack(spacing: 14) {
-                    Button {
-                        if player.rate > 0 { player.pause() }
-                        else { player.play() }
-                    } label: {
-                        Image(systemName: player.rate > 0 ? "pause.fill" : "play.fill")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.85))
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onExpand)
+
+                HStack(spacing: 10) {
+                    Button(action: togglePlayback) {
+                        HStack(spacing: 7) {
+                            MediaverseIcon(name: isPlaying ? "pause" : "play", fallbackSystemName: isPlaying ? "pause" : "play")
+                                .frame(width: 17, height: 17)
+                            Text(isPlaying ? "Pause" : "Play")
+                                .font(.system(size: 12, weight: .bold))
+                        }
+                        .foregroundStyle(.black)
+                        .frame(height: 36)
+                        .padding(.horizontal, 13)
+                        .background(C.watch)
+                        .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
 
                     Button(action: onClose) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.72))
+                        MediaverseIcon(name: "close", fallbackSystemName: "xmark")
+                            .frame(width: 18, height: 18)
+                            .foregroundStyle(.white.opacity(0.88))
+                            .frame(width: 38, height: 36)
+                            .background(.white.opacity(0.12))
+                            .clipShape(Circle())
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 10)
-            .frame(height: 84)
-            .background(Color.black.opacity(0.90))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.trailing, 4)
         }
-        .background(Color.black.opacity(0.92))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay { RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.14), lineWidth: 1) }
-        .shadow(color: .black.opacity(0.45), radius: 20, y: 8)
+        .padding(8)
+        .background(
+            LinearGradient(
+                colors: [Color.black.opacity(0.96), Color(red: 0.08, green: 0.08, blue: 0.11).opacity(0.96)],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay { RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.16), lineWidth: 1) }
+        .shadow(color: .black.opacity(0.50), radius: 24, y: 10)
+        .onAppear { isPlaying = player.rate > 0 }
+    }
+
+    private func togglePlayback() {
+        if player.rate > 0 {
+            player.pause()
+            isPlaying = false
+        } else {
+            player.play()
+            isPlaying = true
+        }
     }
 }
 

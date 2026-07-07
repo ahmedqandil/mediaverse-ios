@@ -486,116 +486,6 @@ struct UploadLinkItem: Codable, Identifiable {
     }
 }
 
-// ── Studio ─────────────────────────────────────────────────────────────────────
-
-struct StudioSceneSummary: Codable, Identifiable {
-    let id: String
-    let slug: String
-    let title: String
-    let sequence: Int
-    let status: String
-}
-
-struct StudioProductionCount: Codable {
-    let scenes: Int
-}
-
-struct StudioProduction: Decodable, Identifiable {
-    let id: String
-    let title: String
-    let arTitle: String?
-    let synopsis: String?
-    let genre: String
-    let language: String
-    let country: String?
-    let dialect: String?
-    let status: String
-    let createdAt: String?
-    let scenes: [StudioSceneSummary]
-    let _count: StudioProductionCount?
-
-    private enum CodingKeys: String, CodingKey {
-        case id, title, arTitle, synopsis, genre, language, country, dialect, status, createdAt, scenes, _count
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(String.self, forKey: .id)
-        title = try c.decode(String.self, forKey: .title)
-        arTitle = try c.decodeIfPresent(String.self, forKey: .arTitle)
-        synopsis = try c.decodeIfPresent(String.self, forKey: .synopsis)
-        genre = try c.decodeIfPresent(String.self, forKey: .genre) ?? "drama"
-        language = try c.decodeIfPresent(String.self, forKey: .language) ?? "ar"
-        country = try c.decodeIfPresent(String.self, forKey: .country)
-        dialect = try c.decodeIfPresent(String.self, forKey: .dialect)
-        status = try c.decodeIfPresent(String.self, forKey: .status) ?? "DRAFT"
-        createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
-        scenes = try c.decodeIfPresent([StudioSceneSummary].self, forKey: .scenes) ?? []
-        _count = try c.decodeIfPresent(StudioProductionCount.self, forKey: ._count)
-    }
-}
-
-struct StudioProductionsResponse: Decodable {
-    let productions: [StudioProduction]
-    let error: String?
-}
-
-struct StudioProductionCreateResponse: Decodable {
-    let production: StudioProduction
-}
-
-struct StudioProductionDetailResponse: Decodable {
-    let production: StudioProduction
-}
-
-struct StudioBreakdownResponse: Decodable {
-    let scenes: [StudioSceneSummary]?
-}
-
-struct StudioDialogue: Codable, Identifiable {
-    let id: String
-    let characterId: String
-    let arText: String
-    let enText: String?
-    let emotion: String?
-    let sequence: Int
-}
-
-struct StudioShot: Codable, Identifiable {
-    let id: String
-    let shotSlug: String
-    let sequence: Int
-    let type: String
-    let durationSec: Double
-    let lipCritical: Bool
-    let emotion: String?
-    let action: String?
-    let locationDesc: String?
-    let characterIds: [String]
-    let status: String?
-    let keyframeUrl: String?
-    let clipUrl: String?
-    let videoStatus: String?
-    let dialogues: [StudioDialogue]
-}
-
-struct StudioSceneDetail: Codable, Identifiable {
-    let id: String
-    let slug: String
-    let title: String
-    let arTitle: String?
-    let synopsis: String?
-    let sequence: Int
-    let status: String
-    let locationDesc: String?
-    let visualBrief: String?
-    let shots: [StudioShot]
-}
-
-struct StudioSceneDetailResponse: Codable {
-    let scene: StudioSceneDetail
-}
-
 // ── Profile ───────────────────────────────────────────────────────────────────
 
 struct UserProfile: Codable {
@@ -1544,11 +1434,12 @@ struct Collection: Codable, Identifiable {
     let user: CollectionUser?
     let _count: CollectionCount
     let items: [CollectionItemPreview]   // up to 4 for mosaic
+    let isFollowing: Bool
 
     // POST /api/collections returns a bare collection without _count or items.
     // This custom init provides defaults so both GET and POST responses decode cleanly.
     private enum CodingKeys: String, CodingKey {
-        case id, title, description, type, visibility, createdAt, updatedAt, user, items
+        case id, title, description, type, visibility, createdAt, updatedAt, user, items, isFollowing
         case _count = "_count"
     }
 
@@ -1564,6 +1455,7 @@ struct Collection: Codable, Identifiable {
         user        = try c.decodeIfPresent(CollectionUser.self, forKey: .user)
         _count      = (try c.decodeIfPresent(CollectionCount.self,          forKey: ._count)) ?? CollectionCount(items: 0, followers: 0)
         items       = (try c.decodeIfPresent([CollectionItemPreview].self,   forKey: .items))  ?? []
+        isFollowing = (try c.decodeIfPresent(Bool.self, forKey: .isFollowing)) ?? false
     }
 }
 

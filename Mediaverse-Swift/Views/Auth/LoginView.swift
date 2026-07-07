@@ -209,9 +209,7 @@ struct LoginView: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(C.watch)
                     Button {
-                        if let url = URL(string: debugURL) {
-                            UIApplication.shared.open(url)
-                        }
+                        Task { await signInWithDebugMagicLink(debugURL) }
                     } label: {
                         Text(debugURL)
                             .font(.system(size: 11))
@@ -272,6 +270,20 @@ struct LoginView: View {
         defer { isLoading = false }
         do {
             try await auth.signInWithGoogle()
+        } catch {
+            if (error as NSError).code != ASWebAuthenticationSessionError.canceledLogin.rawValue {
+                errorMsg = error.localizedDescription
+            }
+        }
+    }
+
+    private func signInWithDebugMagicLink(_ debugURL: String) async {
+        guard let url = URL(string: debugURL) else { return }
+        isLoading = true
+        errorMsg = nil
+        defer { isLoading = false }
+        do {
+            try await auth.signInWithMagicLinkURL(url)
         } catch {
             if (error as NSError).code != ASWebAuthenticationSessionError.canceledLogin.rawValue {
                 errorMsg = error.localizedDescription

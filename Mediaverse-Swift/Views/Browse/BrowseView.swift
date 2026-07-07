@@ -1,141 +1,145 @@
 import SwiftUI
 
-/// Browse landing — sections for TV Shows, Movies, Microdramas, Following, Collections.
-/// Each section leads to a dedicated sub-view.
+/// Browse landing with in-place section tabs.
+/// Each tab keeps the section-specific filters/search controls from its destination page.
 struct BrowseView: View {
 
+    @State private var selectedSection: BrowseSection = .shows
     @State private var searchPresented = false
 
     var body: some View {
         ZStack {
             C.bg.ignoresSafeArea()
-            ScrollView {
-                VStack(spacing: 0) {
-                    // ── TV Shows ──────────────────────────────────────────
-                    BrowseSectionRow(
-                        icon: "tv",
-                        title: "TV Shows",
-                        subtitle: "Series, anime, reality",
-                        tintColor: C.watch
-                    ) {
-                        ShowsBrowseView()
-                    }
 
-                    Divider().background(C.border).padding(.horizontal, C.pagePad)
+            VStack(spacing: 0) {
+                sectionTabs
 
-                    // ── Movies ────────────────────────────────────────────
-                    BrowseSectionRow(
-                        icon: "film",
-                        title: "Movies",
-                        subtitle: "Films, documentaries, specials",
-                        tintColor: Color(hex: "#F59E0B")
-                    ) {
-                        MoviesBrowseView()
-                    }
+                TabView(selection: $selectedSection) {
+                    ShowsBrowseView()
+                        .tag(BrowseSection.shows)
 
-                    Divider().background(C.border).padding(.horizontal, C.pagePad)
+                    MoviesBrowseView()
+                        .tag(BrowseSection.movies)
 
-                    // ── Microdramas ───────────────────────────────────────
-                    BrowseSectionRow(
-                        icon: "iphone",
-                        title: "Microdramas",
-                        subtitle: "Short vertical series",
-                        tintColor: Color(hex: "#8B5CF6")
-                    ) {
-                        MicrodramasBrowseView()
-                    }
+                    MicrodramasBrowseView()
+                        .tag(BrowseSection.microdramas)
 
-                    Divider().background(C.border).padding(.horizontal, C.pagePad)
+                    ChannelsBrowseView()
+                        .tag(BrowseSection.channels)
 
-                    // ── Channels ──────────────────────────────────────────
-                    BrowseSectionRow(
-                        icon: "rectangle.stack.person.crop",
-                        title: "Channels",
-                        subtitle: "Creators and networks",
-                        tintColor: Color(hex: "#38BDF8")
-                    ) {
-                        ChannelsBrowseView()
-                    }
+                    FollowingView()
+                        .tag(BrowseSection.following)
 
-                    Divider().background(C.border).padding(.horizontal, C.pagePad)
-
-                    // ── Following ─────────────────────────────────────────
-                    BrowseSectionRow(
-                        icon: "bell",
-                        title: "Following",
-                        subtitle: "Videos from channels you follow",
-                        tintColor: Color(hex: "#10B981")
-                    ) {
-                        FollowingView()
-                    }
-
-                    Divider().background(C.border).padding(.horizontal, C.pagePad)
-
-                    // ── Collections ───────────────────────────────────────
-                    BrowseSectionRow(
-                        icon: "square.stack",
-                        title: "Collections",
-                        subtitle: "Your curated lists",
-                        tintColor: Color(hex: "#EC4899")
-                    ) {
-                        CollectionsView()
-                    }
+                    CollectionsView()
+                        .tag(BrowseSection.collections)
                 }
-                .padding(.top, 8)
+                .tabViewStyle(.page(indexDisplayMode: .never))
             }
         }
         .navigationTitle("Browse")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("Browse")
+                    .font(.system(size: 17, weight: .bold))
+                    .fontDesign(.rounded)
+                    .foregroundStyle(C.text)
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     searchPresented = true
                 } label: {
-                    Image(systemName: "magnifyingglass")
+                    MediaverseIcon(name: "search", fallbackSystemName: "magnifyingglass")
+                        .frame(width: 16, height: 16)
                         .foregroundStyle(C.text)
+                        .frame(width: 36, height: 36)
                 }
+                .buttonStyle(.plain)
             }
         }
         .sheet(isPresented: $searchPresented) {
             SearchView()
         }
     }
-}
 
-// MARK: - Row component
-
-private struct BrowseSectionRow<Destination: View>: View {
-    let icon: String
-    let title: String
-    let subtitle: String
-    let tintColor: Color
-    @ViewBuilder var destination: () -> Destination
-
-    var body: some View {
-        NavigationLink(destination: destination) {
-            HStack(spacing: 14) {
-                Image(systemName: icon)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(tintColor)
-                    .frame(width: 44, height: 44)
-                    .background(tintColor.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(C.text)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(C.textMuted)
+    private var sectionTabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(BrowseSection.allCases) { section in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            selectedSection = section
+                        }
+                    } label: {
+                        Label(section.title, systemImage: section.fallbackIcon)
+                            .mediaverseLabelIcon(section.assetIcon, fallback: section.fallbackIcon)
+                            .font(.system(size: 13, weight: selectedSection == section ? .bold : .semibold))
+                            .foregroundStyle(selectedSection == section ? C.bg : C.textMuted)
+                            .padding(.horizontal, 12)
+                            .frame(height: 36)
+                            .background(selectedSection == section ? C.watch : C.elevated)
+                            .clipShape(Capsule())
+                            .overlay {
+                                Capsule()
+                                    .stroke(selectedSection == section ? C.watch.opacity(0.6) : C.border, lineWidth: 1)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(section.title)
                 }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(C.textMuted)
             }
             .padding(.horizontal, C.pagePad)
-            .padding(.vertical, 14)
+            .padding(.vertical, 10)
+        }
+        .background(C.bg)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(C.borderSubtle)
+                .frame(height: 0.5)
+        }
+    }
+}
+
+private enum BrowseSection: String, CaseIterable, Identifiable {
+    case shows
+    case movies
+    case microdramas
+    case channels
+    case following
+    case collections
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .shows: return "Shows"
+        case .movies: return "Movies"
+        case .microdramas: return "Microdramas"
+        case .channels: return "Channels"
+        case .following: return "Following"
+        case .collections: return "Collections"
+        }
+    }
+
+    var assetIcon: String {
+        switch self {
+        case .shows: return "tv"
+        case .movies: return "film"
+        case .microdramas: return "phone"
+        case .channels: return "users"
+        case .following: return "notification"
+        case .collections: return "library"
+        }
+    }
+
+    var fallbackIcon: String {
+        switch self {
+        case .shows: return "tv"
+        case .movies: return "film"
+        case .microdramas: return "iphone"
+        case .channels: return "rectangle.stack.person.crop"
+        case .following: return "bell"
+        case .collections: return "square.stack"
         }
     }
 }

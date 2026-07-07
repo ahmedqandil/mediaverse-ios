@@ -21,9 +21,12 @@ enum WatchUnderPlayerPanel: Identifiable {
 struct VideoWatchView: View {
 
     let videoId: String
+    let playlistId: String?
 
     // ── Data
     @State private var video:         VideoDetail?
+    @State private var currentVideoId: String
+    @State private var previousVideoIds: [String] = []
     @State private var isLoading                = true
     @State private var loadError:     String?
 
@@ -54,11 +57,18 @@ struct VideoWatchView: View {
 
     // ── Save to collection
     @State private var showSaveSheet:     Bool   = false
+    @State private var showPlaylistSheet: Bool   = false
     @State private var clipReactionReloadToken   = 0
     @State private var insertedClipPostToken      = 0
     @State private var insertedClipPost: UserPost?
     @State private var underPlayerPanel: WatchUnderPlayerPanel?
     @State private var playerDragOffset: CGFloat = 0
+    @State private var isFullscreenPlayerPresented = false
+    @State private var playlistPanel: PlaylistDetail?
+    @State private var playlistPanelExpanded = true
+    @State private var relatedPlaylists: [ChannelPlaylist] = []
+    @State private var relatedPlaylistsExpanded = true
+    @AppStorage("playerMuted") private var playerMuted = false
 
     // ── Moment likes (heatmap)
     @State private var heatmapBuckets:   [Int]   = []
@@ -76,20 +86,39 @@ struct VideoWatchView: View {
     @EnvironmentObject private var auth: AuthManager
     @EnvironmentObject private var miniPlayer: MiniPlayerManager
 
+    private var underPlayerPanelAnimation: Animation {
+        .spring(response: 0.34, dampingFraction: 0.88)
+    }
+
+    private var underPlayerPanelTransition: AnyTransition {
+        .asymmetric(
+            insertion: .move(edge: .trailing).combined(with: .opacity),
+            removal: .move(edge: .leading).combined(with: .opacity)
+        )
+    }
+
+    init(videoId: String, playlistId: String? = nil) {
+        self.videoId = videoId
+        self.playlistId = playlistId
+        _currentVideoId = State(initialValue: videoId)
+    }
+
     // MARK: - Body
 
     var body: some View {
         ZStack {
             C.bg.ignoresSafeArea()
             if isLoading {
-                watchSkeleton
+                if !miniPlayer.isExpansionHandoffActive {
+                    watchSkeleton
+                }
             } else if let v = video {
                 mainContent(v)
             } else {
                 // Load failed — show retry
                 VStack(spacing: 16) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 36))
+                    MediaverseIcon(name: "warning", fallbackSystemName: "exclamationmark.triangle")
+                        .frame(width: 36, height: 36)
                         .foregroundStyle(C.textMuted.opacity(0.4))
                     Text(loadError ?? "Failed to load video")
                         .font(.system(size: 14))
@@ -115,11 +144,19 @@ struct VideoWatchView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
-        .task { await load() }
+        .task(id: currentVideoId) { await load() }
+        .onAppear {
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        }
         .onDisappear { stopProgress() }
         .sheet(isPresented: $showSaveSheet) {
             if let vid = video {
                 SaveToCollectionSheet(videoId: vid.id)
+            }
+        }
+        .sheet(isPresented: $showPlaylistSheet) {
+            if let vid = video {
+                SaveToPlaylistSheet(videoId: vid.id, videoType: vid.type)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification)) { _ in
@@ -128,6 +165,10 @@ struct VideoWatchView: View {
             } else {
                 showReplayPrompt = true
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            guard UIDevice.current.orientation.isLandscape else { return }
+            presentFullscreenPlayerIfNeeded()
         }
         .navigationDestination(item: $autoplayDest) { route in
             routeDestination(route)
@@ -172,27 +213,48 @@ struct VideoWatchView: View {
         GeometryReader { geo in
             let progress = collapseProgress(in: geo)
             VStack(spacing: 0) {
-                pinnedPlayer(v, geometry: geo, progress: progress)
+                pinnedPlayer(v, geometry: geo)
 
                 if let panel = underPlayerPanel {
                     underPlayerPanelView(panel, video: v)
+                        .id(panel.id)
+                        .transition(underPlayerPanelTransition)
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
                             videoDetailsContent(v)
+
+                            if let playlistPanel {
+                                playlistPlaybackPanel(playlistPanel)
+                                    .padding(.horizontal, C.pagePad)
+                                    .padding(.bottom, 16)
+                            }
+
+                            if !relatedPlaylists.isEmpty {
+                                relatedPlaylistsPanel(relatedPlaylists)
+                                    .padding(.horizontal, C.pagePad)
+                                    .padding(.bottom, 16)
+                            }
 
                             if !v.upNext.isEmpty {
                                 upNextSection(v.upNext)
                             }
                         }
                     }
+                    .transition(.opacity.combined(with: .move(edge: .leading)))
                 }
             }
+            .animation(underPlayerPanelAnimation, value: underPlayerPanel?.id)
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
             .background(C.bg)
+            .scaleEffect(x: collapseScale(progress), y: collapseScale(progress), anchor: .top)
+            .offset(y: collapseYOffset(in: geo, progress: progress))
+            .opacity(max(0.86, 1 - progress * 0.14))
+            .simultaneousGesture(playerCollapseGesture)
         }
     }
 
-    private func pinnedPlayer(_ v: VideoDetail, geometry geo: GeometryProxy, progress: CGFloat) -> some View {
+    private func pinnedPlayer(_ v: VideoDetail, geometry geo: GeometryProxy) -> some View {
         ZStack {
             playerArea
             if autoplayCountdown > 0, let next = v.upNext.first {
@@ -202,15 +264,10 @@ struct VideoWatchView: View {
             }
         }
         .frame(width: geo.size.width)
-        .scaleEffect(x: collapseScale(progress), y: collapseScale(progress), anchor: .topLeading)
-        .offset(x: collapseXOffset(in: geo, progress: progress), y: collapseYOffset(in: geo, progress: progress))
-        .opacity(max(0.82, 1 - progress * 0.18))
-        .gesture(playerCollapseGesture)
         .frame(maxWidth: .infinity)
-        .frame(height: playerVisibleHeight(in: geo, progress: progress), alignment: .topLeading)
+        .frame(height: playerVisibleHeight(in: geo), alignment: .topLeading)
         .background(Color.black)
         .zIndex(10)
-        .ignoresSafeArea(edges: .top)
     }
 
     private func collapseProgress(in geo: GeometryProxy) -> CGFloat {
@@ -221,18 +278,12 @@ struct VideoWatchView: View {
         1 - progress * 0.58
     }
 
-    private func collapseXOffset(in geo: GeometryProxy, progress: CGFloat) -> CGFloat {
-        let targetWidth = geo.size.width * collapseScale(1)
-        let targetX = geo.size.width - targetWidth - 12
-        return targetX * progress
-    }
-
     private func collapseYOffset(in geo: GeometryProxy, progress: CGFloat) -> CGFloat {
         let targetY = max(0, geo.size.height - 176)
         return targetY * progress
     }
 
-    private func playerVisibleHeight(in geo: GeometryProxy, progress: CGFloat) -> CGFloat {
+    private func playerVisibleHeight(in geo: GeometryProxy) -> CGFloat {
         geo.size.width * 9 / 16
     }
 
@@ -242,8 +293,8 @@ struct VideoWatchView: View {
                 Button {
                     dismiss()
                 } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 18, weight: .bold))
+                    MediaverseIcon(name: "chevron-down", fallbackSystemName: "chevron.down")
+                        .frame(width: 18, height: 18)
                         .foregroundStyle(.white)
                         .frame(width: 42, height: 42)
                         .background(.black.opacity(0.36))
@@ -259,6 +310,17 @@ struct VideoWatchView: View {
         }
     }
 
+    private func collapseToMiniPlayer() {
+        guard let player, let video else { return }
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
+            playerDragOffset = 999
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+            miniPlayer.present(player: player, title: video.title, route: .video(video.id))
+            dismiss()
+        }
+    }
+
     private var playerCollapseGesture: some Gesture {
         DragGesture(minimumDistance: 18)
             .onChanged { value in
@@ -267,12 +329,12 @@ struct VideoWatchView: View {
             }
             .onEnded { value in
                 let shouldMinimize = value.translation.height > 78 || value.predictedEndTranslation.height > 160
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                    playerDragOffset = 0
-                }
-                if shouldMinimize, let player, let video {
-                    miniPlayer.present(player: player, title: video.title, route: .video(video.id))
-                    dismiss()
+                if shouldMinimize {
+                    collapseToMiniPlayer()
+                } else {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                        playerDragOffset = 0
+                    }
                 }
             }
     }
@@ -336,7 +398,7 @@ struct VideoWatchView: View {
                 insertedPostToken: insertedClipPostToken,
                 insertedPost: insertedClipPost,
                 previewLimit: 2,
-                onShowMore: { _ in underPlayerPanel = .reactions },
+                onShowMore: { _ in setUnderPlayerPanel(.reactions) },
                 onSeek: { seekSeconds in
                 let t = CMTime(seconds: seekSeconds, preferredTimescale: 600)
                 player?.seek(to: t, toleranceBefore: .zero, toleranceAfter: .zero)
@@ -356,6 +418,7 @@ struct VideoWatchView: View {
                     switch panel {
                     case .comments:
                         CommentThreadView(target: .video(v.id), initialComments: localComments)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
                     case .reactions:
                         PostSectionView(
                             target: .video(v.id),
@@ -368,8 +431,10 @@ struct VideoWatchView: View {
                             player?.seek(to: t, toleranceBefore: .zero, toleranceAfter: .zero)
                             }
                         )
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
                 }
+                .id(panel.id)
                 .padding(C.pagePad)
             }
         }
@@ -378,10 +443,10 @@ struct VideoWatchView: View {
     private func underPlayerPanelHeader(_ panel: WatchUnderPlayerPanel) -> some View {
         HStack(spacing: 12) {
             Button {
-                underPlayerPanel = nil
+                setUnderPlayerPanel(nil)
             } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 15, weight: .bold))
+                MediaverseIcon(name: "chevron-left", fallbackSystemName: "chevron.left")
+                    .frame(width: 15, height: 15)
                     .foregroundStyle(C.text)
                     .frame(width: 36, height: 36)
                     .background(C.surface)
@@ -402,39 +467,51 @@ struct VideoWatchView: View {
         }
     }
 
+    private func setUnderPlayerPanel(_ panel: WatchUnderPlayerPanel?) {
+        withAnimation(underPlayerPanelAnimation) {
+            underPlayerPanel = panel
+        }
+    }
+
     // MARK: - Player area
 
     @ViewBuilder
     private var playerArea: some View {
         if let p = player {
-            WatchPlayerChrome(
-                player: p,
-                heatmapBuckets: heatmapBuckets,
-                likedSeconds: likedSeconds,
-                isAuthenticated: auth.isAuthenticated,
-                onLikeMoment: { sec in
-                    Task { await likeMomentVideo(id: videoId, sec: sec) }
-                },
-                showSpoilerToggle: video?.show != nil,
-                onClipRequest: { markIn, markOut, caption, _ in
-                    let normalizedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let post = try await APIClient.shared.createPost(
-                        videoId: videoId,
-                        markIn: markIn,
-                        markOut: markOut,
-                        caption: normalizedCaption.isEmpty ? nil : normalizedCaption
-                    )
-                    await MainActor.run {
-                        insertedClipPost = post
-                        insertedClipPostToken += 1
-                    }
-                },
-                onBack: { dismiss() },
-                onFullscreen: { openFullscreenPlayer(p) }
-            ) {
-                playerMarkerOverlay
+            if miniPlayer.isExpansionHandoffActive {
+                Color.black
+                    .aspectRatio(16/9, contentMode: .fit)
+            } else {
+                WatchPlayerChrome(
+                    player: p,
+                    heatmapBuckets: heatmapBuckets,
+                    likedSeconds: likedSeconds,
+                    isAuthenticated: auth.isAuthenticated,
+                    onLikeMoment: { sec in
+                        Task { await likeMomentVideo(id: currentVideoId, sec: sec) }
+                    },
+                    showSpoilerToggle: video?.show != nil,
+                    onClipRequest: { markIn, markOut, caption, _ in
+                        let normalizedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let post = try await APIClient.shared.createPost(
+                            videoId: currentVideoId,
+                            markIn: markIn,
+                            markOut: markOut,
+                            caption: normalizedCaption.isEmpty ? nil : normalizedCaption
+                        )
+                        await MainActor.run {
+                            insertedClipPost = post
+                            insertedClipPostToken += 1
+                        }
+                    },
+                    onPrevious: previousVideoIds.isEmpty ? nil : { playPreviousVideo() },
+                    onBack: { collapseToMiniPlayer() },
+                    onFullscreen: { presentFullscreenPlayerIfNeeded() }
+                ) {
+                    playerMarkerOverlay
+                }
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
         } else {
             Color.black
                 .aspectRatio(16/9, contentMode: .fit)
@@ -565,8 +642,8 @@ struct VideoWatchView: View {
                         showSaveSheet = true
                     } label: {
                         HStack(spacing: 5) {
-                            Image(systemName: "bookmark")
-                                .font(.system(size: 12))
+                            MediaverseIcon(name: "bookmark", fallbackSystemName: "bookmark")
+                                .frame(width: 12, height: 12)
                             Text("Save")
                                 .font(.system(size: 13, weight: .medium))
                                 .lineLimit(1)
@@ -578,10 +655,302 @@ struct VideoWatchView: View {
                         .clipShape(Capsule())
                         .overlay { Capsule().stroke(C.border, lineWidth: 1) }
                     }
+
+                    Button {
+                        showPlaylistSheet = true
+                    } label: {
+                        HStack(spacing: 5) {
+                            MediaverseIcon(name: "playlist", fallbackSystemName: "list.bullet.rectangle")
+                                .frame(width: 12, height: 12)
+                            Text("Playlist")
+                                .font(.system(size: 13, weight: .medium))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.78)
+                        }
+                        .foregroundStyle(C.textMuted)
+                        .padding(.horizontal, 12).padding(.vertical, 9)
+                        .background(C.surface)
+                        .clipShape(Capsule())
+                        .overlay { Capsule().stroke(C.border, lineWidth: 1) }
+                    }
                 }
 
                 Spacer(minLength: 0)
             }
+        }
+    }
+
+    // MARK: - Playlist panel
+
+    private func playlistPlaybackPanel(_ playlist: PlaylistDetail) -> some View {
+        let playlistItems = playlist.items.compactMap { item -> (PlaylistDetailItem, PlaylistDetailVideo)? in
+            guard let video = item.video else { return nil }
+            return (item, video)
+        }
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    playlistPanelExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    MediaverseIcon(name: "playlist", fallbackSystemName: "list.bullet.rectangle")
+                        .frame(width: 18, height: 18)
+                        .foregroundStyle(C.watch)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(playlist.title)
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(C.text)
+                            .lineLimit(1)
+                        Text("\(playlistItems.count) \(playlist.type == "short" ? "shorts" : "videos")")
+                            .font(.caption)
+                            .foregroundStyle(C.textMuted)
+                    }
+
+                    Spacer()
+
+                    MediaverseIcon(name: playlistPanelExpanded ? "chevron-up" : "chevron-down", fallbackSystemName: playlistPanelExpanded ? "chevron.up" : "chevron.down")
+                        .frame(width: 14, height: 14)
+                        .foregroundStyle(C.textMuted)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if playlistPanelExpanded {
+                LazyVStack(spacing: 8) {
+                    ForEach(Array(playlistItems.enumerated()), id: \.element.0.id) { index, pair in
+                        playlistPanelRow(
+                            item: pair.0,
+                            video: pair.1,
+                            position: index + 1,
+                            isCurrent: pair.1.id == currentVideoId
+                        )
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(C.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay { RoundedRectangle(cornerRadius: 12).stroke(C.border, lineWidth: 1) }
+    }
+
+    private func playlistPanelRow(item: PlaylistDetailItem, video: PlaylistDetailVideo, position: Int, isCurrent: Bool) -> some View {
+        Button {
+            playVideoInPlace(video.id)
+        } label: {
+            HStack(spacing: 10) {
+                Text("\(position)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(isCurrent ? C.watch : C.textMuted)
+                    .frame(width: 22)
+
+                ZStack(alignment: .bottomTrailing) {
+                    AsyncImage(url: C.mediaURL(video.thumbnailUrl)) { phase in
+                        switch phase {
+                        case .success(let img): img.resizable().scaledToFill()
+                        default: Color.white.opacity(0.08)
+                        }
+                    }
+                    .frame(width: 96, height: 54)
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+
+                    if let duration = video.duration {
+                        playlistDurationBadge(duration)
+                    }
+
+                    if isCurrent {
+                        Color.black.opacity(0.35)
+                            .clipShape(RoundedRectangle(cornerRadius: 7))
+                        MediaverseIcon(name: "play", fallbackSystemName: "play.fill")
+                            .frame(width: 15, height: 15)
+                            .foregroundStyle(C.watch)
+                    }
+                }
+                .frame(width: 96, height: 54)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(video.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(C.text)
+                        .lineLimit(2)
+                    if let views = video.views, views > 0 {
+                        Text("\(fmtCount(views)) views")
+                            .font(.caption)
+                            .foregroundStyle(C.textMuted)
+                    }
+                }
+
+                Spacer()
+
+                if isCurrent {
+                    Text("Now")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(C.watch)
+                        .clipShape(Capsule())
+                } else {
+                    MediaverseIcon(name: "chevron-right", fallbackSystemName: "chevron.right")
+                        .frame(width: 11, height: 11)
+                        .foregroundStyle(C.textMuted)
+                }
+            }
+            .padding(8)
+            .background(isCurrent ? C.watch.opacity(0.10) : Color.white.opacity(0.035))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(isCurrent ? C.watch.opacity(0.45) : Color.clear, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isCurrent)
+    }
+
+    private func playlistDurationBadge(_ secs: Double) -> some View {
+        let total = Int(secs)
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        let label = h > 0
+            ? "\(h):\(String(format: "%02d", m)):\(String(format: "%02d", s))"
+            : "\(m):\(String(format: "%02d", s))"
+
+        return Text(label)
+            .font(.system(size: 9, weight: .semibold))
+            .fontDesign(.monospaced)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .background(Color.black.opacity(0.75))
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .padding(4)
+    }
+
+    // MARK: - Related playlists drawer
+
+    private func relatedPlaylistsPanel(_ playlists: [ChannelPlaylist]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    relatedPlaylistsExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    MediaverseIcon(name: "playlist", fallbackSystemName: "list.bullet.rectangle")
+                        .frame(width: 18, height: 18)
+                        .foregroundStyle(C.watch)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Playlists")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(C.text)
+                        Text("\(playlists.count) from this \(video?.show == nil ? "channel" : "show")")
+                            .font(.caption)
+                            .foregroundStyle(C.textMuted)
+                    }
+
+                    Spacer()
+
+                    MediaverseIcon(name: relatedPlaylistsExpanded ? "chevron-up" : "chevron-down", fallbackSystemName: relatedPlaylistsExpanded ? "chevron.up" : "chevron.down")
+                        .frame(width: 14, height: 14)
+                        .foregroundStyle(C.textMuted)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if relatedPlaylistsExpanded {
+                LazyVStack(spacing: 8) {
+                    ForEach(playlists) { playlist in
+                        NavigationLink(value: AppRoute.playlist(playlist.id)) {
+                            relatedPlaylistRow(playlist)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(C.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay { RoundedRectangle(cornerRadius: 12).stroke(C.border, lineWidth: 1) }
+    }
+
+    private func relatedPlaylistRow(_ playlist: ChannelPlaylist) -> some View {
+        HStack(spacing: 10) {
+            relatedPlaylistMosaic(playlist)
+                .frame(width: 112, height: 63)
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(playlist.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(C.text)
+                    .lineLimit(2)
+
+                HStack(spacing: 4) {
+                    Text("\(playlist._count.items) \(playlist.type == "short" ? "short" : "video")\(playlist._count.items == 1 ? "" : "s")")
+                    if let description = playlist.description, !description.isEmpty {
+                        Text("·")
+                            .foregroundStyle(C.textMuted.opacity(0.35))
+                        Text(description)
+                            .lineLimit(1)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(C.textMuted)
+            }
+
+            Spacer()
+
+            MediaverseIcon(name: "chevron-right", fallbackSystemName: "chevron.right")
+                .frame(width: 11, height: 11)
+                .foregroundStyle(C.textMuted)
+        }
+        .padding(8)
+        .background(Color.white.opacity(0.035))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    @ViewBuilder
+    private func relatedPlaylistMosaic(_ playlist: ChannelPlaylist) -> some View {
+        let thumbnails = playlist.items.compactMap { $0.video?.thumbnailUrl }
+
+        if thumbnails.count >= 4 {
+            LazyVGrid(
+                columns: [GridItem(.flexible(), spacing: 0), GridItem(.flexible(), spacing: 0)],
+                spacing: 0
+            ) {
+                ForEach(Array(thumbnails.prefix(4).enumerated()), id: \.offset) { _, thumbnail in
+                    AsyncImage(url: C.mediaURL(thumbnail)) { img in
+                        img.resizable().scaledToFill()
+                    } placeholder: {
+                        C.surfaceAlt
+                    }
+                    .frame(width: 56, height: 32)
+                    .clipped()
+                }
+            }
+        } else if let thumbnail = thumbnails.first {
+            AsyncImage(url: C.mediaURL(thumbnail)) { img in
+                img.resizable().scaledToFill()
+            } placeholder: {
+                C.surfaceAlt
+            }
+            .frame(width: 112, height: 63)
+            .clipped()
+        } else {
+            C.surfaceAlt
+                .overlay {
+                    MediaverseIcon(name: "playlist", fallbackSystemName: "list.bullet.rectangle")
+                        .frame(width: 24, height: 24)
+                        .foregroundStyle(C.textMuted.opacity(0.45))
+                }
         }
     }
 
@@ -642,7 +1011,9 @@ struct VideoWatchView: View {
         if v.linkedClip != nil || v.linkedEpisode != nil {
             VStack(spacing: 8) {
                 if let clip = v.linkedClip {
-                    NavigationLink(value: AppRoute.video(clip.id)) {
+                    Button {
+                        playVideoInPlace(clip.id)
+                    } label: {
                         linkedBannerCard(
                             label: "Watch full clip",
                             title: clip.title,
@@ -699,8 +1070,8 @@ struct VideoWatchView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            Image(systemName: "chevron.right")
-                .font(.system(size: 12, weight: .medium))
+            MediaverseIcon(name: "chevron-right", fallbackSystemName: "chevron.right")
+                .frame(width: 12, height: 12)
                 .foregroundStyle(C.textMuted.opacity(0.4))
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
@@ -719,7 +1090,7 @@ struct VideoWatchView: View {
             target: .video(videoId),
             initialComments: localComments,
             previewLimit: 2,
-            onShowMore: { _ in underPlayerPanel = .comments }
+            onShowMore: { _ in setUnderPlayerPanel(.comments) }
         )
     }
 
@@ -733,7 +1104,9 @@ struct VideoWatchView: View {
                 .padding(.horizontal, C.pagePad)
 
             ForEach(items) { next in
-                NavigationLink(value: AppRoute.video(next.id)) {
+                Button {
+                    playVideoInPlace(next.id)
+                } label: {
                     UpNextRow(video: next)
                 }
                 .buttonStyle(.plain)
@@ -750,7 +1123,12 @@ struct VideoWatchView: View {
         savedProgress = 0
         showReplayPrompt = false
         do {
-            let v = try await APIClient.shared.fetchVideo(id: videoId)
+            let loadId = currentVideoId
+            async let progressTask: ProgressItem? = auth.isAuthenticated
+                ? (try? await APIClient.shared.fetchProgress(videoId: loadId))
+                : nil
+
+            let v = try await APIClient.shared.fetchVideo(id: loadId)
             video             = v
             userLike          = v.userLike
             likeCount         = v.likes.filter { $0.type == "like" }.count
@@ -760,18 +1138,19 @@ struct VideoWatchView: View {
             localComments     = v.comments
 
             // Restore progress position
-            if auth.isAuthenticated,
-               let item = try? await APIClient.shared.fetchProgress(videoId: videoId) {
+            if let item = await progressTask {
                 savedProgress = item.progress
             }
 
-            // Build AVPlayer
-            if let url = C.mediaURL(v.videoUrl) {
+            if let resumedPlayer = miniPlayer.takeExpandedPlayer(for: .video(loadId)) {
+                attachPlayer(resumedPlayer, videoId: loadId)
+            } else if let url = C.mediaURL(v.videoUrl) {
                 let asset = AVURLAsset(url: url)
                 let item  = AVPlayerItem(asset: asset)
                 let p     = AVPlayer(playerItem: item)
+                p.isMuted = playerMuted
+                p.volume = 1
 
-                // Seek to saved position
                 if savedProgress > 0.05 && savedProgress < 0.95 {
                     if let dur = try? await asset.load(.duration), dur.isNumeric {
                         let seekTo = CMTime(seconds: dur.seconds * savedProgress,
@@ -779,35 +1158,78 @@ struct VideoWatchView: View {
                         await p.seek(to: seekTo, toleranceBefore: .zero, toleranceAfter: .zero)
                     }
                 }
-                // Periodic time observer — drives heatmap needle + moment button state
-                if let existing = momentObserver { p.removeTimeObserver(existing) }
-                let token = p.addPeriodicTimeObserver(
-                    forInterval: CMTime(seconds: 1, preferredTimescale: 600),
-                    queue: .main
-                ) { time in
-                    guard !time.seconds.isNaN else { return }
-                    currentPlayerSec = Int(time.seconds)
-                }
-                momentObserver = token
 
-                player = p
-                p.play()
-                startProgress(videoId: videoId, player: p)
+                attachPlayer(p, videoId: loadId)
             }
 
-            // Fetch moment likes + timed player markers (fire-and-forget alongside load)
-            if let data = try? await APIClient.shared.fetchMomentLikes(videoId: videoId) {
-                heatmapBuckets = data.buckets
-                likedSeconds   = data.userLikedSeconds
-            }
-            if let markers = try? await APIClient.shared.fetchPlayerMarkers(videoId: videoId) {
-                playerMarkers = markers
-                dismissedMarkerIds.removeAll()
-            }
+            isLoading = false
+            miniPlayer.markExpandedPlayerAttached()
+            Task { await loadSecondaryVideoData(for: v, loadId: loadId) }
         } catch {
             loadError = error.localizedDescription
+            isLoading = false
+            miniPlayer.markExpandedPlayerAttached()
         }
-        isLoading = false
+    }
+
+    private func loadSecondaryVideoData(for video: VideoDetail, loadId: String) async {
+        async let momentTask = APIClient.shared.fetchMomentLikes(videoId: loadId)
+        async let markerTask = APIClient.shared.fetchPlayerMarkers(videoId: loadId)
+
+        if let data = try? await momentTask, currentVideoId == loadId {
+            heatmapBuckets = data.buckets
+            likedSeconds = data.userLikedSeconds
+        }
+
+        if let markers = try? await markerTask, currentVideoId == loadId {
+            playerMarkers = markers
+            dismissedMarkerIds.removeAll()
+        }
+
+        if let playlistId, playlistPanel == nil || playlistPanel?.id != playlistId {
+            let detail = try? await APIClient.shared.fetchPlaylistDetail(id: playlistId)
+            if currentVideoId == loadId {
+                playlistPanel = detail
+            }
+        }
+
+        guard currentVideoId == loadId else { return }
+        await loadRelatedPlaylists(for: video)
+    }
+
+    private func loadRelatedPlaylists(for video: VideoDetail) async {
+        let playlists: [ChannelPlaylist]?
+        if let show = video.show {
+            playlists = try? await APIClient.shared.fetchShowPlaylists(id: show.id)
+        } else if let handle = video.channel?.handle, !handle.isEmpty {
+            playlists = try? await APIClient.shared.fetchChannelPlaylists(handle: handle)
+        } else {
+            playlists = nil
+        }
+
+        relatedPlaylists = (playlists ?? [])
+            .filter { $0.type == "video" && $0._count.items > 0 }
+            .filter { $0.id != playlistId }
+    }
+
+    private func attachPlayer(_ player: AVPlayer, videoId: String) {
+        if let existing = momentObserver {
+            self.player?.removeTimeObserver(existing)
+            momentObserver = nil
+        }
+
+        let token = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 1, preferredTimescale: 600),
+            queue: .main
+        ) { time in
+            guard !time.seconds.isNaN else { return }
+            currentPlayerSec = Int(time.seconds)
+        }
+        momentObserver = token
+
+        self.player = player
+        player.play()
+        startProgress(videoId: videoId, player: player)
     }
 
     private func startProgress(videoId: String, player: AVPlayer) {
@@ -830,7 +1252,7 @@ struct VideoWatchView: View {
         let cur = p.currentTime().seconds
         let tot = item.duration.seconds
         guard tot > 0 else { return }
-        Task { try? await APIClient.shared.recordProgress(videoId: videoId, seconds: Int(cur), percent: min(1.0, cur / tot)) }
+        Task { try? await APIClient.shared.recordProgress(videoId: currentVideoId, seconds: Int(cur), percent: min(1.0, cur / tot)) }
     }
 
     // MARK: - Moment like
@@ -858,6 +1280,34 @@ struct VideoWatchView: View {
 
     // MARK: - Autoplay
 
+    private func playVideoInPlace(_ id: String, recordPrevious: Bool = true) {
+        guard id != currentVideoId else { return }
+        stopProgress()
+        if recordPrevious {
+            previousVideoIds.append(currentVideoId)
+        }
+        cancelAutoplay()
+        showReplayPrompt = false
+        underPlayerPanel = nil
+        markerRoute = nil
+        playerMarkers = []
+        dismissedMarkerIds.removeAll()
+        heatmapBuckets = []
+        likedSeconds = []
+        currentPlayerSec = 0
+        insertedClipPost = nil
+        insertedClipPostToken = 0
+        relatedPlaylists = []
+        player?.pause()
+        player = nil
+        currentVideoId = id
+    }
+
+    private func playPreviousVideo() {
+        guard let previousId = previousVideoIds.popLast() else { return }
+        playVideoInPlace(previousId, recordPrevious: false)
+    }
+
     private func startAutoplay(next: VideoUpNext) {
         showReplayPrompt = false
         autoplayCountdown = 10
@@ -869,7 +1319,7 @@ struct VideoWatchView: View {
                     autoplayCountdown -= 1
                 } else {
                     cancelAutoplay()
-                    autoplayDest = .video(nextId)
+                    playVideoInPlace(nextId)
                 }
             }
         }
@@ -910,7 +1360,7 @@ struct VideoWatchView: View {
                     Button {
                         guard let next = video?.upNext.first else { return }
                         cancelAutoplay()
-                        autoplayDest = .video(next.id)
+                        playVideoInPlace(next.id)
                     } label: {
                         Text("Play now")
                             .font(.system(size: 14, weight: .semibold))
@@ -938,8 +1388,8 @@ struct VideoWatchView: View {
         ZStack {
             Color.black.opacity(0.82)
             VStack(spacing: 12) {
-                Image(systemName: "arrow.counterclockwise")
-                    .font(.system(size: 26, weight: .bold))
+                MediaverseIcon(name: "refresh", fallbackSystemName: "arrow.counterclockwise")
+                    .frame(width: 26, height: 26)
                     .foregroundStyle(C.watch)
                 Text("Replay")
                     .font(.system(size: 16, weight: .bold))
@@ -970,11 +1420,62 @@ struct VideoWatchView: View {
         }
         currentPlayerSec = 0
         if auth.isAuthenticated {
-            Task { try? await APIClient.shared.recordProgress(videoId: videoId, seconds: 0, percent: 0) }
+            Task { try? await APIClient.shared.recordProgress(videoId: currentVideoId, seconds: 0, percent: 0) }
         }
     }
 
     // MARK: - Player markers
+
+    private func presentFullscreenPlayerIfNeeded() {
+        guard !isFullscreenPlayerPresented,
+              !miniPlayer.isExpansionHandoffActive,
+              let p = player else { return }
+        isFullscreenPlayerPresented = true
+        openFullscreenPlayer(
+            p,
+            heatmapBuckets: heatmapBuckets,
+            likedSeconds: likedSeconds,
+            isAuthenticated: auth.isAuthenticated,
+            onLikeMoment: { sec in
+                Task { await likeMomentVideo(id: currentVideoId, sec: sec) }
+            },
+            showSpoilerToggle: video?.show != nil,
+            onClipRequest: { markIn, markOut, caption, _ in
+                let normalizedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+                let post = try await APIClient.shared.createPost(
+                    videoId: currentVideoId,
+                    markIn: markIn,
+                    markOut: markOut,
+                    caption: normalizedCaption.isEmpty ? nil : normalizedCaption
+                )
+                await MainActor.run {
+                    insertedClipPost = post
+                    insertedClipPostToken += 1
+                }
+            },
+            onPrevious: previousVideoIds.isEmpty ? nil : { playPreviousVideo() },
+            relatedItems: fullscreenRelatedItems,
+            onSelectRelated: { item in
+                autoplayDest = .video(item.id)
+            },
+            onDismiss: {
+                isFullscreenPlayerPresented = false
+            }
+        ) {
+            playerMarkerOverlay
+        }
+    }
+
+    private var fullscreenRelatedItems: [PlayerRelatedItem] {
+        (video?.upNext ?? []).map { item in
+            PlayerRelatedItem(
+                id: item.id,
+                title: item.title,
+                subtitle: item.channel?.name,
+                thumbnailUrl: item.thumbnailUrl
+            )
+        }
+    }
 
     private var visiblePlayerMarkers: [PlayerMarker] {
         playerMarkers.filter { marker in
@@ -1012,8 +1513,8 @@ struct VideoWatchView: View {
                         Button {
                             dismissedMarkerIds.insert(marker.id)
                         } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 9, weight: .bold))
+                            MediaverseIcon(name: "close", fallbackSystemName: "xmark")
+                                .frame(width: 9, height: 9)
                                 .foregroundStyle(.white.opacity(0.5))
                                 .frame(width: 30, height: 30)
                         }
@@ -1077,9 +1578,9 @@ struct VideoWatchView: View {
     @ViewBuilder
     private func routeDestination(_ route: AppRoute) -> some View {
         switch route {
-        case .video(let id): VideoWatchView(videoId: id)
+        case .video(let id): VideoWatchView(videoId: id).id(id)
         case .short(let id, let showId, let channelId): ShortsView(initialShortId: id, contextShowId: showId, contextChannelId: channelId)
-        case .episode(let id): EpisodeWatchView(episodeId: id)
+        case .episode(let id): EpisodeWatchView(episodeId: id).id(id)
         case .channel(let id): ChannelView(handle: id)
         case .show(let id): ShowView(showId: id)
         case .playlist(let id): PlaylistDetailView(playlistId: id)

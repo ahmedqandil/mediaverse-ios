@@ -23,6 +23,9 @@ struct PlaylistDetailView: View {
     @State private var showEdit      = false
     @State private var playDest:     AppRoute? = nil
     @State private var wasDeleted    = false
+    @State private var isReordering  = false
+    @State private var isSavingOrder = false
+    @State private var orderError:   String?
 
     @Environment(\.dismiss) private var dismiss
 
@@ -56,6 +59,22 @@ struct PlaylistDetailView: View {
         .navigationTitle(playlist?.title ?? "Playlist")
         .toolbar {
             if let pl = playlist, pl.isOwner {
+                if items.count > 1 {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button(isReordering ? (isSavingOrder ? "Saving..." : "Done") : "Reorder") {
+                            if isReordering {
+                                Task { await saveOrderAndExit() }
+                            } else {
+                                orderError = nil
+                                shuffled = false
+                                isReordering = true
+                            }
+                        }
+                        .disabled(isSavingOrder)
+                        .foregroundStyle(C.watch)
+                    }
+                }
+
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Edit") { showEdit = true }
                         .foregroundStyle(C.watch)
@@ -84,8 +103,9 @@ struct PlaylistDetailView: View {
         }
         .navigationDestination(item: $playDest) { route in
             switch route {
-            case .video(let id):   VideoWatchView(videoId: id)
+            case .video(let id):   VideoWatchView(videoId: id, playlistId: playlistId)
             case .episode(let id): EpisodeWatchView(episodeId: id)
+            case .short(let id, let showId, let channelId): ShortsView(initialShortId: id, contextShowId: showId, contextChannelId: channelId)
             default: EmptyView()
             }
         }
@@ -172,6 +192,14 @@ struct PlaylistDetailView: View {
                 .padding(.horizontal, C.pagePad)
                 .padding(.top, 16)
 
+                if let orderError {
+                    Text(orderError)
+                        .font(.caption)
+                        .foregroundStyle(Color.red)
+                        .padding(.horizontal, C.pagePad)
+                        .padding(.top, 10)
+                }
+
                 // ── Divider ────────────────────────────────────────────────────
                 Divider()
                     .background(C.border)
@@ -193,7 +221,7 @@ struct PlaylistDetailView: View {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(items.enumerated()), id: \.element.id) { idx, item in
                             if let video = item.video {
-                                itemRow(item: item, video: video, position: idx + 1, isOwner: pl.isOwner)
+                                itemRow(item: item, video: video, position: idx + 1, isOwner: pl.isOwner, canMoveUp: idx > 0, canMoveDown: idx < items.count - 1)
                                 Divider()
                                     .background(C.border)
                                     .padding(.leading, C.pagePad + 24 + 12 + thumbW + 12)
@@ -211,7 +239,7 @@ struct PlaylistDetailView: View {
 
     // MARK: - Item row
 
-    private func itemRow(item: PlaylistDetailItem, video: PlaylistDetailVideo, position: Int, isOwner: Bool) -> some View {
+    private func itemRow(item: PlaylistDetailItem, video: PlaylistDetailVideo, position: Int, isOwner: Bool, canMoveUp: Bool, canMoveDown: Bool) -> some View {
         HStack(spacing: 12) {
 
             // Position number
@@ -221,7 +249,7 @@ struct PlaylistDetailView: View {
                 .frame(width: 24, alignment: .center)
 
             // Thumbnail → watch
-            NavigationLink(value: AppRoute.media(id: video.id, type: video.type)) {
+            playlistVideoLink(video: video) {
                 ZStack(alignment: .bottomTrailing) {
                     AsyncImage(url: C.mediaURL(video.thumbnailUrl)) { phase in
                         switch phase {
@@ -242,7 +270,7 @@ struct PlaylistDetailView: View {
             .buttonStyle(.plain)
 
             // Info → watch
-            NavigationLink(value: AppRoute.media(id: video.id, type: video.type)) {
+            playlistVideoLink(video: video) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(video.title)
                         .font(.subheadline.weight(.medium))
@@ -260,13 +288,40 @@ struct PlaylistDetailView: View {
             }
             .buttonStyle(.plain)
 
-            // Remove button (owner only)
-            if isOwner {
+            if isOwner && isReordering {
+                VStack(spacing: 4) {
+                    Button {
+                        moveItem(item.id, direction: -1)
+                    } label: {
+                        MediaverseIcon(name: "chevron-up", fallbackSystemName: "chevron.up")
+                            .frame(width: 12, height: 12)
+                            .foregroundStyle(canMoveUp ? C.text : C.textMuted.opacity(0.35))
+                            .frame(width: 30, height: 26)
+                            .background(Color.white.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .disabled(!canMoveUp)
+                    .buttonStyle(.plain)
+
+                    Button {
+                        moveItem(item.id, direction: 1)
+                    } label: {
+                        MediaverseIcon(name: "chevron-down", fallbackSystemName: "chevron.down")
+                            .frame(width: 12, height: 12)
+                            .foregroundStyle(canMoveDown ? C.text : C.textMuted.opacity(0.35))
+                            .frame(width: 30, height: 26)
+                            .background(Color.white.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .disabled(!canMoveDown)
+                    .buttonStyle(.plain)
+                }
+            } else if isOwner {
                 Button {
                     Task { await removeItem(id: item.id) }
                 } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .semibold))
+                    MediaverseIcon(name: "xmark", fallbackSystemName: "xmark")
+                        .frame(width: 11, height: 11)
                         .foregroundStyle(C.textMuted)
                         .frame(width: 28, height: 28)
                         .background(Color.white.opacity(0.08))
@@ -279,6 +334,21 @@ struct PlaylistDetailView: View {
         .padding(.vertical, 10)
     }
 
+    @ViewBuilder
+    private func playlistVideoLink<Content: View>(video: PlaylistDetailVideo, @ViewBuilder content: () -> Content) -> some View {
+        if video.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "short" {
+            NavigationLink(value: AppRoute.media(id: video.id, type: video.type)) {
+                content()
+            }
+        } else {
+            NavigationLink {
+                VideoWatchView(videoId: video.id, playlistId: playlistId)
+            } label: {
+                content()
+            }
+        }
+    }
+
     // MARK: - Thumbnail mosaic (same logic as PlaylistsView)
 
     @ViewBuilder
@@ -286,29 +356,27 @@ struct PlaylistDetailView: View {
         let urls = Array(thumbURLs.prefix(4))
 
         if urls.count >= 4 {
-            LazyVGrid(
-                columns: [GridItem(.flexible(), spacing: 0), GridItem(.flexible(), spacing: 0)],
-                spacing: 0
-            ) {
-                ForEach(Array(urls.enumerated()), id: \.offset) { _, url in
-                    AsyncImage(url: C.mediaURL(url)) { phase in
-                        switch phase {
-                        case .success(let img): img.resizable().scaledToFill()
-                        default: Rectangle().fill(Color.white.opacity(0.08))
-                        }
+            GeometryReader { geo in
+                let cellWidth = geo.size.width / 2
+                let cellHeight = geo.size.height / 2
+
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        mosaicImage(urls[0])
+                            .frame(width: cellWidth, height: cellHeight)
+                        mosaicImage(urls[1])
+                            .frame(width: cellWidth, height: cellHeight)
                     }
-                    .aspectRatio(16/9, contentMode: .fit)
-                    .clipped()
+                    HStack(spacing: 0) {
+                        mosaicImage(urls[2])
+                            .frame(width: cellWidth, height: cellHeight)
+                        mosaicImage(urls[3])
+                            .frame(width: cellWidth, height: cellHeight)
+                    }
                 }
             }
         } else if let first = urls.first {
-            AsyncImage(url: C.mediaURL(first)) { phase in
-                switch phase {
-                case .success(let img): img.resizable().scaledToFill()
-                default: Rectangle().fill(Color.white.opacity(0.08))
-                }
-            }
-            .clipped()
+            mosaicImage(first)
         } else {
             ZStack {
                 Color.white.opacity(0.05)
@@ -317,6 +385,16 @@ struct PlaylistDetailView: View {
                     .foregroundStyle(Color.white.opacity(0.2))
             }
         }
+    }
+
+    private func mosaicImage(_ url: String) -> some View {
+        AsyncImage(url: C.mediaURL(url)) { phase in
+            switch phase {
+            case .success(let img): img.resizable().scaledToFill()
+            default: Rectangle().fill(Color.white.opacity(0.08))
+            }
+        }
+        .clipped()
     }
 
     // MARK: - Duration badge
@@ -346,7 +424,7 @@ struct PlaylistDetailView: View {
     private func playAll() {
         let list = shuffled ? items.shuffled() : items
         guard let first = list.first?.video else { return }
-        playDest = .video(first.id)
+        playDest = AppRoute.media(id: first.id, type: first.type)
     }
 
     private func toggleShuffle() {
@@ -368,6 +446,30 @@ struct PlaylistDetailView: View {
         try? await APIClient.shared.reorderPlaylist(playlistId: playlistId, order: order)
     }
 
+    private func moveItem(_ id: String, direction: Int) {
+        guard let from = items.firstIndex(where: { $0.id == id }) else { return }
+        let to = from + direction
+        guard items.indices.contains(to) else { return }
+        withAnimation(.easeInOut(duration: 0.18)) {
+            let item = items.remove(at: from)
+            items.insert(item, at: to)
+        }
+        orderError = nil
+    }
+
+    private func saveOrderAndExit() async {
+        guard !isSavingOrder else { return }
+        isSavingOrder = true
+        orderError = nil
+        do {
+            try await APIClient.shared.reorderPlaylist(playlistId: playlistId, order: items.map { $0.id })
+            isReordering = false
+        } catch {
+            orderError = "Could not save playlist order. Please try again."
+        }
+        isSavingOrder = false
+    }
+
     // MARK: - Load
 
     private func load() async {
@@ -377,6 +479,8 @@ struct PlaylistDetailView: View {
             let detail  = try await APIClient.shared.fetchPlaylistDetail(id: playlistId)
             playlist    = detail
             items       = detail.items
+            isReordering = false
+            orderError = nil
         } catch {
             self.error  = true
         }

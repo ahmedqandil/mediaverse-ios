@@ -53,60 +53,63 @@ struct ChannelView: View {
     // MARK: - Main content
 
     private func channelContent(_ ch: ChannelDetail) -> some View {
-        ScrollView(showsIndicators: false) {
-            VStack(spacing: 0) {
-                heroSection(ch)
-                tabBar(ch)
-                tabContent(ch)
-                    .padding(.horizontal, C.pagePad)
-                    .padding(.top, 20)
-                    .padding(.bottom, 32)
+        GeometryReader { geo in
+            let width = geo.size.width
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 0) {
+                    heroSection(ch, width: width)
+                    tabBar(ch, width: width)
+                    tabContent(ch)
+                        .frame(width: max(0, width - C.pagePad * 2), alignment: .topLeading)
+                        .padding(.top, 20)
+                        .padding(.bottom, 32)
+                }
+                .frame(width: width, alignment: .top)
             }
+            .frame(width: width)
+            .clipped()
         }
     }
 
     // MARK: - Hero
 
-    private func heroSection(_ ch: ChannelDetail) -> some View {
-        ZStack(alignment: .bottomLeading) {
-            // Banner or gradient
-            if let url = C.mediaURL(ch.bannerUrl) {
-                AsyncImage(url: url) { img in img.resizable().scaledToFill() } placeholder: { C.surface }
-                    .frame(height: 220)
-                    .clipped()
-                    .overlay {
-                        ZStack {
-                            LinearGradient(
-                                colors: [.black.opacity(0.92), .black.opacity(0.60), .black.opacity(0.10)],
-                                startPoint: .leading, endPoint: .trailing
-                            )
-                            LinearGradient(
-                                colors: [.black, .black.opacity(0.70), .black.opacity(0.20), .clear],
-                                startPoint: .bottom, endPoint: .init(x: 0.5, y: 0.35)
-                            )
+    private func heroSection(_ ch: ChannelDetail, width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .bottomLeading) {
+                if let url = C.mediaURL(ch.bannerUrl) {
+                    AsyncImage(url: url) { img in img.resizable().scaledToFill() } placeholder: { C.surface }
+                        .frame(width: width, height: 200)
+                        .clipped()
+                        .overlay {
+                            ZStack {
+                                LinearGradient(
+                                    colors: [.black.opacity(0.92), .black.opacity(0.60), .black.opacity(0.10)],
+                                    startPoint: .leading, endPoint: .trailing
+                                )
+                                LinearGradient(
+                                    colors: [.black, .black.opacity(0.70), .black.opacity(0.20), .clear],
+                                    startPoint: .bottom, endPoint: .init(x: 0.5, y: 0.35)
+                                )
+                            }
                         }
-                    }
-            } else {
-                LinearGradient(
-                    colors: [C.surface, C.bg],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                )
-                .frame(height: 220)
-            }
+                } else {
+                    LinearGradient(
+                        colors: [C.surface, C.bg],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    )
+                    .frame(width: width, height: 200)
+                }
 
-            // Channel info row
-            VStack(spacing: 0) {
-                Spacer()
                 HStack(alignment: .bottom, spacing: 16) {
-                    // Avatar
                     channelAvatar(ch)
 
-                    // Meta
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 6) {
                             Text(ch.name)
                                 .font(.system(size: 22, weight: .bold))
                                 .foregroundStyle(C.text)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
                             if ch.verified {
                                 Circle()
                                     .fill(C.watch)
@@ -121,12 +124,15 @@ struct ChannelView: View {
                             Text("@\(ch.handle)")
                                 .font(.caption)
                                 .foregroundStyle(C.textMuted)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                             if followerCount > 0 {
                                 Text("·")
                                     .foregroundStyle(C.textMuted.opacity(0.4))
                                 Text(fmtCount(followerCount) + " followers")
                                     .font(.caption)
                                     .foregroundStyle(C.textMuted)
+                                    .lineLimit(1)
                             }
                             if let ct = ch.channelType, ct != "general", !ct.isEmpty {
                                 Text(ct.replacingOccurrences(of: "_", with: " ").capitalized)
@@ -138,15 +144,15 @@ struct ChannelView: View {
                             }
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .frame(width: max(0, width - C.pagePad * 2), alignment: .leading)
                 .padding(.horizontal, C.pagePad)
                 .padding(.bottom, 12)
             }
-            .frame(height: 220)
-        }
-        .overlay(alignment: .bottom) {
-            // Description + CTA bar below hero
-            VStack(alignment: .leading, spacing: 10) {
+            .frame(width: width, height: 200)
+
+            VStack(alignment: .leading, spacing: 12) {
                 if let desc = ch.description, !desc.isEmpty {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(desc)
@@ -165,7 +171,6 @@ struct ChannelView: View {
                     }
                 }
 
-                // CTA row
                 HStack(spacing: 10) {
                     Button {
                         Task { await toggleFollow(ch) }
@@ -212,11 +217,13 @@ struct ChannelView: View {
                     }
                 }
             }
-            .padding(C.pagePad)
+            .frame(width: max(0, width - C.pagePad * 2), alignment: .leading)
+            .padding(.horizontal, C.pagePad)
+            .padding(.top, 12)
+            .padding(.bottom, 14)
             .background(C.bg)
-            .offset(y: 105)
         }
-        .frame(height: 220 + 115)
+        .frame(width: width)
     }
 
     private func channelAvatar(_ ch: ChannelDetail) -> some View {
@@ -238,7 +245,7 @@ struct ChannelView: View {
 
     // MARK: - Tab bar
 
-    private func tabBar(_ ch: ChannelDetail) -> some View {
+    private func tabBar(_ ch: ChannelDetail, width: CGFloat) -> some View {
         let availableTabs: [CTab] = {
             var tabs: [CTab] = []
             if !ch.videos.isEmpty      { tabs.append(.videos) }
@@ -248,34 +255,36 @@ struct ChannelView: View {
             return tabs
         }()
 
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 0) {
-                ForEach(availableTabs) { tab in
-                    Button {
-                        activeTab = tab
-                    } label: {
-                        Text(tab.label)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(activeTab == tab ? C.text : C.textMuted)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
-                            .overlay(alignment: .bottom) {
-                                if activeTab == tab {
-                                    Rectangle()
-                                        .fill(C.watch)
-                                        .frame(height: 2)
-                                        .offset(y: 1)
-                                }
+        return HStack(spacing: 0) {
+            ForEach(availableTabs) { tab in
+                Button {
+                    activeTab = tab
+                } label: {
+                    Text(tab.label)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(activeTab == tab ? C.text : C.textMuted)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .overlay(alignment: .bottom) {
+                            if activeTab == tab {
+                                Rectangle()
+                                    .fill(C.watch)
+                                    .frame(height: 2)
+                                    .offset(y: 1)
                             }
-                    }
+                        }
                 }
+                .frame(maxWidth: .infinity)
             }
         }
+        .padding(.horizontal, C.pagePad)
+        .frame(width: width)
         .background(C.bg)
         .overlay(alignment: .bottom) {
             Divider().background(C.border)
         }
-        .padding(.top, 110) // accounts for CTA bar overlap
     }
 
     // MARK: - Tab content
@@ -288,12 +297,13 @@ struct ChannelView: View {
                 emptyState(icon: "video.fill", title: "No videos yet",
                            sub: "Videos uploaded to this channel will appear here.")
             } else {
-                let cols = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+                let cols = [GridItem(.flexible(minimum: 0), spacing: 12), GridItem(.flexible(minimum: 0), spacing: 12)]
                 LazyVGrid(columns: cols, spacing: 16) {
                     ForEach(ch.videos) { v in
                         NavigationLink(value: AppRoute.video(v.id)) {
                             ChannelVideoCard(video: v)
                         }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -303,14 +313,13 @@ struct ChannelView: View {
                 if s.isEmpty {
                     emptyState(icon: "film.fill", title: "No shorts yet", sub: "")
                 } else {
-                    let cols = [GridItem(.flexible(), spacing: 8),
-                                GridItem(.flexible(), spacing: 8),
-                                GridItem(.flexible(), spacing: 8)]
-                    LazyVGrid(columns: cols, spacing: 10) {
+                    let cols = [GridItem(.flexible(minimum: 0), spacing: 12), GridItem(.flexible(minimum: 0), spacing: 12)]
+                    LazyVGrid(columns: cols, spacing: 16) {
                         ForEach(s) { v in
                             NavigationLink(value: AppRoute.short(v.id, showId: nil, channelId: ch.id)) {
                                 ChannelShortCard(video: v)
                             }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -323,7 +332,7 @@ struct ChannelView: View {
                 if pl.isEmpty {
                     emptyState(icon: "play.rectangle.on.rectangle", title: "No public playlists yet", sub: "")
                 } else {
-                    let cols = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+                    let cols = [GridItem(.flexible(minimum: 0), spacing: 12), GridItem(.flexible(minimum: 0), spacing: 12)]
                     LazyVGrid(columns: cols, spacing: 16) {
                         ForEach(pl) { playlist in
                             NavigationLink(value: playlist.primaryRoute) {
@@ -401,29 +410,38 @@ struct ChannelView: View {
     private func load() async {
         isLoading = true
         loadError = nil
-        async let channelTask  = APIClient.shared.fetchChannel(handle: handle)
-        async let followTask   = APIClient.shared.fetchChannelFollowStatus(handle: handle)
-        async let shortsTask   = APIClient.shared.fetchChannelShorts(handle: handle)
-        async let playlistTask = APIClient.shared.fetchChannelPlaylists(handle: handle)
 
         do {
-            channel = try await channelTask
+            channel = try await APIClient.shared.fetchChannel(handle: handle)
         } catch {
             channel = nil
             loadError = error.localizedDescription
+            isLoading = false
+            return
         }
-        followStatus = try? await followTask
-        shorts       = (try? await shortsTask) ?? []
-        playlists    = (try? await playlistTask) ?? []
 
         // Choose initial tab based on what has content
         if let ch = channel {
             if !ch.videos.isEmpty         { activeTab = .videos }
-            else if shorts?.isEmpty == false { activeTab = .shorts }
-            else if playlists?.isEmpty == false { activeTab = .playlists }
             else { activeTab = .about }
         }
         isLoading = false
+        Task { await loadSecondaryChannelContent() }
+    }
+
+    private func loadSecondaryChannelContent() async {
+        async let followTask = APIClient.shared.fetchChannelFollowStatus(handle: handle)
+        async let shortsTask = APIClient.shared.fetchChannelShorts(handle: handle)
+        async let playlistTask = APIClient.shared.fetchChannelPlaylists(handle: handle)
+
+        followStatus = try? await followTask
+        shorts = (try? await shortsTask) ?? []
+        playlists = (try? await playlistTask) ?? []
+
+        if channel?.videos.isEmpty != false {
+            if shorts?.isEmpty == false { activeTab = .shorts }
+            else if playlists?.isEmpty == false { activeTab = .playlists }
+        }
     }
 
     private var loadFailureView: some View {
@@ -576,7 +594,7 @@ private struct ChannelShortCard: View {
                 img.resizable().scaledToFill()
             } placeholder: { C.surface }
             .frame(maxWidth: .infinity)
-            .aspectRatio(9/16, contentMode: .fit)
+            .aspectRatio(16/9, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .clipped()
 
@@ -609,44 +627,90 @@ private struct ChannelPlaylistCard: View {
     private var count: Int { playlist._count.items }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .bottomTrailing) {
                 mosaicThumbnail
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .aspectRatio(16/9, contentMode: .fit)
+                    .aspectRatio(16/9, contentMode: .fill)
+                    .frame(maxWidth: .infinity)
+                    .clipped()
 
-                Text("\(count) \(count == 1 ? "video" : "videos")")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(.black.opacity(0.80))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.68)],
+                    startPoint: .center,
+                    endPoint: .bottom
+                )
+
+                playlistCountBadge
                     .padding(8)
             }
+            .aspectRatio(16/9, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay { RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.08), lineWidth: 1) }
 
-            Text(playlist.title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(C.text)
-                .lineLimit(2)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(playlist.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(C.text)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(minHeight: 34, alignment: .topLeading)
+
+                HStack(spacing: 5) {
+                    MediaverseIcon(name: "playlist", fallbackSystemName: "play.rectangle.on.rectangle")
+                        .frame(width: 11, height: 11)
+                    Text("Playlist")
+                    Text("·")
+                    Text("\(count)")
+                }
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(C.textMuted)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
         }
+        .background(C.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay { RoundedRectangle(cornerRadius: 14).stroke(C.border, lineWidth: 1) }
+    }
+
+    private var playlistCountBadge: some View {
+        let itemName = playlist.type == "short" ? "short" : "video"
+
+        return Text("\(count) \(itemName)\(count == 1 ? "" : "s")")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(.black.opacity(0.76))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     @ViewBuilder
     private var mosaicThumbnail: some View {
-        if thumbnails.count >= 4 {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 0), GridItem(.flexible(), spacing: 0)], spacing: 0) {
-                ForEach(thumbnails.prefix(4), id: \.self) { t in
-                    AsyncImage(url: C.mediaURL(t)) { img in img.resizable().scaledToFill() } placeholder: { C.surface }
-                        .frame(maxWidth: .infinity)
-                        .aspectRatio(1, contentMode: .fit)
-                        .clipped()
+        let visibleThumbs = Array(thumbnails.prefix(4))
+
+        if visibleThumbs.count >= 4 {
+            GeometryReader { geo in
+                let cellWidth = geo.size.width / 2
+                let cellHeight = geo.size.height / 2
+
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        mosaicImage(visibleThumbs[0])
+                            .frame(width: cellWidth, height: cellHeight)
+                        mosaicImage(visibleThumbs[1])
+                            .frame(width: cellWidth, height: cellHeight)
+                    }
+                    HStack(spacing: 0) {
+                        mosaicImage(visibleThumbs[2])
+                            .frame(width: cellWidth, height: cellHeight)
+                        mosaicImage(visibleThumbs[3])
+                            .frame(width: cellWidth, height: cellHeight)
+                    }
                 }
             }
-        } else if let t = thumbnails.first {
-            AsyncImage(url: C.mediaURL(t)) { img in img.resizable().scaledToFill() } placeholder: { C.surface }
-                .frame(maxWidth: .infinity)
-                .aspectRatio(16/9, contentMode: .fit)
-                .clipped()
+        } else if let t = visibleThumbs.first {
+            mosaicImage(t)
         } else {
             C.surface
                 .overlay {
@@ -655,6 +719,15 @@ private struct ChannelPlaylistCard: View {
                         .foregroundStyle(C.textMuted)
                 }
         }
+    }
+
+    private func mosaicImage(_ url: String) -> some View {
+        AsyncImage(url: C.mediaURL(url)) { img in
+            img.resizable().scaledToFill()
+        } placeholder: {
+            C.surface
+        }
+        .clipped()
     }
 }
 

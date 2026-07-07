@@ -104,8 +104,8 @@ struct FollowingView: View {
     private func shortsGrid(_ items: [FollowingFeedItem]) -> some View {
         ScrollView {
             LazyVGrid(
-                columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())],
-                spacing: 12
+                columns: [GridItem(.flexible()), GridItem(.flexible())],
+                spacing: 16
             ) {
                 ForEach(items) { item in
                     NavigationLink(value: AppRoute.media(id: item.id, type: item.type, channelId: item.channel?.id)) {
@@ -233,7 +233,7 @@ private struct FollowingShortCard: View {
             } placeholder: {
                 Color.white.opacity(0.06)
             }
-            .aspectRatio(9/16, contentMode: .fit)
+            .aspectRatio(16/9, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: C.cardRadius - 2))
             .clipped()
 

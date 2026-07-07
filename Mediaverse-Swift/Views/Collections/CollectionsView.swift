@@ -12,6 +12,8 @@ struct CollectionsView: View {
     @State private var showCreate    = false
     @State private var activeTab: CollectionTab = .mine
     @State private var deletingId: String?
+    @State private var followingCollectionIds = Set<String>()
+    @State private var togglingCollectionId: String?
 
     private enum CollectionTab: String, CaseIterable, Identifiable {
         case mine, communities
@@ -116,7 +118,12 @@ struct CollectionsView: View {
                     CollectionCard(
                         col: col,
                         isOwner: isOwner,
-                        onDelete: isOwner ? { Task { await delete(col) } } : nil
+                        isFollowing: followingCollectionIds.contains(col.id),
+                        isTogglingFollow: togglingCollectionId == col.id,
+                        onFollow: !isOwner && col.visibility == "public" ? {
+                            _ = Task<Void, Never>(priority: nil) { await toggleFollow(col) }
+                        } : nil,
+                        onDelete: isOwner ? { _ = Task<Void, Never>(priority: nil) { await delete(col) } } : nil
                     )
                 }
             }
@@ -174,7 +181,34 @@ struct CollectionsView: View {
         async let publicTask = APIClient.shared.fetchPublicCollections()
         collections = (try? await mineTask) ?? []
         publicCollections = (try? await publicTask) ?? []
+        followingCollectionIds = Set(publicCollections.filter { $0.isFollowing }.map(\.id))
         isLoading = false
+    }
+
+    private func toggleFollow(_ col: Collection) async {
+        guard togglingCollectionId == nil else { return }
+        togglingCollectionId = col.id
+        let wasFollowing = followingCollectionIds.contains(col.id)
+        if wasFollowing {
+            followingCollectionIds.remove(col.id)
+        } else {
+            followingCollectionIds.insert(col.id)
+        }
+        do {
+            let result = try await APIClient.shared.toggleCollectionFollow(id: col.id)
+            if result.following {
+                followingCollectionIds.insert(col.id)
+            } else {
+                followingCollectionIds.remove(col.id)
+            }
+        } catch {
+            if wasFollowing {
+                followingCollectionIds.insert(col.id)
+            } else {
+                followingCollectionIds.remove(col.id)
+            }
+        }
+        togglingCollectionId = nil
     }
 
     private func delete(_ col: Collection) async {
@@ -196,63 +230,90 @@ struct CollectionsView: View {
 private struct CollectionCard: View {
     let col: Collection
     let isOwner: Bool
+    let isFollowing: Bool
+    let isTogglingFollow: Bool
+    let onFollow: (() -> Void)?
     let onDelete: (() -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 10) {
             NavigationLink(value: AppRoute.collection(col.id)) {
                 MosaicThumbnail(items: col.items, type: col.type)
                     .clipShape(RoundedRectangle(cornerRadius: C.cardRadius))
             }
             .buttonStyle(.plain)
 
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .top, spacing: 6) {
-                    NavigationLink(value: AppRoute.collection(col.id)) {
-                        Text(col.title)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(C.text)
-                            .lineLimit(2)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.plain)
-
-                    Text(col.visibility == "public" ? "Community" : "Private")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(col.visibility == "public" ? C.watch : C.textMuted)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(col.visibility == "public" ? C.watch.opacity(0.15) : Color.white.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
+            VStack(alignment: .leading, spacing: 7) {
+                NavigationLink(value: AppRoute.collection(col.id)) {
+                    Text(col.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(C.text)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .buttonStyle(.plain)
 
                 if let desc = col.description, !desc.isEmpty {
                     Text(desc)
                         .font(.caption2)
                         .foregroundStyle(C.textMuted)
-                        .lineLimit(1)
+                        .lineLimit(2)
                 }
 
-                HStack(spacing: 4) {
-                    Text(typeLabel(col.type))
-                    Text("·")
-                    Text("\(col._count.items) \(col._count.items == 1 ? "item" : "items")")
-                    if col.visibility == "public" {
-                        Text("·")
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("\(typeLabel(col.type)) · \(col._count.items) \(col._count.items == 1 ? "item" : "items")")
+                    if col.visibility == "public", col._count.followers > 0 {
                         Text("\(col._count.followers) followers")
                     }
-                    Spacer(minLength: 0)
-                    if isOwner, let onDelete {
-                        Button("Delete", role: .destructive, action: onDelete)
-                            .font(.caption2.weight(.semibold))
-                    } else if let userName = col.user?.name {
+                    if !isOwner, let userName = col.user?.name {
                         Text("by \(userName)")
                     }
                 }
                 .font(.caption2)
                 .foregroundStyle(C.textMuted)
+
+                HStack(spacing: 8) {
+                    Text(col.visibility == "public" ? "Public" : "Private")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(col.visibility == "public" ? C.watch : C.textMuted)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
+                        .background(col.visibility == "public" ? C.watch.opacity(0.15) : Color.white.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+
+                    Spacer(minLength: 0)
+
+                    if let onFollow {
+                        Button(action: onFollow) {
+                            Text(isFollowing ? "Following" : "Follow")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(isFollowing ? C.text : .black)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(isFollowing ? C.surfaceAlt : C.watch)
+                                .clipShape(Capsule())
+                                .overlay {
+                                    if isFollowing {
+                                        Capsule().stroke(C.border, lineWidth: 1)
+                                    }
+                                }
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isTogglingFollow)
+                        .opacity(isTogglingFollow ? 0.55 : 1)
+                    } else if isOwner, let onDelete {
+                        Button(role: .destructive, action: onDelete) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.red.opacity(0.85))
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
             }
-            .padding(10)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 10)
         }
         .background(C.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -387,7 +448,7 @@ private struct CreateCollectionSheet: View {
                         .foregroundStyle(C.textMuted)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") { Task { await save() } }
+                    Button("Create") { _ = Task<Void, Never>(priority: nil) { await save() } }
                         .disabled(title.isEmpty || isSaving)
                         .foregroundStyle(C.watch)
                 }

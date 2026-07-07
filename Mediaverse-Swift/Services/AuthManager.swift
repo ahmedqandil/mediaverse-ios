@@ -17,6 +17,8 @@ final class AuthManager: ObservableObject {
     @Published var magicLinkEmail    = ""
     @Published var magicLinkDebugURL: String?
 
+    private var webAuthSession: ASWebAuthenticationSession?
+
     // MARK: - Init
 
     init() {
@@ -81,30 +83,55 @@ final class AuthManager: ObservableObject {
     /// Step 2: called from onOpenURL when the deep link arrives.
     /// Handles both magic-link and Google OAuth callbacks.
     func handleDeepLink(_ url: URL) {
+        Task { try? await authenticate(from: url) }
+    }
+
+    private func authenticate(from url: URL) async throws {
         guard url.scheme == "westreem",
               let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        else { return }
+        else { throw APIError.badURL(url.absoluteString) }
 
         let path = url.path
 
         if path == "/verify" {
             // Magic link: westreem:///verify?token=...
             guard let token = comps.queryItems?.first(where: { $0.name == "token" })?.value
-            else { return }
-            Task {
-                do {
-                    let ok = try await APIClient.shared.verifyMagicLink(token: token)
-                    if ok { didAuthenticate() }
-                } catch {}
-            }
+            else { throw APIError.unauthorized }
 
+            let ok = try await APIClient.shared.verifyMagicLink(token: token)
+            if ok { didAuthenticate() }
         } else if path == "/auth/google" {
             // Google OAuth fallback: westreem:///auth/google?sessionToken=...
             guard let jwt = comps.queryItems?.first(where: { $0.name == "sessionToken" })?.value
-            else { return }
-            Task {
-                await APIClient.shared.storeSessionToken(jwt)
-                didAuthenticate()
+            else { throw APIError.unauthorized }
+
+            await APIClient.shared.storeSessionToken(jwt)
+            didAuthenticate()
+        } else {
+            throw APIError.badURL(url.absoluteString)
+        }
+    }
+
+    private func callbackURL(from startURL: URL) async throws -> URL {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<URL, Error>) in
+            let session = ASWebAuthenticationSession(
+                url: startURL,
+                callbackURLScheme: "westreem"
+            ) { [weak self] url, error in
+                Task { @MainActor in
+                    self?.webAuthSession = nil
+                    if let error { cont.resume(throwing: error) }
+                    else if let url { cont.resume(returning: url) }
+                    else { cont.resume(throwing: APIError.unauthorized) }
+                }
+            }
+            session.prefersEphemeralWebBrowserSession = true
+            session.presentationContextProvider = WebAuthAnchor.shared
+            webAuthSession = session
+
+            if !session.start() {
+                webAuthSession = nil
+                cont.resume(throwing: APIError.unauthorized)
             }
         }
     }
@@ -115,27 +142,13 @@ final class AuthManager: ObservableObject {
         guard let startURL = URL(string: "\(C.baseURL)/api/auth/google?mobile=true&appScheme=westreem")
         else { throw APIError.badURL("/api/auth/google") }
 
-        let callbackURL = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<URL, Error>) in
-            let session = ASWebAuthenticationSession(
-                url:               startURL,
-                callbackURLScheme: "westreem"
-            ) { url, error in
-                if let error { cont.resume(throwing: error) }
-                else if let url { cont.resume(returning: url) }
-                else { cont.resume(throwing: APIError.unauthorized) }
-            }
-            session.prefersEphemeralWebBrowserSession = true
-            session.presentationContextProvider = WebAuthAnchor.shared
-            session.start()
-        }
+        let callbackURL = try await callbackURL(from: startURL)
+        try await authenticate(from: callbackURL)
+    }
 
-        guard
-            let comps = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
-            let jwt   = comps.queryItems?.first(where: { $0.name == "sessionToken" })?.value
-        else { throw APIError.unauthorized }
-
-        await APIClient.shared.storeSessionToken(jwt)
-        didAuthenticate()
+    func signInWithMagicLinkURL(_ url: URL) async throws {
+        let callbackURL = try await callbackURL(from: url)
+        try await authenticate(from: callbackURL)
     }
 
     // MARK: - Sign out

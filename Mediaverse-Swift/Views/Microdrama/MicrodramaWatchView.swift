@@ -159,6 +159,7 @@ private struct EpisodePlayerSlide: View {
     let onNext: (() -> Void)?
 
     @State private var player: AVPlayer?
+    @AppStorage("playerMuted") private var playerMuted = false
 
     private var canPlay: Bool {
         let state = episode.accessState
@@ -239,6 +240,8 @@ private struct EpisodePlayerSlide: View {
               player == nil,
               let url = C.mediaURL(episode.videoUrl) else { return }
         let newPlayer = AVPlayer(url: url)
+        newPlayer.isMuted = playerMuted
+        newPlayer.volume = 1
         player = newPlayer
         newPlayer.play()
     }

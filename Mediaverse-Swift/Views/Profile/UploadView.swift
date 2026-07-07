@@ -1,11 +1,39 @@
 import AVFoundation
+import CoreTransferable
+import PhotosUI
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
+
+private struct PickedUploadVideo: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: .movie) { received in
+            let source = received.file
+            let ext = source.pathExtension.isEmpty ? "mov" : source.pathExtension
+            let destination = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(ext)
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.copyItem(at: source, to: destination)
+            return PickedUploadVideo(url: destination)
+        }
+    }
+}
+
+private struct UploadThumbnailFrame: Identifiable {
+    let id = UUID()
+    let time: Double
+    let image: UIImage
+}
 
 struct UploadView: View {
     @EnvironmentObject private var auth: AuthManager
+    @EnvironmentObject private var platformConfig: PlatformConfigManager
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var contexts: UploadContextsResponse?
     @State private var selectedDestination: UploadContext?
@@ -25,10 +53,22 @@ struct UploadView: View {
     @State private var fileSize: Int64 = 0
     @State private var orientation = "horizontal"
     @State private var thumbnail: Image?
+    @State private var thumbnailImageData: Data?
+    @State private var thumbnailFrames = [UploadThumbnailFrame]()
+    @State private var selectedThumbnailFrameId: UUID?
+    @State private var selectedThumbnailTime = 0.5
+    @State private var videoDuration = 0.0
+    @State private var thumbnailScrubTask: Task<Void, Never>?
     @State private var isExtractingFrames = false
 
     @State private var isLoading = true
     @State private var isPickingFile = false
+    @State private var isPickingThumbnail = false
+    @State private var isRecordingVideo = false
+    @State private var isCreatingStory = false
+    @State private var isManagingStories = false
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var selectedThumbnailPhotoItem: PhotosPickerItem?
     @State private var isUploading = false
     @State private var uploadProgress = 0.0
     @State private var statusText = ""
@@ -36,8 +76,10 @@ struct UploadView: View {
     @State private var createdVideoId: String?
     @State private var showDestinationLookup = false
     @State private var showPlaylistLookup = false
+    @State private var showLinkLookup = false
     @State private var destinationQuery = ""
     @State private var playlistQuery = ""
+    @State private var linkQuery = ""
 
     private let visibilityOptions = ["public", "unlisted", "private"]
     private var allDestinations: [UploadContext] { (contexts?.channels ?? []) + (contexts?.shows ?? []) }
@@ -56,24 +98,20 @@ struct UploadView: View {
 
             if !auth.isAuthenticated {
                 authRequiredState
-            } else if isLoading {
-                ProgressView("Loading destinations...")
-                    .tint(C.watch)
-                    .foregroundStyle(C.text)
-            } else if allDestinations.isEmpty {
-                noDestinationState
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         header
                         mediaSection
-                        thumbnailSection
-                        contentTypeSection
-                        destinationSection
-                        playlistSection
-                        detailsSection
-                        if contentType == "short" { linkSection }
-                        uploadSection
+                        if fileURL != nil {
+                            thumbnailSection
+                            contentTypeSection
+                            destinationSection
+                            playlistSection
+                            detailsSection
+                            if contentType == "short" { linkSection }
+                            uploadSection
+                        }
                     }
                     .padding(C.pagePad)
                     .padding(.bottom, 24)
@@ -83,16 +121,51 @@ struct UploadView: View {
         .navigationTitle("Upload")
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom) {
-            if horizontalSizeClass == .compact, auth.isAuthenticated, !isLoading, !allDestinations.isEmpty {
+            if auth.isAuthenticated, fileURL != nil {
                 stickySubmitBar
             }
         }
-        .fileImporter(
+        .photosPicker(
             isPresented: $isPickingFile,
-            allowedContentTypes: [.movie, .mpeg4Movie, .quickTimeMovie],
-            allowsMultipleSelection: false
-        ) { result in
-            handleFileImport(result)
+            selection: $selectedPhotoItem,
+            matching: .videos,
+            preferredItemEncoding: .current
+        )
+        .photosPicker(
+            isPresented: $isPickingThumbnail,
+            selection: $selectedThumbnailPhotoItem,
+            matching: .images,
+            preferredItemEncoding: .current
+        )
+        .onChange(of: selectedPhotoItem) { _, item in
+            guard let item else { return }
+            Task { await handlePhotoSelection(item) }
+        }
+        .onChange(of: selectedThumbnailPhotoItem) { _, item in
+            guard let item else { return }
+            Task { await handleThumbnailImageSelection(item) }
+        }
+        .fullScreenCover(isPresented: $isRecordingVideo) {
+            VideoCameraPicker { url in
+                handleCapturedVideo(url)
+            }
+            .ignoresSafeArea()
+        }
+        .fullScreenCover(isPresented: $isCreatingStory) {
+            StoryCreatorCoordinator(preselectedPublisher: selectedDestination) {
+                isCreatingStory = false
+            }
+        }
+        .sheet(isPresented: $isManagingStories) {
+            BackstageStoriesView(publishers: allDestinations) { publisher in
+                if let publisher {
+                    selectedDestination = publisher
+                }
+                isManagingStories = false
+                isCreatingStory = true
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showDestinationLookup) {
             UploadDestinationLookupSheet(
@@ -114,6 +187,30 @@ struct UploadView: View {
             ) { playlistId in
                 selectedPlaylistId = playlistId
                 showPlaylistLookup = false
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showLinkLookup) {
+            UploadLinkLookupSheet(
+                videos: linkVideos,
+                episodes: selectedDestination?.type == "show" ? linkEpisodes : [],
+                selectedClipId: linkedClipId,
+                selectedEpisodeId: linkedEpisodeId,
+                query: $linkQuery
+            ) { selection in
+                switch selection {
+                case .none:
+                    linkedClipId = nil
+                    linkedEpisodeId = nil
+                case .clip(let id):
+                    linkedClipId = id
+                    linkedEpisodeId = nil
+                case .episode(let id):
+                    linkedClipId = nil
+                    linkedEpisodeId = id
+                }
+                showLinkLookup = false
             }
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
@@ -145,7 +242,7 @@ struct UploadView: View {
     }
 
     private var mediaSection: some View {
-        section("Video File") {
+        section("Video Source") {
             if fileURL != nil {
                 HStack(spacing: 12) {
                     ZStack {
@@ -195,132 +292,266 @@ struct UploadView: View {
                         Image(systemName: "checkmark")
                             .font(.system(size: 12, weight: .bold))
                             .foregroundStyle(C.watch)
-                        Text("1 frame · \(orientation.capitalized)")
+                        Text("\(thumbnailFrames.count) frames · \(orientation.capitalized)")
                             .font(.system(size: 12))
                             .foregroundStyle(C.watch)
                     }
                 }
             } else {
-                Button {
-                    isPickingFile = true
-                } label: {
-                    VStack(spacing: 12) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 16)
-                                .fill(C.elevated)
-                                .frame(width: 56, height: 56)
-                            Image(systemName: "arrow.up.to.line.compact")
-                                .font(.system(size: 24, weight: .semibold))
-                                .foregroundStyle(C.textTertiary)
+                VStack(spacing: 10) {
+                    if platformConfig.storiesFeedEnabled {
+                        uploadSourceButton(
+                            icon: "circle.dashed.inset.filled",
+                            title: "Create Story",
+                            subtitle: "Post a 24-hour photo or portrait video story"
+                        ) {
+                            isCreatingStory = true
                         }
-                        VStack(spacing: 4) {
-                            Text("Tap to select a video")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(C.text.opacity(0.7))
-                            Text("MP4, MOV, AVI, WebM")
-                                .font(.system(size: 12))
-                                .foregroundStyle(C.textTertiary)
+
+                        uploadSourceButton(
+                            icon: "rectangle.stack.badge.play",
+                            title: "Manage Stories",
+                            subtitle: "Review active stories, view counts, and removals"
+                        ) {
+                            guard !allDestinations.isEmpty else {
+                                errorText = "Load or create a channel/show before managing stories."
+                                return
+                            }
+                            isManagingStories = true
                         }
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 36)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(style: StrokeStyle(lineWidth: 2, dash: [7, 6]))
-                            .foregroundStyle(C.borderSubtle)
-                    )
+
+                    uploadSourceButton(
+                        icon: "video.badge.plus",
+                        title: "Record video",
+                        subtitle: "Open the camera and record a new upload"
+                    ) {
+                        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+                            errorText = "Camera is not available on this device."
+                            return
+                        }
+                        isRecordingVideo = true
+                    }
+
+                    uploadSourceButton(
+                        icon: "photo.on.rectangle.angled",
+                        title: "Upload video",
+                        subtitle: "Select an existing video from your library"
+                    ) {
+                        isPickingFile = true
+                    }
                 }
-                .buttonStyle(.plain)
             }
         }
     }
 
+    private func uploadSourceButton(icon: String, title: String, subtitle: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(C.elevated)
+                        .frame(width: 48, height: 48)
+                    Image(systemName: icon)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(C.watch)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(C.text)
+                    Text(subtitle)
+                        .font(.system(size: 11))
+                        .foregroundStyle(C.textTertiary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(C.textTertiary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(C.borderSubtle, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isUploading || isExtractingFrames)
+    }
+
     private var thumbnailSection: some View {
-        section("Thumbnail *") {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.white.opacity(0.04))
+        section("Thumbnail") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top) {
+                    thumbnailPreview
+                    Spacer(minLength: 12)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button {
+                            isPickingThumbnail = true
+                        } label: {
+                            Label("Upload image", systemImage: "photo.badge.plus")
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(C.watch)
+                        .disabled(fileURL == nil || isUploading || isExtractingFrames)
+
+                        if thumbnailImageData != nil {
+                            Text("Custom image selected")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(C.watch)
+                        } else if thumbnail != nil {
+                            Text("Frame \(formatTime(selectedThumbnailTime))")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(C.textMuted)
+                        }
+                    }
+                }
+
+                if !thumbnailFrames.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(thumbnailFrames) { frame in
+                                thumbnailFrameButton(frame)
+                            }
+                        }
+                    }
+                }
+
+                if fileURL != nil, videoDuration > 0 {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Pick frame")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(C.text)
+                            Spacer()
+                            Text(formatTime(selectedThumbnailTime))
+                                .font(.system(size: 11))
+                                .foregroundStyle(C.textTertiary)
+                        }
+                        Slider(
+                            value: $selectedThumbnailTime,
+                            in: 0...max(videoDuration, 0.1)
+                        )
+                        .tint(C.watch)
+                        .onChange(of: selectedThumbnailTime) { _, time in
+                            scheduleThumbnailScrub(at: time)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var thumbnailPreview: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.white.opacity(0.04))
+                .aspectRatio(contentType == "short" ? 9.0 / 16.0 : 16.0 / 9.0, contentMode: .fit)
+                .frame(maxWidth: contentType == "short" ? 130 : .infinity)
+
+            if let thumbnail {
+                thumbnail
+                    .resizable()
+                    .scaledToFill()
                     .aspectRatio(contentType == "short" ? 9.0 / 16.0 : 16.0 / 9.0, contentMode: .fit)
                     .frame(maxWidth: contentType == "short" ? 130 : .infinity)
-
-                if let thumbnail {
-                    thumbnail
-                        .resizable()
-                        .scaledToFill()
-                        .aspectRatio(contentType == "short" ? 9.0 / 16.0 : 16.0 / 9.0, contentMode: .fit)
-                        .frame(maxWidth: contentType == "short" ? 130 : .infinity)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                } else if isExtractingFrames {
-                    VStack(spacing: 8) {
-                        ProgressView().tint(C.textMuted)
-                        Text("Extracting...")
-                            .font(.system(size: 12))
-                            .foregroundStyle(C.textMuted)
-                    }
-                } else {
-                    Image(systemName: "photo")
-                        .font(.system(size: 30))
-                        .foregroundStyle(Color.white.opacity(0.15))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else if isExtractingFrames {
+                VStack(spacing: 8) {
+                    ProgressView().tint(C.textMuted)
+                    Text("Extracting...")
+                        .font(.system(size: 12))
+                        .foregroundStyle(C.textMuted)
                 }
+            } else {
+                Image(systemName: "photo")
+                    .font(.system(size: 30))
+                    .foregroundStyle(Color.white.opacity(0.15))
             }
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-
-            Button {
-                isPickingFile = true
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: thumbnail == nil ? "video.badge.plus" : "arrow.clockwise")
-                        .frame(width: 18)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(thumbnail == nil ? "Pick from video" : "Replace video")
-                            .font(.system(size: 13, weight: .semibold))
-                        Text(thumbnail == nil ? "Select a video first" : "Extract a new frame")
-                            .font(.system(size: 11))
-                            .foregroundStyle(C.textTertiary)
-                    }
-                    Spacer()
-                }
-                .foregroundStyle(C.text.opacity(0.7))
-                .padding(12)
-                .background(C.surface)
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
-            .buttonStyle(.plain)
-            .disabled(isUploading || isExtractingFrames)
         }
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func thumbnailFrameButton(_ frame: UploadThumbnailFrame) -> some View {
+        Button {
+            selectThumbnail(frame.image, time: frame.time, frameId: frame.id, customData: nil)
+        } label: {
+            ZStack(alignment: .bottomTrailing) {
+                Image(uiImage: frame.image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: contentType == "short" ? 52 : 76, height: 52)
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                Text(formatTime(frame.time))
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(Color.black.opacity(0.55))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .padding(4)
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(selectedThumbnailFrameId == frame.id ? C.watch : C.borderSubtle, lineWidth: selectedThumbnailFrameId == frame.id ? 2 : 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private var contentTypeSection: some View {
         section("Content Type") {
-            Picker("Content Type", selection: $contentType) {
-                Label("Video", systemImage: "play.rectangle").tag("video")
-                Label("Short", systemImage: "iphone").tag("short")
+            HStack(spacing: 10) {
+                Image(systemName: contentType == "short" ? "iphone" : "play.rectangle")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(C.watch)
+                    .frame(width: 36, height: 36)
+                    .background(C.watch.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(contentType == "short" ? "Short" : "Video")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(C.text)
+                    Text(fileURL == nil ? "Selected automatically after you choose or record a video." : "\(orientation.capitalized) upload detected from the selected video.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(C.textTertiary)
+                }
+                Spacer()
             }
-            .pickerStyle(.segmented)
-
-            Text(contentType == "short" ? "Vertical short-form video, displayed in the Shorts feed." : "Standard video, displayed on your channel or show page.")
-                .font(.caption)
-                .foregroundStyle(C.textMuted)
         }
     }
 
     private var destinationSection: some View {
         section("Destination") {
-            Button {
-                destinationQuery = ""
-                showDestinationLookup = true
-            } label: {
-                lookupRow(
-                    icon: selectedDestination?.type == "show" ? "play.tv" : "dot.radiowaves.left.and.right",
-                    title: selectedDestination?.name ?? "Search channels and shows...",
-                    subtitle: selectedDestinationSubtitle,
-                    badge: selectedDestination?.type == "show" ? "Show" : "Channel",
-                    badgeColor: selectedDestination?.type == "show" ? C.play : C.watch
-                )
+            if isLoading {
+                HStack(spacing: 8) {
+                    ProgressView().scaleEffect(0.8).tint(C.textMuted)
+                    Text("Loading destinations...")
+                        .font(.system(size: 13))
+                        .foregroundStyle(C.textMuted)
+                }
+                .padding(.vertical, 8)
+            } else if allDestinations.isEmpty {
+                Text("You need a channel or show before publishing this upload.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(C.textTertiary)
+            } else {
+                Button {
+                    destinationQuery = ""
+                    showDestinationLookup = true
+                } label: {
+                    lookupRow(
+                        icon: selectedDestination?.type == "show" ? "play.tv" : "dot.radiowaves.left.and.right",
+                        title: selectedDestination?.name ?? "Search channels and shows...",
+                        subtitle: selectedDestinationSubtitle,
+                        badge: selectedDestination?.type == "show" ? "Show" : selectedDestination == nil ? nil : "Channel",
+                        badgeColor: selectedDestination?.type == "show" ? C.play : C.watch
+                    )
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
     }
 
@@ -415,33 +646,39 @@ struct UploadView: View {
                         .foregroundStyle(C.textMuted)
                 }
 
-                if !linkVideos.isEmpty {
-                    Picker("Video or clip", selection: Binding(
-                        get: { linkedClipId ?? "" },
-                        set: { linkedClipId = $0.isEmpty ? nil : $0 }
-                    )) {
-                        Text("None").tag("")
-                        ForEach(linkVideos) { item in
-                            Text(item.displayTitle).tag(item.id)
-                        }
+                if !linkVideos.isEmpty || !linkEpisodes.isEmpty {
+                    Button {
+                        linkQuery = ""
+                        showLinkLookup = true
+                    } label: {
+                        lookupRow(
+                            icon: "link",
+                            title: selectedLinkTitle,
+                            subtitle: selectedLinkSubtitle,
+                            badge: nil,
+                            badgeColor: C.watch
+                        )
                     }
-                    .pickerStyle(.menu)
-                }
-
-                if selectedDestination?.type == "show", !linkEpisodes.isEmpty {
-                    Picker("Episode", selection: Binding(
-                        get: { linkedEpisodeId ?? "" },
-                        set: { linkedEpisodeId = $0.isEmpty ? nil : $0 }
-                    )) {
-                        Text("None").tag("")
-                        ForEach(linkEpisodes) { item in
-                            Text(item.displayTitle).tag(item.id)
-                        }
-                    }
-                    .pickerStyle(.menu)
+                    .buttonStyle(.plain)
                 }
             }
         }
+    }
+
+    private var selectedLinkTitle: String {
+        if let linkedClipId, let item = linkVideos.first(where: { $0.id == linkedClipId }) {
+            return item.displayTitle
+        }
+        if let linkedEpisodeId, let item = linkEpisodes.first(where: { $0.id == linkedEpisodeId }) {
+            return item.displayTitle
+        }
+        return "Search videos and episodes..."
+    }
+
+    private var selectedLinkSubtitle: String {
+        if linkedClipId != nil { return "Linked video or clip" }
+        if linkedEpisodeId != nil { return "Linked episode" }
+        return "Optional source for this short"
     }
 
     private var uploadSection: some View {
@@ -462,19 +699,26 @@ struct UploadView: View {
             }
 
             if let createdVideoId {
-                NavigationLink(value: AppRoute.video(createdVideoId)) {
+                NavigationLink(value: uploadedMediaRoute(id: createdVideoId)) {
                     HStack {
                         Image(systemName: "play.circle.fill")
-                        Text("Open uploaded video")
+                        Text("Open uploaded \(contentType == "short" ? "short" : "video")")
                     }
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(C.watch)
             }
-
-            submitButton
         }
+    }
+
+    private func uploadedMediaRoute(id: String) -> AppRoute {
+        AppRoute.media(
+            id: id,
+            type: contentType,
+            showId: selectedDestination?.type == "show" ? selectedDestination?.id : nil,
+            channelId: selectedDestination?.type == "channel" ? selectedDestination?.id : nil
+        )
     }
 
     private var stickySubmitBar: some View {
@@ -624,12 +868,97 @@ struct UploadView: View {
             fileSize = Int64(values.fileSize ?? 0)
             title = title.isEmpty ? pickedURL.deletingPathExtension().lastPathComponent : title
             thumbnail = nil
+            thumbnailImageData = nil
+            thumbnailFrames = []
+            selectedThumbnailFrameId = nil
+            videoDuration = 0
+            selectedThumbnailTime = 0.5
             errorText = nil
             isExtractingFrames = true
 
             Task { await inspectVideo(tempURL) }
         } catch {
             errorText = error.localizedDescription
+        }
+    }
+
+    private func handlePhotoSelection(_ item: PhotosPickerItem) async {
+        await MainActor.run {
+            errorText = nil
+            thumbnail = nil
+            thumbnailImageData = nil
+            thumbnailFrames = []
+            selectedThumbnailFrameId = nil
+            videoDuration = 0
+            selectedThumbnailTime = 0.5
+            isExtractingFrames = true
+        }
+
+        do {
+            guard let picked = try await item.loadTransferable(type: PickedUploadVideo.self) else {
+                throw UploadFailure.message("Could not read the selected video from Photos.")
+            }
+
+            try await prepareSelectedVideo(picked.url)
+            await inspectVideo(picked.url)
+        } catch {
+            await MainActor.run {
+                selectedPhotoItem = nil
+                isExtractingFrames = false
+                errorText = error.localizedDescription
+            }
+        }
+    }
+
+    private func handleCapturedVideo(_ url: URL) {
+        Task {
+            await MainActor.run {
+                errorText = nil
+                thumbnail = nil
+                thumbnailImageData = nil
+                thumbnailFrames = []
+                selectedThumbnailFrameId = nil
+                videoDuration = 0
+                selectedThumbnailTime = 0.5
+                isExtractingFrames = true
+            }
+
+            do {
+                let tempURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathExtension(url.pathExtension.isEmpty ? "mov" : url.pathExtension)
+                if FileManager.default.fileExists(atPath: tempURL.path) {
+                    try FileManager.default.removeItem(at: tempURL)
+                }
+                try FileManager.default.copyItem(at: url, to: tempURL)
+                try await prepareSelectedVideo(tempURL)
+                await inspectVideo(tempURL)
+            } catch {
+                await MainActor.run {
+                    isExtractingFrames = false
+                    errorText = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func prepareSelectedVideo(_ url: URL) async throws {
+        let values = try url.resourceValues(forKeys: [.fileSizeKey, .nameKey])
+        let displayName = values.name ?? url.lastPathComponent
+        let titleName = url.deletingPathExtension().lastPathComponent
+        await MainActor.run {
+            if let fileURL, fileURL != url {
+                try? FileManager.default.removeItem(at: fileURL)
+            }
+            fileURL = url
+            fileName = displayName
+            fileSize = Int64(values.fileSize ?? 0)
+            title = title.isEmpty ? titleName : title
+            createdVideoId = nil
+            uploadProgress = 0
+            statusText = ""
+            errorText = nil
+            selectedPhotoItem = nil
         }
     }
 
@@ -641,23 +970,90 @@ struct UploadView: View {
         let asset = AVAsset(url: url)
         guard let track = try? await asset.loadTracks(withMediaType: .video).first else { return }
         let size = (try? await track.load(.naturalSize)) ?? .zero
-        let detectedOrientation = abs(size.height) > abs(size.width) ? "vertical" : "horizontal"
+        let transform = (try? await track.load(.preferredTransform)) ?? .identity
+        let transformedSize = size.applying(transform)
+        let displayWidth = abs(transformedSize.width) > 0 ? abs(transformedSize.width) : abs(size.width)
+        let displayHeight = abs(transformedSize.height) > 0 ? abs(transformedSize.height) : abs(size.height)
+        let detectedOrientation = displayHeight > displayWidth ? "vertical" : "horizontal"
+        let duration = max((try? await asset.load(.duration).seconds) ?? 0, 0)
+        let frames = await extractThumbnailFrames(from: asset, duration: duration)
 
         await MainActor.run {
             orientation = detectedOrientation
-            if contentType != "short", detectedOrientation == "vertical" {
-                contentType = "short"
+            contentType = detectedOrientation == "vertical" ? "short" : "video"
+            videoDuration = duration
+            thumbnailFrames = frames
+            if let first = frames.first {
+                selectThumbnail(first.image, time: first.time, frameId: first.id, customData: nil)
+            } else if let image = try? frameImage(from: asset, at: min(0.5, duration)) {
+                selectThumbnail(image, time: min(0.5, duration), frameId: nil, customData: nil)
             }
         }
+    }
 
+    private func extractThumbnailFrames(from asset: AVAsset, duration: Double) async -> [UploadThumbnailFrame] {
+        let count = 8
+        let safeDuration = max(duration, 1)
+        let times = (0..<count).map { index in
+            safeDuration * (Double(index) + 0.5) / Double(count)
+        }
+        return times.compactMap { time in
+            guard let image = try? frameImage(from: asset, at: time) else { return nil }
+            return UploadThumbnailFrame(time: time, image: image)
+        }
+    }
+
+    private func frameImage(from asset: AVAsset, at seconds: Double) throws -> UIImage {
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 640, height: 640)
-        let time = CMTime(seconds: 0.5, preferredTimescale: 600)
-        if let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) {
-            await MainActor.run {
-                thumbnail = Image(decorative: cgImage, scale: 1)
+        generator.maximumSize = CGSize(width: 900, height: 900)
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        let time = CMTime(seconds: max(seconds, 0), preferredTimescale: 600)
+        let cgImage = try generator.copyCGImage(at: time, actualTime: nil)
+        return UIImage(cgImage: cgImage)
+    }
+
+    private func handleThumbnailImageSelection(_ item: PhotosPickerItem) async {
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: data) else {
+                throw UploadFailure.message("Could not read the selected thumbnail image.")
             }
+            await MainActor.run {
+                selectThumbnail(image, time: selectedThumbnailTime, frameId: nil, customData: image.jpegData(compressionQuality: 0.86) ?? data)
+                selectedThumbnailPhotoItem = nil
+            }
+        } catch {
+            await MainActor.run {
+                selectedThumbnailPhotoItem = nil
+                errorText = error.localizedDescription
+            }
+        }
+    }
+
+    private func selectThumbnail(_ image: UIImage, time: Double, frameId: UUID?, customData: Data?) {
+        thumbnail = Image(uiImage: image)
+        thumbnailImageData = customData
+        selectedThumbnailFrameId = frameId
+        selectedThumbnailTime = min(max(time, 0), max(videoDuration, 0.1))
+    }
+
+    private func scheduleThumbnailScrub(at time: Double) {
+        guard let fileURL, thumbnailImageData == nil else { return }
+        thumbnailScrubTask?.cancel()
+        thumbnailScrubTask = Task {
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard !Task.isCancelled else { return }
+            await pickThumbnailFrame(at: time, fileURL: fileURL)
+        }
+    }
+
+    private func pickThumbnailFrame(at time: Double, fileURL: URL) async {
+        let asset = AVAsset(url: fileURL)
+        guard let image = try? frameImage(from: asset, at: time) else { return }
+        await MainActor.run {
+            selectThumbnail(image, time: time, frameId: nil, customData: nil)
         }
     }
 
@@ -671,6 +1067,13 @@ struct UploadView: View {
         fileSize = 0
         orientation = "horizontal"
         thumbnail = nil
+        thumbnailImageData = nil
+        thumbnailFrames = []
+        selectedThumbnailFrameId = nil
+        videoDuration = 0
+        selectedThumbnailTime = 0.5
+        thumbnailScrubTask?.cancel()
+        thumbnailScrubTask = nil
         isExtractingFrames = false
         createdVideoId = nil
         uploadProgress = 0
@@ -713,6 +1116,16 @@ struct UploadView: View {
 
             uploadProgress = 0.85
             statusText = "Saving..."
+            let thumbnailUrl: String
+            if let thumbnailImageData {
+                statusText = "Uploading thumbnail..."
+                thumbnailUrl = try await APIClient.shared.uploadThumbnailImage(thumbnailImageData)
+            } else {
+                thumbnailUrl = cloudflareThumbnailUrl(streamId: cf.streamId, time: selectedThumbnailTime)
+            }
+
+            uploadProgress = 0.85
+            statusText = "Saving..."
             let video = try await APIClient.shared.createUploadedVideo(
                 title: title.trimmingCharacters(in: .whitespacesAndNewlines),
                 description: description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : description,
@@ -724,7 +1137,7 @@ struct UploadView: View {
                 linkedClipId: linkedClipId,
                 linkedEpisodeId: linkedEpisodeId,
                 cfStreamId: cf.streamId,
-                thumbnailUrl: cloudflareThumbnailUrl(streamId: cf.streamId)
+                thumbnailUrl: thumbnailUrl
             )
             createdVideoId = video.id
             uploadProgress = 0.85
@@ -737,7 +1150,7 @@ struct UploadView: View {
                 message: isReady
                     ? "\"\(videoTitle)\" finished transcoding and is ready to watch."
                     : "\"\(videoTitle)\" uploaded and is still processing.",
-                linkUrl: "/watch/\(video.id)"
+                linkUrl: contentType == "short" ? "/shorts/\(video.id)" : "/watch/\(video.id)"
             )
             statusText = isReady ? "Video ready" : "Upload complete - still processing"
         } catch {
@@ -767,8 +1180,15 @@ struct UploadView: View {
         return false
     }
 
-    private func cloudflareThumbnailUrl(streamId: String) -> String {
-        "https://videodelivery.net/\(streamId)/thumbnails/thumbnail.jpg?time=1s"
+    private func cloudflareThumbnailUrl(streamId: String, time: Double) -> String {
+        let seconds = max(0, time)
+        return "https://videodelivery.net/\(streamId)/thumbnails/thumbnail.jpg?time=\(String(format: "%.2f", seconds))s"
+    }
+
+    private func formatTime(_ seconds: Double) -> String {
+        guard seconds.isFinite else { return "0:00" }
+        let totalSeconds = max(Int(seconds.rounded()), 0)
+        return "\(totalSeconds / 60):\(String(format: "%02d", totalSeconds % 60))"
     }
 
     private func formatBytes(_ bytes: Int64) -> String {
@@ -898,6 +1318,205 @@ private struct UploadDestinationLookupSheet: View {
         .background(C.surface)
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private enum UploadLinkSelection {
+    case none
+    case clip(String)
+    case episode(String)
+}
+
+private struct UploadLinkLookupSheet: View {
+    let videos: [UploadLinkItem]
+    let episodes: [UploadLinkItem]
+    let selectedClipId: String?
+    let selectedEpisodeId: String?
+    @Binding var query: String
+    let onSelect: (UploadLinkSelection) -> Void
+
+    private var filteredVideos: [UploadLinkItem] {
+        filter(videos)
+    }
+
+    private var filteredEpisodes: [UploadLinkItem] {
+        filter(episodes)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                C.bg.ignoresSafeArea()
+                VStack(spacing: 12) {
+                    searchField
+                    ScrollView {
+                        VStack(spacing: 8) {
+                            linkButton(
+                                title: "None - do not link this short",
+                                subtitle: nil,
+                                icon: "xmark.circle",
+                                selected: selectedClipId == nil && selectedEpisodeId == nil
+                            ) {
+                                onSelect(.none)
+                            }
+
+                            linkGroup(title: "Videos", items: filteredVideos, icon: "play.rectangle") { item in
+                                onSelect(.clip(item.id))
+                            }
+
+                            linkGroup(title: "Episodes", items: filteredEpisodes, icon: "tv") { item in
+                                onSelect(.episode(item.id))
+                            }
+
+                            if filteredVideos.isEmpty,
+                               filteredEpisodes.isEmpty,
+                               !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Text("No matches for \"\(query)\"")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(C.textTertiary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.top, 8)
+                            }
+                        }
+                    }
+                }
+                .padding(C.pagePad)
+            }
+            .navigationTitle("Link To")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private func filter(_ items: [UploadLinkItem]) -> [UploadLinkItem] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return items }
+        return items.filter { $0.displayTitle.lowercased().contains(trimmed) }
+    }
+
+    private func linkGroup(
+        title: String,
+        items: [UploadLinkItem],
+        icon: String,
+        action: @escaping (UploadLinkItem) -> Void
+    ) -> some View {
+        Group {
+            if !items.isEmpty {
+                Text(title.uppercased())
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(C.textTertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 6)
+                ForEach(items) { item in
+                    linkButton(
+                        title: item.displayTitle,
+                        subtitle: nil,
+                        icon: icon,
+                        selected: item.id == selectedClipId || item.id == selectedEpisodeId
+                    ) {
+                        action(item)
+                    }
+                }
+            }
+        }
+    }
+
+    private func linkButton(
+        title: String,
+        subtitle: String?,
+        icon: String,
+        selected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(C.textTertiary)
+                    .frame(width: 28, height: 28)
+                    .background(C.elevated)
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(selected ? C.watch : C.text)
+                        .lineLimit(1)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 11))
+                            .foregroundStyle(C.textTertiary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                if selected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(C.watch)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(C.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(C.textTertiary)
+            TextField("Search videos and episodes", text: $query)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .foregroundStyle(C.text)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .background(C.surface)
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct VideoCameraPicker: UIViewControllerRepresentable {
+    let onVideo: (URL) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onVideo: onVideo)
+    }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.mediaTypes = [UTType.movie.identifier]
+        picker.videoQuality = .typeHigh
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        let onVideo: (URL) -> Void
+
+        init(onVideo: @escaping (URL) -> Void) {
+            self.onVideo = onVideo
+        }
+
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            picker.dismiss(animated: true)
+            if let url = info[.mediaURL] as? URL {
+                onVideo(url)
+            }
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            picker.dismiss(animated: true)
+        }
     }
 }
 

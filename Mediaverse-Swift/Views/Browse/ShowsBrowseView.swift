@@ -7,16 +7,35 @@ struct ShowsBrowseView: View {
     @State private var allShows = [ShowBrowseCard]()
     @State private var searchResults = [ShowBrowseCard]()
     @State private var query = ""
+    @State private var selectedGenre = "All"
     @State private var isSearching = false
     @State private var isLoading = true
     @State private var isSearchLoading = false
 
-    private var hero: ShowBrowseCard? { allShows.first }
-    private var newAndPopular: [ShowBrowseCard] { Array(allShows.prefix(16)) }
+    private var showGenres: [String] {
+        let genres = Set(
+            allShows.compactMap { show in
+                show.genre?.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            .filter { !$0.isEmpty }
+        )
+        return ["All"] + genres.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    private var filteredShows: [ShowBrowseCard] {
+        guard selectedGenre != "All" else { return allShows }
+        return allShows.filter { show in
+            show.genre?.localizedCaseInsensitiveCompare(selectedGenre) == .orderedSame
+        }
+    }
+
+    private var hero: ShowBrowseCard? { filteredShows.first }
+    private var newAndPopular: [ShowBrowseCard] { Array(filteredShows.prefix(16)) }
 
     private var genreRows: [(String, [ShowBrowseCard])] {
+        guard selectedGenre == "All" else { return [] }
         var grouped = [String: [ShowBrowseCard]]()
-        for show in allShows {
+        for show in filteredShows {
             guard let genre = show.genre?.trimmingCharacters(in: .whitespacesAndNewlines), !genre.isEmpty else { continue }
             grouped[genre, default: []].append(show)
         }
@@ -46,7 +65,7 @@ struct ShowsBrowseView: View {
                         if isSearching {
                             searchSection
                         } else {
-                            ShowsCarousel(title: "New & Popular", shows: newAndPopular, seeAllGenre: nil)
+                            ShowsCarousel(title: selectedGenre == "All" ? "New & Popular" : selectedGenre, shows: newAndPopular, seeAllGenre: nil)
 
                             ForEach(genreRows, id: \.0) { genre, shows in
                                 ShowsCarousel(title: genre, shows: shows, seeAllGenre: genre)
@@ -73,6 +92,8 @@ struct ShowsBrowseView: View {
                     .font(.title3.bold())
                     .foregroundStyle(C.text)
             }
+
+            genreSubtabs
 
             HStack(spacing: 10) {
                 TextField("Search shows...", text: $query)
@@ -115,6 +136,27 @@ struct ShowsBrowseView: View {
             .clipShape(Capsule())
         }
         .padding(.horizontal, C.pagePad)
+    }
+
+    private var genreSubtabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(showGenres, id: \.self) { genre in
+                    GenrePill(label: genre, selected: selectedGenre == genre) {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            selectedGenre = genre
+                            if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                isSearching = false
+                                searchResults = []
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, C.pagePad)
+        }
+        .frame(height: 32)
+        .padding(.horizontal, -C.pagePad)
     }
 
     private var searchSection: some View {

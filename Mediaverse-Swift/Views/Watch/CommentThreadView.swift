@@ -39,6 +39,10 @@ struct CommentThreadView: View {
 
     @EnvironmentObject private var auth: AuthManager
 
+    private var contentAnimation: Animation {
+        .spring(response: 0.32, dampingFraction: 0.88)
+    }
+
     init(
         target: CommentThreadTarget,
         initialComments: [Comment]? = nil,
@@ -90,6 +94,8 @@ struct CommentThreadView: View {
         .onChange(of: target.id) { _, _ in
             Task { await reload() }
         }
+        .animation(contentAnimation, value: isLoading)
+        .animation(contentAnimation, value: commentIdentity)
     }
 
     private var commentCount: Int {
@@ -201,18 +207,21 @@ struct CommentThreadView: View {
                     .redacted(reason: .placeholder)
                 }
             }
+            .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
         } else if loadError != nil {
             Text("Could not load comments.")
                 .font(.system(size: 13))
                 .foregroundStyle(C.textMuted)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, 18)
+                .transition(.opacity)
         } else if comments.isEmpty {
             Text("No comments yet. Be the first.")
                 .font(.system(size: 13))
                 .foregroundStyle(C.textMuted)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, inputPosition == .bottom ? 24 : 18)
+                .transition(.opacity)
         } else {
             LazyVStack(alignment: .leading, spacing: 18) {
                 ForEach(visibleComments) { comment in
@@ -235,6 +244,10 @@ struct CommentThreadView: View {
                     )
                 }
             }
+            .transition(.asymmetric(
+                insertion: .move(edge: .bottom).combined(with: .opacity),
+                removal: .opacity
+            ))
         }
     }
 
@@ -243,6 +256,10 @@ struct CommentThreadView: View {
             return Array(comments.prefix(previewLimit))
         }
         return comments
+    }
+
+    private var commentIdentity: String {
+        visibleComments.map(\.id).joined(separator: "|") + ":\(commentCount)"
     }
 
     private func showMoreButton(title: String, count: Int) -> some View {
@@ -293,16 +310,25 @@ struct CommentThreadView: View {
         await reload()
     }
 
+    @MainActor
     private func reload() async {
-        isLoading = true
-        loadError = nil
+        withAnimation(.easeOut(duration: 0.16)) {
+            isLoading = true
+            loadError = nil
+        }
         do {
-            comments = try await fetchTargetComments()
+            let fetchedComments = try await fetchTargetComments()
+            withAnimation(contentAnimation) {
+                comments = fetchedComments
+                isLoading = false
+            }
             onCountChange?(commentCount)
         } catch {
-            loadError = error.localizedDescription
+            withAnimation(contentAnimation) {
+                loadError = error.localizedDescription
+                isLoading = false
+            }
         }
-        isLoading = false
     }
 
     private func fetchTargetComments() async throws -> [Comment] {
@@ -323,11 +349,15 @@ struct CommentThreadView: View {
         do {
             if let replyTarget {
                 let reply = try await postTargetComment(content: text, parentId: replyTarget.id)
-                comments = comments.map { $0.addingReply(reply.withRepliesIfNeeded(), to: replyTarget.id) }
-                self.replyTarget = nil
+                withAnimation(contentAnimation) {
+                    comments = comments.map { $0.addingReply(reply.withRepliesIfNeeded(), to: replyTarget.id) }
+                    self.replyTarget = nil
+                }
             } else {
                 let comment = try await postTargetComment(content: text, parentId: nil)
-                comments.insert(comment.withRepliesIfNeeded(), at: 0)
+                withAnimation(contentAnimation) {
+                    comments.insert(comment.withRepliesIfNeeded(), at: 0)
+                }
             }
             commentText = ""
             onCountChange?(commentCount)
@@ -339,7 +369,9 @@ struct CommentThreadView: View {
         guard auth.isAuthenticated else { return }
         do {
             let reply = try await postTargetComment(content: text, parentId: parentId)
-            comments = comments.map { $0.addingReply(reply.withRepliesIfNeeded(), to: parentId) }
+            withAnimation(contentAnimation) {
+                comments = comments.map { $0.addingReply(reply.withRepliesIfNeeded(), to: parentId) }
+            }
             onCountChange?(commentCount)
         } catch {}
     }
@@ -358,8 +390,10 @@ struct CommentThreadView: View {
     private func toggleLike(commentId: String, currentLikes: Int) {
         guard auth.isAuthenticated else { return }
         let wasLiked = likedCommentIds.contains(commentId)
-        if wasLiked { likedCommentIds.remove(commentId) } else { likedCommentIds.insert(commentId) }
-        comments = comments.map { $0.updatingLikes(commentId: commentId, likes: max(0, currentLikes + (wasLiked ? -1 : 1))) }
+        withAnimation(.easeInOut(duration: 0.16)) {
+            if wasLiked { likedCommentIds.remove(commentId) } else { likedCommentIds.insert(commentId) }
+            comments = comments.map { $0.updatingLikes(commentId: commentId, likes: max(0, currentLikes + (wasLiked ? -1 : 1))) }
+        }
         Task {
             _ = try? await APIClient.shared.likeComment(commentId: commentId, liked: !wasLiked)
         }

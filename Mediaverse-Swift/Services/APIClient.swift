@@ -1,8 +1,8 @@
 import Foundation
 
-/// Thin URLSession wrapper that authenticates via a manually-injected Cookie header.
-/// The JWT is stored in SessionStorage (UserDefaults) and attached to every request,
-/// which is more reliable than relying on iOS HTTPCookieStorage for __Secure- cookies.
+/// Thin URLSession wrapper that authenticates with the stored mobile session JWT.
+/// The JWT is stored in SessionStorage (UserDefaults) and attached to every request
+/// as both a bearer token and compatibility cookies.
 actor APIClient {
     static let shared = APIClient()
 
@@ -22,14 +22,22 @@ actor APIClient {
 
     // MARK: - Auth header
 
-    /// Builds the Cookie header value from the stored JWT.
+    /// Current mobile session JWT returned by the auth endpoints.
+    private var sessionToken: String? {
+        SessionStorage.token
+    }
+
+    /// Builds the Cookie header value from the stored JWT for older endpoints.
     private var cookieHeader: String? {
         guard let token = SessionStorage.token else { return nil }
         return "next-auth.session-token=\(token); __Secure-next-auth.session-token=\(token)"
     }
 
-    /// Attaches the session cookie to a request.
+    /// Attaches the mobile session token to a request.
     private func attachAuth(_ req: inout URLRequest) {
+        if let token = sessionToken {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         if let cookie = cookieHeader {
             req.setValue(cookie, forHTTPHeaderField: "Cookie")
         }
@@ -158,6 +166,12 @@ actor APIClient {
         return try await get("/api/feed-config")
     }
 
+    /// GET /api/platform-config — mirrors the web PlatformConfig gate.
+    /// Stories default to visible if the endpoint is unavailable so older backends keep working.
+    func fetchPlatformConfig() async throws -> PlatformConfig {
+        return try await get("/api/platform-config")
+    }
+
     // MARK: - Feed
 
     func fetchFeed(cursor: String? = nil) async throws -> FeedResponse {
@@ -275,9 +289,17 @@ actor APIClient {
         return try await get("/api/me/profile")
     }
 
-    func updateProfile(name: String?, bio: String?) async throws -> ProfileResponse {
-        struct Body: Encodable { let name: String?; let bio: String? }
-        return try await patch("/api/me/profile", body: Body(name: name, bio: bio))
+    func updateProfile(name: String?, bio: String?, image: String?, bannerUrl: String?) async throws -> ProfileResponse {
+        struct Body: Encodable {
+            let name: String?
+            let bio: String?
+            let image: String?
+            let bannerUrl: String?
+        }
+        return try await patch(
+            "/api/me/profile",
+            body: Body(name: name, bio: bio, image: image, bannerUrl: bannerUrl)
+        )
     }
 
     // MARK: - Upload
@@ -301,6 +323,40 @@ actor APIClient {
             path += "&channelId=\(enc)"
         }
         return try await get(path)
+    }
+
+    func uploadThumbnailImage(_ imageData: Data) async throws -> String {
+        struct Response: Decodable {
+            let url: String?
+            let imageUrl: String?
+            let thumbnailUrl: String?
+        }
+
+        guard let url = URL(string: C.baseURL + "/api/upload/thumbnail") else {
+            throw APIError.badURL("/api/upload/thumbnail")
+        }
+
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var body = Data()
+        body.append("--\(boundary)\r\n".data(using: .utf8) ?? Data())
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"thumbnail.jpg\"\r\n".data(using: .utf8) ?? Data())
+        body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8) ?? Data())
+        body.append(imageData)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8) ?? Data())
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        attachAuth(&req)
+
+        let (data, resp) = try await session.upload(for: req, from: body)
+        try validate(resp)
+        let decoded = try decoder.decode(Response.self, from: data)
+        if let url = decoded.url ?? decoded.thumbnailUrl ?? decoded.imageUrl, !url.isEmpty {
+            return url
+        }
+        throw APIError.invalidResponse("Thumbnail upload did not return an image URL.")
     }
 
     func uploadToTus(uploadUrl: URL, fileURL: URL, fileSize: Int64, progress: @escaping @Sendable (Double) async -> Void) async throws {
@@ -396,81 +452,6 @@ actor APIClient {
         struct Response: Decodable { let episodes: [UploadLinkItem] }
         let response: Response = try await get("/api/backstage/show/\(showId)/episodes")
         return response.episodes
-    }
-
-    // MARK: - Studio
-
-    func fetchStudioProductions() async throws -> StudioProductionsResponse {
-        return try await get("/api/backstage/studio/productions")
-    }
-
-    func createStudioProduction(
-        title: String,
-        arTitle: String,
-        synopsis: String,
-        genre: String,
-        country: String,
-        dialect: String
-    ) async throws -> StudioProduction {
-        struct Body: Encodable {
-            let title: String
-            let arTitle: String
-            let synopsis: String
-            let genre: String
-            let language: String
-            let country: String
-            let dialect: String
-        }
-        let response: StudioProductionCreateResponse = try await post(
-            "/api/backstage/studio/productions",
-            body: Body(
-                title: title,
-                arTitle: arTitle,
-                synopsis: synopsis,
-                genre: genre,
-                language: "ar",
-                country: country,
-                dialect: dialect
-            )
-        )
-        return response.production
-    }
-
-    func fetchStudioProduction(id: String) async throws -> StudioProduction {
-        let response: StudioProductionDetailResponse = try await get("/api/backstage/studio/productions/\(id)")
-        return response.production
-    }
-
-    func runStudioBreakdown(
-        productionId: String,
-        concept: String,
-        genre: String,
-        dialect: String,
-        episodeSec: Int = 60,
-        culturalConstraints: Bool = true
-    ) async throws {
-        struct Body: Encodable {
-            let concept: String
-            let genre: String
-            let culturalConstraints: Bool
-            let dialect: String
-            let episodeSec: Int
-        }
-        let _: StudioBreakdownResponse = try await post(
-            "/api/backstage/studio/productions/\(productionId)/breakdown",
-            body: Body(
-                concept: concept,
-                genre: genre,
-                culturalConstraints: culturalConstraints,
-                dialect: dialect,
-                episodeSec: episodeSec
-            )
-        )
-    }
-
-    func fetchStudioScene(id: String) async throws -> StudioSceneDetail {
-        let response: StudioSceneDetailResponse = try await get("/api/backstage/studio/scenes/\(id)")
-        return response.scene
     }
 
     func createNotification(type: String, title: String, message: String, linkUrl: String?) async throws {
@@ -792,9 +773,7 @@ actor APIClient {
 
     func removeCollectionItem(collectionId: String, item: CollectionDetailItem) async throws {
         if let showId = item.show?.id {
-            let enc = showId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? showId
-            struct Resp: Decodable { let ok: Bool? }
-            let _: Resp = try await delete("/api/collections/\(collectionId)/items?showId=\(enc)")
+            try await removeShowFromCollection(collectionId: collectionId, showId: showId)
             return
         }
         if let videoId = item.video?.id {
@@ -815,6 +794,12 @@ actor APIClient {
         let _: Resp = try await delete("/api/collections/\(collectionId)/items?videoId=\(enc)")
     }
 
+    func removeShowFromCollection(collectionId: String, showId: String) async throws {
+        let enc = showId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? showId
+        struct Resp: Decodable { let ok: Bool? }
+        let _: Resp = try await delete("/api/collections/\(collectionId)/items?showId=\(enc)")
+    }
+
     // MARK: - Playlists
 
     func fetchPlaylists() async throws -> [Playlist] {
@@ -823,6 +808,11 @@ actor APIClient {
 
     func fetchPlaylistDetail(id: String) async throws -> PlaylistDetail {
         return try await get("/api/playlists/\(id)")
+    }
+
+    func createPlaylist(title: String, description: String?, type: String, visibility: String) async throws -> Playlist {
+        struct Body: Encodable { let title: String; let description: String?; let type: String; let visibility: String }
+        return try await post("/api/playlists", body: Body(title: title, description: description, type: type, visibility: visibility))
     }
 
     func updatePlaylist(id: String, title: String, description: String?, visibility: String) async throws -> PlaylistDetail {
@@ -838,6 +828,12 @@ actor APIClient {
     func removePlaylistItem(playlistId: String, itemId: String) async throws {
         struct Resp: Decodable { let ok: Bool? }
         let _: Resp = try await delete("/api/playlists/\(playlistId)/items/\(itemId)")
+    }
+
+    func addVideoToPlaylist(playlistId: String, videoId: String) async throws {
+        struct Body: Encodable { let videoId: String }
+        struct Resp: Decodable { let id: String?; let ok: Bool? }
+        let _: Resp = try await post("/api/playlists/\(playlistId)/items", body: Body(videoId: videoId))
     }
 
     func reorderPlaylist(playlistId: String, order: [String]) async throws {
@@ -879,6 +875,15 @@ actor APIClient {
 
     func fetchNotificationCounts() async throws -> [String: Int] {
         return try await get("/api/notifications/counts")
+    }
+
+    func registerPushToken(token: String, platform: String = "ios") async throws {
+        struct Body: Encodable {
+            let token: String
+            let platform: String
+        }
+        struct Resp: Decodable { let ok: Bool? }
+        let _: Resp = try await post("/api/notifications/push-token", body: Body(token: token, platform: platform))
     }
 
     // MARK: - Like / Subscribe
@@ -939,6 +944,7 @@ enum APIError: LocalizedError {
     case unauthorized
     case notFound
     case http(Int)
+    case invalidResponse(String)
 
     var errorDescription: String? {
         switch self {
@@ -946,6 +952,7 @@ enum APIError: LocalizedError {
         case .unauthorized:   return "Not signed in"
         case .notFound:       return "Not found"
         case .http(let c):    return "HTTP \(c)"
+        case .invalidResponse(let message): return message
         }
     }
 }
