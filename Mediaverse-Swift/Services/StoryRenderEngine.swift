@@ -477,6 +477,8 @@ private final class StoryFaceAnalyzer: @unchecked Sendable {
 
 private enum StoryCoreImageEffects {
     private static let faceAnalyzer = StoryFaceAnalyzer()
+    private static let skinMaskCubeDimension = 32
+    private static let skinMaskCubeData = makeSkinMaskCube()
 
     private static func boostedAmount(_ value: Float, master: Float) -> Float {
         let normalized = min(max(value, 0), 1)
@@ -592,7 +594,12 @@ private enum StoryCoreImageEffects {
             )
         }
 
-        guard let mask = faceMask(for: faces, extent: image.extent, intensity: settings.intensity) else {
+        guard let mask = faceMask(
+            for: faces,
+            image: image,
+            extent: image.extent,
+            intensity: settings.intensity
+        ) else {
             return image
         }
         var result = target.applyingFilter("CIBlendWithMask", parameters: [
@@ -900,6 +907,7 @@ private enum StoryCoreImageEffects {
 
     private static func faceMask(
         for faces: [StoryDetectedFace],
+        image: CIImage,
         extent: CGRect,
         intensity: Float
     ) -> CIImage? {
@@ -933,6 +941,16 @@ private enum StoryCoreImageEffects {
         }
         guard let combined else { return nil }
 
+        let skinLikelihood = image
+            .applyingFilter("CIColorCube", parameters: [
+                "inputCubeDimension": skinMaskCubeDimension,
+                "inputCubeData": skinMaskCubeData
+            ])
+            .cropped(to: extent)
+        let semanticSkin = combined.applyingFilter("CIMultiplyCompositing", parameters: [
+            kCIInputBackgroundImageKey: skinLikelihood
+        ]).cropped(to: extent)
+
         let protectedPoints = faces.flatMap {
             $0.eyePoints + $0.eyebrowPoints + $0.lipPoints
         }
@@ -950,11 +968,11 @@ private enum StoryCoreImageEffects {
             let inverseProtected = protectedMask
                 .applyingFilter("CIColorInvert")
                 .cropped(to: extent)
-            skinOnly = combined.applyingFilter("CIMultiplyCompositing", parameters: [
+            skinOnly = semanticSkin.applyingFilter("CIMultiplyCompositing", parameters: [
                 kCIInputBackgroundImageKey: inverseProtected
             ]).cropped(to: extent)
         } else {
-            skinOnly = combined
+            skinOnly = semanticSkin
         }
 
         let amount = CGFloat(min(max(intensity, 0), 1))
@@ -964,6 +982,44 @@ private enum StoryCoreImageEffects {
             "inputBVector": CIVector(x: 0, y: 0, z: amount, w: 0),
             "inputAVector": CIVector(x: 0, y: 0, z: 0, w: amount)
         ]).cropped(to: extent)
+    }
+
+    private static func makeSkinMaskCube() -> Data {
+        let dimension = skinMaskCubeDimension
+        let denominator = Float(dimension - 1)
+        var values = [Float]()
+        values.reserveCapacity(dimension * dimension * dimension * 4)
+
+        func softRange(_ value: Float, lower: Float, upper: Float, feather: Float) -> Float {
+            let lowerEdge = min(max((value - (lower - feather)) / feather, 0), 1)
+            let upperEdge = min(max(((upper + feather) - value) / feather, 0), 1)
+            let lowerSmooth = lowerEdge * lowerEdge * (3 - 2 * lowerEdge)
+            let upperSmooth = upperEdge * upperEdge * (3 - 2 * upperEdge)
+            return min(lowerSmooth, upperSmooth)
+        }
+
+        for blueIndex in 0..<dimension {
+            for greenIndex in 0..<dimension {
+                for redIndex in 0..<dimension {
+                    let red = Float(redIndex) / denominator
+                    let green = Float(greenIndex) / denominator
+                    let blue = Float(blueIndex) / denominator
+                    let luma = red * 0.299 + green * 0.587 + blue * 0.114
+                    let cb = 0.5 - red * 0.168736 - green * 0.331264 + blue * 0.5
+                    let cr = 0.5 + red * 0.5 - green * 0.418688 - blue * 0.081312
+                    let chromaMask =
+                        softRange(cb, lower: 0.26, upper: 0.56, feather: 0.10) *
+                        softRange(cr, lower: 0.48, upper: 0.78, feather: 0.11)
+                    let lightMask = softRange(luma, lower: 0.10, upper: 0.98, feather: 0.10)
+                    let colorSpread = max(red, max(green, blue)) - min(red, min(green, blue))
+                    let neutralAllowance = min(max((luma - 0.16) / 0.28, 0), 1) *
+                        min(max((0.22 - colorSpread) / 0.15, 0), 1) * 0.42
+                    let probability = min(max(chromaMask * lightMask + neutralAllowance, 0), 1)
+                    values.append(contentsOf: [probability, probability, probability, 1])
+                }
+            }
+        }
+        return values.withUnsafeBytes { Data($0) }
     }
 
     private static func contourMask(

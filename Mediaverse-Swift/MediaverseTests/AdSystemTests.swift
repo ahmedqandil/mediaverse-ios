@@ -1101,6 +1101,63 @@ final class StoryLookEditingTests: XCTestCase {
         XCTAssertNotEqual(try rgbaBytes(original), try rgbaBytes(edited))
     }
 
+    func testBeautyZeroIsPixelIdenticalEvenWithConfiguredControls() throws {
+        var originalClip = try XCTUnwrap(projectWithClip().tracks.videoClips.first)
+        originalClip.effectStack = StoryEffectStack.none
+        var zeroBeautyClip = originalClip
+        var zeroBeautyStack = StoryEffectStack.none
+        zeroBeautyStack.beauty = StoryBeautySettings(
+            intensity: 0,
+            skinSmoothing: 1,
+            wrinkleReduction: 1,
+            skinGlow: 1,
+            faceClarity: 1,
+            skinTone: 1,
+            brightness: 1,
+            eyeBrightening: 1,
+            underEye: 1,
+            teethWhitening: 1,
+            lipColor: 1,
+            contour: 1
+        )
+        zeroBeautyClip.effectStack = zeroBeautyStack
+        let source = CIFilter(
+            name: "CICheckerboardGenerator",
+            parameters: [
+                "inputColor0": CIColor(red: 0.72, green: 0.48, blue: 0.38),
+                "inputColor1": CIColor(red: 0.22, green: 0.15, blue: 0.12),
+                "inputWidth": 4,
+                "inputSharpness": 0.8
+            ]
+        )!.outputImage!.cropped(to: CGRect(x: 0, y: 0, width: 64, height: 64))
+        let canvas = CanvasSpec(
+            width: 64,
+            height: 64,
+            fps: 30,
+            backgroundColor: RGBAColor(r: 0, g: 0, b: 0, a: 1)
+        )
+        let graph = StoryEffectGraph()
+
+        let original = graph.render(
+            sourceImage: source,
+            time: .zero,
+            clip: originalClip,
+            overlays: [],
+            canvas: canvas,
+            useMetalPetal: false
+        )
+        let zeroBeauty = graph.render(
+            sourceImage: source,
+            time: .zero,
+            clip: zeroBeautyClip,
+            overlays: [],
+            canvas: canvas,
+            useMetalPetal: false
+        )
+
+        XCTAssertEqual(try rgbaBytes(original), try rgbaBytes(zeroBeauty))
+    }
+
     func testEffectStackDecodesBeforeCreativeIntensityWasAdded() throws {
         let stack = StoryEffectStack(
             version: 1,
