@@ -4668,7 +4668,8 @@ struct StoryEditorPreviewView: View {
                     intensity: clip.filterIntensity,
                     adjustments: clip.adjustments,
                     effectStack: clip.effectStack,
-                    time: request.compositionTime.seconds
+                    time: request.compositionTime.seconds,
+                    trackingKey: clip.id.uuidString
                 ) else {
                     request.finish(with: request.sourceImage, context: nil)
                     return

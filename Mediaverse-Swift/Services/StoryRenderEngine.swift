@@ -175,7 +175,12 @@ final class MetalPetalStoryFilterProcessor {
         if let stack, stack.beauty.isEnabled,
            let ciOutput = try? context.makeCIImage(from: rendered) {
             rendered = MTIImage(
-                ciImage: StoryCoreImageEffects.faceAwareBeauty(ciOutput, settings: stack.beauty),
+                ciImage: StoryCoreImageEffects.faceAwareBeauty(
+                    ciOutput,
+                    settings: stack.beauty,
+                    trackingKey: "camera-live",
+                    time: ProcessInfo.processInfo.systemUptime
+                ),
                 isOpaque: true
             )
         }
@@ -272,10 +277,24 @@ private struct StoryDetectedFace {
 }
 
 private final class StoryFaceAnalyzer: @unchecked Sendable {
+    private struct TrackedFaces {
+        let time: Double
+        let faces: [StoryDetectedFace]
+    }
+
     private let lock = NSLock()
     private let maximumAnalysisSide: CGFloat = 360
+    private let maximumTrackingGap = 0.35
+    private let previousFrameWeight: CGFloat = 0.34
+    private let maximumTrackedClips = 12
+    private var trackedFaces = [String: TrackedFaces]()
+    private var trackingOrder = [String]()
 
-    func faces(in image: CIImage) -> [StoryDetectedFace] {
+    func faces(
+        in image: CIImage,
+        trackingKey: String? = nil,
+        time: Double? = nil
+    ) -> [StoryDetectedFace] {
         let extent = image.extent
         let longestSide = max(extent.width, extent.height)
         guard longestSide > 0 else { return [] }
@@ -298,7 +317,7 @@ private final class StoryFaceAnalyzer: @unchecked Sendable {
             return []
         }
         let analysisExtent = analysisImage.extent
-        return (request.results ?? []).map { observation in
+        let detected = (request.results ?? []).map { observation in
             detectedFace(
                 from: observation,
                 analysisExtent: analysisExtent,
@@ -306,6 +325,92 @@ private final class StoryFaceAnalyzer: @unchecked Sendable {
                 scale: scale
             )
         }
+        guard let trackingKey, let time, time.isFinite else { return detected }
+        return stabilized(detected, key: trackingKey, time: time)
+    }
+
+    private func stabilized(
+        _ current: [StoryDetectedFace],
+        key: String,
+        time: Double
+    ) -> [StoryDetectedFace] {
+        guard let previous = trackedFaces[key],
+              time >= previous.time,
+              time - previous.time <= maximumTrackingGap,
+              previous.faces.count == current.count else {
+            store(current, key: key, time: time)
+            return current
+        }
+
+        let stabilizedFaces = current.map { face in
+            guard let prior = previous.faces.min(by: {
+                distance(center(of: $0.bounds), center(of: face.bounds)) <
+                    distance(center(of: $1.bounds), center(of: face.bounds))
+            }) else { return face }
+            return interpolate(previous: prior, current: face)
+        }
+        store(stabilizedFaces, key: key, time: time)
+        return stabilizedFaces
+    }
+
+    private func store(_ faces: [StoryDetectedFace], key: String, time: Double) {
+        trackedFaces[key] = TrackedFaces(time: time, faces: faces)
+        trackingOrder.removeAll { $0 == key }
+        trackingOrder.append(key)
+        while trackingOrder.count > maximumTrackedClips {
+            trackedFaces.removeValue(forKey: trackingOrder.removeFirst())
+        }
+    }
+
+    private func interpolate(
+        previous: StoryDetectedFace,
+        current: StoryDetectedFace
+    ) -> StoryDetectedFace {
+        StoryDetectedFace(
+            bounds: interpolate(previous.bounds, current.bounds),
+            leftEyePosition: interpolate(previous.leftEyePosition, current.leftEyePosition),
+            rightEyePosition: interpolate(previous.rightEyePosition, current.rightEyePosition),
+            mouthPosition: interpolate(previous.mouthPosition, current.mouthPosition),
+            eyePoints: interpolate(previous.eyePoints, current.eyePoints),
+            eyebrowPoints: interpolate(previous.eyebrowPoints, current.eyebrowPoints),
+            lipPoints: interpolate(previous.lipPoints, current.lipPoints),
+            nosePoints: interpolate(previous.nosePoints, current.nosePoints),
+            contourPoints: interpolate(previous.contourPoints, current.contourPoints)
+        )
+    }
+
+    private func interpolate(_ previous: CGRect, _ current: CGRect) -> CGRect {
+        CGRect(
+            x: blend(previous.minX, current.minX),
+            y: blend(previous.minY, current.minY),
+            width: blend(previous.width, current.width),
+            height: blend(previous.height, current.height)
+        )
+    }
+
+    private func interpolate(_ previous: CGPoint?, _ current: CGPoint?) -> CGPoint? {
+        guard let current else { return nil }
+        guard let previous else { return current }
+        return CGPoint(x: blend(previous.x, current.x), y: blend(previous.y, current.y))
+    }
+
+    private func interpolate(_ previous: [CGPoint], _ current: [CGPoint]) -> [CGPoint] {
+        guard previous.count == current.count else { return current }
+        return zip(previous, current).map {
+            CGPoint(x: blend($0.x, $1.x), y: blend($0.y, $1.y))
+        }
+    }
+
+    private func blend(_ previous: CGFloat, _ current: CGFloat) -> CGFloat {
+        previous * previousFrameWeight + current * (1 - previousFrameWeight)
+    }
+
+    private func distance(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {
+        hypot(lhs.x - rhs.x, lhs.y - rhs.y)
+    }
+
+    private func center(of rect: CGRect) -> CGPoint {
+        CGPoint(x: rect.midX, y: rect.midY)
     }
 
     private func detectedFace(
@@ -377,10 +482,15 @@ private enum StoryCoreImageEffects {
         blendedSkinSmoothing(image, smoothness: smoothness, intensity: intensity)
     }
 
-    static func faceAwareBeauty(_ image: CIImage, settings: StoryBeautySettings) -> CIImage {
+    static func faceAwareBeauty(
+        _ image: CIImage,
+        settings: StoryBeautySettings,
+        trackingKey: String? = nil,
+        time: Double? = nil
+    ) -> CIImage {
         let settings = settings.clamped()
         guard settings.isEnabled else { return image }
-        let faces = faceAnalyzer.faces(in: image)
+        let faces = faceAnalyzer.faces(in: image, trackingKey: trackingKey, time: time)
         guard !faces.isEmpty else {
             return fallbackBeauty(image, settings: settings)
         }
@@ -832,7 +942,8 @@ enum StoryFrameFilterRenderer {
         intensity: Float = 1,
         adjustments: ColorAdjust,
         effectStack: StoryEffectStack? = nil,
-        time: Double = 0
+        time: Double = 0,
+        trackingKey: String? = nil
     ) -> CIImage? {
         let stack: StoryEffectStack = {
             if let effectStack { return effectStack }
@@ -852,7 +963,12 @@ enum StoryFrameFilterRenderer {
         output = applyCoreImageFallbackEffect(preset.renderEffect, to: output)
         output = blend(source: image, filtered: output, intensity: stack.lookIntensity)
         if stack.beauty.isEnabled {
-            output = StoryCoreImageEffects.faceAwareBeauty(output, settings: stack.beauty)
+            output = StoryCoreImageEffects.faceAwareBeauty(
+                output,
+                settings: stack.beauty,
+                trackingKey: trackingKey,
+                time: time
+            )
         }
         for effect in stack.creativeEffects where effect != .none && effect != .skinSmooth {
             let target = effect.usesTimelineAnimation
@@ -1195,7 +1311,12 @@ struct StoryEffectGraph {
         filtered = applyRenderEffect(preset.renderEffect, to: filtered, useMetalPetal: useMetalPetal).cropped(to: sourceExtent)
         var image = blend(source: sourceImage, filtered: filtered, intensity: stack.lookIntensity)
         if stack.beauty.isEnabled {
-            image = StoryCoreImageEffects.faceAwareBeauty(image, settings: stack.beauty).cropped(to: sourceExtent)
+            image = StoryCoreImageEffects.faceAwareBeauty(
+                image,
+                settings: stack.beauty,
+                trackingKey: clip.id.uuidString,
+                time: time.seconds
+            ).cropped(to: sourceExtent)
         }
         for effect in stack.creativeEffects where effect != .none && effect != .skinSmooth {
             let effectOutput = effect.usesTimelineAnimation
