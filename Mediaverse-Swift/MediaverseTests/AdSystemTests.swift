@@ -431,3 +431,19 @@ final class StoryFeedNormalizerTests: XCTestCase {
         )
     }
 }
+
+final class StoryMediaCacheValidationTests: XCTestCase {
+    func testAcceptsOnlySuccessfulHTTPResponses() throws {
+        let url = try XCTUnwrap(URL(string: "https://example.com/story.mp4"))
+        let success = try XCTUnwrap(
+            HTTPURLResponse(url: url, statusCode: 206, httpVersion: nil, headerFields: nil)
+        )
+        let notFound = try XCTUnwrap(
+            HTTPURLResponse(url: url, statusCode: 404, httpVersion: nil, headerFields: nil)
+        )
+
+        XCTAssertTrue(StoryMediaCache.isSuccessfulResponse(success))
+        XCTAssertFalse(StoryMediaCache.isSuccessfulResponse(notFound))
+        XCTAssertFalse(StoryMediaCache.isSuccessfulResponse(nil))
+    }
+}

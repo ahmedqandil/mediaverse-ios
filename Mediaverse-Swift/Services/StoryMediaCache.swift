@@ -34,7 +34,8 @@ actor StoryMediaCache {
 
     func localURL(for remoteURL: URL) throws -> URL? {
         let fileURL = cacheFileURL(for: remoteURL)
-        guard fileManager.fileExists(atPath: fileURL.path) else {
+        guard isValidCachedFile(fileURL) else {
+            try? fileManager.removeItem(at: fileURL)
             CacheMetrics.shared.recordMiss(Self.metricsNamespace)
             return nil
         }
@@ -46,18 +47,19 @@ actor StoryMediaCache {
     @discardableResult
     func cachedURL(for remoteURL: URL, priority: CacheWarmupPriority = .high) async throws -> URL {
         let fileURL = cacheFileURL(for: remoteURL)
-        if fileManager.fileExists(atPath: fileURL.path) {
+        if isValidCachedFile(fileURL) {
             touch(fileURL)
             CacheMetrics.shared.recordHit(Self.metricsNamespace)
             return fileURL
         }
+        try? fileManager.removeItem(at: fileURL)
         CacheMetrics.shared.recordMiss(Self.metricsNamespace)
 
         try ensureRootDirectory()
         var request = URLRequest(url: remoteURL)
         request.cachePolicy = .returnCacheDataElseLoad
         let temporaryURL = try await downloadFile(for: request, priority: priority)
-        if fileManager.fileExists(atPath: fileURL.path) {
+        if isValidCachedFile(fileURL) {
             try? fileManager.removeItem(at: temporaryURL)
             touch(fileURL)
             return fileURL
@@ -75,7 +77,7 @@ actor StoryMediaCache {
         let box = DownloadTaskBox()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                let task = URLSession.shared.downloadTask(with: request) { temporaryURL, _, error in
+                let task = URLSession.shared.downloadTask(with: request) { temporaryURL, response, error in
                     if let error {
                         CacheMetrics.shared.recordError(Self.metricsNamespace)
                         continuation.resume(throwing: error)
@@ -86,15 +88,26 @@ actor StoryMediaCache {
                         continuation.resume(throwing: URLError(.badServerResponse))
                         return
                     }
+                    guard Self.isSuccessfulResponse(response),
+                          ((try? temporaryURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0) > 0 else {
+                        try? FileManager.default.removeItem(at: temporaryURL)
+                        CacheMetrics.shared.recordError(Self.metricsNamespace)
+                        continuation.resume(throwing: URLError(.badServerResponse))
+                        return
+                    }
                     continuation.resume(returning: temporaryURL)
                 }
                 task.priority = priority.urlSessionPriority
-                box.task = task
-                task.resume()
+                box.install(task)
             }
         } onCancel: {
-            box.task?.cancel()
+            box.cancel()
         }
+    }
+
+    static func isSuccessfulResponse(_ response: URLResponse?) -> Bool {
+        guard let response = response as? HTTPURLResponse else { return false }
+        return (200..<300).contains(response.statusCode)
     }
 
     func trim() throws {
@@ -118,6 +131,11 @@ actor StoryMediaCache {
 
     private func touch(_ url: URL) {
         try? fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+    }
+
+    private func isValidCachedFile(_ url: URL) -> Bool {
+        guard fileManager.fileExists(atPath: url.path) else { return false }
+        return ((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0) > 0
     }
 
     private func evictIfNeeded() throws {
@@ -168,5 +186,27 @@ actor StoryMediaCache {
 }
 
 private final class DownloadTaskBox: @unchecked Sendable {
-    var task: URLSessionDownloadTask?
+    private let lock = NSLock()
+    private var task: URLSessionDownloadTask?
+    private var isCancelled = false
+
+    func install(_ task: URLSessionDownloadTask) {
+        lock.lock()
+        if isCancelled {
+            lock.unlock()
+            task.cancel()
+            return
+        }
+        self.task = task
+        lock.unlock()
+        task.resume()
+    }
+
+    func cancel() {
+        lock.lock()
+        isCancelled = true
+        let task = task
+        lock.unlock()
+        task?.cancel()
+    }
 }

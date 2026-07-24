@@ -42,9 +42,20 @@ actor StoryExportCache {
             CacheMetrics.shared.recordMiss(Self.metricsNamespace)
             return nil
         }
-        let entry = try decoder.decode(Entry.self, from: Data(contentsOf: metadataURL))
+        guard let data = try? Data(contentsOf: metadataURL),
+              let entry = try? decoder.decode(Entry.self, from: data),
+              entry.key == versionedKey,
+              !entry.fileName.isEmpty,
+              URL(fileURLWithPath: entry.fileName).lastPathComponent == entry.fileName else {
+            try? fileManager.removeItem(at: metadataURL)
+            CacheMetrics.shared.recordError(Self.metricsNamespace)
+            CacheMetrics.shared.recordMiss(Self.metricsNamespace)
+            return nil
+        }
         let mediaURL = rootURL.appendingPathComponent(entry.fileName)
-        guard fileManager.fileExists(atPath: mediaURL.path) else {
+        let fileSize = (try? mediaURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+        guard fileManager.fileExists(atPath: mediaURL.path), fileSize > 0 else {
+            try? fileManager.removeItem(at: mediaURL)
             try? fileManager.removeItem(at: metadataURL)
             CacheMetrics.shared.recordMiss(Self.metricsNamespace)
             return nil
