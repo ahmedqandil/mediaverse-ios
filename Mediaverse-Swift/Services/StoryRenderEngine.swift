@@ -481,12 +481,19 @@ private enum StoryCoreImageEffects {
     private static func boostedAmount(_ value: Float, master: Float) -> Float {
         let normalized = min(max(value, 0), 1)
         guard normalized > 0, master > 0 else { return 0 }
-        return min(pow(normalized, 0.72) * min(max(master, 0), 1) * 1.4, 1)
+        let master = min(max(master, 0), 1)
+        let dramaticRange = highEndMasterAmount(master)
+        return min(pow(normalized, 0.72) * master * (1.4 + dramaticRange * 1.7), 1)
     }
 
     private static func boostedSignedAmount(_ value: Float, master: Float) -> Float {
         let sign: Float = value < 0 ? -1 : 1
         return sign * boostedAmount(abs(value), master: master)
+    }
+
+    private static func highEndMasterAmount(_ master: Float) -> Float {
+        let normalized = min(max((master - 0.52) / 0.48, 0), 1)
+        return normalized * normalized * (3 - 2 * normalized)
     }
 
     static func smoothSkin(_ image: CIImage, smoothness: Float = 8.0, intensity: Float = 0.6) -> CIImage {
@@ -561,6 +568,30 @@ private enum StoryCoreImageEffects {
                 ])
         }
 
+        let highEndMaster = highEndMasterAmount(settings.intensity)
+        if highEndMaster > 0.001 {
+            let polished = target
+                .applyingFilter("CINoiseReduction", parameters: [
+                    "inputNoiseLevel": 0.08 + highEndMaster * 0.15,
+                    "inputSharpness": max(0.30 - highEndMaster * 0.22, 0.04)
+                ])
+                .applyingFilter("CIColorControls", parameters: [
+                    kCIInputBrightnessKey: highEndMaster * 0.10,
+                    kCIInputContrastKey: 1 - highEndMaster * 0.08,
+                    kCIInputSaturationKey: 1 + highEndMaster * 0.15
+                ])
+                .applyingFilter("CIBloom", parameters: [
+                    kCIInputRadiusKey: 5 + highEndMaster * 9,
+                    kCIInputIntensityKey: 0.22 + highEndMaster * 0.58
+                ])
+                .cropped(to: image.extent)
+            target = mix(
+                base: target,
+                target: polished,
+                amount: min(0.22 + highEndMaster * 0.58, 0.80)
+            )
+        }
+
         guard let mask = faceMask(for: faces, extent: image.extent, intensity: settings.intensity) else {
             return image
         }
@@ -630,6 +661,30 @@ private enum StoryCoreImageEffects {
                     kCIInputSaturationKey: 1 + abs(tone) * 0.12,
                     kCIInputBrightnessKey: CGFloat(tone) * 0.025
                 ])
+        }
+
+        let highEndMaster = highEndMasterAmount(settings.intensity)
+        if highEndMaster > 0.001 {
+            let polished = output
+                .applyingFilter("CINoiseReduction", parameters: [
+                    "inputNoiseLevel": 0.07 + highEndMaster * 0.13,
+                    "inputSharpness": max(0.30 - highEndMaster * 0.20, 0.05)
+                ])
+                .applyingFilter("CIColorControls", parameters: [
+                    kCIInputBrightnessKey: highEndMaster * 0.075,
+                    kCIInputContrastKey: 1 - highEndMaster * 0.06,
+                    kCIInputSaturationKey: 1 + highEndMaster * 0.12
+                ])
+                .applyingFilter("CIBloom", parameters: [
+                    kCIInputRadiusKey: 4 + highEndMaster * 7,
+                    kCIInputIntensityKey: 0.18 + highEndMaster * 0.45
+                ])
+                .cropped(to: image.extent)
+            output = mix(
+                base: output,
+                target: polished,
+                amount: min(0.18 + highEndMaster * 0.50, 0.68)
+            )
         }
         return output.cropped(to: image.extent)
     }
