@@ -240,3 +240,12 @@ Metrics are intentionally passive: they do not emit network traffic, persist use
 - Changing a sticker query during an active request immediately permits the replacement request, while older pages cannot replace or append into the new query.
 - Preserved collection add behavior, search debounce timing, sticker browsing, load-more pagination, error UI, and all visible layouts.
 - Verified with 8 routing contract tests, query/pagination ownership inspection, diff-integrity checks, and complete unsigned dual-architecture iOS Simulator builds after each change.
+
+### Batch 20: Secondary feeds and playback lifecycle
+
+- Reaction/post refreshes now use latest-request ownership, preventing an older initial or notification-triggered load from replacing a newer feed.
+- Periodic episode progress writes are bound to the episode that created the timer instead of mutable current-navigation state.
+- Audited video, episode, microdrama, Shorts, and player-chrome lifecycle paths for periodic observers, end observers, timers, autoplay tasks, and teardown symmetry.
+- Verified that image memory/disk caches, Shorts player/asset pools, memory-pressure eviction, and startup warmups are bounded and cancellable; no behavior-changing cache rewrite was warranted.
+- Preserved post animations, inserted-post behavior, playback handoff, mini-player/fullscreen transitions, ads, autoplay, progress cadence, and all visible UI.
+- Verified with 8 routing contract tests, lifecycle/cache invariant inspection, a clean unsigned dual-architecture iOS Simulator build, and an iPhone 17 Pro Simulator install/launch smoke test with a live app process and no fatal startup log entries.

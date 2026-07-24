@@ -1808,7 +1808,7 @@ struct EpisodeWatchView: View {
             let cur = player.currentTime().seconds
             let tot = item.duration.seconds
             guard tot > 0, !tot.isNaN else { return }
-            Task { try? await APIClient.shared.recordProgress(episodeId: currentEpisodeId, seconds: Int(cur), percent: min(1.0, cur / tot)) }
+            Task { try? await APIClient.shared.recordProgress(episodeId: episodeId, seconds: Int(cur), percent: min(1.0, cur / tot)) }
         }
     }
 

@@ -433,6 +433,7 @@ struct PostSectionView: View {
     @State private var loading = true
     @State private var expanded: Bool
     @State private var visibleCount = 12
+    @State private var loadGeneration = 0
 
     @EnvironmentObject private var auth: AuthManager
 
@@ -608,6 +609,8 @@ struct PostSectionView: View {
 
     @MainActor
     private func loadPosts(expandAfterLoad: Bool = false) async {
+        loadGeneration &+= 1
+        let generation = loadGeneration
         withAnimation(.easeOut(duration: 0.16)) {
             loading = true
         }
@@ -619,6 +622,7 @@ struct PostSectionView: View {
             case .episode(let id):
                 fetchedPosts = try await APIClient.shared.fetchPosts(episodeId: id)
             }
+            guard generation == loadGeneration else { return }
             withAnimation(contentAnimation) {
                 posts = fetchedPosts
                 if expandAfterLoad, !fetchedPosts.isEmpty {
@@ -628,6 +632,7 @@ struct PostSectionView: View {
                 loading = false
             }
         } catch {
+            guard generation == loadGeneration else { return }
             withAnimation(contentAnimation) {
                 loading = false
             }
