@@ -1040,9 +1040,11 @@ final class StoryLookEditingTests: XCTestCase {
         let original = try XCTUnwrap(editor.selectedClip)
         var enlarged = original.transform
         enlarged.scale = 20
+        enlarged.rotation = .pi / 4
 
         editor.previewSelectedClipTransform(enlarged)
         XCTAssertEqual(editor.selectedClip?.transform.scale, 4)
+        XCTAssertEqual(editor.selectedClip?.transform.rotation, .pi / 4)
         XCTAssertFalse(editor.canUndo)
 
         await editor.commitSelectedClipTransform(

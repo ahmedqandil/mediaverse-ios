@@ -388,7 +388,8 @@ struct StoryEditorPreviewView: View {
     @State private var overlayAlignmentGuide = OverlayAlignmentGuide()
     @State private var clipBaselineClip: VideoClip?
     @State private var canvasTransformBaselineClip: VideoClip?
-    @State private var canvasPinchStartScale: Double?
+    @State private var canvasGestureVisualScale: CGFloat = 1
+    @State private var canvasGestureVisualRotation: Angle = .zero
     @State private var filterBaselineClip: VideoClip?
     @State private var lookSection: StoryLookSection = .filters
     @State private var selectedBeautyControl: StoryBeautyControl = .smooth
@@ -521,7 +522,7 @@ struct StoryEditorPreviewView: View {
                         accessibilityReduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.86),
                         value: activeTool?.id
                     )
-                    .simultaneousGesture(canvasMagnificationGesture)
+                    .simultaneousGesture(canvasTransformGesture)
             }
 
             if isDrawingPresented {
@@ -1748,8 +1749,9 @@ struct StoryEditorPreviewView: View {
         return -(toolSheetHeight(for: tool) / 2) + 12
     }
 
-    private var canvasMagnificationGesture: some Gesture {
+    private var canvasTransformGesture: some Gesture {
         MagnificationGesture()
+            .simultaneously(with: RotationGesture())
             .onChanged { value in
                 guard !isDrawingPresented,
                       !isTextComposerPresented,
@@ -1757,23 +1759,27 @@ struct StoryEditorPreviewView: View {
                       let clip = editor.selectedClip else { return }
                 if canvasTransformBaselineClip == nil {
                     canvasTransformBaselineClip = clip
-                    canvasPinchStartScale = clip.transform.scale
                 }
-                let startScale = canvasPinchStartScale ?? clip.transform.scale
-                var transform = clip.transform
-                transform.scale = min(max(startScale * value, 0.5), 4)
-                editor.previewSelectedClipTransform(transform)
+                canvasGestureVisualScale = value.first ?? 1
+                canvasGestureVisualRotation = value.second ?? .zero
             }
-            .onEnded { _ in
-                guard let baseline = canvasTransformBaselineClip,
-                      let clip = editor.selectedClip else {
+            .onEnded { value in
+                guard let baseline = canvasTransformBaselineClip else {
                     canvasTransformBaselineClip = nil
-                    canvasPinchStartScale = nil
+                    canvasGestureVisualScale = 1
+                    canvasGestureVisualRotation = .zero
                     return
                 }
-                let transform = clip.transform
+                var transform = baseline.transform
+                transform.scale = min(max(
+                    baseline.transform.scale * Double(value.first ?? 1),
+                    0.5
+                ), 4)
+                transform.rotation = baseline.transform.rotation + (value.second?.radians ?? 0)
+                editor.previewSelectedClipTransform(transform)
                 canvasTransformBaselineClip = nil
-                canvasPinchStartScale = nil
+                canvasGestureVisualScale = 1
+                canvasGestureVisualRotation = .zero
                 Task {
                     await editor.commitSelectedClipTransform(transform, baselineClip: baseline)
                 }
@@ -4283,33 +4289,37 @@ struct StoryEditorPreviewView: View {
         ZStack {
             Color.black
 
-            if usesRenderedToolPreview, let renderedImage {
-                Image(uiImage: renderedImage)
-                    .resizable()
-                    .scaledToFill()
-            } else if let previewPlayer {
-                StoryEditorPlayerView(player: previewPlayer)
-                    .onAppear {
-                        previewPlayer.play()
-                        isPlaying = true
+            Group {
+                if usesRenderedToolPreview, let renderedImage {
+                    Image(uiImage: renderedImage)
+                        .resizable()
+                        .scaledToFill()
+                } else if let previewPlayer {
+                    StoryEditorPlayerView(player: previewPlayer)
+                        .onAppear {
+                            previewPlayer.play()
+                            isPlaying = true
+                        }
+                        .storyPreviewColorGrade(videoPreviewColorGrade)
+                } else if let renderedImage {
+                    Image(uiImage: renderedImage)
+                        .resizable()
+                        .scaledToFill()
+                } else if isRendering {
+                    ProgressView()
+                        .tint(C.watch)
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: "photo")
+                            .font(.system(size: 34))
+                        Text("Preview unavailable")
+                            .font(.system(size: 13, weight: .semibold))
                     }
-                    .storyPreviewColorGrade(videoPreviewColorGrade)
-            } else if let renderedImage {
-                Image(uiImage: renderedImage)
-                    .resizable()
-                    .scaledToFill()
-            } else if isRendering {
-                ProgressView()
-                    .tint(C.watch)
-            } else {
-                VStack(spacing: 8) {
-                    Image(systemName: "photo")
-                        .font(.system(size: 34))
-                    Text("Preview unavailable")
-                        .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(C.textMuted)
                 }
-                .foregroundStyle(C.textMuted)
             }
+            .scaleEffect(canvasGestureVisualScale)
+            .rotationEffect(canvasGestureVisualRotation)
 
             if isDrawingPresented {
                 StoryDrawingCanvas(

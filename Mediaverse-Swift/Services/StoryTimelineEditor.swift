@@ -877,7 +877,7 @@ final class StoryTimelineEditor: ObservableObject {
             tx: transform.tx,
             ty: transform.ty
         )
-        await commit(updated, label: "Scale", before: before)
+        await commit(updated, label: "Transform", before: before)
         selectedClipID = updated.tracks.videoClips[index].id
     }
 
