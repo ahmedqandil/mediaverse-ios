@@ -355,7 +355,6 @@ private enum StoryCoreImageEffects {
         ]).cropped(to: image.extent)
         result = applyFeatureBeauty(
             to: result,
-            original: image,
             faces: faces,
             settings: settings
         )
@@ -364,7 +363,6 @@ private enum StoryCoreImageEffects {
 
     private static func applyFeatureBeauty(
         to image: CIImage,
-        original: CIImage,
         faces: [StoryDetectedFace],
         settings: StoryBeautySettings
     ) -> CIImage {
@@ -447,7 +445,8 @@ private enum StoryCoreImageEffects {
 
             if settings.contour > 0.001 {
                 let amount = settings.contour * master
-                let darkened = result.applyingFilter("CIExposureAdjust", parameters: [
+                let uncontoured = result
+                let darkened = uncontoured.applyingFilter("CIExposureAdjust", parameters: [
                     kCIInputEVKey: -0.34 * amount
                 ])
                 let outer = radialMask(
@@ -463,7 +462,7 @@ private enum StoryCoreImageEffects {
                     extent: image.extent,
                     intensity: amount
                 )
-                result = blend(base: result, target: original, mask: inner)
+                result = blend(base: result, target: uncontoured, mask: inner)
             }
         }
         return result.cropped(to: image.extent)

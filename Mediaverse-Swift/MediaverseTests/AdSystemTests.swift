@@ -1,4 +1,6 @@
 import XCTest
+import CoreImage
+import CoreMedia
 @testable import Mediaverse
 
 final class StoryTimedMediaOverlayTests: XCTestCase {
@@ -998,6 +1000,41 @@ final class StoryLookEditingTests: XCTestCase {
         XCTAssertTrue(ids.contains(StoryRenderEffect.kaleidoscope.rawValue))
     }
 
+    func testTimelineEffectIsDeterministicAtSameTimestamp() throws {
+        var clip = try XCTUnwrap(projectWithClip().tracks.videoClips.first)
+        var stack = StoryEffectStack.none
+        stack.creativeEffects = [.lightLeak]
+        clip.effectStack = stack
+        let source = CIImage(color: CIColor(red: 0.1, green: 0.2, blue: 0.8))
+            .cropped(to: CGRect(x: 0, y: 0, width: 64, height: 64))
+        let canvas = CanvasSpec(
+            width: 64,
+            height: 64,
+            fps: 30,
+            backgroundColor: RGBAColor(r: 0, g: 0, b: 0, a: 1)
+        )
+        let graph = StoryEffectGraph()
+
+        let first = graph.render(
+            sourceImage: source,
+            time: CMTime(seconds: 1.25, preferredTimescale: 600),
+            clip: clip,
+            overlays: [],
+            canvas: canvas,
+            useMetalPetal: false
+        )
+        let second = graph.render(
+            sourceImage: source,
+            time: CMTime(seconds: 1.25, preferredTimescale: 600),
+            clip: clip,
+            overlays: [],
+            canvas: canvas,
+            useMetalPetal: false
+        )
+
+        XCTAssertEqual(try rgbaBytes(first), try rgbaBytes(second))
+    }
+
     func testEffectStackDecodesBeforeCreativeIntensityWasAdded() throws {
         let stack = StoryEffectStack(
             version: 1,
@@ -1085,5 +1122,21 @@ final class StoryLookEditingTests: XCTestCase {
         )
         try! project.addStoryClip(.storyClip(assetRef: asset, durationSeconds: 5))
         return project
+    }
+
+    private func rgbaBytes(_ image: CIImage) throws -> [UInt8] {
+        let width = Int(image.extent.width)
+        let height = Int(image.extent.height)
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        CIContext(options: [.cacheIntermediates: false]).render(
+            image,
+            toBitmap: &bytes,
+            rowBytes: width * 4,
+            bounds: image.extent,
+            format: .RGBA8,
+            colorSpace: colorSpace
+        )
+        return bytes
     }
 }
