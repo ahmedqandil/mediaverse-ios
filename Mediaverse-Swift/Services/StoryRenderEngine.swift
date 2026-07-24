@@ -67,6 +67,15 @@ private extension StoryRenderEffect {
             return false
         }
     }
+
+    var usesTimelineAnimation: Bool {
+        switch self {
+        case .vhs, .lightLeak, .chromatic:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 #if canImport(MetalPetal)
@@ -228,7 +237,7 @@ final class MetalPetalStoryFilterProcessor {
             } else {
                 output = input
             }
-        case .glow, .comic, .edges, .crystallize, .kaleidoscope:
+        case .glow, .comic, .edges, .crystallize, .kaleidoscope, .vhs, .lightLeak, .chromatic:
             output = input
         }
 
@@ -676,6 +685,8 @@ enum StoryFrameFilterRenderer {
                 "inputCount": 8,
                 "inputAngle": 0
             ]).cropped(to: image.extent)
+        case .vhs, .lightLeak, .chromatic:
+            return image
         }
     }
 }
@@ -890,7 +901,9 @@ struct StoryEffectGraph {
             image = StoryCoreImageEffects.faceAwareBeauty(image, settings: stack.beauty).cropped(to: sourceExtent)
         }
         for effect in stack.creativeEffects where effect != .none && effect != .skinSmooth {
-            let effectOutput = applyRenderEffect(effect, to: image, useMetalPetal: useMetalPetal).cropped(to: sourceExtent)
+            let effectOutput = effect.usesTimelineAnimation
+                ? StoryAnimatedEffects.apply(effect, to: image, time: time.seconds)
+                : applyRenderEffect(effect, to: image, useMetalPetal: useMetalPetal)
             image = blend(source: image, filtered: effectOutput, intensity: stack.creativeEffectIntensity)
         }
         image = applyTransform(clip.transform, crop: clip.cropRect, to: image, canvas: canvas)
@@ -1018,6 +1031,8 @@ struct StoryEffectGraph {
                 "inputCount": 8,
                 "inputAngle": 0
             ]).cropped(to: image.extent)
+        case .vhs, .lightLeak, .chromatic:
+            return image
         }
     }
 
@@ -1155,6 +1170,96 @@ private extension StoryLUTProfile {
     static let allProfiles: [StoryLUTProfile] = [
         .portrait, .golden, .cinema, .film, .vivid, .vintage
     ]
+}
+
+private enum StoryAnimatedEffects {
+    static func apply(_ effect: StoryRenderEffect, to image: CIImage, time: Double) -> CIImage {
+        switch effect {
+        case .vhs:
+            return vhs(image, time: time)
+        case .lightLeak:
+            return lightLeak(image, time: time)
+        case .chromatic:
+            return chromaticSplit(image, time: time)
+        default:
+            return image
+        }
+    }
+
+    private static func vhs(_ image: CIImage, time: Double) -> CIImage {
+        let extent = image.extent
+        let jitter = CGFloat(sin(time * 17.0) * 3.5)
+        let shifted = image
+            .transformed(by: CGAffineTransform(translationX: jitter, y: 0))
+            .cropped(to: extent)
+            .applyingFilter("CIColorControls", parameters: [
+                kCIInputSaturationKey: 0.88,
+                kCIInputContrastKey: 1.08
+            ])
+        let phase = CGFloat((time * 70).truncatingRemainder(dividingBy: 8))
+        let cellExtent = CGRect(x: 0, y: 0, width: extent.width, height: 8)
+        let line = CIImage(
+            color: CIColor(red: 0, green: 0, blue: 0, alpha: 0.12)
+        )
+        .cropped(to: CGRect(x: 0, y: 0, width: extent.width, height: 1.4))
+        let cell = line.composited(over: CIImage(color: .clear).cropped(to: cellExtent))
+        let scanlines = cell
+            .applyingFilter("CIAffineTile", parameters: [
+                kCIInputTransformKey: CGAffineTransform.identity
+            ])
+            .transformed(by: CGAffineTransform(
+                translationX: extent.minX,
+                y: extent.minY - 8 + phase
+            ))
+            .cropped(to: extent)
+        return scanlines.composited(over: shifted).cropped(to: extent)
+    }
+
+    private static func lightLeak(_ image: CIImage, time: Double) -> CIImage {
+        let extent = image.extent
+        let travel = CGFloat((sin(time * 0.9) + 1) * 0.5)
+        let center = CIVector(
+            x: extent.minX + extent.width * (-0.05 + travel * 1.1),
+            y: extent.minY + extent.height * (0.72 + CGFloat(sin(time * 0.47)) * 0.12)
+        )
+        let radius = max(extent.width, extent.height) * 0.48
+        let leak = CIFilter(
+            name: "CIRadialGradient",
+            parameters: [
+                "inputCenter": center,
+                "inputRadius0": radius * 0.04,
+                "inputRadius1": radius,
+                "inputColor0": CIColor(red: 1, green: 0.28, blue: 0.04, alpha: 0.72),
+                "inputColor1": CIColor.clear
+            ]
+        )?.outputImage?.cropped(to: extent) ?? image
+        return leak.applyingFilter("CIScreenBlendMode", parameters: [
+            kCIInputBackgroundImageKey: image
+        ]).cropped(to: extent)
+    }
+
+    private static func chromaticSplit(_ image: CIImage, time: Double) -> CIImage {
+        let extent = image.extent
+        let distance = CGFloat(3.5 + abs(sin(time * 2.2)) * 4)
+        let red = channel(image, vector: CIVector(x: 1, y: 0, z: 0, w: 0))
+            .transformed(by: CGAffineTransform(translationX: distance, y: 0))
+        let green = channel(image, vector: CIVector(x: 0, y: 1, z: 0, w: 0))
+        let blue = channel(image, vector: CIVector(x: 0, y: 0, z: 1, w: 0))
+            .transformed(by: CGAffineTransform(translationX: -distance, y: 0))
+        return red
+            .applyingFilter("CIAdditionCompositing", parameters: [kCIInputBackgroundImageKey: green])
+            .applyingFilter("CIAdditionCompositing", parameters: [kCIInputBackgroundImageKey: blue])
+            .cropped(to: extent)
+    }
+
+    private static func channel(_ image: CIImage, vector: CIVector) -> CIImage {
+        image.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: vector.x, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: vector.y, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: vector.z, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)
+        ])
+    }
 }
 
 enum StoryRenderQuality {

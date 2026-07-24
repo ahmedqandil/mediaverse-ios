@@ -210,6 +210,9 @@ enum StoryRenderEffect: String, Codable, Equatable {
     case edges
     case crystallize
     case kaleidoscope
+    case vhs
+    case lightLeak
+    case chromatic
 }
 
 enum StoryEffectCatalog {
@@ -264,6 +267,9 @@ enum StoryCreativeEffectCatalog {
         StoryCreativeEffectPreset(effect: .comic, name: "Comic", systemImage: "text.bubble.fill"),
         StoryCreativeEffectPreset(effect: .edges, name: "Edges", systemImage: "scribble.variable"),
         StoryCreativeEffectPreset(effect: .crystallize, name: "Crystal", systemImage: "diamond.fill"),
-        StoryCreativeEffectPreset(effect: .kaleidoscope, name: "Kaleido", systemImage: "hexagon.fill")
+        StoryCreativeEffectPreset(effect: .kaleidoscope, name: "Kaleido", systemImage: "hexagon.fill"),
+        StoryCreativeEffectPreset(effect: .vhs, name: "VHS", systemImage: "videocassette.fill"),
+        StoryCreativeEffectPreset(effect: .lightLeak, name: "Leak", systemImage: "sun.max.trianglebadge.exclamationmark"),
+        StoryCreativeEffectPreset(effect: .chromatic, name: "RGB", systemImage: "circle.lefthalf.filled")
     ]
 }
