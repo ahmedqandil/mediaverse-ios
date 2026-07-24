@@ -1,6 +1,20 @@
 import XCTest
 @testable import Mediaverse
 
+final class StoryTimedMediaOverlayTests: XCTestCase {
+    func testOverlayMediaLoopsAgainstItsOwnDuration() {
+        XCTAssertEqual(storyLoopedMediaTime(elapsed: 0.5, duration: 2), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(storyLoopedMediaTime(elapsed: 2.5, duration: 2), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(storyLoopedMediaTime(elapsed: 6, duration: 2), 0, accuracy: 0.0001)
+    }
+
+    func testInvalidOrNegativeTimesResolveSafely() {
+        XCTAssertEqual(storyLoopedMediaTime(elapsed: -1, duration: 2), 0)
+        XCTAssertEqual(storyLoopedMediaTime(elapsed: 1, duration: 0), 0)
+        XCTAssertEqual(storyLoopedMediaTime(elapsed: .infinity, duration: 2), 0)
+    }
+}
+
 @MainActor
 final class StoryTimelineMusicEditingTests: XCTestCase {
     func testMusicVolumePreviewClampsWithoutCreatingUndoCommand() {

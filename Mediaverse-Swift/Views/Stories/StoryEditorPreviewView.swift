@@ -341,6 +341,7 @@ struct StoryEditorPreviewView: View {
     @State private var previewPlayerEndObserver: NSObjectProtocol?
     @State private var previewPlayerStatusObserver: NSKeyValueObservation?
     @State private var previewPlaybackWatchdogTask: Task<Void, Never>?
+    @State private var timedOverlayClockTask: Task<Void, Never>?
     @State private var musicImportTask: Task<Void, Never>?
     @State private var mediaOverlayImportTask: Task<Void, Never>?
     @State private var networkStickerTask: Task<Void, Never>?
@@ -451,6 +452,15 @@ struct StoryEditorPreviewView: View {
         videoPreviewClip != nil
     }
 
+    private var hasTimedMediaOverlay: Bool {
+        project.tracks.overlays.contains { overlay in
+            guard case .sticker(let sticker) = overlay, let assetRef = sticker.assetRef else { return false }
+            if assetRef.kind == .video { return true }
+            let ext = URL(fileURLWithPath: assetRef.relativePath).pathExtension.lowercased()
+            return assetRef.kind == .image && (ext == "gif" || ext == "webp")
+        }
+    }
+
     private var videoPreviewURL: URL? {
         guard let assetStore, let videoPreviewClip else { return nil }
         return assetStore.absoluteURL(for: videoPreviewClip.assetRef.relativePath)
@@ -541,6 +551,7 @@ struct StoryEditorPreviewView: View {
             } else {
                 destroyPreviewPlayer()
                 schedulePreviewRender(after: 90_000_000)
+                startTimedOverlayClockIfNeeded()
             }
             presentFilterHUD()
         }
@@ -553,6 +564,7 @@ struct StoryEditorPreviewView: View {
             mediaOverlayImportTask?.cancel()
             networkStickerTask?.cancel()
             drawingImportTask?.cancel()
+            timedOverlayClockTask?.cancel()
             locationSearch.clear()
             filterHUDVisible = false
             shouldResumePlaybackAfterToolPreview = false
@@ -576,6 +588,8 @@ struct StoryEditorPreviewView: View {
                     schedulePreviewRender()
                 } else if hasVideoPreviewClip {
                     resumeVideoPreviewPlaybackIfNeeded()
+                } else {
+                    startTimedOverlayClockIfNeeded()
                 }
                 return
             }
@@ -585,6 +599,7 @@ struct StoryEditorPreviewView: View {
             } else {
                 destroyPreviewPlayer()
                 schedulePreviewRender()
+                startTimedOverlayClockIfNeeded()
             }
         }
         .onChange(of: activeTool?.id) { oldValue, newValue in
@@ -3291,7 +3306,7 @@ struct StoryEditorPreviewView: View {
                     StoryAssetOverlayImageView(
                         url: assetStore.absoluteURL(for: assetRef.relativePath),
                         kind: assetRef.kind,
-                        time: 0
+                        time: overlayPlaybackTime(for: sticker)
                     )
                     .frame(width: width, height: height)
                     .clipShape(RoundedRectangle(cornerRadius: state.cornerRadius))
@@ -3409,6 +3424,12 @@ struct StoryEditorPreviewView: View {
                 cornerRadius: 24
             )
         }
+    }
+
+    private func overlayPlaybackTime(for overlay: StickerOverlay) -> Double {
+        let elapsed = max(currentTime - overlay.timeRange.start.time.seconds, 0)
+        guard let duration = overlay.assetRef?.durationSeconds, duration > 0 else { return elapsed }
+        return storyLoopedMediaTime(elapsed: elapsed, duration: duration)
     }
 
     private func textOverlayCanvasSize(_ overlay: TextOverlay) -> CGSize {
@@ -4286,7 +4307,10 @@ struct StoryEditorPreviewView: View {
 
     @MainActor
     private func resumeVideoPreviewPlaybackIfNeeded() {
-        guard hasVideoPreviewClip else { return }
+        guard hasVideoPreviewClip else {
+            startTimedOverlayClockIfNeeded()
+            return
+        }
         guard let previewPlayer else {
             configureVideoPreviewPlayer(autoplay: true)
             return
@@ -4424,7 +4448,31 @@ struct StoryEditorPreviewView: View {
 
     private func stopPlayback() {
         previewPlayer?.pause()
+        timedOverlayClockTask?.cancel()
+        timedOverlayClockTask = nil
         isPlaying = false
+    }
+
+    @MainActor
+    private func startTimedOverlayClockIfNeeded() {
+        guard !hasVideoPreviewClip, hasTimedMediaOverlay, timedOverlayClockTask == nil else { return }
+        isPlaying = true
+        timedOverlayClockTask = Task { @MainActor in
+            var previous = ContinuousClock.now
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 83_333_333)
+                guard !Task.isCancelled else { break }
+                let now = ContinuousClock.now
+                let elapsed = previous.duration(to: now)
+                previous = now
+                let components = elapsed.components
+                let seconds = Double(components.seconds)
+                    + Double(components.attoseconds) / 1_000_000_000_000_000_000
+                currentTime = duration > 0
+                    ? (currentTime + max(seconds, 0)).truncatingRemainder(dividingBy: duration)
+                    : 0
+            }
+        }
     }
 
     private func destroyPreviewPlayer() {
@@ -4441,6 +4489,8 @@ struct StoryEditorPreviewView: View {
         previewPlayerStatusObserver = nil
         previewPlaybackWatchdogTask?.cancel()
         previewPlaybackWatchdogTask = nil
+        timedOverlayClockTask?.cancel()
+        timedOverlayClockTask = nil
 
         previewPlayer?.pause()
         previewPlayer = nil
@@ -4886,16 +4936,23 @@ private struct StoryAssetOverlayImageView: View {
     private var reloadID: String {
         switch kind {
         case .video:
-            return "\(url.path)-\(Int(max(time, 0) * 2))"
+            return "\(url.path)-\(Int(max(time, 0) * 12))"
+        case .image where isAnimatedImage:
+            return "\(url.path)-\(Int(max(time, 0) * 12))"
         case .image, .audio:
             return url.path
         }
     }
 
+    private var isAnimatedImage: Bool {
+        let ext = url.pathExtension.lowercased()
+        return ext == "gif" || ext == "webp"
+    }
+
     private func loadImage() async -> UIImage? {
         switch kind {
         case .image:
-            return loadStaticImage()
+            return loadImageFrame()
         case .video:
             return await loadVideoFrame()
         case .audio:
@@ -4903,7 +4960,10 @@ private struct StoryAssetOverlayImageView: View {
         }
     }
 
-    private func loadStaticImage() -> UIImage? {
+    private func loadImageFrame() -> UIImage? {
+        if let frame = StoryAnimatedImage.frame(at: time, from: url) {
+            return UIImage(cgImage: frame)
+        }
         if let image = UIImage(contentsOfFile: url.path) {
             return image
         }
@@ -5118,7 +5178,7 @@ private struct GiphySticker: Decodable, Identifiable {
     let original: GiphyStickerAsset?
 
     var overlayAsset: GiphyStickerAsset {
-        webp ?? original ?? preview
+        original ?? webp ?? preview
     }
 }
 

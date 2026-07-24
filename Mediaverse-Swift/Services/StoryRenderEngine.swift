@@ -4,11 +4,50 @@ import CoreMedia
 import CoreVideo
 import CryptoKit
 import Foundation
+import ImageIO
 import Metal
 import UIKit
 #if canImport(MetalPetal)
 import MetalPetal
 #endif
+
+enum StoryAnimatedImage {
+    static func frame(at seconds: Double, from url: URL) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let count = CGImageSourceGetCount(source)
+        guard count > 1 else { return nil }
+
+        let durations = (0..<count).map { frameDuration(source: source, index: $0) }
+        let totalDuration = durations.reduce(0, +)
+        guard totalDuration > 0 else { return CGImageSourceCreateImageAtIndex(source, 0, nil) }
+
+        var cursor = max(seconds, 0).truncatingRemainder(dividingBy: totalDuration)
+        for (index, duration) in durations.enumerated() {
+            if cursor < duration {
+                return CGImageSourceCreateImageAtIndex(source, index, [
+                    kCGImageSourceShouldCacheImmediately: true
+                ] as CFDictionary)
+            }
+            cursor -= duration
+        }
+        return CGImageSourceCreateImageAtIndex(source, count - 1, nil)
+    }
+
+    private static func frameDuration(source: CGImageSource, index: Int) -> Double {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any] else {
+            return 0.1
+        }
+        let gif = properties[kCGImagePropertyGIFDictionary] as? [CFString: Any]
+        let unclamped = gif?[kCGImagePropertyGIFUnclampedDelayTime] as? Double
+        let clamped = gif?[kCGImagePropertyGIFDelayTime] as? Double
+        return max(unclamped ?? clamped ?? 0.1, 0.02)
+    }
+}
+
+func storyLoopedMediaTime(elapsed: Double, duration: Double) -> Double {
+    guard elapsed.isFinite, duration.isFinite, duration > 0 else { return 0 }
+    return max(elapsed, 0).truncatingRemainder(dividingBy: duration)
+}
 
 private extension StoryRenderEffect {
     var usesCoreImageBeautyPipeline: Bool {
@@ -783,7 +822,9 @@ actor StoryCompositor {
             return
         }
 
-        let overlays = quality.includesOverlays ? try await renderedOverlays(in: project, assetStore: assetStore) : []
+        let overlays = quality.includesOverlays
+            ? try await renderedOverlays(in: project, assetStore: assetStore, at: timelineTime)
+            : []
         let rendered = effectGraph.render(
             sourceImage: sourceImage,
             time: timelineTime,
@@ -855,9 +896,10 @@ actor StoryCompositor {
         }
     }
 
-    private func renderedOverlays(in project: Project, assetStore: AssetStore) async throws -> [RenderedOverlay] {
+    private func renderedOverlays(in project: Project, assetStore: AssetStore, at timelineTime: CMTime) async throws -> [RenderedOverlay] {
+        let hasTimedMedia = project.tracks.overlays.contains(where: isTimedMediaOverlay)
         let cacheKey = overlayCacheKey(for: project)
-        if let cached = overlayCache[cacheKey] {
+        if !hasTimedMedia, let cached = overlayCache[cacheKey] {
             return cached
         }
 
@@ -865,18 +907,34 @@ actor StoryCompositor {
         rendered.reserveCapacity(project.tracks.overlays.count)
 
         for overlay in project.tracks.overlays {
-            guard let image = try await overlayImage(for: overlay, assetStore: assetStore) else {
+            let overlayStart = overlay.timeRange.start.time
+            let overlayEnd = overlayStart + overlay.timeRange.duration.time
+            guard timelineTime >= overlayStart, timelineTime < overlayEnd,
+                  let image = try await overlayImage(for: overlay, assetStore: assetStore, at: timelineTime) else {
                 continue
             }
             rendered.append(positionedOverlay(image: image, transform: transform(for: overlay), canvas: project.canvas))
         }
 
-        overlayCache = overlayCache.filter { $0.key.projectId != project.id || $0.key == cacheKey }
-        overlayCache[cacheKey] = rendered
+        if !hasTimedMedia {
+            overlayCache = overlayCache.filter { $0.key.projectId != project.id || $0.key == cacheKey }
+            overlayCache[cacheKey] = rendered
+        }
         return rendered
     }
 
-    private func overlayImage(for overlay: Overlay, assetStore: AssetStore) async throws -> CIImage? {
+    private func overlayImage(for overlay: Overlay, assetStore: AssetStore, at timelineTime: CMTime) async throws -> CIImage? {
+        if case .sticker(let sticker) = overlay,
+           let assetRef = sticker.assetRef,
+           isTimedMediaAsset(assetRef) {
+            return try await timedStickerImage(
+                sticker,
+                assetRef: assetRef,
+                assetStore: assetStore,
+                at: timelineTime
+            )
+        }
+
         let cacheKey = try overlayDiskCacheKey(for: overlay, assetStore: assetStore)
         if let cached = cachedOverlayImage(for: cacheKey) {
             CacheMetrics.shared.recordHit(overlayDiskCacheMetricsNamespace)
@@ -902,6 +960,44 @@ actor StoryCompositor {
             try? storeOverlayImage(image, for: cacheKey)
         }
         return image
+    }
+
+    private func isTimedMediaOverlay(_ overlay: Overlay) -> Bool {
+        guard case .sticker(let sticker) = overlay, let assetRef = sticker.assetRef else { return false }
+        return isTimedMediaAsset(assetRef)
+    }
+
+    private func isTimedMediaAsset(_ assetRef: AssetRef) -> Bool {
+        if assetRef.kind == .video { return true }
+        guard assetRef.kind == .image else { return false }
+        let ext = URL(fileURLWithPath: assetRef.relativePath).pathExtension.lowercased()
+        return ext == "gif" || ext == "webp"
+    }
+
+    private func timedStickerImage(
+        _ overlay: StickerOverlay,
+        assetRef: AssetRef,
+        assetStore: AssetStore,
+        at timelineTime: CMTime
+    ) async throws -> CIImage? {
+        let url = assetStore.absoluteURL(for: assetRef.relativePath)
+        let localSeconds = max(timelineTime.seconds - overlay.timeRange.start.time.seconds, 0)
+
+        switch assetRef.kind {
+        case .video:
+            let sourceDuration = max(assetRef.durationSeconds, 0.01)
+            let loopedTime = storyLoopedMediaTime(elapsed: localSeconds, duration: sourceDuration)
+            return try await frameSource(for: assetRef, assetStore: assetStore).image(
+                at: CMTime(seconds: loopedTime, preferredTimescale: projectTimeScale)
+            )
+        case .image:
+            guard let frame = StoryAnimatedImage.frame(at: localSeconds, from: url) else {
+                return CIImage(contentsOf: url, options: [.applyOrientationProperty: true])
+            }
+            return CIImage(cgImage: frame)
+        case .audio:
+            return nil
+        }
     }
 
     private struct OverlayDiskCacheInput: Codable {
