@@ -4,6 +4,8 @@ import SwiftUI
 /// Mirrors web /microdramas: header, hero, trending/new rows, genre rows, and 9:16 cards.
 struct MicrodramasBrowseView: View {
 
+    let isBrowseActive: Bool
+
     @EnvironmentObject private var platformConfig: PlatformConfigManager
     @State private var selectedSectionID: String? = nil
     @State private var curationSections = [PageSection]()
@@ -12,6 +14,10 @@ struct MicrodramasBrowseView: View {
     @State private var curationListings = [AssembledListing]()
     @State private var continueItems = [ProgressItem]()
     @State private var isLoading = true
+    @State private var loadGeneration = 0
+    init(isBrowseActive: Bool = true) {
+        self.isBrowseActive = isBrowseActive
+    }
     private var pageConfig: PlatformBrowseItem { platformConfig.browseItem(id: "microdramas") }
 
     private var hero: MicrodramaListShow? { trending.first ?? newRels.first }
@@ -111,11 +117,16 @@ struct MicrodramasBrowseView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            guard isBrowseActive else { return }
             guard pageConfig.enabled else {
                 isLoading = false
                 return
             }
             await load()
+        }
+        .onChange(of: isBrowseActive) { _, isActive in
+            guard isActive, isLoading else { return }
+            Task { await load() }
         }
     }
 
@@ -188,6 +199,8 @@ struct MicrodramasBrowseView: View {
 
     @MainActor
     private func load() async {
+        loadGeneration &+= 1
+        let generation = loadGeneration
         if let cachedPage = CurationManager.shared.cachedPage(key: "microdramas", section: selectedSectionID, allowExpired: true), cachedPage.hasCurationSurface {
             applyCurationPage(cachedPage)
             isLoading = false
@@ -197,7 +210,9 @@ struct MicrodramasBrowseView: View {
 
         async let c = APIClient.shared.fetchContinueWatching()
 
-        if let page = try? await CurationManager.shared.fetchPage(key: "microdramas", section: selectedSectionID), page.hasCurationSurface {
+        let refreshedPage = try? await CurationManager.shared.fetchPage(key: "microdramas", section: selectedSectionID)
+        guard generation == loadGeneration else { return }
+        if let page = refreshedPage, page.hasCurationSurface {
             applyCurationPage(page)
         } else if trending.isEmpty && newRels.isEmpty {
             curationSections = []
@@ -206,11 +221,14 @@ struct MicrodramasBrowseView: View {
             async let t = APIClient.shared.fetchMicrodramas(section: "trending", limit: 20)
             async let n = APIClient.shared.fetchMicrodramas(section: "new", limit: 20)
             let (tr, nr) = (try? await t, try? await n)
+            guard generation == loadGeneration else { return }
             trending = tr ?? []
             newRels = nr ?? []
         }
 
-        continueItems = (try? await c)?.items ?? continueItems
+        let refreshedContinueItems = (try? await c)?.items
+        guard generation == loadGeneration else { return }
+        continueItems = refreshedContinueItems ?? continueItems
         isLoading = false
     }
 

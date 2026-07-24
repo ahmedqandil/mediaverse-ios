@@ -4,6 +4,8 @@ import SwiftUI
 /// Mirrors the mobile web /channels route: search, inactive filtering, full channel cards.
 struct ChannelsBrowseView: View {
 
+    let isBrowseActive: Bool
+
     @EnvironmentObject private var platformConfig: PlatformConfigManager
     @State private var selectedSectionID: String? = nil
     @State private var curationSections = [PageSection]()
@@ -11,6 +13,10 @@ struct ChannelsBrowseView: View {
     @State private var channels = [ChannelBrowseCard]()
     @State private var query = ""
     @State private var isLoading = true
+    @State private var loadGeneration = 0
+    init(isBrowseActive: Bool = true) {
+        self.isBrowseActive = isBrowseActive
+    }
     private var pageConfig: PlatformBrowseItem { platformConfig.browseItem(id: "channels") }
 
     private var filteredChannels: [ChannelBrowseCard] {
@@ -36,11 +42,16 @@ struct ChannelsBrowseView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            guard isBrowseActive else { return }
             guard pageConfig.enabled else {
                 isLoading = false
                 return
             }
             await load()
+        }
+        .onChange(of: isBrowseActive) { _, isActive in
+            guard isActive, isLoading else { return }
+            Task { await load() }
         }
     }
 
@@ -176,6 +187,8 @@ struct ChannelsBrowseView: View {
 
     @MainActor
     private func load() async {
+        loadGeneration &+= 1
+        let generation = loadGeneration
         if let cachedPage = CurationManager.shared.cachedPage(key: "channels", section: selectedSectionID, allowExpired: true), cachedPage.hasCurationSurface {
             applyCurationPage(cachedPage)
             isLoading = false
@@ -185,8 +198,10 @@ struct ChannelsBrowseView: View {
 
         do {
             let page = try await CurationManager.shared.fetchPage(key: "channels", section: selectedSectionID)
+            guard generation == loadGeneration else { return }
             applyCurationPage(page)
         } catch {
+            guard generation == loadGeneration else { return }
             if channels.isEmpty {
                 channels = []
                 curationSections = []

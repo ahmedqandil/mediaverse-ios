@@ -4,6 +4,8 @@ import SwiftUI
 /// Mirrors /src/app/collections/page.tsx
 struct CollectionsView: View {
 
+    let isBrowseActive: Bool
+
     @EnvironmentObject private var auth: AuthManager
     @EnvironmentObject private var platformConfig: PlatformConfigManager
 
@@ -15,6 +17,10 @@ struct CollectionsView: View {
     @State private var deletingId: String?
     @State private var followingCollectionIds = Set<String>()
     @State private var togglingCollectionId: String?
+    @State private var accountGeneration = 0
+    init(isBrowseActive: Bool = true) {
+        self.isBrowseActive = isBrowseActive
+    }
     private var pageConfig: PlatformBrowseItem { platformConfig.browseItem(id: "collections") }
 
     private enum CollectionTab: String, CaseIterable, Identifiable {
@@ -78,9 +84,34 @@ struct CollectionsView: View {
             }
         }
         .task {
+            guard isBrowseActive else { return }
             guard pageConfig.enabled else { isLoading = false; return }
             guard auth.isAuthenticated else { isLoading = false; return }
             await load()
+        }
+        .onChange(of: isBrowseActive) { _, isActive in
+            guard isActive, isLoading else { return }
+            guard pageConfig.enabled, auth.isAuthenticated else {
+                isLoading = false
+                return
+            }
+            Task { await load() }
+        }
+        .onChange(of: auth.isAuthenticated) { _, isAuthenticated in
+            accountGeneration &+= 1
+            collections = []
+            publicCollections = []
+            followingCollectionIds.removeAll()
+            deletingId = nil
+            togglingCollectionId = nil
+            guard isAuthenticated else {
+                isLoading = false
+                showCreate = false
+                return
+            }
+            isLoading = true
+            guard isBrowseActive, pageConfig.enabled else { return }
+            Task { await load() }
         }
         .sheet(isPresented: $showCreate) {
             CreateCollectionSheet { newCol in
@@ -182,17 +213,22 @@ struct CollectionsView: View {
     }
 
     private func load() async {
+        let generation = accountGeneration
         isLoading = collections.isEmpty && publicCollections.isEmpty
         async let mineTask = APIClient.shared.fetchCollections()
         async let publicTask = APIClient.shared.fetchPublicCollections()
-        collections = (try? await mineTask) ?? []
-        publicCollections = (try? await publicTask) ?? []
+        let refreshedCollections = (try? await mineTask) ?? []
+        let refreshedPublicCollections = (try? await publicTask) ?? []
+        guard generation == accountGeneration, auth.isAuthenticated else { return }
+        collections = refreshedCollections
+        publicCollections = refreshedPublicCollections
         followingCollectionIds = Set(publicCollections.filter { $0.isFollowing }.map(\.id))
         isLoading = false
     }
 
     private func toggleFollow(_ col: Collection) async {
         guard togglingCollectionId == nil else { return }
+        let generation = accountGeneration
         togglingCollectionId = col.id
         let wasFollowing = followingCollectionIds.contains(col.id)
         if wasFollowing {
@@ -202,32 +238,36 @@ struct CollectionsView: View {
         }
         do {
             let result = try await APIClient.shared.toggleCollectionFollow(id: col.id)
+            guard generation == accountGeneration, auth.isAuthenticated else { return }
             if result.following {
                 followingCollectionIds.insert(col.id)
             } else {
                 followingCollectionIds.remove(col.id)
             }
         } catch {
+            guard generation == accountGeneration, auth.isAuthenticated else { return }
             if wasFollowing {
                 followingCollectionIds.insert(col.id)
             } else {
                 followingCollectionIds.remove(col.id)
             }
         }
-        togglingCollectionId = nil
+        if generation == accountGeneration { togglingCollectionId = nil }
     }
 
     private func delete(_ col: Collection) async {
         guard deletingId == nil else { return }
+        let generation = accountGeneration
         deletingId = col.id
         let old = collections
         collections.removeAll { $0.id == col.id }
         do {
             try await APIClient.shared.deleteCollection(id: col.id)
         } catch {
+            guard generation == accountGeneration, auth.isAuthenticated else { return }
             collections = old
         }
-        deletingId = nil
+        if generation == accountGeneration { deletingId = nil }
     }
 }
 

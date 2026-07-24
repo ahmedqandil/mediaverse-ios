@@ -5,11 +5,17 @@ import SwiftUI
 /// turning the whole Browse area into a horizontally paged carousel.
 struct BrowseView: View {
 
+    let isRootActive: Bool
+
     @EnvironmentObject private var platformConfig: PlatformConfigManager
     @State private var selectedSection: BrowseSection = .shows
     @State private var searchPresented = false
     @State private var scrollResetToken = 0
     @State private var curatedBrowseItems: [PlatformBrowseItem]?
+
+    init(isRootActive: Bool = true) {
+        self.isRootActive = isRootActive
+    }
 
     private var platformBrowseItems: [PlatformBrowseItem] {
         let configured = platformConfig.browseSections.filter { BrowseSection(rawValue: $0.id) != nil }
@@ -72,10 +78,16 @@ struct BrowseView: View {
             scrollResetToken += 1
         }
         .onChange(of: platformConfig.browseSections) { _, _ in
+            guard isRootActive else { return }
             Task { await refreshCuratedBrowseItems() }
         }
         .task {
+            guard isRootActive else { return }
             await refreshCuratedBrowseItems()
+        }
+        .onChange(of: isRootActive) { _, isActive in
+            guard isActive else { return }
+            Task { await refreshCuratedBrowseItems() }
         }
         .onAppear {
             ensureSelectedSectionIsVisible()
@@ -146,19 +158,19 @@ struct BrowseView: View {
     private var selectedContent: some View {
         switch selectedSection {
         case .shows:
-            ShowsBrowseView()
+            ShowsBrowseView(isBrowseActive: isRootActive)
         case .videos:
-            VideosBrowseView()
+            VideosBrowseView(isBrowseActive: isRootActive)
         case .movies:
-            MoviesBrowseView()
+            MoviesBrowseView(isBrowseActive: isRootActive)
         case .microdramas:
-            MicrodramasBrowseView()
+            MicrodramasBrowseView(isBrowseActive: isRootActive)
         case .channels:
-            ChannelsBrowseView()
+            ChannelsBrowseView(isBrowseActive: isRootActive)
         case .following:
-            FollowingView()
+            FollowingView(isBrowseActive: isRootActive)
         case .collections:
-            CollectionsView()
+            CollectionsView(isBrowseActive: isRootActive)
         }
     }
 

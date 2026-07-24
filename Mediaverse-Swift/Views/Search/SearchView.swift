@@ -75,6 +75,9 @@ struct SearchView: View {
     @State private var selectedSuggestionID: String?
     @State private var debounceTask: Task<Void, Never>?
     @State private var networkMonitor: NWPathMonitor?
+    @State private var suggestGeneration = 0
+    @State private var trendingGeneration = 0
+    @State private var searchGeneration = 0
     @AppStorage("searchHistory") private var searchHistoryData = "[]"
     @FocusState private var focused: Bool
 
@@ -136,6 +139,9 @@ struct SearchView: View {
         }
         .onDisappear {
             debounceTask?.cancel()
+            suggestGeneration &+= 1
+            trendingGeneration &+= 1
+            searchGeneration &+= 1
             stopNetworkMonitor()
         }
     }
@@ -725,6 +731,8 @@ struct SearchView: View {
 
     private func handleQueryChange(oldValue: String, newValue: String) {
         debounceTask?.cancel()
+        suggestGeneration &+= 1
+        searchGeneration &+= 1
         showResults = false
         searchError = nil
         let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -745,11 +753,16 @@ struct SearchView: View {
     }
 
     private func runSuggest(q: String) async {
+        suggestGeneration &+= 1
+        let generation = suggestGeneration
         do {
-            suggests = try await APIClient.shared.searchSuggest(q: q)
+            let refreshedSuggestions = try await APIClient.shared.searchSuggest(q: q)
+            guard generation == suggestGeneration, trimmedQuery == q else { return }
+            suggests = refreshedSuggestions
             selectedSuggestionID = visibleSuggestionItems.first?.id
             isOffline = false
         } catch {
+            guard generation == suggestGeneration, trimmedQuery == q else { return }
             suggests = []
             selectedSuggestionID = nil
             if (error as? URLError)?.code == .notConnectedToInternet { isOffline = true }
@@ -759,13 +772,18 @@ struct SearchView: View {
 
     private func loadTrendingIfNeeded() async {
         guard trending.isEmpty else { return }
+        trendingGeneration &+= 1
+        let generation = trendingGeneration
         do {
-            trending = try await APIClient.shared.searchTrendingSuggest()
+            let refreshedTrending = try await APIClient.shared.searchTrendingSuggest()
+            guard generation == trendingGeneration else { return }
+            trending = refreshedTrending
             if trimmedQuery.isEmpty, selectedSuggestionID == nil {
                 selectedSuggestionID = visibleSuggestionItems.first?.id
             }
             isOffline = false
         } catch {
+            guard generation == trendingGeneration else { return }
             trending = []
             selectedSuggestionID = nil
             if (error as? URLError)?.code == .notConnectedToInternet { isOffline = true }
@@ -823,17 +841,27 @@ struct SearchView: View {
     private func runFullSearch() async {
         let trimmed = trimmedQuery
         guard trimmed.count >= 2 else { return }
+        searchGeneration &+= 1
+        let generation = searchGeneration
+        let requestedFilter = activeFilter
         isLoadingResults = true
         showResults = true
         suggests = []
         committedQuery = trimmed
         searchError = nil
         do {
-            results = try await APIClient.shared.search(q: trimmed, type: activeFilter.rawValue)
+            let refreshedResults = try await APIClient.shared.search(q: trimmed, type: requestedFilter.rawValue)
+            guard generation == searchGeneration,
+                  trimmedQuery == trimmed,
+                  activeFilter == requestedFilter else { return }
+            results = refreshedResults
             isOffline = false
             UIAccessibility.post(notification: .announcement, argument: "\(results.totalCount) results for \(trimmed)")
             addSearchHistory(queryHistoryItem(trimmed))
         } catch {
+            guard generation == searchGeneration,
+                  trimmedQuery == trimmed,
+                  activeFilter == requestedFilter else { return }
             results = SearchResults(channels: nil, shows: nil, episodes: nil, videos: nil)
             searchError = "Something went wrong"
             if (error as? URLError)?.code == .notConnectedToInternet { isOffline = true }

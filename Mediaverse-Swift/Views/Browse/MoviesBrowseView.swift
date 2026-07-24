@@ -4,6 +4,8 @@ import SwiftUI
 /// Mirrors the mobile web /movies route: Watch eyebrow, genre pills, and dense poster grid.
 struct MoviesBrowseView: View {
 
+    let isBrowseActive: Bool
+
     private let genres = ["All", "Drama", "Action", "Comedy", "Thriller",
                           "Romance", "Sci-Fi", "Horror", "Documentary", "Animation"]
 
@@ -15,6 +17,10 @@ struct MoviesBrowseView: View {
     @State private var curationListings = [AssembledListing]()
     @State private var continueItems = [ProgressItem]()
     @State private var isLoading = true
+    @State private var loadGeneration = 0
+    init(isBrowseActive: Bool = true) {
+        self.isBrowseActive = isBrowseActive
+    }
     private var pageConfig: PlatformBrowseItem { platformConfig.browseItem(id: "movies") }
     private var displayGenres: [String] {
         curationSections.isEmpty ? genres : curationSections.map(\.name)
@@ -84,11 +90,16 @@ struct MoviesBrowseView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            guard isBrowseActive else { return }
             guard pageConfig.enabled else {
                 isLoading = false
                 return
             }
             await load()
+        }
+        .onChange(of: isBrowseActive) { _, isActive in
+            guard isActive, isLoading else { return }
+            Task { await load() }
         }
     }
 
@@ -162,6 +173,8 @@ struct MoviesBrowseView: View {
 
     @MainActor
     private func load() async {
+        loadGeneration &+= 1
+        let generation = loadGeneration
         if let cachedPage = CurationManager.shared.cachedPage(key: "movies", section: selectedSectionID, allowExpired: true), cachedPage.hasCurationSurface {
             applyCurationPage(cachedPage)
             isLoading = false
@@ -173,9 +186,13 @@ struct MoviesBrowseView: View {
             async let pageTask = CurationManager.shared.fetchPage(key: "movies", section: selectedSectionID)
             async let continueTask = APIClient.shared.fetchContinueWatching()
             let page = try await pageTask
+            guard generation == loadGeneration else { return }
             applyCurationPage(page)
-            continueItems = ((try? await continueTask)?.items ?? [])
+            let refreshedContinueItems = (try? await continueTask)?.items ?? []
+            guard generation == loadGeneration else { return }
+            continueItems = refreshedContinueItems
         } catch {
+            guard generation == loadGeneration else { return }
             if movies.isEmpty && curationListings.isEmpty {
                 continueItems = []
                 curationSections = []

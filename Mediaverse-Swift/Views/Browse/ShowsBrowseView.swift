@@ -4,6 +4,8 @@ import SwiftUI
 /// Mirrors the mobile web /shows route: hero, search mode, New & Popular, and genre rows.
 struct ShowsBrowseView: View {
 
+    let isBrowseActive: Bool
+
     @EnvironmentObject private var platformConfig: PlatformConfigManager
     @State private var allShows = [ShowBrowseCard]()
     @State private var searchResults = [ShowBrowseCard]()
@@ -16,6 +18,12 @@ struct ShowsBrowseView: View {
     @State private var isLoading = true
     @State private var isSearchLoading = false
     @State private var continueItems = [ProgressItem]()
+    @State private var loadGeneration = 0
+    @State private var searchGeneration = 0
+
+    init(isBrowseActive: Bool = true) {
+        self.isBrowseActive = isBrowseActive
+    }
 
     private var showGenres: [String] {
         if !curationSections.isEmpty {
@@ -131,11 +139,16 @@ struct ShowsBrowseView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            guard isBrowseActive else { return }
             guard pageConfig.enabled else {
                 isLoading = false
                 return
             }
             await load()
+        }
+        .onChange(of: isBrowseActive) { _, isActive in
+            guard isActive, isLoading else { return }
+            Task { await load() }
         }
     }
 
@@ -155,6 +168,8 @@ struct ShowsBrowseView: View {
                     .foregroundStyle(C.text)
                     .onSubmit { Task { await submitSearch() } }
                     .onChange(of: query) { _, newValue in
+                        searchGeneration &+= 1
+                        isSearchLoading = false
                         if newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             isSearching = false
                             searchResults = []
@@ -290,6 +305,8 @@ struct ShowsBrowseView: View {
 
     @MainActor
     private func load() async {
+        loadGeneration &+= 1
+        let generation = loadGeneration
         if let cachedPage = CurationManager.shared.cachedPage(key: "shows", section: selectedSectionID, allowExpired: true), cachedPage.hasCurationSurface {
             applyCurationPage(cachedPage)
             isLoading = false
@@ -301,9 +318,13 @@ struct ShowsBrowseView: View {
             async let pageTask = CurationManager.shared.fetchPage(key: "shows", section: selectedSectionID)
             async let continueTask = APIClient.shared.fetchContinueWatching()
             let page = try await pageTask
+            guard generation == loadGeneration else { return }
             applyCurationPage(page)
-            continueItems = ((try? await continueTask)?.items ?? [])
+            let refreshedContinueItems = (try? await continueTask)?.items ?? []
+            guard generation == loadGeneration else { return }
+            continueItems = refreshedContinueItems
         } catch {
+            guard generation == loadGeneration else { return }
             if allShows.isEmpty && curationListings.isEmpty {
                 continueItems = []
                 curationSections = []
@@ -347,11 +368,18 @@ struct ShowsBrowseView: View {
 
         isSearching = true
         isSearchLoading = true
+        searchGeneration &+= 1
+        let generation = searchGeneration
         do {
-            searchResults = try await APIClient.shared.fetchShowsBrowse(q: trimmed)
+            let refreshedResults = try await APIClient.shared.fetchShowsBrowse(q: trimmed)
+            guard generation == searchGeneration,
+                  query.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else { return }
+            searchResults = refreshedResults
         } catch {
+            guard generation == searchGeneration else { return }
             searchResults = []
         }
+        isSearchLoading = false
         isSearchLoading = false
     }
 }

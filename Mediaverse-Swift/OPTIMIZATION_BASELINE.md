@@ -58,9 +58,9 @@ Metrics are intentionally passive: they do not emit network traffic, persist use
 9. Upload memory and background behavior.
 10. Domain separation for models and networking.
 
-## Known Pre-existing Contract Issue
+## Resolved Contract Issue
 
-- A path-form short link such as `/watch/{id}?type=short` resolves correctly. If that same path also carries a generic `showId` query, the current parser resolves the generic show destination before inspecting the short path. This was discovered by the initial routing suite and is intentionally not changed as part of observability work; it requires a separate product-compatible navigation fix.
+- Path-form media links now take precedence over generic context query values. A short such as `/watch/{id}?type=short&showId={context}` opens the short and preserves its show context instead of incorrectly opening the show.
 
 ## Completed Optimization Batches
 
@@ -156,3 +156,78 @@ Metrics are intentionally passive: they do not emit network traffic, persist use
 - Every tab now owns a stable root navigation item for the full lifetime of the page-style tab container, preventing the Profile item from moving between wrapped navigation bars during a transition.
 - Preserved tab order, horizontal paging, navigation paths, custom bottom controls, screen UI, and deferred startup/network warmups.
 - Verified with 7 routing contract tests, navigation-container inspection, diff-integrity checks, and a complete unsigned dual-architecture iOS Simulator build.
+
+### Batch 11: deep-link destination precedence
+
+- Dedicated query destinations such as `shortId`, `videoId`, `episodeId`, and `microdramaId` retain highest routing priority.
+- Concrete URL paths now resolve before generic `showId`, `channelId`, playlist, or collection query-only fallbacks.
+- Path-form short links preserve optional show and channel context for the Shorts feed instead of discarding it.
+- Prevented video, short, and channel links from being redirected to unrelated contextual query destinations.
+- Preserved notification payload precedence, custom-scheme parity, route identities, navigation presentation, and all visible UI.
+- Added the previously missing regression contract and verified with 8 routing tests, diff-integrity checks, and a complete unsigned dual-architecture iOS Simulator build.
+
+### Corrective QA: Shorts first-activation loading
+
+- Restored the initial Shorts feed load after stable tab navigation roots made the Shorts view exist before its tab became active.
+- Root tab activation now starts the existing guarded load path even while the feed is empty; playback-only observers continue to run after cards exist.
+- Preserved stable navigation ownership, request prewarming, restored feed sessions, routed Shorts, pagination, playback, and visible UI.
+- Verified with 8 routing contract tests, activation-lifecycle inspection, diff-integrity checks, and a complete unsigned dual-architecture iOS Simulator build.
+
+### Batch 12: stable-root offscreen work control
+
+- Profile keeps its stable navigation root but defers the five-request account refresh until the tab is first selected.
+- Returning to an already loaded Profile refreshes time-sensitive billing and notification counts without rebuilding the screen.
+- Authentication and context ownership changes invalidate Profile state and trigger a full refresh on the next active presentation.
+- Explore defers its curation refresh while inactive while retaining the mounted subsection content, filters, scroll position, and navigation item.
+- Preserved page-style tab transitions, navigation-bar ownership, screen state, pull-to-refresh, UI, and all account business logic.
+- Verified with 8 routing contract tests, activation-state inspection, diff-integrity checks, and a complete unsigned dual-architecture iOS Simulator build.
+
+### Batch 13: Explore subsection activation gates
+
+- Shows, Videos, Movies, Microdramas, Channels, Following, and Collections now defer their initial data request until Explore is active.
+- Subsection views remain mounted, so the selected section, filters, search text, scroll state, and loaded results survive tab switches.
+- A section selected while Explore is visible loads through its existing task path; an already loaded section does not refetch merely because the user returns to Explore.
+- Offscreen Videos also cancels pending preview selection work and pauses preview playback without discarding its feed.
+- Preserved pull-to-refresh, pagination, authentication gates, curation behavior, navigation identity, UI, and stable navigation-bar ownership.
+- Verified with 8 routing contract tests, subsection activation inspection, diff-integrity checks, and a complete unsigned dual-architecture iOS Simulator build.
+
+### Batch 14: Explore account-state isolation
+
+- Following and Collections now clear account-owned results, pending mutation state, and modal presentation state immediately on sign-out.
+- Both screens use authentication generations so an older account's late response cannot repopulate state after sign-out or account replacement.
+- Signing in while a screen is active reloads immediately; signing in while it is offscreen marks it for loading on the next Explore activation.
+- Preserved public collection fetching within the authenticated Collections experience, follow/delete/create behavior, pull-to-refresh, tabs, and UI.
+- Verified with 8 routing contract tests, auth-transition ownership inspection, diff-integrity checks, and a complete unsigned dual-architecture iOS Simulator build.
+
+### Batch 15: Explore latest-selection ownership
+
+- Shows, Movies, Microdramas, and Channels now assign generations to section and refresh loads so only the latest request may publish screen state.
+- Rapid genre or curated-section changes can no longer be overwritten by a slower response for the previous selection.
+- Show search uses a separate generation and query check; editing or clearing the query invalidates the pending search and ends its loading state.
+- Continue-watching results are committed under the same generation as their paired curation response.
+- Preserved cached-first rendering, fallback content, section selection, search UX, pull-to-refresh, and UI.
+- Verified with 8 routing contract tests, overlapping-request inspection, diff-integrity checks, and a complete unsigned dual-architecture iOS Simulator build.
+
+### Batch 16: Videos and Profile request ownership
+
+- Videos curation refreshes and cursor pagination now publish only while their request generation still owns the screen.
+- Pagination binds to its starting cursor, preventing a late page from appending after a newer refresh or section change.
+- Profile account, billing, and notification-count requests use independent generations so faster focused refreshes cannot be overwritten by an older full refresh.
+- Authentication and active-context transitions invalidate every Profile request boundary before clearing or reloading account state.
+- Preserved video fallbacks, previews, pagination, pull-to-refresh, profile billing/count UI, and all visible behavior.
+- Verified with 8 routing contract tests, request-ownership inspection, diff-integrity checks, and a complete unsigned dual-architecture iOS Simulator build.
+
+### Batch 17: Search latest-intent ownership
+
+- Suggestions, trending content, and full results now have independent request generations.
+- A slower response for older text or a previous filter can no longer replace results for the user's current query and filter.
+- Leaving Search invalidates pending publications while retaining the existing cancellation, history, routing, debounce timing, and offline behavior.
+- Preserved search layout, keyboard selection, filters, accessibility announcements, history sync, and navigation.
+- Verified with 8 routing contract tests, rapid-query/filter invariant inspection, diff-integrity checks, and a complete unsigned dual-architecture iOS Simulator build.
+
+### Batch 18: Collections mutation account isolation
+
+- Follow and delete mutations capture the authenticated account generation that initiated them.
+- A mutation completing after sign-out or account replacement can no longer restore or alter collection state owned by the next session.
+- Preserved optimistic follow/delete feedback, rollback-on-failure behavior, creation, tabs, public communities, and UI.
+- Verified with 8 routing contract tests, auth-transition mutation inspection, diff-integrity checks, and a complete unsigned dual-architecture iOS Simulator build.

@@ -16,6 +16,25 @@ final class AppRouteContractTests: XCTestCase {
             AppRoute.route(link: "westreem://open?shortId=short-1&showId=show-2&channelId=channel-3"),
             .short("short-1", showId: "show-2", channelId: "channel-3")
         )
+        XCTAssertEqual(
+            AppRoute.route(link: "https://westreem.com/watch/short-1?type=short&showId=show-2&channelId=channel-3"),
+            .short("short-1", showId: "show-2", channelId: "channel-3")
+        )
+    }
+
+    func testConcretePathBeatsGenericContextQuery() {
+        XCTAssertEqual(
+            AppRoute.route(link: "https://westreem.com/watch/short-9?type=short&showId=show-context"),
+            .short("short-9", showId: "show-context", channelId: nil)
+        )
+        XCTAssertEqual(
+            AppRoute.route(link: "https://westreem.com/watch/video-9?showId=show-context"),
+            .video("video-9")
+        )
+        XCTAssertEqual(
+            AppRoute.route(link: "https://westreem.com/channel/path-channel?channelId=context-channel"),
+            .channel("path-channel")
+        )
     }
 
     func testEpisodeAndMicrodramaPathsResolve() {

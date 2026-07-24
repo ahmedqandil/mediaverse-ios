@@ -284,7 +284,7 @@ struct MainTabView: View {
             .tag(AppTab.shorts)
 
             NavigationStack(path: $explorePath) {
-                BrowseView()
+                BrowseView(isRootActive: selectedTab == .explore)
                     .navigationDestination(for: AppRoute.self) { route in
                         routeDestination(route)
                     }
@@ -294,7 +294,7 @@ struct MainTabView: View {
             .tag(AppTab.explore)
 
             NavigationStack(path: $profilePath) {
-                ProfileView()
+                ProfileView(isRootActive: selectedTab == .profile)
                     .navigationDestination(for: AppRoute.self) { route in
                         routeDestination(route)
                     }

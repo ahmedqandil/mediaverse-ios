@@ -4,6 +4,8 @@ import SwiftUI
 /// Mirrors /src/app/following/page.tsx
 struct FollowingView: View {
 
+    let isBrowseActive: Bool
+
     @EnvironmentObject private var auth: AuthManager
     @EnvironmentObject private var platformConfig: PlatformConfigManager
 
@@ -16,6 +18,10 @@ struct FollowingView: View {
     @State private var selectedTab: Tab = .videos
     @State private var items     = [FollowingFeedItem]()
     @State private var isLoading = true
+    @State private var accountGeneration = 0
+    init(isBrowseActive: Bool = true) {
+        self.isBrowseActive = isBrowseActive
+    }
     private var pageConfig: PlatformBrowseItem { platformConfig.browseItem(id: "following") }
 
     private var videos:   [FollowingFeedItem] { items.filter { $0._kind != "episode" && $0.type != "short" } }
@@ -53,9 +59,29 @@ struct FollowingView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            guard isBrowseActive else { return }
             guard pageConfig.enabled else { isLoading = false; return }
             guard auth.isAuthenticated else { isLoading = false; return }
             await load()
+        }
+        .onChange(of: isBrowseActive) { _, isActive in
+            guard isActive, isLoading else { return }
+            guard pageConfig.enabled, auth.isAuthenticated else {
+                isLoading = false
+                return
+            }
+            Task { await load() }
+        }
+        .onChange(of: auth.isAuthenticated) { _, isAuthenticated in
+            accountGeneration &+= 1
+            items = []
+            guard isAuthenticated else {
+                isLoading = false
+                return
+            }
+            isLoading = true
+            guard isBrowseActive, pageConfig.enabled else { return }
+            Task { await load() }
         }
     }
 
@@ -180,8 +206,11 @@ struct FollowingView: View {
     }
 
     private func load() async {
+        let generation = accountGeneration
         isLoading = items.isEmpty
-        items = (try? await APIClient.shared.fetchFollowingFeed()) ?? []
+        let refreshedItems = (try? await APIClient.shared.fetchFollowingFeed()) ?? []
+        guard generation == accountGeneration, auth.isAuthenticated else { return }
+        items = refreshedItems
         isLoading = false
     }
 }

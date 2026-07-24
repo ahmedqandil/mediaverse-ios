@@ -2,6 +2,8 @@ import SwiftUI
 import AVKit
 
 struct VideosBrowseView: View {
+    let isBrowseActive: Bool
+
     @AppStorage("playerMuted") private var playerMuted = false
     @EnvironmentObject private var miniPlayer: MiniPlayerManager
 
@@ -19,7 +21,12 @@ struct VideosBrowseView: View {
     @State private var previewIdleTask: Task<Void, Never>?
     @State private var didStartPreviewScroll = false
     @State private var isPreservingPreviewHandoff = false
+    @State private var loadGeneration = 0
     @StateObject private var previewPlayerManager = FeedPreviewPlayerManager()
+
+    init(isBrowseActive: Bool = true) {
+        self.isBrowseActive = isBrowseActive
+    }
 
     private var videoIdsInOrder: [String] {
         videos.map(\.id)
@@ -77,7 +84,20 @@ struct VideosBrowseView: View {
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await load(reset: true) }
+        .task {
+            guard isBrowseActive else { return }
+            await load(reset: true)
+        }
+        .onChange(of: isBrowseActive) { _, isActive in
+            if isActive, isLoading, videos.isEmpty {
+                Task { await load(reset: true) }
+            } else if !isActive {
+                previewIdleTask?.cancel()
+                previewIdleTask = nil
+                activePreviewVideoId = nil
+                previewPlayerManager.pause()
+            }
+        }
         .onDisappear {
             previewIdleTask?.cancel()
             previewIdleTask = nil
@@ -358,6 +378,9 @@ struct VideosBrowseView: View {
 
     @MainActor
     private func load(reset: Bool) async {
+        loadGeneration &+= 1
+        let generation = loadGeneration
+        let requestedCursor = reset ? nil : cursor
         if reset {
             loadError = nil
             cursor = nil
@@ -381,30 +404,44 @@ struct VideosBrowseView: View {
         }
 
         do {
-            if reset, let page = try? await CurationManager.shared.fetchPage(key: "videos", section: selectedSectionID), page.hasCurationSurface {
+            let refreshedPage = reset ? try? await CurationManager.shared.fetchPage(key: "videos", section: selectedSectionID) : nil
+            guard generation == loadGeneration else { return }
+            if let page = refreshedPage, page.hasCurationSurface {
                 applyCuratedVideoPage(page)
-            } else if reset, let curationVideos = try? await fetchCuratedInitialVideos(), !curationVideos.isEmpty {
-                curationListings = []
-                videos = uniqueByID(curationVideos)
-                cursor = curationVideos.last?.id
-            } else {
-                let response = try await APIClient.shared.fetchFeed(cursor: reset ? nil : cursor)
-                let filtered = response.videos.filter(isRegularVideo)
-                if reset {
+            } else if reset {
+                let curationVideos = try? await fetchCuratedInitialVideos()
+                guard generation == loadGeneration else { return }
+                if let curationVideos, !curationVideos.isEmpty {
+                    curationListings = []
+                    videos = uniqueByID(curationVideos)
+                    cursor = curationVideos.last?.id
+                } else {
+                    let response = try await APIClient.shared.fetchFeed(cursor: nil)
+                    guard generation == loadGeneration else { return }
+                    let filtered = response.videos.filter(isRegularVideo)
                     curationSections = []
                     selectedSectionID = nil
                     curationListings = []
+                    videos = uniqueByID(filtered)
+                    cursor = response.nextCursor
                 }
-                videos = reset ? uniqueByID(filtered) : uniqueByID(videos + filtered)
+            } else {
+                let response = try await APIClient.shared.fetchFeed(cursor: requestedCursor)
+                guard generation == loadGeneration else { return }
+                let filtered = response.videos.filter(isRegularVideo)
+                videos = uniqueByID(videos + filtered)
                 cursor = response.nextCursor
             }
             previewPlayerManager.warm(videos: videos, currentID: activePreviewVideoId)
         } catch {
+            guard generation == loadGeneration else { return }
             if videos.isEmpty && curationListings.isEmpty {
                 loadError = "Unable to load videos."
             }
         }
-        isLoading = false
+        if generation == loadGeneration {
+            isLoading = false
+        }
     }
 
     @MainActor

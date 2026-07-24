@@ -5,6 +5,8 @@ import UIKit
 /// User profile — avatar, name, stats, settings rows, context switcher, sign out.
 struct ProfileView: View {
 
+    let isRootActive: Bool
+
     @EnvironmentObject private var auth: AuthManager
 
     @State private var profile: FullProfile?
@@ -23,6 +25,14 @@ struct ProfileView: View {
     @State private var rentals = [UserRental]()
     @State private var cancellingSubscriptionId: String?
     @State private var notificationCounts = [String: Int]()
+    @State private var hasLoadedProfile = false
+    @State private var profileLoadGeneration = 0
+    @State private var billingLoadGeneration = 0
+    @State private var notificationLoadGeneration = 0
+
+    init(isRootActive: Bool = true) {
+        self.isRootActive = isRootActive
+    }
 
     var body: some View {
         ZStack {
@@ -95,22 +105,38 @@ struct ProfileView: View {
             PairedDevicesView()
         }
         .task {
-            guard auth.isAuthenticated else { isLoading = false; return }
-            await loadAll()
+            guard isRootActive else { return }
+            await activateProfile()
         }
         .onAppear {
             // Refresh billing whenever the tab reappears (e.g. returning from watching)
             // so rental status/countdown reflects a just-started playback. .task only
             // fires once for the tab's lifetime, so it can't catch this on its own.
-            guard auth.isAuthenticated, !isLoading else { return }
+            guard isRootActive, auth.isAuthenticated, hasLoadedProfile, !isLoading else { return }
             Task { await loadBilling() }
+        }
+        .onChange(of: isRootActive) { _, isActive in
+            guard isActive else { return }
+            Task { await activateProfile() }
+        }
+        .onChange(of: auth.isAuthenticated) { _, isAuthenticated in
+            invalidateProfileLoads()
+            hasLoadedProfile = false
+            guard isRootActive, isAuthenticated else {
+                if !isAuthenticated { isLoading = false }
+                return
+            }
+            Task { await loadAll() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .appContextDidChange)) { _ in
             guard auth.isAuthenticated else { return }
+            invalidateProfileLoads()
+            hasLoadedProfile = false
+            guard isRootActive else { return }
             Task { await loadAll() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .notificationCountsDidChange)) { _ in
-            guard auth.isAuthenticated else { return }
+            guard isRootActive, auth.isAuthenticated else { return }
             Task { await loadNotificationCounts() }
         }
     }
@@ -817,7 +843,27 @@ struct ProfileView: View {
 
     // MARK: - Load
 
+    private func activateProfile() async {
+        guard auth.isAuthenticated else {
+            isLoading = false
+            return
+        }
+        if hasLoadedProfile {
+            async let billing: Void = loadBilling()
+            async let counts: Void = loadNotificationCounts()
+            _ = await (billing, counts)
+        } else {
+            await loadAll()
+        }
+    }
+
     private func loadAll() async {
+        profileLoadGeneration &+= 1
+        billingLoadGeneration &+= 1
+        notificationLoadGeneration &+= 1
+        let profileGeneration = profileLoadGeneration
+        let billingGeneration = billingLoadGeneration
+        let notificationGeneration = notificationLoadGeneration
         isLoading = true
         async let profTask   = APIClient.shared.fetchProfile()
         async let ctxTask    = APIClient.shared.fetchContexts()
@@ -833,27 +879,48 @@ struct ProfileView: View {
             try? await notificationCountsTask
         )
 
+        guard profileGeneration == profileLoadGeneration, auth.isAuthenticated else { return }
         if let p = profResult { profile = p.profile }
         if let c = ctxResult {
             contexts   = c.contexts
             activeCtx  = SessionStorage.activeContext ?? c.active
             contextUser = c.user
         }
-        subscriptions = subscriptionsResult?.subscriptions ?? []
-        rentals = rentalsResult?.rentals ?? []
-        notificationCounts = notificationCountsResult ?? [:]
+        if billingGeneration == billingLoadGeneration {
+            subscriptions = subscriptionsResult?.subscriptions ?? []
+            rentals = rentalsResult?.rentals ?? []
+        }
+        if notificationGeneration == notificationLoadGeneration {
+            notificationCounts = notificationCountsResult ?? [:]
+        }
+        hasLoadedProfile = true
         isLoading = false
     }
 
     private func loadBilling() async {
+        billingLoadGeneration &+= 1
+        let generation = billingLoadGeneration
         async let subscriptionsTask = APIClient.shared.fetchUserSubscriptions()
         async let rentalsTask = APIClient.shared.fetchUserRentals()
-        subscriptions = (try? await subscriptionsTask)?.subscriptions ?? subscriptions
-        rentals = (try? await rentalsTask)?.rentals ?? rentals
+        let refreshedSubscriptions = (try? await subscriptionsTask)?.subscriptions
+        let refreshedRentals = (try? await rentalsTask)?.rentals
+        guard generation == billingLoadGeneration, auth.isAuthenticated else { return }
+        subscriptions = refreshedSubscriptions ?? subscriptions
+        rentals = refreshedRentals ?? rentals
     }
 
     private func loadNotificationCounts() async {
-        notificationCounts = (try? await APIClient.shared.fetchNotificationCounts()) ?? notificationCounts
+        notificationLoadGeneration &+= 1
+        let generation = notificationLoadGeneration
+        let refreshedCounts = try? await APIClient.shared.fetchNotificationCounts()
+        guard generation == notificationLoadGeneration, auth.isAuthenticated else { return }
+        notificationCounts = refreshedCounts ?? notificationCounts
+    }
+
+    private func invalidateProfileLoads() {
+        profileLoadGeneration &+= 1
+        billingLoadGeneration &+= 1
+        notificationLoadGeneration &+= 1
     }
 
     private func ctxIcon(_ type: String) -> String {

@@ -723,6 +723,11 @@ struct ShortsView: View {
             ensureInitialShortSelection()
             configurePlayback(ensureAutoplay: true)
         }
+        .onChange(of: isRootActive) { _, isActive in
+            guard isActive else { return }
+            loadShortsAdConfig()
+            Task { await loadInitial() }
+        }
         .onDisappear {
             if showsDismissControls {
                 postRoutedShortsVisibility(false)

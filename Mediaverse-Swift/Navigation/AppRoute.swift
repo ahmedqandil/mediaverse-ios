@@ -103,6 +103,7 @@ extension AppRoute {
         let queryShowId = queryValue(["showId", "show_id"], in: queryItems)
         let queryChannelId = queryValue(["channelId", "channel_id"], in: queryItems)
         let queryEpisodeNumber = queryValue(["episodeNumber", "episode_number", "ep"], in: queryItems).flatMap(Int.init)
+        let looksLikeShort = notificationType?.lowercased().contains("short") == true || queryType?.lowercased() == "short"
 
         if let id = queryValue(["shortId", "short_id"], in: queryItems) {
             return .short(id, showId: queryShowId, channelId: queryChannelId)
@@ -116,29 +117,17 @@ extension AppRoute {
         if let id = queryValue(["microdramaId", "microdrama_id"], in: queryItems) {
             return queryEpisodeNumber.map { .microdramaWatchEp(id, $0) } ?? .microdramaShow(id)
         }
-        if let id = queryValue(["showId", "show_id"], in: queryItems) {
-            let type = (queryType ?? notificationType)?.lowercased()
-            return type?.contains("micro") == true ? .microdramaShow(id) : .show(id)
-        }
-        if let id = queryValue(["channelHandle", "channel_handle", "channelId", "channel_id"], in: queryItems) {
-            return .channel(id)
-        }
-        if let id = queryValue(["playlistId", "playlist_id"], in: queryItems) {
-            return .playlist(id)
-        }
-        if let id = queryValue(["collectionId", "collection_id"], in: queryItems) {
-            return .collection(id)
-        }
 
-        guard !parts.isEmpty else { return nil }
-
-        let looksLikeShort = notificationType?.lowercased().contains("short") == true || queryType?.lowercased() == "short"
         if parts.count >= 3, parts[0] == "watch", parts[1] == "episode" { return .episode(parts[2]) }
-        if parts.count >= 2, parts[0] == "watch" { return looksLikeShort ? .short(parts[1], showId: nil, channelId: nil) : .video(parts[1]) }
+        if parts.count >= 2, parts[0] == "watch" {
+            return looksLikeShort
+                ? .short(parts[1], showId: queryShowId, channelId: queryChannelId)
+                : .video(parts[1])
+        }
         if parts.count >= 2, parts[0] == "videos" { return .video(parts[1]) }
         if parts.count >= 2, parts[0] == "video" { return .video(parts[1]) }
-        if parts.count >= 2, parts[0] == "shorts" { return .short(parts[1], showId: nil, channelId: nil) }
-        if parts.count >= 2, parts[0] == "short" { return .short(parts[1], showId: nil, channelId: nil) }
+        if parts.count >= 2, parts[0] == "shorts" { return .short(parts[1], showId: queryShowId, channelId: queryChannelId) }
+        if parts.count >= 2, parts[0] == "short" { return .short(parts[1], showId: queryShowId, channelId: queryChannelId) }
         if parts.count >= 2, parts[0] == "handoff" { return .handoff(parts[1]) }
         if parts.count >= 2, parts[0] == "shows" { return .show(parts[1]) }
         if parts.count >= 2, parts[0] == "show" { return .show(parts[1]) }
@@ -156,6 +145,21 @@ extension AppRoute {
         }
         if parts.count >= 2, parts[0] == "microdramas" { return .microdramaShow(parts[1]) }
         if parts.count >= 2, parts[0] == "microdrama" { return .microdramaShow(parts[1]) }
+
+        if let id = queryValue(["showId", "show_id"], in: queryItems) {
+            let type = (queryType ?? notificationType)?.lowercased()
+            return type?.contains("micro") == true ? .microdramaShow(id) : .show(id)
+        }
+        if let id = queryValue(["channelHandle", "channel_handle", "channelId", "channel_id"], in: queryItems) {
+            return .channel(id)
+        }
+        if let id = queryValue(["playlistId", "playlist_id"], in: queryItems) {
+            return .playlist(id)
+        }
+        if let id = queryValue(["collectionId", "collection_id"], in: queryItems) {
+            return .collection(id)
+        }
+
         return nil
     }
 
