@@ -854,6 +854,33 @@ final class StoryTimelineEditor: ObservableObject {
         await commitSelectedClipAdjustments(adjustments, baselineClip: nil)
     }
 
+    func previewSelectedClipTransform(_ transform: Transform2D) {
+        guard let index = selectedClipIndex else { return }
+        project.tracks.videoClips[index].transform = Transform2D(
+            scale: min(max(transform.scale, 0.5), 4),
+            rotation: transform.rotation,
+            tx: transform.tx,
+            ty: transform.ty
+        )
+        selectedClipID = project.tracks.videoClips[index].id
+        errorMessage = nil
+    }
+
+    func commitSelectedClipTransform(_ transform: Transform2D, baselineClip: VideoClip) async {
+        guard let index = selectedClipIndex else { return }
+        var before = project
+        before.tracks.videoClips[index] = baselineClip
+        var updated = project
+        updated.tracks.videoClips[index].transform = Transform2D(
+            scale: min(max(transform.scale, 0.5), 4),
+            rotation: transform.rotation,
+            tx: transform.tx,
+            ty: transform.ty
+        )
+        await commit(updated, label: "Scale", before: before)
+        selectedClipID = updated.tracks.videoClips[index].id
+    }
+
     func previewSelectedClipAudio(volume: Float, muted: Bool) {
         guard let index = selectedClipIndex else { return }
         project.tracks.videoClips[index].volume = min(max(volume, 0), 1)

@@ -387,6 +387,8 @@ struct StoryEditorPreviewView: View {
     @State private var measuredInteractiveStickerSizes: [UUID: CGSize] = [:]
     @State private var overlayAlignmentGuide = OverlayAlignmentGuide()
     @State private var clipBaselineClip: VideoClip?
+    @State private var canvasTransformBaselineClip: VideoClip?
+    @State private var canvasPinchStartScale: Double?
     @State private var filterBaselineClip: VideoClip?
     @State private var lookSection: StoryLookSection = .filters
     @State private var selectedBeautyControl: StoryBeautyControl = .smooth
@@ -511,7 +513,16 @@ struct StoryEditorPreviewView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            editablePreviewSurface
+            GeometryReader { proxy in
+                editablePreviewSurface
+                    .scaleEffect(canvasPreviewScale(in: proxy.size))
+                    .offset(y: canvasPreviewOffset(in: proxy.size))
+                    .animation(
+                        accessibilityReduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.86),
+                        value: activeTool?.id
+                    )
+                    .simultaneousGesture(canvasMagnificationGesture)
+            }
 
             if isDrawingPresented {
                 drawingTopOverlay
@@ -640,6 +651,7 @@ struct StoryEditorPreviewView: View {
             toolSheet(tool)
                 .presentationDetents([.height(toolSheetHeight(for: tool)), .medium])
                 .presentationDragIndicator(.visible)
+                .presentationBackgroundInteraction(.enabled(upThrough: .medium))
         }
         .fileImporter(isPresented: $isImportingMusic, allowedContentTypes: [.audio]) { result in
             switch result {
@@ -1722,6 +1734,50 @@ struct StoryEditorPreviewView: View {
         filterBaselineClip = nil
         audioBaselineClip = nil
         musicBaselineClip = nil
+    }
+
+    private func canvasPreviewScale(in size: CGSize) -> CGFloat {
+        guard let tool = activeTool else { return 1 }
+        let reservedHeight = toolSheetHeight(for: tool)
+        let availableHeight = max(size.height - reservedHeight - 72, 1)
+        return min(max(availableHeight / max(size.height, 1), 0.42), 0.72)
+    }
+
+    private func canvasPreviewOffset(in size: CGSize) -> CGFloat {
+        guard let tool = activeTool else { return 0 }
+        return -(toolSheetHeight(for: tool) / 2) + 12
+    }
+
+    private var canvasMagnificationGesture: some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                guard !isDrawingPresented,
+                      !isTextComposerPresented,
+                      editor.selectedOverlayID == nil,
+                      let clip = editor.selectedClip else { return }
+                if canvasTransformBaselineClip == nil {
+                    canvasTransformBaselineClip = clip
+                    canvasPinchStartScale = clip.transform.scale
+                }
+                let startScale = canvasPinchStartScale ?? clip.transform.scale
+                var transform = clip.transform
+                transform.scale = min(max(startScale * value, 0.5), 4)
+                editor.previewSelectedClipTransform(transform)
+            }
+            .onEnded { _ in
+                guard let baseline = canvasTransformBaselineClip,
+                      let clip = editor.selectedClip else {
+                    canvasTransformBaselineClip = nil
+                    canvasPinchStartScale = nil
+                    return
+                }
+                let transform = clip.transform
+                canvasTransformBaselineClip = nil
+                canvasPinchStartScale = nil
+                Task {
+                    await editor.commitSelectedClipTransform(transform, baselineClip: baseline)
+                }
+            }
     }
 
     @ViewBuilder

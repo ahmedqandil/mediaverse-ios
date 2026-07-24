@@ -1035,6 +1035,26 @@ final class StoryLookEditingTests: XCTestCase {
         XCTAssertEqual(try rgbaBytes(first), try rgbaBytes(second))
     }
 
+    func testClipScalePreviewClampsAndCommitsAsUndoableEdit() async throws {
+        let editor = StoryTimelineEditor(project: projectWithClip())
+        let original = try XCTUnwrap(editor.selectedClip)
+        var enlarged = original.transform
+        enlarged.scale = 20
+
+        editor.previewSelectedClipTransform(enlarged)
+        XCTAssertEqual(editor.selectedClip?.transform.scale, 4)
+        XCTAssertFalse(editor.canUndo)
+
+        await editor.commitSelectedClipTransform(
+            try XCTUnwrap(editor.selectedClip).transform,
+            baselineClip: original
+        )
+        XCTAssertTrue(editor.canUndo)
+
+        await editor.undo()
+        XCTAssertEqual(editor.selectedClip, original)
+    }
+
     func testEffectStackDecodesBeforeCreativeIntensityWasAdded() throws {
         let stack = StoryEffectStack(
             version: 1,
