@@ -996,10 +996,17 @@ final class StoryTimelineEditor: ObservableObject {
     }
 
     private func commit(_ updatedProject: Project, label: String, before beforeProject: Project? = nil) async {
-        var updated = updatedProject
-        updated.updatedAt = Date()
         var before = beforeProject ?? project
         before.updatedAt = project.updatedAt
+        var comparableUpdated = updatedProject
+        comparableUpdated.updatedAt = before.updatedAt
+        guard comparableUpdated != before else {
+            project = before
+            errorMessage = nil
+            return
+        }
+        var updated = updatedProject
+        updated.updatedAt = Date()
         undoStack.append(StoryTimelineCommand(before: before, after: updated, label: label))
         if undoStack.count > maxCommands {
             undoStack.removeFirst()

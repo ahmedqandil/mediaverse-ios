@@ -119,6 +119,26 @@ final class StoryTimelineOverlayEditingTests: XCTestCase {
         XCTAssertTrue(editor.project.tracks.overlays.isEmpty)
         XCTAssertNil(editor.selectedOverlayID)
     }
+
+    func testApplyingUnchangedTextDoesNotCreateUndoCommand() async {
+        var project = Project.storyDraft(title: "Overlay test", destination: nil)
+        let overlay = TextOverlay(
+            text: "Unchanged",
+            transform: .identity,
+            timeRange: TimelineRange(
+                start: CMTimeValueBox(seconds: 0),
+                duration: CMTimeValueBox(seconds: 5)
+            )
+        )
+        project.tracks.overlays = [.text(overlay)]
+        let editor = StoryTimelineEditor(project: project)
+        editor.selectOverlay(overlay.id)
+
+        await editor.updateSelectedText("Unchanged")
+
+        XCTAssertFalse(editor.canUndo)
+        XCTAssertEqual(editor.project, project)
+    }
 }
 
 final class AdBreakSchedulerTests: XCTestCase {
