@@ -675,7 +675,8 @@ struct StoryEffectGraph {
             image = StoryCoreImageEffects.faceAwareBeauty(image, settings: stack.beauty).cropped(to: sourceExtent)
         }
         for effect in stack.creativeEffects where effect != .none && effect != .skinSmooth {
-            image = applyRenderEffect(effect, to: image, useMetalPetal: useMetalPetal).cropped(to: sourceExtent)
+            let effectOutput = applyRenderEffect(effect, to: image, useMetalPetal: useMetalPetal).cropped(to: sourceExtent)
+            image = blend(source: image, filtered: effectOutput, intensity: stack.creativeEffectIntensity)
         }
         image = applyTransform(clip.transform, crop: clip.cropRect, to: image, canvas: canvas)
         image = composite(overlays: overlays, over: image)

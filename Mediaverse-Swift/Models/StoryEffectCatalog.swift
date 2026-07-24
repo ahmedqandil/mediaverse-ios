@@ -40,6 +40,7 @@ struct StoryEffectStack: Codable, Equatable {
     var lookIntensity: Float
     var beauty: StoryBeautySettings
     var creativeEffects: [StoryRenderEffect]
+    var creativeEffectIntensity: Float
 
     static let currentVersion = 1
 
@@ -48,8 +49,44 @@ struct StoryEffectStack: Codable, Equatable {
         lookId: nil,
         lookIntensity: 1,
         beauty: .off,
-        creativeEffects: []
+        creativeEffects: [],
+        creativeEffectIntensity: 1
     )
+
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case lookId
+        case lookIntensity
+        case beauty
+        case creativeEffects
+        case creativeEffectIntensity
+    }
+
+    init(
+        version: Int,
+        lookId: String?,
+        lookIntensity: Float,
+        beauty: StoryBeautySettings,
+        creativeEffects: [StoryRenderEffect],
+        creativeEffectIntensity: Float = 1
+    ) {
+        self.version = version
+        self.lookId = lookId
+        self.lookIntensity = lookIntensity
+        self.beauty = beauty
+        self.creativeEffects = creativeEffects
+        self.creativeEffectIntensity = creativeEffectIntensity
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? Self.currentVersion
+        lookId = try container.decodeIfPresent(String.self, forKey: .lookId)
+        lookIntensity = try container.decodeIfPresent(Float.self, forKey: .lookIntensity) ?? 1
+        beauty = try container.decodeIfPresent(StoryBeautySettings.self, forKey: .beauty) ?? .off
+        creativeEffects = try container.decodeIfPresent([StoryRenderEffect].self, forKey: .creativeEffects) ?? []
+        creativeEffectIntensity = try container.decodeIfPresent(Float.self, forKey: .creativeEffectIntensity) ?? 1
+    }
 }
 
 struct StoryEffectPreset: Identifiable, Equatable {
@@ -106,4 +143,24 @@ enum StoryEffectCatalog {
     static func preset(id: String?) -> StoryEffectPreset {
         presets.first { $0.id == id } ?? presets[0]
     }
+}
+
+struct StoryCreativeEffectPreset: Identifiable, Equatable {
+    let effect: StoryRenderEffect
+    let name: String
+    let systemImage: String
+
+    var id: String { effect.rawValue }
+}
+
+enum StoryCreativeEffectCatalog {
+    static let presets: [StoryCreativeEffectPreset] = [
+        StoryCreativeEffectPreset(effect: .none, name: "None", systemImage: "circle.slash"),
+        StoryCreativeEffectPreset(effect: .clarify, name: "Clarity", systemImage: "sun.max.fill"),
+        StoryCreativeEffectPreset(effect: .softBlur, name: "Dream", systemImage: "cloud.fill"),
+        StoryCreativeEffectPreset(effect: .sharpen, name: "Detail", systemImage: "sparkles"),
+        StoryCreativeEffectPreset(effect: .pixel, name: "Pixel", systemImage: "square.grid.3x3.fill"),
+        StoryCreativeEffectPreset(effect: .dotScreen, name: "Dots", systemImage: "circle.grid.3x3.fill"),
+        StoryCreativeEffectPreset(effect: .halftone, name: "Poster", systemImage: "circle.hexagongrid.fill")
+    ]
 }

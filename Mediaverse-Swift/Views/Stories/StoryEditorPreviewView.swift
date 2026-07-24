@@ -1950,6 +1950,8 @@ struct StoryEditorPreviewView: View {
                 filterControls(for: clip)
             case .beauty:
                 beautyControls(for: clip)
+            case .effects:
+                creativeEffectControls(for: clip)
             case .adjust:
                 adjustmentControls(for: clip)
             }
@@ -2325,6 +2327,56 @@ struct StoryEditorPreviewView: View {
                 range: -1...1
             ) { value in
                 previewBeauty(clip) { $0.brightness = value }
+            }
+        }
+    }
+
+    private func creativeEffectControls(for clip: VideoClip) -> some View {
+        let stack = clip.resolvedEffectStack
+        let selected = stack.creativeEffects.first ?? .none
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Creative effects are rendered identically in this preview and the published story.")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(C.textTertiary)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 9) {
+                    ForEach(StoryCreativeEffectCatalog.presets) { preset in
+                        Button {
+                            beginLookPreview(from: clip)
+                            editor.previewSelectedClipCreativeEffect(preset.effect)
+                        } label: {
+                            VStack(spacing: 7) {
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(selected == preset.effect ? C.watch : C.elevated)
+                                        .frame(width: 58, height: 58)
+                                    Image(systemName: preset.systemImage)
+                                        .font(.system(size: 19, weight: .bold))
+                                        .foregroundStyle(selected == preset.effect ? .black : C.text)
+                                }
+                                Text(preset.name)
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(C.text)
+                            }
+                            .frame(width: 66)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+
+            if selected != .none {
+                adjustmentSlider(
+                    "Effect strength",
+                    value: stack.creativeEffectIntensity,
+                    range: 0...1,
+                    displayValue: Int((stack.creativeEffectIntensity * 100).rounded())
+                ) { value in
+                    beginLookPreview(from: clip)
+                    editor.previewSelectedClipCreativeEffect(selected, intensity: value)
+                }
             }
         }
     }
@@ -4744,6 +4796,7 @@ struct StoryEditorPreviewView: View {
 private enum StoryLookSection: String, CaseIterable, Identifiable {
     case filters = "Filters"
     case beauty = "Beauty"
+    case effects = "Effects"
     case adjust = "Adjust"
 
     var id: String { rawValue }
@@ -4764,7 +4817,7 @@ private enum StoryFilterCategory: String, CaseIterable, Identifiable {
         case .popular:
             return ["neutral", "smooth", "warm", "cinema", "vivid", "crisp", "fade", "moody"]
         case .portrait:
-            return ["neutral", "smooth", "rose", "bright", "warm", "dream"]
+            return ["neutral", "rose", "bright", "warm", "dream"]
         case .warm:
             return ["neutral", "warm", "golden", "sunset", "rose", "vintage"]
         case .cool:

@@ -965,6 +965,37 @@ final class StoryLookEditingTests: XCTestCase {
         XCTAssertEqual(editor.selectedClip, original)
     }
 
+    func testCreativeEffectSelectionAndIntensityAreClamped() {
+        let editor = StoryTimelineEditor(project: projectWithClip())
+
+        editor.previewSelectedClipCreativeEffect(.pixel, intensity: 4)
+
+        XCTAssertEqual(editor.selectedClip?.resolvedEffectStack.creativeEffects, [.pixel])
+        XCTAssertEqual(editor.selectedClip?.resolvedEffectStack.creativeEffectIntensity, 1)
+
+        editor.previewSelectedClipCreativeEffect(.none)
+        XCTAssertTrue(editor.selectedClip?.resolvedEffectStack.creativeEffects.isEmpty == true)
+    }
+
+    func testEffectStackDecodesBeforeCreativeIntensityWasAdded() throws {
+        let stack = StoryEffectStack(
+            version: 1,
+            lookId: "cinema",
+            lookIntensity: 0.7,
+            beauty: .natural,
+            creativeEffects: [.clarify]
+        )
+        let encoded = try JSONEncoder().encode(stack)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object.removeValue(forKey: "creativeEffectIntensity")
+
+        let data = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(StoryEffectStack.self, from: data)
+
+        XCTAssertEqual(decoded.creativeEffectIntensity, 1)
+        XCTAssertEqual(decoded.creativeEffects, [.clarify])
+    }
+
     func testLookSessionCommitsFilterAndAdjustmentsAsOneUndoableEdit() async {
         let project = projectWithClip()
         let editor = StoryTimelineEditor(project: project)

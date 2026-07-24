@@ -813,6 +813,18 @@ final class StoryTimelineEditor: ObservableObject {
         errorMessage = nil
     }
 
+    func previewSelectedClipCreativeEffect(_ effect: StoryRenderEffect, intensity: Float? = nil) {
+        guard let index = selectedClipIndex else { return }
+        var stack = project.tracks.videoClips[index].resolvedEffectStack
+        stack.creativeEffects = effect == .none ? [] : [effect]
+        if let intensity {
+            stack.creativeEffectIntensity = min(max(intensity, 0), 1)
+        }
+        project.tracks.videoClips[index].effectStack = stack
+        selectedClipID = project.tracks.videoClips[index].id
+        errorMessage = nil
+    }
+
     func commitSelectedClipLook(baselineClip: VideoClip) async {
         guard let index = selectedClipIndex else { return }
         var before = project
