@@ -617,12 +617,45 @@ enum StoryFrameFilterRenderer {
         return blend(source: image, filtered: output, intensity: intensity)
     }
 
-    static func realtimePreviewCIImage(_ image: CIImage, filterId: String?, intensity: Float = 1, adjustments: ColorAdjust) -> CIImage? {
-        let preset = StoryEffectCatalog.preset(id: filterId)
-        var output = applyCoreImageBasicColorAdjustments(adjustments, to: image)
+    static func realtimePreviewCIImage(
+        _ image: CIImage,
+        filterId: String?,
+        intensity: Float = 1,
+        adjustments: ColorAdjust,
+        effectStack: StoryEffectStack? = nil,
+        time: Double = 0
+    ) -> CIImage? {
+        let stack: StoryEffectStack = {
+            if let effectStack { return effectStack }
+            var legacy = StoryEffectStack.none
+            legacy.version = 0
+            legacy.lookId = filterId
+            legacy.lookIntensity = intensity
+            return legacy
+        }()
+        let preset = StoryEffectCatalog.preset(id: stack.lookId)
+        var lookInput = image
+        if stack.version >= StoryEffectStack.currentVersion, let lut = preset.lut {
+            lookInput = StoryColorLUT.apply(lut, to: lookInput)
+        }
+        var output = applyCoreImageBasicColorAdjustments(adjustments, to: lookInput)
         output = applyCoreImageFinishingAdjustments(adjustments, to: output)
         output = applyCoreImageFallbackEffect(preset.renderEffect, to: output)
-        return blend(source: image, filtered: output, intensity: intensity)
+        output = blend(source: image, filtered: output, intensity: stack.lookIntensity)
+        if stack.beauty.isEnabled {
+            output = StoryCoreImageEffects.faceAwareBeauty(output, settings: stack.beauty)
+        }
+        for effect in stack.creativeEffects where effect != .none && effect != .skinSmooth {
+            let target = effect.usesTimelineAnimation
+                ? StoryAnimatedEffects.apply(effect, to: output, time: time)
+                : applyCoreImageFallbackEffect(effect, to: output)
+            output = blend(
+                source: output,
+                filtered: target,
+                intensity: stack.creativeEffectIntensity
+            )
+        }
+        return output.cropped(to: image.extent)
     }
 
     private static func blend(source: CIImage, filtered: CIImage, intensity: Float) -> CIImage {

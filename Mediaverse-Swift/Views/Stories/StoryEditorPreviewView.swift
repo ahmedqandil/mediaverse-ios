@@ -476,11 +476,16 @@ struct StoryEditorPreviewView: View {
     }
 
     private func shouldUseVideoComposition(for clip: VideoClip) -> Bool {
-        StoryFrameFilterRenderer.hasActiveFilter(
+        let stack = clip.resolvedEffectStack
+        return StoryFrameFilterRenderer.hasActiveFilter(
             filterId: clip.filterId,
             intensity: clip.filterIntensity,
             adjustments: clip.adjustments
         )
+            || stack.beauty.isEnabled
+            || !stack.creativeEffects.isEmpty
+            || (stack.version >= StoryEffectStack.currentVersion
+                && StoryEffectCatalog.preset(id: stack.lookId).lut != nil)
     }
 
     private func previewPlayerSignature(url: URL, clip: VideoClip) -> String {
@@ -495,6 +500,7 @@ struct StoryEditorPreviewView: View {
             "\(clip.adjustments.saturation)",
             "\(clip.adjustments.warmth)",
             "\(clip.adjustments.vignette)",
+            effectStackSignature(for: clip),
             "\(clip.muted)",
             "\(clip.volume)",
             "\(isComparingOriginal)"
@@ -4370,6 +4376,7 @@ struct StoryEditorPreviewView: View {
                 originalClip.filterId = "neutral"
                 originalClip.filterIntensity = 0
                 originalClip.adjustments = .neutral
+                originalClip.effectStack = StoryEffectStack.none
                 return originalClip
             }
         }
@@ -4393,12 +4400,34 @@ struct StoryEditorPreviewView: View {
                 "\(clip.adjustments.saturation)",
                 "\(clip.adjustments.warmth)",
                 "\(clip.adjustments.vignette)",
+                effectStackSignature(for: clip),
                 "\(clip.transform.scale)",
                 "\(clip.transform.rotation)",
                 "\(clip.transform.tx)",
                 "\(clip.transform.ty)"
             ].joined(separator: ":")
         }.joined(separator: "|")
+    }
+
+    private func effectStackSignature(for clip: VideoClip) -> String {
+        let stack = clip.resolvedEffectStack
+        let beauty = stack.beauty
+        return [
+            "\(stack.version)",
+            stack.lookId ?? "neutral",
+            "\(stack.lookIntensity)",
+            "\(beauty.intensity)",
+            "\(beauty.skinSmoothing)",
+            "\(beauty.skinTone)",
+            "\(beauty.brightness)",
+            "\(beauty.eyeBrightening)",
+            "\(beauty.underEye)",
+            "\(beauty.teethWhitening)",
+            "\(beauty.lipColor)",
+            "\(beauty.contour)",
+            stack.creativeEffects.map(\.rawValue).joined(separator: ","),
+            "\(stack.creativeEffectIntensity)"
+        ].joined(separator: ":")
     }
 
     @MainActor
@@ -4603,7 +4632,9 @@ struct StoryEditorPreviewView: View {
                     request.sourceImage,
                     filterId: clip.filterId,
                     intensity: clip.filterIntensity,
-                    adjustments: clip.adjustments
+                    adjustments: clip.adjustments,
+                    effectStack: clip.effectStack,
+                    time: request.compositionTime.seconds
                 ) else {
                     request.finish(with: request.sourceImage, context: nil)
                     return
