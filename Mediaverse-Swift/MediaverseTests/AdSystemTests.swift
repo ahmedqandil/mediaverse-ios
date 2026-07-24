@@ -475,3 +475,27 @@ final class StoriesRequestPolicyTests: XCTestCase {
         )
     }
 }
+
+final class StoryInteractionNormalizerTests: XCTestCase {
+    func testVoteCountsAreNonNegativeAndMatchOptions() {
+        XCTAssertEqual(
+            StoryInteractionNormalizer.votes([4, -3, 2, 99], optionCount: 3),
+            [4, 0, 2]
+        )
+        XCTAssertEqual(
+            StoryInteractionNormalizer.votes([1], optionCount: 3),
+            [1, 0, 0]
+        )
+        XCTAssertEqual(
+            StoryInteractionNormalizer.votes(nil, optionCount: 0),
+            []
+        )
+    }
+
+    func testOptionIndexesMustBeWithinBounds() {
+        XCTAssertEqual(StoryInteractionNormalizer.optionIndex(1, optionCount: 3), 1)
+        XCTAssertNil(StoryInteractionNormalizer.optionIndex(-1, optionCount: 3))
+        XCTAssertNil(StoryInteractionNormalizer.optionIndex(3, optionCount: 3))
+        XCTAssertNil(StoryInteractionNormalizer.optionIndex(nil, optionCount: 3))
+    }
+}

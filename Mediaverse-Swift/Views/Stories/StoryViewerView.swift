@@ -2,6 +2,22 @@ import AVKit
 import SwiftUI
 import UIKit
 
+enum StoryInteractionNormalizer {
+    static func votes(_ votes: [Int]?, optionCount: Int) -> [Int] {
+        guard optionCount > 0 else { return [] }
+        var normalized = (votes ?? []).map { max(0, $0) }
+        if normalized.count < optionCount {
+            normalized.append(contentsOf: Array(repeating: 0, count: optionCount - normalized.count))
+        }
+        return Array(normalized.prefix(optionCount))
+    }
+
+    static func optionIndex(_ index: Int?, optionCount: Int) -> Int? {
+        guard let index, (0..<optionCount).contains(index) else { return nil }
+        return index
+    }
+}
+
 struct StoryViewerView: View {
     @ObservedObject var repository: StoriesRepository
     let initialGroupId: String
@@ -1310,8 +1326,8 @@ private struct PollStickerView: View {
         self.data = data
         self.storyId = storyId
         self.overlayIndex = overlayIndex
-        _votes = State(initialValue: Self.normalizedVotes(data.votes, optionCount: data.options.count))
-        _userVote = State(initialValue: data.userVote)
+        _votes = State(initialValue: StoryInteractionNormalizer.votes(data.votes, optionCount: data.options.count))
+        _userVote = State(initialValue: StoryInteractionNormalizer.optionIndex(data.userVote, optionCount: data.options.count))
     }
 
     private var totalVotes: Int {
@@ -1388,8 +1404,11 @@ private struct PollStickerView: View {
                     optionIndex: optionIndex
                 )
                 await MainActor.run {
-                    votes = Self.normalizedVotes(response.votes, optionCount: data.options.count)
-                    userVote = response.userVote
+                    votes = StoryInteractionNormalizer.votes(response.votes, optionCount: data.options.count)
+                    userVote = StoryInteractionNormalizer.optionIndex(
+                        response.userVote,
+                        optionCount: data.options.count
+                    ) ?? optionIndex
                     isSubmitting = false
                 }
             } catch {
@@ -1402,13 +1421,6 @@ private struct PollStickerView: View {
         }
     }
 
-    private static func normalizedVotes(_ votes: [Int]?, optionCount: Int) -> [Int] {
-        var normalized = votes ?? []
-        if normalized.count < optionCount {
-            normalized.append(contentsOf: Array(repeating: 0, count: optionCount - normalized.count))
-        }
-        return Array(normalized.prefix(optionCount))
-    }
 }
 
 private struct QuizStickerView: View {
@@ -1424,8 +1436,12 @@ private struct QuizStickerView: View {
         self.data = data
         self.storyId = storyId
         self.overlayIndex = overlayIndex
-        _userAnswer = State(initialValue: data.userAnswer)
-        _correctIndex = State(initialValue: data.correctIndex)
+        _userAnswer = State(
+            initialValue: StoryInteractionNormalizer.optionIndex(data.userAnswer, optionCount: data.options.count)
+        )
+        _correctIndex = State(
+            initialValue: StoryInteractionNormalizer.optionIndex(data.correctIndex, optionCount: data.options.count) ?? 0
+        )
     }
 
     var body: some View {
@@ -1504,8 +1520,16 @@ private struct QuizStickerView: View {
                     selectedIndex: selectedIndex
                 )
                 await MainActor.run {
-                    userAnswer = response.selectedIndex
-                    correctIndex = response.correctIndex
+                    userAnswer = StoryInteractionNormalizer.optionIndex(
+                        response.selectedIndex,
+                        optionCount: data.options.count
+                    ) ?? selectedIndex
+                    if let validCorrectIndex = StoryInteractionNormalizer.optionIndex(
+                        response.correctIndex,
+                        optionCount: data.options.count
+                    ) {
+                        correctIndex = validCorrectIndex
+                    }
                     isSubmitting = false
                 }
             } catch {

@@ -53,9 +53,18 @@ final class StoryViewersViewModel: ObservableObject {
     }
 
     private func apply(_ response: StoryViewersResponse, cursor: String?) {
-        total = response.total
-        nextCursor = response.nextCursor
-        viewers = cursor == nil ? response.viewers : viewers + response.viewers
+        total = max(0, response.total)
+        let trimmedNextCursor = response.nextCursor?.trimmingCharacters(in: .whitespacesAndNewlines)
+        nextCursor = trimmedNextCursor?.isEmpty == false && trimmedNextCursor != cursor
+            ? trimmedNextCursor
+            : nil
+
+        var seenIds = Set<String>()
+        let combined = cursor == nil ? response.viewers : viewers + response.viewers
+        viewers = combined.filter { viewer in
+            !viewer.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && seenIds.insert(viewer.id).inserted
+        }
     }
 }
 
