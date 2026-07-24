@@ -2292,7 +2292,12 @@ struct StoryEditorPreviewView: View {
                         intensity: 0.72,
                         skinSmoothing: 0.52,
                         skinTone: 0.14,
-                        brightness: 0.12
+                        brightness: 0.12,
+                        eyeBrightening: 0.22,
+                        underEye: 0.18,
+                        teethWhitening: 0.16,
+                        lipColor: 0.10,
+                        contour: 0.08
                     ),
                     current: beauty
                 )
@@ -2327,6 +2332,51 @@ struct StoryEditorPreviewView: View {
                 range: -1...1
             ) { value in
                 previewBeauty(clip) { $0.brightness = value }
+            }
+
+            Text("Details")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(C.textMuted)
+                .padding(.top, 2)
+
+            adjustmentSlider(
+                "Eyes",
+                value: beauty.eyeBrightening,
+                range: 0...1,
+                displayValue: Int((beauty.eyeBrightening * 100).rounded())
+            ) { value in
+                previewBeauty(clip) { $0.eyeBrightening = value }
+            }
+            adjustmentSlider(
+                "Under eyes",
+                value: beauty.underEye,
+                range: 0...1,
+                displayValue: Int((beauty.underEye * 100).rounded())
+            ) { value in
+                previewBeauty(clip) { $0.underEye = value }
+            }
+            adjustmentSlider(
+                "Teeth",
+                value: beauty.teethWhitening,
+                range: 0...1,
+                displayValue: Int((beauty.teethWhitening * 100).rounded())
+            ) { value in
+                previewBeauty(clip) { $0.teethWhitening = value }
+            }
+            adjustmentSlider(
+                "Lips",
+                value: beauty.lipColor,
+                range: -1...1
+            ) { value in
+                previewBeauty(clip) { $0.lipColor = value }
+            }
+            adjustmentSlider(
+                "Contour",
+                value: beauty.contour,
+                range: 0...1,
+                displayValue: Int((beauty.contour * 100).rounded())
+            ) { value in
+                previewBeauty(clip) { $0.contour = value }
             }
         }
     }

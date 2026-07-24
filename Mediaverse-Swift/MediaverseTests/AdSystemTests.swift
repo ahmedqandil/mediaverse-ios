@@ -1008,6 +1008,24 @@ final class StoryLookEditingTests: XCTestCase {
         XCTAssertEqual(decoded.creativeEffects, [.clarify])
     }
 
+    func testLegacyBeautySettingsDecodeWithAdvancedControlsOff() throws {
+        let legacy: [String: Any] = [
+            "intensity": 0.6,
+            "skinSmoothing": 0.4,
+            "skinTone": 0.1,
+            "brightness": 0.08
+        ]
+        let data = try JSONSerialization.data(withJSONObject: legacy)
+
+        let decoded = try JSONDecoder().decode(StoryBeautySettings.self, from: data)
+
+        XCTAssertEqual(decoded.eyeBrightening, 0)
+        XCTAssertEqual(decoded.underEye, 0)
+        XCTAssertEqual(decoded.teethWhitening, 0)
+        XCTAssertEqual(decoded.lipColor, 0)
+        XCTAssertEqual(decoded.contour, 0)
+    }
+
     func testLookSessionCommitsFilterAndAdjustmentsAsOneUndoableEdit() async {
         let project = projectWithClip()
         let editor = StoryTimelineEditor(project: project)

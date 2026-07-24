@@ -279,10 +279,158 @@ private enum StoryCoreImageEffects {
         guard let mask = faceMask(for: faces, extent: image.extent, intensity: settings.intensity) else {
             return image
         }
-        return target.applyingFilter("CIBlendWithMask", parameters: [
+        var result = target.applyingFilter("CIBlendWithMask", parameters: [
             kCIInputBackgroundImageKey: image,
             kCIInputMaskImageKey: mask
         ]).cropped(to: image.extent)
+        result = applyFeatureBeauty(
+            to: result,
+            original: image,
+            faces: faces,
+            settings: settings
+        )
+        return result
+    }
+
+    private static func applyFeatureBeauty(
+        to image: CIImage,
+        original: CIImage,
+        faces: [CIFaceFeature],
+        settings: StoryBeautySettings
+    ) -> CIImage {
+        var result = image
+        let master = settings.intensity
+
+        for face in faces {
+            let unit = max(min(face.bounds.width, face.bounds.height), 1)
+
+            if settings.eyeBrightening > 0.001 {
+                let target = result
+                    .applyingFilter("CIColorControls", parameters: [
+                        kCIInputBrightnessKey: 0.10 * settings.eyeBrightening * master,
+                        kCIInputSaturationKey: 1 + 0.08 * settings.eyeBrightening * master
+                    ])
+                    .applyingFilter("CISharpenLuminance", parameters: [
+                        kCIInputSharpnessKey: 0.22 * settings.eyeBrightening * master
+                    ])
+                for position in eyePositions(face) {
+                    let mask = radialMask(
+                        center: position,
+                        radius: unit * 0.115,
+                        extent: image.extent,
+                        intensity: settings.eyeBrightening * master
+                    )
+                    result = blend(base: result, target: target, mask: mask)
+                }
+            }
+
+            if settings.underEye > 0.001 {
+                let target = result.applyingFilter("CIColorControls", parameters: [
+                    kCIInputBrightnessKey: 0.075 * settings.underEye * master,
+                    kCIInputContrastKey: 0.98
+                ])
+                for position in eyePositions(face) {
+                    let underEyeCenter = CGPoint(x: position.x, y: position.y - unit * 0.055)
+                    let mask = radialMask(
+                        center: underEyeCenter,
+                        radius: unit * 0.13,
+                        extent: image.extent,
+                        intensity: settings.underEye * master
+                    )
+                    result = blend(base: result, target: target, mask: mask)
+                }
+            }
+
+            if face.hasMouthPosition, settings.teethWhitening > 0.001 {
+                let target = result.applyingFilter("CIColorControls", parameters: [
+                    kCIInputBrightnessKey: 0.12 * settings.teethWhitening * master,
+                    kCIInputSaturationKey: max(1 - 0.72 * settings.teethWhitening * master, 0)
+                ])
+                let center = CGPoint(x: face.mouthPosition.x, y: face.mouthPosition.y + unit * 0.012)
+                let mask = radialMask(
+                    center: center,
+                    radius: unit * 0.085,
+                    extent: image.extent,
+                    intensity: settings.teethWhitening * master
+                )
+                result = blend(base: result, target: target, mask: mask)
+            }
+
+            if face.hasMouthPosition, abs(settings.lipColor) > 0.001 {
+                let amount = settings.lipColor * master
+                let target = result
+                    .applyingFilter("CIColorControls", parameters: [
+                        kCIInputSaturationKey: 1 + abs(amount) * 0.38
+                    ])
+                    .applyingFilter("CITemperatureAndTint", parameters: [
+                        "inputNeutral": CIVector(x: 6500, y: 0),
+                        "inputTargetNeutral": CIVector(x: 6500 + CGFloat(amount) * 900, y: 0)
+                    ])
+                let mask = radialMask(
+                    center: face.mouthPosition,
+                    radius: unit * 0.105,
+                    extent: image.extent,
+                    intensity: abs(amount)
+                )
+                result = blend(base: result, target: target, mask: mask)
+            }
+
+            if settings.contour > 0.001 {
+                let amount = settings.contour * master
+                let darkened = result.applyingFilter("CIExposureAdjust", parameters: [
+                    kCIInputEVKey: -0.34 * amount
+                ])
+                let outer = radialMask(
+                    center: CGPoint(x: face.bounds.midX, y: face.bounds.midY),
+                    radius: unit * 0.58,
+                    extent: image.extent,
+                    intensity: amount
+                )
+                result = blend(base: result, target: darkened, mask: outer)
+                let inner = radialMask(
+                    center: CGPoint(x: face.bounds.midX, y: face.bounds.midY),
+                    radius: unit * 0.36,
+                    extent: image.extent,
+                    intensity: amount
+                )
+                result = blend(base: result, target: original, mask: inner)
+            }
+        }
+        return result.cropped(to: image.extent)
+    }
+
+    private static func eyePositions(_ face: CIFaceFeature) -> [CGPoint] {
+        var positions = [CGPoint]()
+        if face.hasLeftEyePosition { positions.append(face.leftEyePosition) }
+        if face.hasRightEyePosition { positions.append(face.rightEyePosition) }
+        return positions
+    }
+
+    private static func radialMask(
+        center: CGPoint,
+        radius: CGFloat,
+        extent: CGRect,
+        intensity: Float
+    ) -> CIImage {
+        let amount = CGFloat(min(max(intensity, 0), 1))
+        let mask = CIFilter(
+            name: "CIRadialGradient",
+            parameters: [
+                "inputCenter": CIVector(cgPoint: center),
+                "inputRadius0": radius * 0.38,
+                "inputRadius1": radius,
+                "inputColor0": CIColor(red: amount, green: amount, blue: amount, alpha: amount),
+                "inputColor1": CIColor.clear
+            ]
+        )?.outputImage
+        return (mask ?? CIImage.empty()).cropped(to: extent)
+    }
+
+    private static func blend(base: CIImage, target: CIImage, mask: CIImage) -> CIImage {
+        target.applyingFilter("CIBlendWithMask", parameters: [
+            kCIInputBackgroundImageKey: base,
+            kCIInputMaskImageKey: mask
+        ]).cropped(to: base.extent)
     }
 
     private static func faceMask(

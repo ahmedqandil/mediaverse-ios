@@ -5,23 +5,47 @@ struct StoryBeautySettings: Codable, Equatable {
     var skinSmoothing: Float
     var skinTone: Float
     var brightness: Float
+    var eyeBrightening: Float
+    var underEye: Float
+    var teethWhitening: Float
+    var lipColor: Float
+    var contour: Float
 
     static let off = StoryBeautySettings(
         intensity: 0,
         skinSmoothing: 0,
         skinTone: 0,
-        brightness: 0
+        brightness: 0,
+        eyeBrightening: 0,
+        underEye: 0,
+        teethWhitening: 0,
+        lipColor: 0,
+        contour: 0
     )
 
     static let natural = StoryBeautySettings(
         intensity: 0.55,
         skinSmoothing: 0.32,
         skinTone: 0.10,
-        brightness: 0.08
+        brightness: 0.08,
+        eyeBrightening: 0.12,
+        underEye: 0.10,
+        teethWhitening: 0.08,
+        lipColor: 0.05,
+        contour: 0
     )
 
     var isEnabled: Bool {
-        intensity > 0.001 && (skinSmoothing > 0.001 || skinTone > 0.001 || brightness > 0.001)
+        intensity > 0.001 && (
+            skinSmoothing > 0.001 ||
+            abs(skinTone) > 0.001 ||
+            abs(brightness) > 0.001 ||
+            eyeBrightening > 0.001 ||
+            underEye > 0.001 ||
+            teethWhitening > 0.001 ||
+            abs(lipColor) > 0.001 ||
+            contour > 0.001
+        )
     }
 
     func clamped() -> StoryBeautySettings {
@@ -29,8 +53,60 @@ struct StoryBeautySettings: Codable, Equatable {
             intensity: min(max(intensity, 0), 1),
             skinSmoothing: min(max(skinSmoothing, 0), 1),
             skinTone: min(max(skinTone, -1), 1),
-            brightness: min(max(brightness, -1), 1)
+            brightness: min(max(brightness, -1), 1),
+            eyeBrightening: min(max(eyeBrightening, 0), 1),
+            underEye: min(max(underEye, 0), 1),
+            teethWhitening: min(max(teethWhitening, 0), 1),
+            lipColor: min(max(lipColor, -1), 1),
+            contour: min(max(contour, 0), 1)
         )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case intensity
+        case skinSmoothing
+        case skinTone
+        case brightness
+        case eyeBrightening
+        case underEye
+        case teethWhitening
+        case lipColor
+        case contour
+    }
+
+    init(
+        intensity: Float,
+        skinSmoothing: Float,
+        skinTone: Float,
+        brightness: Float,
+        eyeBrightening: Float = 0,
+        underEye: Float = 0,
+        teethWhitening: Float = 0,
+        lipColor: Float = 0,
+        contour: Float = 0
+    ) {
+        self.intensity = intensity
+        self.skinSmoothing = skinSmoothing
+        self.skinTone = skinTone
+        self.brightness = brightness
+        self.eyeBrightening = eyeBrightening
+        self.underEye = underEye
+        self.teethWhitening = teethWhitening
+        self.lipColor = lipColor
+        self.contour = contour
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        intensity = try container.decodeIfPresent(Float.self, forKey: .intensity) ?? 0
+        skinSmoothing = try container.decodeIfPresent(Float.self, forKey: .skinSmoothing) ?? 0
+        skinTone = try container.decodeIfPresent(Float.self, forKey: .skinTone) ?? 0
+        brightness = try container.decodeIfPresent(Float.self, forKey: .brightness) ?? 0
+        eyeBrightening = try container.decodeIfPresent(Float.self, forKey: .eyeBrightening) ?? 0
+        underEye = try container.decodeIfPresent(Float.self, forKey: .underEye) ?? 0
+        teethWhitening = try container.decodeIfPresent(Float.self, forKey: .teethWhitening) ?? 0
+        lipColor = try container.decodeIfPresent(Float.self, forKey: .lipColor) ?? 0
+        contour = try container.decodeIfPresent(Float.self, forKey: .contour) ?? 0
     }
 }
 
