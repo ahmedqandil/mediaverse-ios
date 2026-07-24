@@ -825,12 +825,59 @@ private enum StoryCoreImageEffects {
     ) -> CIImage? {
         var combined: CIImage?
         for face in faces {
+            guard let faceRegion = contourMask(for: face, extent: extent) else { continue }
+            combined = combined.map {
+                faceRegion.applyingFilter("CIMaximumCompositing", parameters: [
+                    kCIInputBackgroundImageKey: $0
+                ])
+            } ?? faceRegion
+        }
+        guard let combined else { return nil }
+
+        let protectedPoints = faces.flatMap {
+            $0.eyePoints + $0.eyebrowPoints + $0.lipPoints
+        }
+        let averageFaceUnit = faces
+            .map { min($0.bounds.width, $0.bounds.height) }
+            .reduce(0, +) / CGFloat(max(faces.count, 1))
+        let protectedMask = featureMask(
+            points: protectedPoints,
+            radius: max(averageFaceUnit * 0.055, 2),
+            extent: extent,
+            intensity: 1
+        )
+        let skinOnly: CIImage
+        if let protectedMask {
+            let inverseProtected = protectedMask
+                .applyingFilter("CIColorInvert")
+                .cropped(to: extent)
+            skinOnly = combined.applyingFilter("CIMultiplyCompositing", parameters: [
+                kCIInputBackgroundImageKey: inverseProtected
+            ]).cropped(to: extent)
+        } else {
+            skinOnly = combined
+        }
+
+        let amount = CGFloat(min(max(intensity, 0), 1))
+        return skinOnly.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: amount, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: amount, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: amount, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: amount)
+        ]).cropped(to: extent)
+    }
+
+    private static func contourMask(
+        for face: StoryDetectedFace,
+        extent: CGRect
+    ) -> CIImage? {
+        guard face.contourPoints.count >= 3 else {
             let bounds = face.bounds.insetBy(
                 dx: -face.bounds.width * 0.12,
                 dy: -face.bounds.height * 0.16
             )
             let radius = max(bounds.width, bounds.height) * 0.58
-            let gradient = CIFilter(
+            return CIFilter(
                 name: "CIRadialGradient",
                 parameters: [
                     "inputCenter": CIVector(x: bounds.midX, y: bounds.midY),
@@ -840,21 +887,74 @@ private enum StoryCoreImageEffects {
                     "inputColor1": CIColor.clear
                 ]
             )?.outputImage?.cropped(to: extent)
-            guard let gradient else { continue }
-            combined = combined.map {
-                gradient.applyingFilter("CIMaximumCompositing", parameters: [
-                    kCIInputBackgroundImageKey: $0
-                ])
-            } ?? gradient
         }
-        guard let combined else { return nil }
-        let amount = CGFloat(min(max(intensity, 0), 1))
-        return combined.applyingFilter("CIColorMatrix", parameters: [
-            "inputRVector": CIVector(x: amount, y: 0, z: 0, w: 0),
-            "inputGVector": CIVector(x: 0, y: amount, z: 0, w: 0),
-            "inputBVector": CIVector(x: 0, y: 0, z: amount, w: 0),
-            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: amount)
-        ]).cropped(to: extent)
+
+        let maximumSide = max(extent.width, extent.height)
+        let analysisScale = min(360 / max(maximumSide, 1), 1)
+        let maskSize = CGSize(
+            width: max(extent.width * analysisScale, 1),
+            height: max(extent.height * analysisScale, 1)
+        )
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: maskSize, format: format)
+        let image = renderer.image { context in
+            context.cgContext.setFillColor(UIColor.white.cgColor)
+            let path = UIBezierPath()
+
+            func maskPoint(_ point: CGPoint) -> CGPoint {
+                CGPoint(
+                    x: (point.x - extent.minX) * analysisScale,
+                    y: (extent.maxY - point.y) * analysisScale
+                )
+            }
+
+            let contour = face.contourPoints.first!.x <= face.contourPoints.last!.x
+                ? face.contourPoints
+                : Array(face.contourPoints.reversed())
+            guard let first = contour.first else { return }
+            path.move(to: maskPoint(first))
+            for point in contour.dropFirst() {
+                path.addLine(to: maskPoint(point))
+            }
+            let foreheadRight = CGPoint(
+                x: face.bounds.maxX - face.bounds.width * 0.12,
+                y: face.bounds.maxY + face.bounds.height * 0.10
+            )
+            let foreheadLeft = CGPoint(
+                x: face.bounds.minX + face.bounds.width * 0.12,
+                y: face.bounds.maxY + face.bounds.height * 0.10
+            )
+            path.addCurve(
+                to: maskPoint(foreheadRight),
+                controlPoint1: maskPoint(CGPoint(x: face.bounds.maxX, y: face.bounds.midY)),
+                controlPoint2: maskPoint(CGPoint(x: face.bounds.maxX, y: face.bounds.maxY))
+            )
+            path.addCurve(
+                to: maskPoint(foreheadLeft),
+                controlPoint1: maskPoint(CGPoint(x: face.bounds.midX, y: face.bounds.maxY + face.bounds.height * 0.18)),
+                controlPoint2: maskPoint(CGPoint(x: face.bounds.midX, y: face.bounds.maxY + face.bounds.height * 0.18))
+            )
+            path.close()
+            path.fill()
+        }
+        guard let cgImage = image.cgImage else { return nil }
+        let scaledMask = CIImage(cgImage: cgImage)
+            .transformed(by: CGAffineTransform(
+                scaleX: 1 / analysisScale,
+                y: 1 / analysisScale
+            ))
+            .transformed(by: CGAffineTransform(
+                translationX: extent.minX,
+                y: extent.minY
+            ))
+            .cropped(to: extent)
+        return scaledMask
+            .applyingFilter("CIGaussianBlur", parameters: [
+                kCIInputRadiusKey: max(min(face.bounds.width, face.bounds.height) * 0.025, 2)
+            ])
+            .cropped(to: extent)
     }
 
     private static func blendedSkinSmoothing(_ image: CIImage, smoothness: Float, intensity: Float) -> CIImage {
