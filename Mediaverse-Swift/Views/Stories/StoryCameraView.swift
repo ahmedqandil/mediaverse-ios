@@ -51,10 +51,17 @@ struct StoryCapturedSegment: Identifiable, Equatable {
     let adjustments: ColorAdjust
 }
 
+struct StoryCapturedPhoto {
+    let data: Data
+    let image: UIImage
+    let filterId: String?
+    let adjustments: ColorAdjust
+}
+
 struct StoryCameraView: View {
     let maxDuration: Double
     let onCancel: () -> Void
-    let onPhoto: (Data, UIImage) -> Void
+    let onPhoto: (StoryCapturedPhoto) -> Void
     let onLibraryVideo: (URL) -> Void
     let onComplete: ([StoryCapturedSegment]) -> Void
 
@@ -452,13 +459,12 @@ struct StoryCameraView: View {
         controller.capturePhoto { result in
             switch result {
             case .success(let photo):
-                let filteredImage = StoryFrameFilterRenderer.renderImage(
-                    photo.image,
+                onPhoto(StoryCapturedPhoto(
+                    data: photo.data,
+                    image: photo.image,
                     filterId: controller.selectedFilterId,
                     adjustments: controller.selectedAdjustments
-                )
-                let filteredData = filteredImage.jpegData(compressionQuality: 0.92) ?? photo.data
-                onPhoto(filteredData, filteredImage)
+                ))
             case .failure(let error):
                 controller.errorText = error.localizedDescription
             }
@@ -496,7 +502,12 @@ struct StoryCameraView: View {
             }
             await MainActor.run {
                 librarySelection = nil
-                onPhoto(jpeg, normalized)
+                onPhoto(StoryCapturedPhoto(
+                    data: jpeg,
+                    image: normalized,
+                    filterId: controller.selectedFilterId,
+                    adjustments: controller.selectedAdjustments
+                ))
             }
         } catch {
             await MainActor.run {

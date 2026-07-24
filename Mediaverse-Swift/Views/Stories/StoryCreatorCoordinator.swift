@@ -157,10 +157,10 @@ struct StoryCreatorCoordinator: View {
         .fullScreenCover(isPresented: $isCameraPresented) {
             StoryCameraView(maxDuration: storyMaxDurationSeconds) {
                 handleCameraCancel()
-            } onPhoto: { data, image in
+            } onPhoto: { photo in
                 shouldDismissOnCameraCancel = false
                 isCameraPresented = false
-                Task { await importCameraPhoto(data: data, image: image) }
+                Task { await importCameraPhoto(photo) }
             } onLibraryVideo: { url in
                 shouldDismissOnCameraCancel = false
                 isCameraPresented = false
@@ -822,15 +822,25 @@ struct StoryCreatorCoordinator: View {
     }
 
 
-    private func importCameraPhoto(data: Data, image: UIImage) async {
+    private func importCameraPhoto(_ photo: StoryCapturedPhoto) async {
         isPreparingMedia = true
         defer { isPreparingMedia = false }
 
         do {
-            let normalized = image.storyPortraitNormalized
-            let jpegData = normalized.jpegData(compressionQuality: 0.92) ?? data
-            currentProject = try await createImageDraft(image: normalized, jpegData: jpegData)
-            draftMedia = .image(data: jpegData, preview: normalized)
+            let normalized = photo.image.storyPortraitNormalized
+            let jpegData = normalized.jpegData(compressionQuality: 0.92) ?? photo.data
+            currentProject = try await createImageDraft(
+                image: normalized,
+                jpegData: jpegData,
+                filterId: photo.filterId,
+                adjustments: photo.adjustments
+            )
+            let preview = StoryFrameFilterRenderer.renderImage(
+                normalized,
+                filterId: photo.filterId,
+                adjustments: photo.adjustments
+            )
+            draftMedia = .image(data: preview.jpegData(compressionQuality: 0.88) ?? jpegData, preview: preview)
             errorText = nil
             step = .editor
         } catch {
@@ -898,7 +908,12 @@ struct StoryCreatorCoordinator: View {
         return metrics.height >= metrics.width
     }
 
-    private func createImageDraft(image: UIImage, jpegData: Data) async throws -> Project {
+    private func createImageDraft(
+        image: UIImage,
+        jpegData: Data,
+        filterId: String? = nil,
+        adjustments: ColorAdjust = .neutral
+    ) async throws -> Project {
         var project = Project.storyDraft(
             title: "Story Draft",
             destination: nil
@@ -917,7 +932,10 @@ struct StoryCreatorCoordinator: View {
                 nominalFrameRate: 0,
                 durationSeconds: 5
             )
-            try project.addStoryClip(.storyClip(assetRef: assetRef, durationSeconds: 5))
+            var clip = VideoClip.storyClip(assetRef: assetRef, durationSeconds: 5)
+            clip.filterId = filterId
+            clip.adjustments = adjustments
+            try project.addStoryClip(clip)
             try await ProjectStore.shared.save(project)
             return project
         } catch {

@@ -715,6 +715,7 @@ final class StoryTimelineEditor: ObservableObject {
     func previewEffectPreset(_ preset: StoryEffectPreset) {
         guard let index = selectedClipIndex else { return }
         project.tracks.videoClips[index].filterId = preset.id
+        project.tracks.videoClips[index].filterIntensity = 1
         project.tracks.videoClips[index].adjustments = preset.adjustments
         selectedClipID = project.tracks.videoClips[index].id
         errorMessage = nil
@@ -728,6 +729,7 @@ final class StoryTimelineEditor: ObservableObject {
         }
         var updated = project
         updated.tracks.videoClips[index].filterId = preset.id
+        updated.tracks.videoClips[index].filterIntensity = 1
         updated.tracks.videoClips[index].adjustments = preset.adjustments
         await commit(updated, label: "Filter", before: before)
         selectedClipID = updated.tracks.videoClips[index].id
@@ -745,6 +747,21 @@ final class StoryTimelineEditor: ObservableObject {
         }
         selectedClipID = project.tracks.videoClips[index].id
         errorMessage = nil
+    }
+
+    func previewSelectedClipFilterIntensity(_ intensity: Float) {
+        guard let index = selectedClipIndex else { return }
+        project.tracks.videoClips[index].filterIntensity = min(max(intensity, 0), 1)
+        selectedClipID = project.tracks.videoClips[index].id
+        errorMessage = nil
+    }
+
+    func commitSelectedClipLook(baselineClip: VideoClip) async {
+        guard let index = selectedClipIndex else { return }
+        var before = project
+        before.tracks.videoClips[index] = baselineClip
+        await commit(project, label: "Look", before: before)
+        selectedClipID = project.tracks.videoClips[index].id
     }
 
     func commitSelectedClipAdjustments(_ adjustments: ColorAdjust, baselineClip: VideoClip?) async {

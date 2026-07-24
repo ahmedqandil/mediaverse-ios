@@ -199,43 +199,58 @@ private enum StoryCoreImageEffects {
 enum StoryFrameFilterRenderer {
     private static let ciContext = CIContext(options: [.cacheIntermediates: false])
 
-    static func renderPreviewImage(from pixelBuffer: CVPixelBuffer, filterId: String?, adjustments: ColorAdjust) -> UIImage? {
-        guard hasActiveFilter(filterId: filterId, adjustments: adjustments) else { return nil }
+    static func renderPreviewImage(from pixelBuffer: CVPixelBuffer, filterId: String?, intensity: Float = 1, adjustments: ColorAdjust) -> UIImage? {
+        guard hasActiveFilter(filterId: filterId, intensity: intensity, adjustments: adjustments) else { return nil }
         let source = CIImage(cvPixelBuffer: pixelBuffer)
         let longestSide = max(source.extent.width, source.extent.height)
         let scale = min(1, 540 / max(longestSide, 1))
         let previewInput = source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        guard let output = filteredCIImage(previewInput, filterId: filterId, adjustments: adjustments),
+        guard let output = filteredCIImage(previewInput, filterId: filterId, intensity: intensity, adjustments: adjustments),
               let cgImage = ciContext.createCGImage(output, from: output.extent) else { return nil }
         return UIImage(cgImage: cgImage, scale: UIScreen.main.scale, orientation: .up)
     }
 
-    static func renderImage(_ image: UIImage, filterId: String?, adjustments: ColorAdjust) -> UIImage {
-        guard hasActiveFilter(filterId: filterId, adjustments: adjustments),
+    static func renderImage(_ image: UIImage, filterId: String?, intensity: Float = 1, adjustments: ColorAdjust) -> UIImage {
+        guard hasActiveFilter(filterId: filterId, intensity: intensity, adjustments: adjustments),
               let input = CIImage(image: image),
-              let output = filteredCIImage(input, filterId: filterId, adjustments: adjustments),
+              let output = filteredCIImage(input, filterId: filterId, intensity: intensity, adjustments: adjustments),
               let cgImage = ciContext.createCGImage(output, from: output.extent) else { return image }
         return UIImage(cgImage: cgImage, scale: image.scale, orientation: .up)
     }
 
-    static func hasActiveFilter(filterId: String?, adjustments: ColorAdjust) -> Bool {
+    static func hasActiveFilter(filterId: String?, intensity: Float = 1, adjustments: ColorAdjust) -> Bool {
+        guard intensity > 0.001 else { return false }
         guard let filterId else { return adjustments != .neutral }
         return filterId != StoryEffectCatalog.presets.first?.id || adjustments != .neutral
     }
 
-    static func filteredCIImage(_ image: CIImage, filterId: String?, adjustments: ColorAdjust) -> CIImage? {
+    static func filteredCIImage(_ image: CIImage, filterId: String?, intensity: Float = 1, adjustments: ColorAdjust) -> CIImage? {
         let preset = StoryEffectCatalog.preset(id: filterId)
         var output = applyColorAdjustments(adjustments, to: image)
         output = applyRenderEffect(preset.renderEffect, to: output)
-        return output.cropped(to: image.extent)
+        return blend(source: image, filtered: output, intensity: intensity)
     }
 
-    static func realtimePreviewCIImage(_ image: CIImage, filterId: String?, adjustments: ColorAdjust) -> CIImage? {
+    static func realtimePreviewCIImage(_ image: CIImage, filterId: String?, intensity: Float = 1, adjustments: ColorAdjust) -> CIImage? {
         let preset = StoryEffectCatalog.preset(id: filterId)
         var output = applyCoreImageBasicColorAdjustments(adjustments, to: image)
         output = applyCoreImageFinishingAdjustments(adjustments, to: output)
         output = applyCoreImageFallbackEffect(preset.renderEffect, to: output)
-        return output.cropped(to: image.extent)
+        return blend(source: image, filtered: output, intensity: intensity)
+    }
+
+    private static func blend(source: CIImage, filtered: CIImage, intensity: Float) -> CIImage {
+        let amount = min(max(intensity, 0), 1)
+        guard amount < 0.999 else { return filtered.cropped(to: source.extent) }
+        guard amount > 0.001 else { return source }
+        return filtered
+            .applyingFilter("CIBlendWithAlphaMask", parameters: [
+                kCIInputBackgroundImageKey: source,
+                kCIInputMaskImageKey: CIImage(
+                    color: CIColor(red: CGFloat(amount), green: CGFloat(amount), blue: CGFloat(amount), alpha: 1)
+                ).cropped(to: source.extent)
+            ])
+            .cropped(to: source.extent)
     }
 
     private static func applyColorAdjustments(_ adjustments: ColorAdjust, to image: CIImage) -> CIImage {
@@ -520,12 +535,27 @@ struct RenderedOverlay {
 struct StoryEffectGraph {
     func render(sourceImage: CIImage, time: CMTime, clip: VideoClip, overlays: [RenderedOverlay], canvas: CanvasSpec, useMetalPetal: Bool = true) -> CIImage {
         let sourceExtent = sourceImage.extent
-        var image = sourceImage
-        image = applyColorAdjustments(clip.adjustments, to: image, useMetalPetal: useMetalPetal).cropped(to: sourceExtent)
-        image = applyRenderEffect(StoryEffectCatalog.preset(id: clip.filterId).renderEffect, to: image, useMetalPetal: useMetalPetal).cropped(to: sourceExtent)
+        var filtered = applyColorAdjustments(clip.adjustments, to: sourceImage, useMetalPetal: useMetalPetal).cropped(to: sourceExtent)
+        filtered = applyRenderEffect(StoryEffectCatalog.preset(id: clip.filterId).renderEffect, to: filtered, useMetalPetal: useMetalPetal).cropped(to: sourceExtent)
+        var image = blend(source: sourceImage, filtered: filtered, intensity: clip.filterIntensity)
         image = applyTransform(clip.transform, crop: clip.cropRect, to: image, canvas: canvas)
         image = composite(overlays: overlays, over: image)
         return image
+    }
+
+    private func blend(source: CIImage, filtered: CIImage, intensity: Float) -> CIImage {
+        let amount = min(max(intensity, 0), 1)
+        guard amount < 0.999 else { return filtered.cropped(to: source.extent) }
+        guard amount > 0.001 else { return source }
+        let mask = CIImage(
+            color: CIColor(red: CGFloat(amount), green: CGFloat(amount), blue: CGFloat(amount), alpha: 1)
+        ).cropped(to: source.extent)
+        return filtered
+            .applyingFilter("CIBlendWithAlphaMask", parameters: [
+                kCIInputBackgroundImageKey: source,
+                kCIInputMaskImageKey: mask
+            ])
+            .cropped(to: source.extent)
     }
 
     private func applyColorAdjustments(_ adjustments: ColorAdjust, to image: CIImage, useMetalPetal: Bool) -> CIImage {

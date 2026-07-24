@@ -691,3 +691,64 @@ final class StoryTemporaryMediaTests: XCTestCase {
         XCTAssertFalse(StoryTemporaryMedia.isOwned(outsideTemporaryRoot))
     }
 }
+
+@MainActor
+final class StoryLookEditingTests: XCTestCase {
+    func testFilterIntensityPreviewClampsWithoutCreatingUndo() {
+        let editor = StoryTimelineEditor(project: projectWithClip())
+
+        editor.previewSelectedClipFilterIntensity(4)
+
+        XCTAssertEqual(editor.selectedClip?.filterIntensity, 1)
+        XCTAssertFalse(editor.canUndo)
+    }
+
+    func testLookSessionCommitsFilterAndAdjustmentsAsOneUndoableEdit() async {
+        let project = projectWithClip()
+        let editor = StoryTimelineEditor(project: project)
+        let original = try! XCTUnwrap(editor.selectedClip)
+        let preset = StoryEffectCatalog.preset(id: "cinema")
+
+        editor.previewEffectPreset(preset)
+        editor.previewSelectedClipFilterIntensity(0.62)
+        var customized = preset.adjustments
+        customized.brightness = 0.12
+        editor.previewSelectedClipAdjustments(customized)
+        await editor.commitSelectedClipLook(baselineClip: original)
+
+        XCTAssertTrue(editor.canUndo)
+        XCTAssertEqual(editor.selectedClip?.filterId, "cinema")
+        XCTAssertEqual(try! XCTUnwrap(editor.selectedClip?.filterIntensity), 0.62, accuracy: 0.001)
+        XCTAssertEqual(try! XCTUnwrap(editor.selectedClip?.adjustments.brightness), 0.12, accuracy: 0.001)
+
+        await editor.undo()
+
+        XCTAssertEqual(editor.selectedClip, original)
+        XCTAssertFalse(editor.canUndo)
+    }
+
+    func testUnchangedLookSessionDoesNotCreateUndo() async {
+        let project = projectWithClip()
+        let editor = StoryTimelineEditor(project: project)
+        let original = try! XCTUnwrap(editor.selectedClip)
+
+        await editor.commitSelectedClipLook(baselineClip: original)
+
+        XCTAssertFalse(editor.canUndo)
+        XCTAssertEqual(editor.selectedClip, original)
+    }
+
+    private func projectWithClip() -> Project {
+        var project = Project.storyDraft(title: "Look test", destination: nil)
+        let asset = AssetRef.make(
+            kind: .image,
+            relativePath: "media/source.jpg",
+            naturalWidth: 1080,
+            naturalHeight: 1920,
+            nominalFrameRate: 0,
+            durationSeconds: 5
+        )
+        try! project.addStoryClip(.storyClip(assetRef: asset, durationSeconds: 5))
+        return project
+    }
+}

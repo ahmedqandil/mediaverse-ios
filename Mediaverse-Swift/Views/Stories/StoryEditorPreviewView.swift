@@ -31,8 +31,7 @@ private struct PickedStoryOverlayVideo: Transferable {
 
 private enum StoryEditorTool: String, Identifiable, Equatable {
     case clip
-    case filters
-    case adjust
+    case look
     case audio
     case stickers
     case music
@@ -328,6 +327,9 @@ struct StoryEditorPreviewView: View {
     @State private var previewRenderTask: Task<Void, Never>?
     @State private var filterHUDVisible = false
     @State private var filterHUDTask: Task<Void, Never>?
+    @State private var filterThumbnailTask: Task<Void, Never>?
+    @State private var filterThumbnails: [String: UIImage] = [:]
+    @State private var isComparingOriginal = false
     @State private var previewPlayer: AVPlayer?
     @State private var previewPlayerURL: URL?
     @State private var previewPlayerSignature = ""
@@ -381,7 +383,8 @@ struct StoryEditorPreviewView: View {
     @State private var overlayAlignmentGuide = OverlayAlignmentGuide()
     @State private var clipBaselineClip: VideoClip?
     @State private var filterBaselineClip: VideoClip?
-    @State private var adjustmentBaselineClip: VideoClip?
+    @State private var lookSection: StoryLookSection = .filters
+    @State private var filterCategory: StoryFilterCategory = .popular
     @State private var audioBaselineClip: VideoClip?
     @State private var musicBaselineClip: AudioClip?
     @State private var toolSheetDismissShouldCancel = true
@@ -454,7 +457,11 @@ struct StoryEditorPreviewView: View {
     }
 
     private func shouldUseVideoComposition(for clip: VideoClip) -> Bool {
-        StoryEffectCatalog.preset(id: clip.filterId).renderEffect != .none
+        StoryFrameFilterRenderer.hasActiveFilter(
+            filterId: clip.filterId,
+            intensity: clip.filterIntensity,
+            adjustments: clip.adjustments
+        )
     }
 
     private func previewPlayerSignature(url: URL, clip: VideoClip) -> String {
@@ -462,6 +469,7 @@ struct StoryEditorPreviewView: View {
         return [
             url.path,
             clip.filterId ?? "neutral",
+            "\(clip.filterIntensity)",
             preset.renderEffect.rawValue,
             "\(clip.adjustments.brightness)",
             "\(clip.adjustments.contrast)",
@@ -469,7 +477,8 @@ struct StoryEditorPreviewView: View {
             "\(clip.adjustments.warmth)",
             "\(clip.adjustments.vignette)",
             "\(clip.muted)",
-            "\(clip.volume)"
+            "\(clip.volume)",
+            "\(isComparingOriginal)"
         ].joined(separator: "|")
     }
 
@@ -529,6 +538,7 @@ struct StoryEditorPreviewView: View {
         .onDisappear {
             previewRenderTask?.cancel()
             filterHUDTask?.cancel()
+            filterThumbnailTask?.cancel()
             musicImportTask?.cancel()
             mediaOverlayImportTask?.cancel()
             networkStickerTask?.cancel()
@@ -566,6 +576,23 @@ struct StoryEditorPreviewView: View {
         }
         .onChange(of: activeTool?.id) { oldValue, newValue in
             handleToolPreviewModeChange(from: oldValue, to: newValue)
+            if newValue == StoryEditorTool.look.id {
+                filterCategory = StoryFilterCategory.category(for: currentFilterPreset.id)
+                scheduleFilterThumbnails()
+            }
+        }
+        .onChange(of: editor.selectedClipID) { _, _ in
+            filterThumbnails.removeAll(keepingCapacity: true)
+            if activeTool == .look {
+                scheduleFilterThumbnails()
+            }
+        }
+        .onChange(of: isComparingOriginal) { _, _ in
+            if hasVideoPreviewClip, !usesRenderedToolPreview {
+                configureVideoPreviewPlayer()
+            } else {
+                schedulePreviewRender()
+            }
         }
         .sheet(item: $activeTool, onDismiss: {
             if toolSheetDismissShouldCancel {
@@ -664,7 +691,7 @@ struct StoryEditorPreviewView: View {
                     Spacer(minLength: 8)
 
                     if let preset = activeFilterPreset {
-                        Text(preset.name)
+                        Text(isCurrentLookEdited ? "\(preset.name) · Edited" : preset.name)
                             .font(.system(size: 12, weight: .bold))
                             .foregroundStyle(.white)
                             .lineLimit(1)
@@ -719,7 +746,7 @@ struct StoryEditorPreviewView: View {
                 HStack {
                     Spacer()
                     Button(action: shareStory) {
-                        Label("Share", systemImage: "paperplane.fill")
+                        Label("Next", systemImage: "arrow.right")
                             .font(.system(size: 13, weight: .bold))
                             .labelStyle(.titleAndIcon)
                             .foregroundStyle(.black)
@@ -729,7 +756,7 @@ struct StoryEditorPreviewView: View {
                             .clipShape(Capsule())
                             .shadow(color: .black.opacity(0.28), radius: 10, y: 4)
                     }
-                    .accessibilityLabel("Share story")
+                    .accessibilityLabel("Continue to share settings")
                     .padding(.trailing, max(proxy.safeAreaInsets.trailing + 18, 18))
                     .padding(.bottom, max(proxy.safeAreaInsets.bottom + 104, 124))
                 }
@@ -1436,6 +1463,12 @@ struct StoryEditorPreviewView: View {
         return preset.id == "neutral" ? nil : preset
     }
 
+    private var isCurrentLookEdited: Bool {
+        guard let clip = editor.selectedClip else { return false }
+        let preset = StoryEffectCatalog.preset(id: clip.filterId)
+        return clip.adjustments != preset.adjustments || abs(clip.filterIntensity - 1) > 0.001
+    }
+
     private func presentFilterHUD() {
         filterHUDTask?.cancel()
         withAnimation(.easeOut(duration: 0.16)) {
@@ -1465,8 +1498,7 @@ struct StoryEditorPreviewView: View {
                         VStack(spacing: 10) {
                             if editor.selectedClip != nil {
                                 storyToolButton(.clip, icon: "slider.horizontal.3")
-                                storyToolButton(.filters, icon: "camera.filters")
-                                storyToolButton(.adjust, icon: "dial.medium")
+                                storyToolButton(.look, icon: "camera.filters")
                             }
                             if shouldShowAudioTool {
                                 storyToolButton(.audio, icon: editor.selectedClip?.muted == true ? "speaker.slash.fill" : "speaker.wave.2.fill")
@@ -1567,7 +1599,7 @@ struct StoryEditorPreviewView: View {
     }
 
     private func cancelLiveToolPreview() {
-        if let baseline = clipBaselineClip ?? filterBaselineClip ?? adjustmentBaselineClip ?? audioBaselineClip {
+        if let baseline = clipBaselineClip ?? filterBaselineClip ?? audioBaselineClip {
             editor.previewSelectedClip(baseline)
         }
         if let baseline = musicBaselineClip {
@@ -1579,7 +1611,6 @@ struct StoryEditorPreviewView: View {
     private func clearLiveToolBaselines() {
         clipBaselineClip = nil
         filterBaselineClip = nil
-        adjustmentBaselineClip = nil
         audioBaselineClip = nil
         musicBaselineClip = nil
     }
@@ -1659,13 +1690,9 @@ struct StoryEditorPreviewView: View {
             if let clip = editor.selectedClip {
                 clipInspectorControls(for: clip)
             }
-        case .filters:
+        case .look:
             if let clip = editor.selectedClip {
-                filterControls(for: clip)
-            }
-        case .adjust:
-            if let clip = editor.selectedClip {
-                adjustmentControls(for: clip)
+                lookControls(for: clip)
             }
         case .audio:
             if let clip = editor.selectedClip, clip.assetRef.kind == .video {
@@ -1684,10 +1711,8 @@ struct StoryEditorPreviewView: View {
         switch tool {
         case .clip:
             return 360
-        case .filters:
-            return 300
-        case .adjust:
-            return 340
+        case .look:
+            return 420
         case .audio, .music:
             return 260
         case .stickers:
@@ -1698,8 +1723,7 @@ struct StoryEditorPreviewView: View {
     private func toolDrawerTitle(_ tool: StoryEditorTool) -> String {
         switch tool {
         case .clip: return "Clip"
-        case .filters: return "Filters"
-        case .adjust: return "Adjust"
+        case .look: return "Look"
         case .audio: return "Audio"
         case .stickers: return "Stickers"
         case .music: return "Music"
@@ -1717,10 +1741,7 @@ struct StoryEditorPreviewView: View {
 
     private func commitLiveToolPreview() async {
         if let baseline = filterBaselineClip {
-            await editor.commitEffectPreset(currentFilterPreset, baselineClip: baseline)
-        }
-        if let baseline = adjustmentBaselineClip, let clip = editor.selectedClip {
-            await editor.commitSelectedClipAdjustments(clip.adjustments, baselineClip: baseline)
+            await editor.commitSelectedClipLook(baselineClip: baseline)
         }
         if let baseline = audioBaselineClip, let clip = editor.selectedClip {
             await editor.commitSelectedClipAudio(volume: clip.volume, muted: clip.muted, baselineClip: baseline)
@@ -1730,6 +1751,42 @@ struct StoryEditorPreviewView: View {
         }
         if let baseline = musicBaselineClip, let music = editor.project.tracks.audioClips.first {
             await editor.commitMusicVolume(music.volume, baselineClip: baseline)
+        }
+    }
+
+    private func beginLookPreview(from clip: VideoClip) {
+        filterBaselineClip = filterBaselineClip ?? clip
+    }
+
+    private func lookControls(for clip: VideoClip) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Picker("Look controls", selection: $lookSection) {
+                ForEach(StoryLookSection.allCases) { section in
+                    Text(section.rawValue).tag(section)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            HStack {
+                Text("Hold the preview to compare with the original.")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(C.textTertiary)
+                Spacer()
+                Button(isComparingOriginal ? "Show edit" : "Compare") {
+                    isComparingOriginal.toggle()
+                }
+                .font(.system(size: 11, weight: .semibold))
+                .buttonStyle(.plain)
+                .foregroundStyle(C.watch)
+                .accessibilityLabel(isComparingOriginal ? "Show edited look" : "Show original media")
+            }
+
+            switch lookSection {
+            case .filters:
+                filterControls(for: clip)
+            case .adjust:
+                adjustmentControls(for: clip)
+            }
         }
     }
 
@@ -1859,17 +1916,42 @@ struct StoryEditorPreviewView: View {
         VStack(alignment: .leading, spacing: 12) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(StoryEffectCatalog.presets) { preset in
+                    ForEach(StoryFilterCategory.allCases) { category in
+                        Button(category.rawValue) {
+                            filterCategory = category
+                        }
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(filterCategory == category ? .black : C.textMuted)
+                        .padding(.horizontal, 11)
+                        .frame(height: 30)
+                        .background(filterCategory == category ? C.watch : C.elevated)
+                        .clipShape(Capsule())
+                    }
+                }
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(filterCategory.presets) { preset in
                         Button {
                             stopPlayback()
-                            filterBaselineClip = filterBaselineClip ?? clip
+                            beginLookPreview(from: clip)
                             editor.previewEffectPreset(preset)
                             presentFilterHUD()
                         } label: {
                             VStack(spacing: 6) {
                                 RoundedRectangle(cornerRadius: 7)
-                                    .fill(filterSwatchGradient(for: preset))
                                     .frame(width: 54, height: 68)
+                                    .overlay {
+                                        if let thumbnail = filterThumbnails[preset.id] {
+                                            Image(uiImage: thumbnail)
+                                                .resizable()
+                                                .scaledToFill()
+                                        } else {
+                                            filterSwatchGradient(for: preset)
+                                        }
+                                    }
+                                    .clipShape(RoundedRectangle(cornerRadius: 7))
                                     .overlay {
                                         if currentFilterPreset.id == preset.id {
                                             Image(systemName: "checkmark.circle.fill")
@@ -1891,23 +1973,31 @@ struct StoryEditorPreviewView: View {
                 .padding(.vertical, 2)
             }
 
-            HStack(spacing: 8) {
-                editorButton("Apply Filter", systemImage: "checkmark") {
-                    await editor.commitEffectPreset(currentFilterPreset, baselineClip: filterBaselineClip)
-                    filterBaselineClip = nil
-                }
-                editorButton("Neutral", systemImage: "circle.slash") {
-                    let neutral = StoryEffectCatalog.preset(id: "neutral")
-                    filterBaselineClip = filterBaselineClip ?? clip
-                    editor.previewEffectPreset(neutral)
-                    presentFilterHUD()
+            if currentFilterPreset.id != "neutral" {
+                adjustmentSlider(
+                    "Intensity",
+                    value: clip.filterIntensity,
+                    range: 0...1,
+                    displayValue: Int((clip.filterIntensity * 100).rounded())
+                ) { value in
+                    beginLookPreview(from: clip)
+                    editor.previewSelectedClipFilterIntensity(value)
                 }
             }
+
+            Button {
+                let neutral = StoryEffectCatalog.preset(id: "neutral")
+                beginLookPreview(from: clip)
+                editor.previewEffectPreset(neutral)
+                editor.previewSelectedClipFilterIntensity(1)
+                presentFilterHUD()
+            } label: {
+                Label("Remove filter", systemImage: "circle.slash")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(C.textMuted)
         }
-        .padding(12)
-        .background(C.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
     }
 
     private func adjustmentControls(for clip: VideoClip) -> some View {
@@ -1929,26 +2019,19 @@ struct StoryEditorPreviewView: View {
             }
 
             HStack(spacing: 8) {
-                editorButton("Apply Adjustments", systemImage: "checkmark") {
-                    await editor.commitSelectedClipAdjustments(clip.adjustments, baselineClip: adjustmentBaselineClip)
-                    adjustmentBaselineClip = nil
-                }
-                editorButton("Reset", systemImage: "arrow.counterclockwise") {
-                    adjustmentBaselineClip = adjustmentBaselineClip ?? clip
-                    editor.previewSelectedClipAdjustments(.neutral)
+                editorButton("Reset to \(currentFilterPreset.name)", systemImage: "arrow.counterclockwise") {
+                    beginLookPreview(from: clip)
+                    editor.previewSelectedClipAdjustments(currentFilterPreset.adjustments)
                 }
             }
         }
-        .padding(12)
-        .background(C.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
     }
 
     private func adjustmentSlider(
         _ title: String,
         value: Float,
         range: ClosedRange<Float>,
+        displayValue: Int? = nil,
         onChange: @escaping (Float) -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -1957,7 +2040,7 @@ struct StoryEditorPreviewView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(C.textMuted)
                 Spacer()
-                Text(String(format: "%.2f", value))
+                Text(displayValue.map(String.init) ?? normalizedAdjustmentValue(title: title, value: value))
                     .font(.system(size: 10, weight: .bold))
                     .fontDesign(.monospaced)
                     .foregroundStyle(C.textTertiary)
@@ -1970,14 +2053,34 @@ struct StoryEditorPreviewView: View {
                 in: range
             )
             .tint(C.watch)
+            .accessibilityValue(displayValue.map { "\($0) percent" } ?? normalizedAdjustmentValue(title: title, value: value))
         }
     }
 
     private func previewAdjustment(_ clip: VideoClip, mutate: (inout ColorAdjust) -> Void) {
-        adjustmentBaselineClip = adjustmentBaselineClip ?? clip
+        beginLookPreview(from: clip)
         var adjustments = clip.adjustments
         mutate(&adjustments)
         editor.previewSelectedClipAdjustments(adjustments)
+    }
+
+    private func normalizedAdjustmentValue(title: String, value: Float) -> String {
+        let normalized: Float
+        switch title {
+        case "Brightness":
+            normalized = value / 0.35 * 100
+        case "Contrast":
+            normalized = (value - 1) / (value >= 1 ? 0.45 : 0.35) * 100
+        case "Saturation":
+            normalized = (value - 1) / (value >= 1 ? 0.8 : 1) * 100
+        case "Warmth":
+            normalized = value * 100
+        case "Vignette":
+            normalized = value / 0.65 * 100
+        default:
+            normalized = value * 100
+        }
+        return "\(Int(min(max(normalized, -100), 100).rounded()))"
     }
 
     private func filterSwatchGradient(for preset: StoryEffectPreset) -> LinearGradient {
@@ -2001,6 +2104,46 @@ struct StoryEditorPreviewView: View {
         default:
             return LinearGradient(colors: [.white.opacity(0.68), .gray.opacity(0.42)], startPoint: .topLeading, endPoint: .bottomTrailing)
         }
+    }
+
+    private func scheduleFilterThumbnails() {
+        filterThumbnailTask?.cancel()
+        guard let clip = editor.selectedClip, let assetStore else { return }
+        filterThumbnailTask = Task { @MainActor in
+            guard let source = await filterThumbnailSource(for: clip, assetStore: assetStore) else { return }
+            var generated: [String: UIImage] = [:]
+            for preset in StoryEffectCatalog.presets {
+                guard !Task.isCancelled else { return }
+                generated[preset.id] = StoryFrameFilterRenderer.renderImage(
+                    source,
+                    filterId: preset.id,
+                    adjustments: preset.adjustments
+                ).storyFilterThumbnail
+                if generated.count.isMultiple(of: 4) {
+                    filterThumbnails.merge(generated) { _, new in new }
+                    generated.removeAll(keepingCapacity: true)
+                    await Task.yield()
+                }
+            }
+            filterThumbnails.merge(generated) { _, new in new }
+        }
+    }
+
+    private func filterThumbnailSource(for clip: VideoClip, assetStore: AssetStore) async -> UIImage? {
+        let url = assetStore.absoluteURL(for: clip.assetRef.relativePath)
+        if clip.assetRef.kind == .image {
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return UIImage(data: data)
+        }
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 180, height: 240)
+        let sampleSeconds = clip.sourceStartSeconds + min(clip.sourceDurationSeconds * 0.35, 1)
+        guard let result = try? await generator.image(at: CMTime(seconds: sampleSeconds, preferredTimescale: 600)) else {
+            return nil
+        }
+        return UIImage(cgImage: result.image)
     }
 
     private func audioControls(for clip: VideoClip) -> some View {
@@ -3689,11 +3832,45 @@ struct StoryEditorPreviewView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    guard activeTool == .look, editor.selectedOverlayID == nil else { return }
+                    if !isComparingOriginal {
+                        isComparingOriginal = true
+                    }
+                }
+                .onEnded { _ in
+                    isComparingOriginal = false
+                }
+        )
+        .overlay(alignment: .top) {
+            if isComparingOriginal {
+                Text("Original")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .frame(height: 30)
+                    .background(Color.black.opacity(0.52))
+                    .clipShape(Capsule())
+                    .padding(.top, 116)
+                    .allowsHitTesting(false)
+            }
+        }
         .accessibilityLabel("Story editor preview")
     }
 
     private func previewRenderProject(from project: Project) -> Project {
         var previewProject = project
+        if isComparingOriginal {
+            previewProject.tracks.videoClips = previewProject.tracks.videoClips.map { clip in
+                var originalClip = clip
+                originalClip.filterId = "neutral"
+                originalClip.filterIntensity = 0
+                originalClip.adjustments = .neutral
+                return originalClip
+            }
+        }
         let originalWidth = max(project.canvas.width, 1)
         let originalHeight = max(project.canvas.height, 1)
         let previewWidth = min(originalWidth, 360)
@@ -3729,6 +3906,7 @@ struct StoryEditorPreviewView: View {
                 "\(clip.speed)",
                 "\(clip.reversed)",
                 clip.filterId ?? "neutral",
+                "\(clip.filterIntensity)",
                 "\(clip.adjustments.brightness)",
                 "\(clip.adjustments.contrast)",
                 "\(clip.adjustments.saturation)",
@@ -3935,11 +4113,12 @@ struct StoryEditorPreviewView: View {
             asset: asset,
             automaticallyLoadedAssetKeys: ["tracks", "duration", "playable"]
         )
-        if shouldUseVideoComposition(for: clip) {
+        if shouldUseVideoComposition(for: clip), !isComparingOriginal {
             item.videoComposition = AVVideoComposition(asset: asset) { request in
                 guard let output = StoryFrameFilterRenderer.realtimePreviewCIImage(
                     request.sourceImage,
                     filterId: clip.filterId,
+                    intensity: clip.filterIntensity,
                     adjustments: clip.adjustments
                 ) else {
                     request.finish(with: request.sourceImage, context: nil)
@@ -4151,6 +4330,56 @@ struct StoryEditorPreviewView: View {
         guard value.isFinite else { return "0:00" }
         let seconds = max(Int(value.rounded(.down)), 0)
         return "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
+    }
+}
+
+private enum StoryLookSection: String, CaseIterable, Identifiable {
+    case filters = "Filters"
+    case adjust = "Adjust"
+
+    var id: String { rawValue }
+}
+
+private enum StoryFilterCategory: String, CaseIterable, Identifiable {
+    case popular = "Popular"
+    case portrait = "Portrait"
+    case warm = "Warm"
+    case cool = "Cool"
+    case film = "Film"
+    case mono = "B&W"
+
+    var id: String { rawValue }
+
+    var presetIDs: [String] {
+        switch self {
+        case .popular:
+            return ["neutral", "smooth", "warm", "cinema", "vivid", "crisp", "fade", "moody"]
+        case .portrait:
+            return ["neutral", "smooth", "rose", "bright", "warm", "dream"]
+        case .warm:
+            return ["neutral", "warm", "golden", "sunset", "rose", "vintage"]
+        case .cool:
+            return ["neutral", "cool", "aqua", "teal", "cinema", "crisp"]
+        case .film:
+            return ["neutral", "film", "cinema", "fade", "matte", "dream", "moody", "vintage"]
+        case .mono:
+            return ["neutral", "bw", "noir"]
+        }
+    }
+
+    var presets: [StoryEffectPreset] {
+        presetIDs.map { StoryEffectCatalog.preset(id: $0) }
+    }
+
+    static func category(for presetID: String) -> StoryFilterCategory {
+        switch presetID {
+        case "smooth", "rose", "bright": return .portrait
+        case "golden", "sunset", "warm": return .warm
+        case "cool", "aqua", "teal": return .cool
+        case "film", "cinema", "fade", "matte", "dream", "moody", "vintage": return .film
+        case "bw", "noir": return .mono
+        default: return .popular
+        }
     }
 }
 
@@ -4835,6 +5064,23 @@ private enum StoryEditorPreviewError: LocalizedError {
             return "Could not display the rendered story frame."
         case .mediaOverlayImportFailed:
             return "Could not add that photo or video overlay. Choose another item."
+        }
+    }
+}
+
+private extension UIImage {
+    var storyFilterThumbnail: UIImage {
+        let target = CGSize(width: 108, height: 136)
+        let widthScale = target.width / max(size.width, 1)
+        let heightScale = target.height / max(size.height, 1)
+        let scale = max(widthScale, heightScale)
+        let drawSize = CGSize(width: size.width * scale, height: size.height * scale)
+        let origin = CGPoint(
+            x: (target.width - drawSize.width) / 2,
+            y: (target.height - drawSize.height) / 2
+        )
+        return UIGraphicsImageRenderer(size: target).image { _ in
+            draw(in: CGRect(origin: origin, size: drawSize))
         }
     }
 }
