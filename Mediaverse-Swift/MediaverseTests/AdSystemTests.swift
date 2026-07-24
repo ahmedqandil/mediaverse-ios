@@ -989,6 +989,15 @@ final class StoryLookEditingTests: XCTestCase {
         XCTAssertTrue(editor.selectedClip?.resolvedEffectStack.creativeEffects.isEmpty == true)
     }
 
+    func testCreativeEffectCatalogHasUniqueStableIdentifiers() {
+        let ids = StoryCreativeEffectCatalog.presets.map(\.id)
+
+        XCTAssertEqual(Set(ids).count, ids.count)
+        XCTAssertEqual(ids.first, StoryRenderEffect.none.rawValue)
+        XCTAssertTrue(ids.contains(StoryRenderEffect.glow.rawValue))
+        XCTAssertTrue(ids.contains(StoryRenderEffect.kaleidoscope.rawValue))
+    }
+
     func testEffectStackDecodesBeforeCreativeIntensityWasAdded() throws {
         let stack = StoryEffectStack(
             version: 1,

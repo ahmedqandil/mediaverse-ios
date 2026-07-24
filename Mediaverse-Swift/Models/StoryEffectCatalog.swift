@@ -205,6 +205,11 @@ enum StoryRenderEffect: String, Codable, Equatable {
     case halftone
     case sharpen
     case skinSmooth
+    case glow
+    case comic
+    case edges
+    case crystallize
+    case kaleidoscope
 }
 
 enum StoryEffectCatalog {
@@ -254,6 +259,11 @@ enum StoryCreativeEffectCatalog {
         StoryCreativeEffectPreset(effect: .sharpen, name: "Detail", systemImage: "sparkles"),
         StoryCreativeEffectPreset(effect: .pixel, name: "Pixel", systemImage: "square.grid.3x3.fill"),
         StoryCreativeEffectPreset(effect: .dotScreen, name: "Dots", systemImage: "circle.grid.3x3.fill"),
-        StoryCreativeEffectPreset(effect: .halftone, name: "Poster", systemImage: "circle.hexagongrid.fill")
+        StoryCreativeEffectPreset(effect: .halftone, name: "Poster", systemImage: "circle.hexagongrid.fill"),
+        StoryCreativeEffectPreset(effect: .glow, name: "Glow", systemImage: "sun.haze.fill"),
+        StoryCreativeEffectPreset(effect: .comic, name: "Comic", systemImage: "text.bubble.fill"),
+        StoryCreativeEffectPreset(effect: .edges, name: "Edges", systemImage: "scribble.variable"),
+        StoryCreativeEffectPreset(effect: .crystallize, name: "Crystal", systemImage: "diamond.fill"),
+        StoryCreativeEffectPreset(effect: .kaleidoscope, name: "Kaleido", systemImage: "hexagon.fill")
     ]
 }

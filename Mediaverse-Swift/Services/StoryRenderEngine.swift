@@ -59,9 +59,9 @@ func storyLoopedMediaTime(elapsed: Double, duration: Double) -> Double {
 }
 
 private extension StoryRenderEffect {
-    var usesCoreImageBeautyPipeline: Bool {
+    var usesCoreImagePipeline: Bool {
         switch self {
-        case .skinSmooth:
+        case .skinSmooth, .glow, .comic, .edges, .crystallize, .kaleidoscope:
             return true
         default:
             return false
@@ -144,7 +144,7 @@ final class MetalPetalStoryFilterProcessor {
         if adjustments.saturation > 1.001 {
             output = output.adjusting(vibrance: min((adjustments.saturation - 1) * 0.55, 1))
         }
-        if preset.renderEffect.usesCoreImageBeautyPipeline,
+        if preset.renderEffect.usesCoreImagePipeline,
            let ciOutput = try? context.makeCIImage(from: output) {
             let filtered = StoryCoreImageEffects.smoothSkin(ciOutput)
             return MTIImage(ciImage: filtered, isOpaque: true)
@@ -228,6 +228,8 @@ final class MetalPetalStoryFilterProcessor {
             } else {
                 output = input
             }
+        case .glow, .comic, .edges, .crystallize, .kaleidoscope:
+            output = input
         }
 
         return output
@@ -615,7 +617,7 @@ enum StoryFrameFilterRenderer {
 
     private static func applyRenderEffect(_ effect: StoryRenderEffect, to image: CIImage) -> CIImage {
         guard effect != .none else { return image }
-        if effect.usesCoreImageBeautyPipeline {
+        if effect.usesCoreImagePipeline {
             return applyCoreImageFallbackEffect(effect, to: image)
         }
         #if canImport(MetalPetal)
@@ -654,6 +656,26 @@ enum StoryFrameFilterRenderer {
             ])
         case .skinSmooth:
             return StoryCoreImageEffects.smoothSkin(image)
+        case .glow:
+            return image.applyingFilter("CIBloom", parameters: [
+                kCIInputRadiusKey: 12,
+                kCIInputIntensityKey: 0.75
+            ]).cropped(to: image.extent)
+        case .comic:
+            return image.applyingFilter("CIComicEffect").cropped(to: image.extent)
+        case .edges:
+            return image.applyingFilter("CIEdges", parameters: [
+                kCIInputIntensityKey: 2.2
+            ]).cropped(to: image.extent)
+        case .crystallize:
+            return image.applyingFilter("CICrystallize", parameters: [
+                kCIInputRadiusKey: 24
+            ]).cropped(to: image.extent)
+        case .kaleidoscope:
+            return image.applyingFilter("CIKaleidoscope", parameters: [
+                "inputCount": 8,
+                "inputAngle": 0
+            ]).cropped(to: image.extent)
         }
     }
 }
@@ -937,7 +959,7 @@ struct StoryEffectGraph {
 
     private func applyRenderEffect(_ effect: StoryRenderEffect, to image: CIImage, useMetalPetal: Bool) -> CIImage {
         guard effect != .none else { return image }
-        if effect.usesCoreImageBeautyPipeline {
+        if effect.usesCoreImagePipeline {
             return applyCoreImageFallbackEffect(effect, to: image)
         }
         #if canImport(MetalPetal)
@@ -976,6 +998,26 @@ struct StoryEffectGraph {
             ])
         case .skinSmooth:
             return StoryCoreImageEffects.smoothSkin(image)
+        case .glow:
+            return image.applyingFilter("CIBloom", parameters: [
+                kCIInputRadiusKey: 12,
+                kCIInputIntensityKey: 0.75
+            ]).cropped(to: image.extent)
+        case .comic:
+            return image.applyingFilter("CIComicEffect").cropped(to: image.extent)
+        case .edges:
+            return image.applyingFilter("CIEdges", parameters: [
+                kCIInputIntensityKey: 2.2
+            ]).cropped(to: image.extent)
+        case .crystallize:
+            return image.applyingFilter("CICrystallize", parameters: [
+                kCIInputRadiusKey: 24
+            ]).cropped(to: image.extent)
+        case .kaleidoscope:
+            return image.applyingFilter("CIKaleidoscope", parameters: [
+                "inputCount": 8,
+                "inputAngle": 0
+            ]).cropped(to: image.extent)
         }
     }
 
