@@ -522,7 +522,18 @@ struct StoryEditorPreviewView: View {
                         accessibilityReduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.86),
                         value: activeTool?.id
                     )
-                    .simultaneousGesture(canvasTransformGesture)
+                    .overlay {
+                        if activeTool != nil,
+                           !isDrawingPresented,
+                           !isTextComposerPresented,
+                           editor.selectedOverlayID == nil {
+                            CanvasMediaTransformGestureLayer(
+                                onBegin: beginCanvasMediaTransform,
+                                onChange: updateCanvasMediaTransform,
+                                onEnd: finishCanvasMediaTransform
+                            )
+                        }
+                    }
             }
 
             if isDrawingPresented {
@@ -1749,41 +1760,35 @@ struct StoryEditorPreviewView: View {
         return -(toolSheetHeight(for: tool) / 2) + 12
     }
 
-    private var canvasTransformGesture: some Gesture {
-        MagnificationGesture()
-            .simultaneously(with: RotationGesture())
-            .onChanged { value in
-                guard !isDrawingPresented,
-                      !isTextComposerPresented,
-                      editor.selectedOverlayID == nil,
-                      let clip = editor.selectedClip else { return }
-                if canvasTransformBaselineClip == nil {
-                    canvasTransformBaselineClip = clip
-                }
-                canvasGestureVisualScale = value.first ?? 1
-                canvasGestureVisualRotation = value.second ?? .zero
-            }
-            .onEnded { value in
-                guard let baseline = canvasTransformBaselineClip else {
-                    canvasTransformBaselineClip = nil
-                    canvasGestureVisualScale = 1
-                    canvasGestureVisualRotation = .zero
-                    return
-                }
-                var transform = baseline.transform
-                transform.scale = min(max(
-                    baseline.transform.scale * Double(value.first ?? 1),
-                    0.5
-                ), 4)
-                transform.rotation = baseline.transform.rotation + (value.second?.radians ?? 0)
-                editor.previewSelectedClipTransform(transform)
-                canvasTransformBaselineClip = nil
-                canvasGestureVisualScale = 1
-                canvasGestureVisualRotation = .zero
-                Task {
-                    await editor.commitSelectedClipTransform(transform, baselineClip: baseline)
-                }
-            }
+    private func beginCanvasMediaTransform() {
+        guard canvasTransformBaselineClip == nil, let clip = editor.selectedClip else { return }
+        canvasTransformBaselineClip = clip
+        canvasGestureVisualScale = 1
+        canvasGestureVisualRotation = .zero
+    }
+
+    private func updateCanvasMediaTransform(scale: Double, rotation: Double) {
+        guard canvasTransformBaselineClip != nil else { return }
+        canvasGestureVisualScale = CGFloat(scale)
+        canvasGestureVisualRotation = Angle(radians: rotation)
+    }
+
+    private func finishCanvasMediaTransform(scale: Double, rotation: Double) {
+        guard let baseline = canvasTransformBaselineClip else {
+            canvasGestureVisualScale = 1
+            canvasGestureVisualRotation = .zero
+            return
+        }
+        var transform = baseline.transform
+        transform.scale = min(max(baseline.transform.scale * scale, 0.5), 4)
+        transform.rotation = baseline.transform.rotation + rotation
+        editor.previewSelectedClipTransform(transform)
+        canvasTransformBaselineClip = nil
+        canvasGestureVisualScale = 1
+        canvasGestureVisualRotation = .zero
+        Task {
+            await editor.commitSelectedClipTransform(transform, baselineClip: baseline)
+        }
     }
 
     @ViewBuilder
@@ -5098,6 +5103,112 @@ private struct InteractiveStickerSizePreferenceKey: PreferenceKey {
 
     static func reduce(value: inout [UUID: CGSize], nextValue: () -> [UUID: CGSize]) {
         value.merge(nextValue()) { _, new in new }
+    }
+}
+
+private struct CanvasMediaTransformGestureLayer: UIViewRepresentable {
+    let onBegin: () -> Void
+    let onChange: (Double, Double) -> Void
+    let onEnd: (Double, Double) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onBegin: onBegin, onChange: onChange, onEnd: onEnd)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        view.backgroundColor = .clear
+        view.isMultipleTouchEnabled = true
+
+        let pinch = UIPinchGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleTransform(_:))
+        )
+        let rotation = UIRotationGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleTransform(_:))
+        )
+        pinch.delegate = context.coordinator
+        rotation.delegate = context.coordinator
+        view.addGestureRecognizer(pinch)
+        view.addGestureRecognizer(rotation)
+        context.coordinator.pinch = pinch
+        context.coordinator.rotation = rotation
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onBegin = onBegin
+        context.coordinator.onChange = onChange
+        context.coordinator.onEnd = onEnd
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onBegin: () -> Void
+        var onChange: (Double, Double) -> Void
+        var onEnd: (Double, Double) -> Void
+        var isTransforming = false
+        var lastScale = 1.0
+        var lastRotation = 0.0
+        weak var pinch: UIPinchGestureRecognizer?
+        weak var rotation: UIRotationGestureRecognizer?
+
+        init(
+            onBegin: @escaping () -> Void,
+            onChange: @escaping (Double, Double) -> Void,
+            onEnd: @escaping (Double, Double) -> Void
+        ) {
+            self.onBegin = onBegin
+            self.onChange = onChange
+            self.onEnd = onEnd
+        }
+
+        @objc func handleTransform(_ recognizer: UIGestureRecognizer) {
+            if recognizer.state == .began, !isTransforming {
+                isTransforming = true
+                lastScale = 1
+                lastRotation = 0
+                onBegin()
+            }
+
+            guard isTransforming else { return }
+            if let pinch, pinch.state == .began || pinch.state == .changed {
+                lastScale = Double(pinch.scale)
+            }
+            if let rotation, rotation.state == .began || rotation.state == .changed {
+                lastRotation = Double(rotation.rotation)
+            }
+            onChange(lastScale, lastRotation)
+
+            if interactionsEnded {
+                let finalScale = lastScale
+                let finalRotation = lastRotation
+                isTransforming = false
+                lastScale = 1
+                lastRotation = 0
+                onEnd(finalScale, finalRotation)
+            }
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
+
+        private var interactionsEnded: Bool {
+            [pinch, rotation].compactMap { $0 }.allSatisfy { recognizer in
+                switch recognizer.state {
+                case .possible, .ended, .cancelled, .failed:
+                    return true
+                case .began, .changed:
+                    return false
+                @unknown default:
+                    return true
+                }
+            }
+        }
     }
 }
 
