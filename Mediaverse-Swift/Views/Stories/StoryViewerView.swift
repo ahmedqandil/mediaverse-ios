@@ -1306,9 +1306,7 @@ private struct LocationStickerView: View {
     }
 
     private func openInMaps() {
-        guard let lat = data.lat, let lng = data.lng else { return }
-        let encoded = data.name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        guard let url = URL(string: "https://maps.apple.com/?q=\(encoded)&ll=\(lat),\(lng)") else { return }
+        guard let url = storyLocationMapsURL(name: data.name, latitude: data.lat, longitude: data.lng) else { return }
         inAppBrowser.open(url)
     }
 }

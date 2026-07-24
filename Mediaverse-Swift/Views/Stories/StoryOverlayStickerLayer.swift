@@ -1,4 +1,18 @@
 import SwiftUI
+
+func storyLocationMapsURL(name: String, latitude: Double?, longitude: Double?) -> URL? {
+    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedName.isEmpty else { return nil }
+
+    var components = URLComponents(string: "https://maps.apple.com/")
+    var queryItems = [URLQueryItem(name: "q", value: trimmedName)]
+    if let latitude, let longitude, latitude.isFinite, longitude.isFinite,
+       (-90...90).contains(latitude), (-180...180).contains(longitude) {
+        queryItems.append(URLQueryItem(name: "ll", value: "\(latitude),\(longitude)"))
+    }
+    components?.queryItems = queryItems
+    return components?.url
+}
 import UIKit
 
 struct StoryOverlayLayout {
@@ -441,9 +455,7 @@ private struct LocationStorySticker: View {
     }
 
     private func openInMaps() {
-        guard let lat = data.lat, let lng = data.lng else { return }
-        let encoded = data.name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        guard let url = URL(string: "https://maps.apple.com/?q=\(encoded)&ll=\(lat),\(lng)") else { return }
+        guard let url = storyLocationMapsURL(name: data.name, latitude: data.lat, longitude: data.lng) else { return }
         inAppBrowser.open(url)
     }
 }

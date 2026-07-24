@@ -980,19 +980,56 @@ struct StoryEditorPreviewView: View {
                 }
                 .padding(.bottom, 8)
 
+                HStack(spacing: 12) {
+                    Image(systemName: "textformat.size.smaller")
+                        .foregroundStyle(.white.opacity(0.72))
+
+                    Slider(value: $composerStyle.fontSize, in: 36...96, step: 2)
+                        .tint(.white)
+                        .accessibilityLabel("Text size")
+                        .accessibilityValue("\(Int(composerStyle.fontSize)) points")
+
+                    Image(systemName: "textformat.size.larger")
+                        .foregroundStyle(.white)
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(Array(composerPalette.enumerated()), id: \.offset) { index, color in
+                            Button {
+                                composerColorIndex = index
+                                composerStyle.color = color
+                            } label: {
+                                Circle()
+                                    .fill(swiftUIColor(color))
+                                    .frame(width: 28, height: 28)
+                                    .overlay {
+                                        Circle()
+                                            .stroke(.white, lineWidth: index == composerColorIndex ? 3 : 1)
+                                            .padding(index == composerColorIndex ? -4 : 0)
+                                    }
+                                    .shadow(color: .black.opacity(0.32), radius: 3, y: 1)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Text color \(index + 1)")
+                            .accessibilityAddTraits(index == composerColorIndex ? .isSelected : [])
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 5)
+                }
+                .padding(.bottom, 8)
+
                 HStack(spacing: 10) {
-                    textComposerTool(icon: "textformat.size", selected: composerStyle.fontSize > 68) {
-                        cycleComposerSize()
-                    }
-                    textComposerTool(icon: "paintpalette.fill", selected: false) {
-                        cycleComposerColor()
-                    }
                     textComposerTool(icon: composerAlignmentIcon, selected: composerStyle.alignment != "center") {
                         cycleComposerAlignment()
                     }
                     textComposerTool(icon: composerStyle.backgroundColor == nil ? "square" : "inset.filled.rectangle", selected: composerStyle.backgroundColor != nil) {
                         toggleComposerBackground()
                     }
+                    Spacer(minLength: 4)
                     Button {
                         saveTextComposer()
                     } label: {
@@ -1006,7 +1043,7 @@ struct StoryEditorPreviewView: View {
                     .disabled(composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityLabel("Done")
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(Color.black.opacity(0.48))
                 .clipShape(Capsule())
@@ -1235,8 +1272,18 @@ struct StoryEditorPreviewView: View {
                 .padding(.vertical, 4)
             }
 
-            if !stickerComposerTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if stickerLocationLatitude != nil {
                 locationComposerPillPreview
+            }
+
+            if stickerLocationLatitude == nil,
+               !stickerComposerTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               locationSearch.completions.isEmpty,
+               locationSearch.errorMessage == nil,
+               !locationSearch.isResolving {
+                Text("Choose a result below so viewers can open this place in Maps.")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.66))
             }
 
             if stickerLocationLatitude == nil, let errorMessage = locationSearch.errorMessage {
@@ -1306,9 +1353,20 @@ struct StoryEditorPreviewView: View {
             Spacer(minLength: 0)
 
             if stickerLocationLatitude != nil {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(C.watch)
+                Button {
+                    stickerComposerTitle = ""
+                    stickerComposerSubtitle = ""
+                    stickerLocationLatitude = nil
+                    stickerLocationLongitude = nil
+                    locationSearch.clear()
+                    isStickerComposerFocused = true
+                } label: {
+                    Text("Change")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(C.watch)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Change selected location")
             }
         }
         .padding(.leading, 12)
@@ -1365,7 +1423,9 @@ struct StoryEditorPreviewView: View {
         switch kind {
         case .link:
             return !title.isEmpty && normalizedStoryLinkURL(from: stickerComposerSubtitle) != nil
-        case .location, .question:
+        case .location:
+            return !title.isEmpty && stickerLocationLatitude != nil && stickerLocationLongitude != nil
+        case .question:
             return !title.isEmpty
         case .poll:
             return !title.isEmpty && configuredStickerOptions.count >= 2

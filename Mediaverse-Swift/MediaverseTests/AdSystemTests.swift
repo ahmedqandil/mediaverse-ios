@@ -727,6 +727,45 @@ final class StoryTemporaryMediaTests: XCTestCase {
     }
 }
 
+final class StoryLocationActionTests: XCTestCase {
+    func testResolvedLocationBuildsMapsURLWithCoordinates() throws {
+        let url = try XCTUnwrap(
+            storyLocationMapsURL(name: "Roman Theatre", latitude: 31.9516, longitude: 35.9393)
+        )
+        let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).compactMap { item in
+            item.value.map { (item.name, $0) }
+        })
+
+        XCTAssertEqual(components.host, "maps.apple.com")
+        XCTAssertEqual(query["q"], "Roman Theatre")
+        XCTAssertEqual(query["ll"], "31.9516,35.9393")
+    }
+
+    func testLegacyLocationWithoutCoordinatesStillOpensMapsSearch() throws {
+        let url = try XCTUnwrap(
+            storyLocationMapsURL(name: "Downtown Amman", latitude: nil, longitude: nil)
+        )
+        let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).compactMap { item in
+            item.value.map { (item.name, $0) }
+        })
+
+        XCTAssertEqual(query["q"], "Downtown Amman")
+        XCTAssertNil(query["ll"])
+    }
+
+    func testInvalidCoordinatesFallBackToNameSearch() throws {
+        let url = try XCTUnwrap(
+            storyLocationMapsURL(name: "Amman", latitude: 200, longitude: .infinity)
+        )
+        let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+
+        XCTAssertFalse((components.queryItems ?? []).contains { $0.name == "ll" })
+        XCTAssertNil(storyLocationMapsURL(name: "   ", latitude: nil, longitude: nil))
+    }
+}
+
 @MainActor
 final class StoryLookEditingTests: XCTestCase {
     func testFilterIntensityPreviewClampsWithoutCreatingUndo() {
