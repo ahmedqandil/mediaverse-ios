@@ -1,5 +1,57 @@
 import Foundation
 
+struct StoryBeautySettings: Codable, Equatable {
+    var intensity: Float
+    var skinSmoothing: Float
+    var skinTone: Float
+    var brightness: Float
+
+    static let off = StoryBeautySettings(
+        intensity: 0,
+        skinSmoothing: 0,
+        skinTone: 0,
+        brightness: 0
+    )
+
+    static let natural = StoryBeautySettings(
+        intensity: 0.55,
+        skinSmoothing: 0.32,
+        skinTone: 0.10,
+        brightness: 0.08
+    )
+
+    var isEnabled: Bool {
+        intensity > 0.001 && (skinSmoothing > 0.001 || skinTone > 0.001 || brightness > 0.001)
+    }
+
+    func clamped() -> StoryBeautySettings {
+        StoryBeautySettings(
+            intensity: min(max(intensity, 0), 1),
+            skinSmoothing: min(max(skinSmoothing, 0), 1),
+            skinTone: min(max(skinTone, -1), 1),
+            brightness: min(max(brightness, -1), 1)
+        )
+    }
+}
+
+struct StoryEffectStack: Codable, Equatable {
+    var version: Int
+    var lookId: String?
+    var lookIntensity: Float
+    var beauty: StoryBeautySettings
+    var creativeEffects: [StoryRenderEffect]
+
+    static let currentVersion = 1
+
+    static let none = StoryEffectStack(
+        version: currentVersion,
+        lookId: nil,
+        lookIntensity: 1,
+        beauty: .off,
+        creativeEffects: []
+    )
+}
+
 struct StoryEffectPreset: Identifiable, Equatable {
     let id: String
     let name: String

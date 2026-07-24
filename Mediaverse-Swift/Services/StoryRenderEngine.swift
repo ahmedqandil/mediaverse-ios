@@ -200,6 +200,90 @@ private enum StoryCoreImageEffects {
         blendedSkinSmoothing(image, smoothness: smoothness, intensity: intensity)
     }
 
+    static func faceAwareBeauty(_ image: CIImage, settings: StoryBeautySettings) -> CIImage {
+        let settings = settings.clamped()
+        guard settings.isEnabled,
+              let detector = CIDetector(
+                ofType: CIDetectorTypeFace,
+                context: nil,
+                options: [CIDetectorAccuracy: CIDetectorAccuracyLow]
+              ) else { return image }
+
+        let faces = detector.features(in: image).compactMap { $0 as? CIFaceFeature }
+        guard !faces.isEmpty else { return image }
+
+        let smoothing = max(settings.skinSmoothing * settings.intensity, 0)
+        var target = smoothing > 0.001
+            ? blendedSkinSmoothing(
+                image,
+                smoothness: 4 + smoothing * 10,
+                intensity: min(0.2 + smoothing * 0.72, 0.88)
+            )
+            : image
+
+        let brightness = settings.brightness * settings.intensity * 0.16
+        if abs(brightness) > 0.001 {
+            target = target.applyingFilter("CIColorControls", parameters: [
+                kCIInputBrightnessKey: brightness
+            ])
+        }
+
+        let tone = settings.skinTone * settings.intensity
+        if abs(tone) > 0.001 {
+            target = target.applyingFilter("CITemperatureAndTint", parameters: [
+                "inputNeutral": CIVector(x: 6500, y: 0),
+                "inputTargetNeutral": CIVector(x: 6500 + CGFloat(tone) * 650, y: 0)
+            ])
+        }
+
+        guard let mask = faceMask(for: faces, extent: image.extent, intensity: settings.intensity) else {
+            return image
+        }
+        return target.applyingFilter("CIBlendWithMask", parameters: [
+            kCIInputBackgroundImageKey: image,
+            kCIInputMaskImageKey: mask
+        ]).cropped(to: image.extent)
+    }
+
+    private static func faceMask(
+        for faces: [CIFaceFeature],
+        extent: CGRect,
+        intensity: Float
+    ) -> CIImage? {
+        var combined: CIImage?
+        for face in faces {
+            let bounds = face.bounds.insetBy(
+                dx: -face.bounds.width * 0.12,
+                dy: -face.bounds.height * 0.16
+            )
+            let radius = max(bounds.width, bounds.height) * 0.58
+            let gradient = CIFilter(
+                name: "CIRadialGradient",
+                parameters: [
+                    "inputCenter": CIVector(x: bounds.midX, y: bounds.midY),
+                    "inputRadius0": radius * 0.62,
+                    "inputRadius1": radius,
+                    "inputColor0": CIColor.white,
+                    "inputColor1": CIColor.clear
+                ]
+            )?.outputImage?.cropped(to: extent)
+            guard let gradient else { continue }
+            combined = combined.map {
+                gradient.applyingFilter("CIMaximumCompositing", parameters: [
+                    kCIInputBackgroundImageKey: $0
+                ])
+            } ?? gradient
+        }
+        guard let combined else { return nil }
+        let amount = CGFloat(min(max(intensity, 0), 1))
+        return combined.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: amount, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: amount, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: amount, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: amount)
+        ]).cropped(to: extent)
+    }
+
     private static func blendedSkinSmoothing(_ image: CIImage, smoothness: Float, intensity: Float) -> CIImage {
         guard let bilateralFilter = CIFilter(name: "CIBilateralFilter") else {
             return gaussianSmoothFallback(image)
@@ -583,9 +667,16 @@ struct RenderedOverlay {
 struct StoryEffectGraph {
     func render(sourceImage: CIImage, time: CMTime, clip: VideoClip, overlays: [RenderedOverlay], canvas: CanvasSpec, useMetalPetal: Bool = true) -> CIImage {
         let sourceExtent = sourceImage.extent
+        let stack = clip.resolvedEffectStack
         var filtered = applyColorAdjustments(clip.adjustments, to: sourceImage, useMetalPetal: useMetalPetal).cropped(to: sourceExtent)
-        filtered = applyRenderEffect(StoryEffectCatalog.preset(id: clip.filterId).renderEffect, to: filtered, useMetalPetal: useMetalPetal).cropped(to: sourceExtent)
-        var image = blend(source: sourceImage, filtered: filtered, intensity: clip.filterIntensity)
+        filtered = applyRenderEffect(StoryEffectCatalog.preset(id: stack.lookId).renderEffect, to: filtered, useMetalPetal: useMetalPetal).cropped(to: sourceExtent)
+        var image = blend(source: sourceImage, filtered: filtered, intensity: stack.lookIntensity)
+        if stack.beauty.isEnabled {
+            image = StoryCoreImageEffects.faceAwareBeauty(image, settings: stack.beauty).cropped(to: sourceExtent)
+        }
+        for effect in stack.creativeEffects where effect != .none && effect != .skinSmooth {
+            image = applyRenderEffect(effect, to: image, useMetalPetal: useMetalPetal).cropped(to: sourceExtent)
+        }
         image = applyTransform(clip.transform, crop: clip.cropRect, to: image, canvas: canvas)
         image = composite(overlays: overlays, over: image)
         return image

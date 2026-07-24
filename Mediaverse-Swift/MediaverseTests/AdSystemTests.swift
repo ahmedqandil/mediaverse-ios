@@ -931,7 +931,38 @@ final class StoryLookEditingTests: XCTestCase {
         editor.previewSelectedClipFilterIntensity(4)
 
         XCTAssertEqual(editor.selectedClip?.filterIntensity, 1)
+        XCTAssertEqual(editor.selectedClip?.resolvedEffectStack.lookIntensity, 1)
         XCTAssertFalse(editor.canUndo)
+    }
+
+    func testLegacyClipWithoutEffectStackStillDecodes() throws {
+        let clip = try XCTUnwrap(projectWithClip().tracks.videoClips.first)
+        let encoded = try JSONEncoder().encode(clip)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object.removeValue(forKey: "effectStack")
+
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(VideoClip.self, from: legacyData)
+
+        XCTAssertNil(decoded.effectStack)
+        XCTAssertEqual(decoded.resolvedEffectStack.lookId, decoded.filterId)
+        XCTAssertEqual(decoded.resolvedEffectStack.lookIntensity, decoded.filterIntensity)
+        XCTAssertEqual(decoded.resolvedEffectStack.beauty, .off)
+    }
+
+    func testBeautyPreviewUsesVersionedEffectStackAndUndoRestoresClip() async throws {
+        let editor = StoryTimelineEditor(project: projectWithClip())
+        let original = try XCTUnwrap(editor.selectedClip)
+
+        editor.previewSelectedClipBeauty(.natural)
+        await editor.commitSelectedClipLook(baselineClip: original)
+
+        XCTAssertEqual(editor.selectedClip?.effectStack?.version, StoryEffectStack.currentVersion)
+        XCTAssertEqual(editor.selectedClip?.resolvedEffectStack.beauty, .natural)
+        XCTAssertTrue(editor.canUndo)
+
+        await editor.undo()
+        XCTAssertEqual(editor.selectedClip, original)
     }
 
     func testLookSessionCommitsFilterAndAdjustmentsAsOneUndoableEdit() async {
@@ -950,6 +981,8 @@ final class StoryLookEditingTests: XCTestCase {
         XCTAssertTrue(editor.canUndo)
         XCTAssertEqual(editor.selectedClip?.filterId, "cinema")
         XCTAssertEqual(try! XCTUnwrap(editor.selectedClip?.filterIntensity), 0.62, accuracy: 0.001)
+        XCTAssertEqual(editor.selectedClip?.resolvedEffectStack.lookId, "cinema")
+        XCTAssertEqual(try! XCTUnwrap(editor.selectedClip?.resolvedEffectStack.lookIntensity), 0.62, accuracy: 0.001)
         XCTAssertEqual(try! XCTUnwrap(editor.selectedClip?.adjustments.brightness), 0.12, accuracy: 0.001)
 
         await editor.undo()

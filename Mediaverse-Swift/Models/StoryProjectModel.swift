@@ -90,7 +90,18 @@ struct VideoClip: Codable, Identifiable, Equatable {
     var filterId: String?
     var filterIntensity: Float
     var adjustments: ColorAdjust
+    var effectStack: StoryEffectStack?
     var transitionIn: Transition?
+
+    var resolvedEffectStack: StoryEffectStack {
+        if let effectStack {
+            return effectStack
+        }
+        var migrated = StoryEffectStack.none
+        migrated.lookId = filterId
+        migrated.lookIntensity = filterIntensity
+        return migrated
+    }
 
     var sourceStartSeconds: Double {
         get { sourceStart.time.seconds }
@@ -122,6 +133,7 @@ struct VideoClip: Codable, Identifiable, Equatable {
             filterId: nil,
             filterIntensity: 1,
             adjustments: .neutral,
+            effectStack: nil,
             transitionIn: nil
         )
     }

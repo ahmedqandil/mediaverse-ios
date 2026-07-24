@@ -753,6 +753,10 @@ final class StoryTimelineEditor: ObservableObject {
         project.tracks.videoClips[index].filterId = preset.id
         project.tracks.videoClips[index].filterIntensity = 1
         project.tracks.videoClips[index].adjustments = preset.adjustments
+        var stack = project.tracks.videoClips[index].resolvedEffectStack
+        stack.lookId = preset.id
+        stack.lookIntensity = 1
+        project.tracks.videoClips[index].effectStack = stack
         selectedClipID = project.tracks.videoClips[index].id
         errorMessage = nil
     }
@@ -767,6 +771,10 @@ final class StoryTimelineEditor: ObservableObject {
         updated.tracks.videoClips[index].filterId = preset.id
         updated.tracks.videoClips[index].filterIntensity = 1
         updated.tracks.videoClips[index].adjustments = preset.adjustments
+        var stack = updated.tracks.videoClips[index].resolvedEffectStack
+        stack.lookId = preset.id
+        stack.lookIntensity = 1
+        updated.tracks.videoClips[index].effectStack = stack
         await commit(updated, label: "Filter", before: before)
         selectedClipID = updated.tracks.videoClips[index].id
     }
@@ -787,7 +795,20 @@ final class StoryTimelineEditor: ObservableObject {
 
     func previewSelectedClipFilterIntensity(_ intensity: Float) {
         guard let index = selectedClipIndex else { return }
-        project.tracks.videoClips[index].filterIntensity = min(max(intensity, 0), 1)
+        let value = min(max(intensity, 0), 1)
+        project.tracks.videoClips[index].filterIntensity = value
+        var stack = project.tracks.videoClips[index].resolvedEffectStack
+        stack.lookIntensity = value
+        project.tracks.videoClips[index].effectStack = stack
+        selectedClipID = project.tracks.videoClips[index].id
+        errorMessage = nil
+    }
+
+    func previewSelectedClipBeauty(_ beauty: StoryBeautySettings) {
+        guard let index = selectedClipIndex else { return }
+        var stack = project.tracks.videoClips[index].resolvedEffectStack
+        stack.beauty = beauty.clamped()
+        project.tracks.videoClips[index].effectStack = stack
         selectedClipID = project.tracks.videoClips[index].id
         errorMessage = nil
     }
@@ -1229,6 +1250,7 @@ extension VideoClip {
             filterId: filterId,
             filterIntensity: filterIntensity,
             adjustments: adjustments,
+            effectStack: effectStack,
             transitionIn: transitionIn
         )
     }

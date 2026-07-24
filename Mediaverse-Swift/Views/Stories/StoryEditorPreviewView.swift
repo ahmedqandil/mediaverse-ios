@@ -1948,6 +1948,8 @@ struct StoryEditorPreviewView: View {
             switch lookSection {
             case .filters:
                 filterControls(for: clip)
+            case .beauty:
+                beautyControls(for: clip)
             case .adjust:
                 adjustmentControls(for: clip)
             }
@@ -2270,6 +2272,92 @@ struct StoryEditorPreviewView: View {
                 }
             }
         }
+    }
+
+    private func beautyControls(for clip: VideoClip) -> some View {
+        let beauty = clip.resolvedEffectStack.beauty
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Face-aware controls only affect detected faces. The editor preview is the final render.")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(C.textTertiary)
+
+            HStack(spacing: 8) {
+                beautyPresetButton("Off", settings: .off, current: beauty)
+                beautyPresetButton("Natural", settings: .natural, current: beauty)
+                beautyPresetButton(
+                    "Polished",
+                    settings: StoryBeautySettings(
+                        intensity: 0.72,
+                        skinSmoothing: 0.52,
+                        skinTone: 0.14,
+                        brightness: 0.12
+                    ),
+                    current: beauty
+                )
+            }
+
+            adjustmentSlider(
+                "Beauty",
+                value: beauty.intensity,
+                range: 0...1,
+                displayValue: Int((beauty.intensity * 100).rounded())
+            ) { value in
+                previewBeauty(clip) { $0.intensity = value }
+            }
+            adjustmentSlider(
+                "Smooth",
+                value: beauty.skinSmoothing,
+                range: 0...1,
+                displayValue: Int((beauty.skinSmoothing * 100).rounded())
+            ) { value in
+                previewBeauty(clip) { $0.skinSmoothing = value }
+            }
+            adjustmentSlider(
+                "Skin tone",
+                value: beauty.skinTone,
+                range: -1...1
+            ) { value in
+                previewBeauty(clip) { $0.skinTone = value }
+            }
+            adjustmentSlider(
+                "Face light",
+                value: beauty.brightness,
+                range: -1...1
+            ) { value in
+                previewBeauty(clip) { $0.brightness = value }
+            }
+        }
+    }
+
+    private func beautyPresetButton(
+        _ title: String,
+        settings: StoryBeautySettings,
+        current: StoryBeautySettings
+    ) -> some View {
+        Button {
+            guard let clip = editor.selectedClip else { return }
+            beginLookPreview(from: clip)
+            editor.previewSelectedClipBeauty(settings)
+        } label: {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(current == settings ? .black : C.textMuted)
+                .frame(maxWidth: .infinity)
+                .frame(height: 34)
+                .background(current == settings ? C.watch : C.elevated)
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func previewBeauty(
+        _ clip: VideoClip,
+        update: (inout StoryBeautySettings) -> Void
+    ) {
+        beginLookPreview(from: clip)
+        var beauty = clip.resolvedEffectStack.beauty
+        update(&beauty)
+        editor.previewSelectedClipBeauty(beauty)
     }
 
     private func adjustmentSlider(
@@ -4655,6 +4743,7 @@ struct StoryEditorPreviewView: View {
 
 private enum StoryLookSection: String, CaseIterable, Identifiable {
     case filters = "Filters"
+    case beauty = "Beauty"
     case adjust = "Adjust"
 
     var id: String { rawValue }
