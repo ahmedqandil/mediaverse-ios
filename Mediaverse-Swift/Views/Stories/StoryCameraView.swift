@@ -7,6 +7,22 @@ import UIKit
 import MetalPetal
 #endif
 
+enum StoryTemporaryMedia {
+    private static let ownedPrefixes = ["story-camera-", "story-camera-library-"]
+
+    static func isOwned(_ url: URL, fileManager: FileManager = .default) -> Bool {
+        let temporaryRoot = fileManager.temporaryDirectory.standardizedFileURL.path
+        let candidate = url.standardizedFileURL
+        guard candidate.path.hasPrefix(temporaryRoot + "/") else { return false }
+        return ownedPrefixes.contains { candidate.lastPathComponent.hasPrefix($0) }
+    }
+
+    static func removeIfOwned(_ url: URL, fileManager: FileManager = .default) {
+        guard isOwned(url, fileManager: fileManager) else { return }
+        try? fileManager.removeItem(at: url)
+    }
+}
+
 private struct PickedStoryCameraVideo: Transferable {
     let url: URL
 
@@ -453,6 +469,7 @@ struct StoryCameraView: View {
         shutterPressActive = false
         shutterLongPressStarted = false
         clearCapturePreview()
+        controller.discardCapturedMedia()
         controller.stopSession()
         onCancel()
     }
@@ -689,6 +706,7 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
     private var isVideoOutputAttached = false
     private var lastFilteredPreviewUpdateTime: TimeInterval = 0
     private let preferredFilteredPreviewFrameRate: Double = 30
+    private var discardRecordingOnFinish = false
 
     var totalRecordedDuration: Double {
         segments.reduce(0) { $0 + $1.duration } + currentRecordingDuration
@@ -760,6 +778,7 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
 
     func startRecording(maxDuration: Double, speed: Double) {
         guard !isRecording, maxDuration > 0 else { return }
+        discardRecordingOnFinish = false
         isRecording = true
         currentRecordingDuration = 0
         currentSegmentMaxDuration = maxDuration
@@ -827,8 +846,17 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
 
     func deleteLastSegment() {
         guard !isRecording, let segment = segments.popLast() else { return }
-        try? FileManager.default.removeItem(at: segment.url)
+        StoryTemporaryMedia.removeIfOwned(segment.url)
         lastCapturedPreviewSegment = segments.last
+    }
+
+    func discardCapturedMedia() {
+        discardRecordingOnFinish = true
+        let capturedSegments = segments
+        segments.removeAll()
+        lastCapturedPreviewSegment = nil
+        capturedSegments.forEach { StoryTemporaryMedia.removeIfOwned($0.url) }
+        stopRecording()
     }
 
     func flipCamera() async {
@@ -1127,8 +1155,13 @@ extension StoryCameraController: AVCaptureFileOutputRecordingDelegate {
         pendingSegmentFilterId = nil
         pendingSegmentAdjustments = .neutral
 
+        if discardRecordingOnFinish {
+            StoryTemporaryMedia.removeIfOwned(outputFileURL)
+            return
+        }
+
         if let error {
-            try? FileManager.default.removeItem(at: outputFileURL)
+            StoryTemporaryMedia.removeIfOwned(outputFileURL)
             Task { @MainActor in
                 self.errorText = error.localizedDescription
             }

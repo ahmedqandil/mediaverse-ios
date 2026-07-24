@@ -499,3 +499,22 @@ final class StoryInteractionNormalizerTests: XCTestCase {
         XCTAssertNil(StoryInteractionNormalizer.optionIndex(nil, optionCount: 3))
     }
 }
+
+final class StoryTemporaryMediaTests: XCTestCase {
+    func testRecognizesOnlyStoryOwnedTemporaryFiles() {
+        let temporaryRoot = FileManager.default.temporaryDirectory
+        let cameraFile = temporaryRoot
+            .appendingPathComponent("story-camera-123")
+            .appendingPathExtension("mov")
+        let libraryFile = temporaryRoot
+            .appendingPathComponent("story-camera-library-456")
+            .appendingPathExtension("mp4")
+        let unrelatedTemporaryFile = temporaryRoot.appendingPathComponent("user-video.mov")
+        let outsideTemporaryRoot = URL(fileURLWithPath: "/var/story-camera-123.mov")
+
+        XCTAssertTrue(StoryTemporaryMedia.isOwned(cameraFile))
+        XCTAssertTrue(StoryTemporaryMedia.isOwned(libraryFile))
+        XCTAssertFalse(StoryTemporaryMedia.isOwned(unrelatedTemporaryFile))
+        XCTAssertFalse(StoryTemporaryMedia.isOwned(outsideTemporaryRoot))
+    }
+}

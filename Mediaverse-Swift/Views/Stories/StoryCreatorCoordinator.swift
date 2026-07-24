@@ -841,7 +841,10 @@ struct StoryCreatorCoordinator: View {
 
     private func importLibraryVideo(_ url: URL) async {
         isPreparingMedia = true
-        defer { isPreparingMedia = false }
+        defer {
+            StoryTemporaryMedia.removeIfOwned(url)
+            isPreparingMedia = false
+        }
 
         do {
             let asset = AVAsset(url: url)
@@ -867,7 +870,10 @@ struct StoryCreatorCoordinator: View {
     private func importCameraSegments(_ segments: [StoryCapturedSegment]) async {
         guard !segments.isEmpty else { return }
         isPreparingMedia = true
-        defer { isPreparingMedia = false }
+        defer {
+            segments.forEach { StoryTemporaryMedia.removeIfOwned($0.url) }
+            isPreparingMedia = false
+        }
 
         do {
             let totalDuration = segments.reduce(0) { $0 + ($1.duration / max($1.speed, 0.5)) }
