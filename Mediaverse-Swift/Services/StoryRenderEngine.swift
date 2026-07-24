@@ -866,23 +866,33 @@ private enum StoryCoreImageEffects {
     private static func strongSkinSmoothing(_ image: CIImage, amount: Float) -> CIImage {
         guard amount > 0.001 else { return image }
         let clamped = min(max(amount, 0), 1)
-        #if canImport(MetalPetal)
-        if let metal = MetalPetalStoryFilterProcessor.shared.applySkinSmoothing(
-            image,
-            amount: min(0.42 + clamped * 0.58, 1),
-            radius: 10 + clamped * 28
-        ) {
-            return mix(
-                base: image,
-                target: metal.cropped(to: image.extent),
-                amount: min(0.46 + clamped * 0.72, 1)
-            )
-        }
-        #endif
-        return blendedSkinSmoothing(
-            image,
-            smoothness: 9 + clamped * 27,
-            intensity: min(0.42 + clamped * 0.66, 1)
+        let denoised = image.applyingFilter("CINoiseReduction", parameters: [
+            "inputNoiseLevel": 0.035 + clamped * 0.14,
+            "inputSharpness": max(0.48 - clamped * 0.30, 0.12)
+        ]).cropped(to: image.extent)
+        let median = denoised
+            .applyingFilter("CIMedianFilter")
+            .cropped(to: image.extent)
+        let textureReduced = mix(
+            base: denoised,
+            target: median,
+            amount: min(0.18 + clamped * 0.44, 0.62)
+        )
+        let lowFrequency = textureReduced
+            .applyingFilter("CIGaussianBlur", parameters: [
+                kCIInputRadiusKey: 0.55 + clamped * 2.65
+            ])
+            .cropped(to: image.extent)
+        let restoredTexture = lowFrequency
+            .applyingFilter("CIUnsharpMask", parameters: [
+                kCIInputRadiusKey: 0.65 + clamped * 0.55,
+                kCIInputIntensityKey: 0.08 + (1 - clamped) * 0.16
+            ])
+            .cropped(to: image.extent)
+        return mix(
+            base: image,
+            target: restoredTexture,
+            amount: min(0.38 + clamped * 0.57, 0.95)
         )
     }
 
