@@ -62,6 +62,33 @@ struct StoryBeautySettings: Codable, Equatable {
         )
     }
 
+    mutating func setMasterIntensity(_ value: Float) {
+        intensity = min(max(value, 0), 1)
+        guard intensity > 0.001, !hasConfiguredControls else { return }
+
+        // The master Beauty control must produce a visible result by itself.
+        // Individual controls remain independently adjustable after this seed.
+        skinSmoothing = 0.75
+        skinTone = 0.12
+        brightness = 0.14
+        eyeBrightening = 0.22
+        underEye = 0.16
+        teethWhitening = 0.12
+        lipColor = 0.06
+        contour = 0.08
+    }
+
+    private var hasConfiguredControls: Bool {
+        skinSmoothing > 0.001 ||
+            abs(skinTone) > 0.001 ||
+            abs(brightness) > 0.001 ||
+            eyeBrightening > 0.001 ||
+            underEye > 0.001 ||
+            teethWhitening > 0.001 ||
+            abs(lipColor) > 0.001 ||
+            contour > 0.001
+    }
+
     private enum CodingKeys: String, CodingKey {
         case intensity
         case skinSmoothing

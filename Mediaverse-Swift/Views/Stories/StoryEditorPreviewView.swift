@@ -4960,7 +4960,7 @@ private enum StoryBeautyControl: String, CaseIterable, Identifiable {
 
     func set(_ value: Float, in settings: inout StoryBeautySettings) {
         switch self {
-        case .strength: settings.intensity = value
+        case .strength: settings.setMasterIntensity(value)
         case .smooth: settings.skinSmoothing = value
         case .tone: settings.skinTone = value
         case .light: settings.brightness = value

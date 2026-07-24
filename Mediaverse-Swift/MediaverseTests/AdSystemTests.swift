@@ -1136,6 +1136,29 @@ final class StoryLookEditingTests: XCTestCase {
         XCTAssertEqual(decoded.contour, 0)
     }
 
+    func testMasterBeautySeedsVisibleControlsWhenStartingFromOff() {
+        var beauty = StoryBeautySettings.off
+
+        beauty.setMasterIntensity(1)
+
+        XCTAssertEqual(beauty.intensity, 1)
+        XCTAssertGreaterThan(beauty.skinSmoothing, 0.7)
+        XCTAssertGreaterThan(beauty.brightness, 0)
+        XCTAssertGreaterThan(beauty.eyeBrightening, 0)
+        XCTAssertTrue(beauty.isEnabled)
+    }
+
+    func testMasterBeautyPreservesExistingCustomControls() {
+        var beauty = StoryBeautySettings.off
+        beauty.skinSmoothing = 0.2
+
+        beauty.setMasterIntensity(0.8)
+
+        XCTAssertEqual(beauty.intensity, 0.8)
+        XCTAssertEqual(beauty.skinSmoothing, 0.2)
+        XCTAssertEqual(beauty.brightness, 0)
+    }
+
     func testLookSessionCommitsFilterAndAdjustmentsAsOneUndoableEdit() async {
         let project = projectWithClip()
         let editor = StoryTimelineEditor(project: project)
