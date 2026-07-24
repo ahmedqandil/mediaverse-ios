@@ -798,28 +798,24 @@ private enum StoryCoreImageEffects {
             if clarityAmount > 0.001 {
                 let target = result
                     .applyingFilter("CISharpenLuminance", parameters: [
-                        kCIInputSharpnessKey: 0.42 + clarityAmount * 1.75
+                        kCIInputSharpnessKey: 0.20 + clarityAmount * 0.62
                     ])
                     .applyingFilter("CIUnsharpMask", parameters: [
-                        kCIInputRadiusKey: 1.2 + clarityAmount * 2.8,
-                        kCIInputIntensityKey: 0.55 + clarityAmount * 1.65
+                        kCIInputRadiusKey: 0.9 + clarityAmount * 1.35,
+                        kCIInputIntensityKey: 0.25 + clarityAmount * 0.72
                     ])
                     .applyingFilter("CIColorControls", parameters: [
-                        kCIInputContrastKey: 1 + clarityAmount * 0.18,
-                        kCIInputSaturationKey: 1 + clarityAmount * 0.08
+                        kCIInputContrastKey: 1 + clarityAmount * 0.07,
+                        kCIInputSaturationKey: 1 + clarityAmount * 0.035
                     ])
-                let featurePoints =
-                    face.eyePoints +
-                    face.eyebrowPoints +
-                    face.lipPoints +
-                    face.nosePoints +
-                    face.contourPoints
-                if let mask = featureMask(
-                    points: featurePoints,
-                    radius: unit * 0.065,
-                    extent: image.extent,
-                    intensity: min(clarityAmount * 1.35, 1)
-                ) {
+                if let faceRegion = contourMask(for: face, extent: image.extent) {
+                    let maskAmount = CGFloat(min(clarityAmount * 0.88, 0.88))
+                    let mask = faceRegion.applyingFilter("CIColorMatrix", parameters: [
+                        "inputRVector": CIVector(x: maskAmount, y: 0, z: 0, w: 0),
+                        "inputGVector": CIVector(x: 0, y: maskAmount, z: 0, w: 0),
+                        "inputBVector": CIVector(x: 0, y: 0, z: maskAmount, w: 0),
+                        "inputAVector": CIVector(x: 0, y: 0, z: 0, w: maskAmount)
+                    ]).cropped(to: image.extent)
                     result = blend(base: result, target: target, mask: mask)
                 }
             }
@@ -910,11 +906,30 @@ private enum StoryCoreImageEffects {
         var combined: CIImage?
         for face in faces {
             guard let faceRegion = contourMask(for: face, extent: extent) else { continue }
+            let highEndCoverage = highEndMasterAmount(intensity)
+            let supportedRegion: CIImage
+            if highEndCoverage > 0.001 {
+                let supportBounds = face.bounds.insetBy(
+                    dx: -face.bounds.width * 0.08,
+                    dy: -face.bounds.height * 0.10
+                )
+                let support = radialMask(
+                    center: CGPoint(x: supportBounds.midX, y: supportBounds.midY + supportBounds.height * 0.05),
+                    radius: max(supportBounds.width, supportBounds.height) * 0.58,
+                    extent: extent,
+                    intensity: min(0.28 + highEndCoverage * 0.52, 0.80)
+                )
+                supportedRegion = faceRegion.applyingFilter("CIMaximumCompositing", parameters: [
+                    kCIInputBackgroundImageKey: support
+                ]).cropped(to: extent)
+            } else {
+                supportedRegion = faceRegion
+            }
             combined = combined.map {
-                faceRegion.applyingFilter("CIMaximumCompositing", parameters: [
+                supportedRegion.applyingFilter("CIMaximumCompositing", parameters: [
                     kCIInputBackgroundImageKey: $0
                 ])
-            } ?? faceRegion
+            } ?? supportedRegion
         }
         guard let combined else { return nil }
 
