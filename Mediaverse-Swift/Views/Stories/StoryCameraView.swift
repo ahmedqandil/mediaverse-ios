@@ -152,7 +152,9 @@ struct StoryCameraView: View {
         .ignoresSafeArea()
         .task {
             let granted = await controller.prepare()
-            if !granted { showPermissionAlert = true }
+            if !granted, controller.errorText == nil {
+                showPermissionAlert = true
+            }
         }
         .onDisappear {
             shutterPressTask?.cancel()
@@ -725,8 +727,14 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
         let microphoneGranted = await requestAccess(for: .audio)
         guard cameraGranted, microphoneGranted else { return false }
         if !isSessionConfigured {
-            await configureSession()
+            guard await configureSession() else {
+                await MainActor.run {
+                    self.errorText = "A usable camera could not be configured on this device."
+                }
+                return false
+            }
         }
+        await MainActor.run { self.errorText = nil }
         startSession()
         return true
     }
@@ -861,10 +869,30 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
 
     func flipCamera() async {
         guard !isRecording else { return }
-        currentPosition = currentPosition == .back ? .front : .back
-        exposureBias = 0
+        let originalPosition = currentPosition
+        let requestedPosition: AVCaptureDevice.Position = originalPosition == .back ? .front : .back
+        guard Self.captureDevice(position: requestedPosition) != nil else {
+            errorText = requestedPosition == .front
+                ? "The front camera is unavailable."
+                : "The rear camera is unavailable."
+            return
+        }
+
+        currentPosition = requestedPosition
         isSessionConfigured = false
-        await configureSession()
+        if await configureSession() {
+            exposureBias = 0
+            torchMode = .off
+            errorText = nil
+            startSession()
+            return
+        }
+
+        currentPosition = originalPosition
+        isSessionConfigured = false
+        _ = await configureSession()
+        errorText = "Could not switch cameras. The previous camera is still active."
+        startSession()
     }
 
     func toggleTorch() {
@@ -978,11 +1006,11 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
         }
     }
 
-    private func configureSession() async {
-        await withCheckedContinuation { continuation in
+    private func configureSession() async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             sessionQueue.async { [weak self] in
                 guard let self else {
-                    continuation.resume()
+                    continuation.resume(returning: false)
                     return
                 }
                 self.session.beginConfiguration()
@@ -993,6 +1021,8 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
                 }
                 self.session.inputs.forEach { self.session.removeInput($0) }
                 self.session.outputs.forEach { self.session.removeOutput($0) }
+                self.videoInput = nil
+                self.audioInput = nil
 
                 if let videoDevice = Self.captureDevice(position: self.currentPosition),
                    let videoInput = try? AVCaptureDeviceInput(device: videoDevice),
@@ -1029,8 +1059,12 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
                     connection.isVideoMirrored = self.currentPosition == .front && connection.isVideoMirroringSupported
                 }
                 self.session.commitConfiguration()
-                self.isSessionConfigured = true
-                continuation.resume()
+                let configured = self.videoInput != nil
+                    && self.audioInput != nil
+                    && self.session.outputs.contains { $0 === self.movieOutput }
+                    && self.session.outputs.contains { $0 === self.photoOutput }
+                self.isSessionConfigured = configured
+                continuation.resume(returning: configured)
             }
         }
     }
