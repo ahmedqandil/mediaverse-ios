@@ -457,6 +457,7 @@ private struct AddCollectionItemsPanel: View {
     @State private var isSearching = false
     @State private var addingId: String?
     @State private var debounceTask: Task<Void, Never>?
+    @State private var searchGeneration = 0
 
     private var isShows: Bool { collection.type == "shows" }
     private var isShorts: Bool { collection.type == "shorts" }
@@ -488,6 +489,8 @@ private struct AddCollectionItemsPanel: View {
                         .foregroundStyle(C.text)
                         .onChange(of: query) { _, value in
                             debounceTask?.cancel()
+                            searchGeneration &+= 1
+                            isSearching = false
                             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
                             guard trimmed.count >= 2 else { results = SearchResults(channels: nil, shows: nil, episodes: nil, videos: nil); return }
                             debounceTask = Task {
@@ -520,6 +523,10 @@ private struct AddCollectionItemsPanel: View {
             .background(Color.white.opacity(0.05))
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay { RoundedRectangle(cornerRadius: 12).stroke(C.border, lineWidth: 1) }
+        }
+        .onDisappear {
+            debounceTask?.cancel()
+            searchGeneration &+= 1
         }
     }
 
@@ -589,10 +596,17 @@ private struct AddCollectionItemsPanel: View {
     }
 
     private func search(_ query: String) async {
+        searchGeneration &+= 1
+        let generation = searchGeneration
         isSearching = true
         do {
-            results = try await APIClient.shared.search(q: query, type: isShows ? "shows" : "videos")
+            let refreshedResults = try await APIClient.shared.search(q: query, type: isShows ? "shows" : "videos")
+            guard generation == searchGeneration,
+                  self.query.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
+            results = refreshedResults
         } catch {
+            guard generation == searchGeneration,
+                  self.query.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
             results = SearchResults(channels: nil, shows: nil, episodes: nil, videos: nil)
         }
         isSearching = false

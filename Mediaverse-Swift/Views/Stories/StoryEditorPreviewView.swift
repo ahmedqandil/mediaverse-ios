@@ -4372,6 +4372,7 @@ private struct GiphyStickerPickerView: View {
     @State private var isLoading = false
     @State private var errorText: String?
     @State private var searchTask: Task<Void, Never>?
+    @State private var loadGeneration = 0
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
 
@@ -4435,28 +4436,41 @@ private struct GiphyStickerPickerView: View {
         .task { await load(reset: true) }
         .onChange(of: query) { _, _ in
             searchTask?.cancel()
+            loadGeneration &+= 1
+            isLoading = false
             searchTask = Task {
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 guard !Task.isCancelled else { return }
                 await load(reset: true)
             }
         }
+        .onDisappear {
+            searchTask?.cancel()
+            loadGeneration &+= 1
+        }
     }
 
     @MainActor
     private func load(reset: Bool) async {
-        guard !isLoading else { return }
+        guard reset || !isLoading else { return }
+        if reset { loadGeneration &+= 1 }
+        let generation = loadGeneration
+        let requestedQuery = query
+        let nextOffset = reset ? 0 : offset
         isLoading = true
         errorText = nil
-        defer { isLoading = false }
+        defer {
+            if generation == loadGeneration { isLoading = false }
+        }
 
         do {
-            let nextOffset = reset ? 0 : offset
-            let response = try await GiphyStickerService.shared.fetchStickers(query: query, limit: 24, offset: nextOffset)
+            let response = try await GiphyStickerService.shared.fetchStickers(query: requestedQuery, limit: 24, offset: nextOffset)
+            guard generation == loadGeneration, query == requestedQuery else { return }
             stickers = reset ? response.stickers : stickers + response.stickers
             offset = nextOffset + response.pagination.count
             totalCount = response.pagination.totalCount
         } catch {
+            guard generation == loadGeneration, query == requestedQuery else { return }
             errorText = "Stickers are unavailable right now."
         }
     }

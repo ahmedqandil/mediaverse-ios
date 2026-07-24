@@ -231,3 +231,12 @@ Metrics are intentionally passive: they do not emit network traffic, persist use
 - A mutation completing after sign-out or account replacement can no longer restore or alter collection state owned by the next session.
 - Preserved optimistic follow/delete feedback, rollback-on-failure behavior, creation, tabs, public communities, and UI.
 - Verified with 8 routing contract tests, auth-transition mutation inspection, diff-integrity checks, and a complete unsigned dual-architecture iOS Simulator build.
+
+### Batch 19: Detail and editor search ownership
+
+- Collection item search now invalidates older debounced and in-flight requests whenever its query changes or the panel disappears.
+- A late collection search response can no longer repopulate results after the query is changed, cleared, or dismissed.
+- The story sticker picker now separates query-reset ownership from cursor pagination ownership.
+- Changing a sticker query during an active request immediately permits the replacement request, while older pages cannot replace or append into the new query.
+- Preserved collection add behavior, search debounce timing, sticker browsing, load-more pagination, error UI, and all visible layouts.
+- Verified with 8 routing contract tests, query/pagination ownership inspection, diff-integrity checks, and complete unsigned dual-architecture iOS Simulator builds after each change.
