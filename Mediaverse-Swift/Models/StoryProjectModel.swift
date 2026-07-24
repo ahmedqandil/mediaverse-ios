@@ -154,6 +154,16 @@ enum Overlay: Codable, Identifiable, Equatable {
         case .interactive(let overlay): return overlay.id
         }
     }
+
+    var timeRange: TimelineRange {
+        switch self {
+        case .text(let overlay): return overlay.timeRange
+        case .sticker(let overlay): return overlay.timeRange
+        case .drawing(let overlay): return overlay.timeRange
+        case .link(let overlay): return overlay.timeRange
+        case .interactive(let overlay): return overlay.timeRange
+        }
+    }
 }
 
 struct TextOverlay: Codable, Identifiable, Equatable {

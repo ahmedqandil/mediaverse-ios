@@ -88,6 +88,7 @@ struct StoryCreatorCoordinator: View {
     @State private var isCameraPresented = true
     @State private var shouldDismissOnCameraCancel = false
     @State private var isShowingPostDrawer = false
+    @State private var isShowingEditorExitConfirmation = false
     @State private var draftMedia: StoryDraftMedia?
     @State private var currentProject: Project?
     @State private var isPreparingMedia = false
@@ -173,6 +174,21 @@ struct StoryCreatorCoordinator: View {
         }
         .sheet(isPresented: $isShowingPostDrawer) {
             postDrawerSheet
+        }
+        .confirmationDialog(
+            "Leave this story?",
+            isPresented: $isShowingEditorExitConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Save Draft") {
+                dismiss()
+            }
+            Button("Discard Story", role: .destructive) {
+                discardCurrentDraft()
+            }
+            Button("Continue Editing", role: .cancel) {}
+        } message: {
+            Text("Your changes are saved automatically. You can keep the draft or discard it permanently.")
         }
         .onAppear {
             if draftMedia == nil {
@@ -341,6 +357,9 @@ struct StoryCreatorCoordinator: View {
                     onProjectChange: { updatedProject in
                         currentProject = updatedProject
                     },
+                    onClose: {
+                        isShowingEditorExitConfirmation = true
+                    },
                     onBack: {
                         step = .media
                         openCamera(dismissOnCancel: true)
@@ -349,6 +368,21 @@ struct StoryCreatorCoordinator: View {
                 )
             } else {
                 loadingRow("Preparing editor...")
+            }
+        }
+    }
+
+    private func discardCurrentDraft() {
+        guard let project = currentProject else {
+            dismiss()
+            return
+        }
+        Task {
+            try? await ProjectStore.shared.delete(id: project.id)
+            await MainActor.run {
+                currentProject = nil
+                draftMedia = nil
+                dismiss()
             }
         }
     }
@@ -377,7 +411,7 @@ struct StoryCreatorCoordinator: View {
                     }
                 }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         .presentationBackground(C.bg)
     }

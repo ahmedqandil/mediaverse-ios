@@ -35,6 +35,7 @@ private enum StoryEditorTool: String, Identifiable, Equatable {
     case audio
     case stickers
     case music
+    case timing
 
     var id: String { rawValue }
 }
@@ -315,6 +316,7 @@ struct StoryEditorPreviewView: View {
     @StateObject private var editor: StoryTimelineEditor
     @StateObject private var locationSearch = StoryLocationSearchModel()
     let onProjectChange: (Project) -> Void
+    let onClose: () -> Void
     let onBack: () -> Void
     let onNext: () -> Void
 
@@ -329,6 +331,8 @@ struct StoryEditorPreviewView: View {
     @State private var filterHUDTask: Task<Void, Never>?
     @State private var filterThumbnailTask: Task<Void, Never>?
     @State private var filterThumbnails: [String: UIImage] = [:]
+    @State private var clipThumbnailTask: Task<Void, Never>?
+    @State private var clipThumbnails: [UUID: UIImage] = [:]
     @State private var isComparingOriginal = false
     @State private var previewPlayer: AVPlayer?
     @State private var previewPlayerURL: URL?
@@ -388,6 +392,8 @@ struct StoryEditorPreviewView: View {
     @State private var audioBaselineClip: VideoClip?
     @State private var musicBaselineClip: AudioClip?
     @State private var toolSheetDismissShouldCancel = true
+    @State private var overlayTimingStart = 0.0
+    @State private var overlayTimingDuration = 5.0
     @FocusState private var isTextComposerFocused: Bool
     @FocusState private var isMentionComposerFocused: Bool
     @FocusState private var isStickerComposerFocused: Bool
@@ -395,9 +401,16 @@ struct StoryEditorPreviewView: View {
     private let compositor = StoryCompositor()
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
 
-    init(project: Project, onProjectChange: @escaping (Project) -> Void = { _ in }, onBack: @escaping () -> Void, onNext: @escaping () -> Void) {
+    init(
+        project: Project,
+        onProjectChange: @escaping (Project) -> Void = { _ in },
+        onClose: @escaping () -> Void,
+        onBack: @escaping () -> Void,
+        onNext: @escaping () -> Void
+    ) {
         _editor = StateObject(wrappedValue: StoryTimelineEditor(project: project))
         self.onProjectChange = onProjectChange
+        self.onClose = onClose
         self.onBack = onBack
         self.onNext = onNext
     }
@@ -420,10 +433,6 @@ struct StoryEditorPreviewView: View {
 
     private var shouldShowAudioTool: Bool {
         editor.selectedClip?.assetRef.kind == .video || !editor.project.tracks.audioClips.isEmpty
-    }
-
-    private var editorToolReservedHeight: CGFloat {
-        activeTool == nil || isTextComposerPresented || isDrawingPresented ? 0 : 292
     }
 
     private var usesRenderedToolPreview: Bool {
@@ -493,8 +502,7 @@ struct StoryEditorPreviewView: View {
             } else {
                 storyTopOverlay
                 if !isOverlayInteracting {
-                    storySideTools
-                    storyShareButtonOverlay
+                    storyBottomToolbar
                     if editor.selectedOverlayID != nil, !isTextComposerPresented, activeTool == nil {
                         selectedOverlayCanvasMenu
                             .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -526,6 +534,7 @@ struct StoryEditorPreviewView: View {
             try? await ProjectStore.shared.pruneUnreferencedAssets(in: project)
             guard !Task.isCancelled else { return }
             assetStore = await ProjectStore.shared.assetStore(for: project.id)
+            scheduleClipThumbnails()
             basePreviewSignature = basePreviewSignature(for: project)
             if hasVideoPreviewClip, !usesRenderedToolPreview {
                 configureVideoPreviewPlayer()
@@ -539,6 +548,7 @@ struct StoryEditorPreviewView: View {
             previewRenderTask?.cancel()
             filterHUDTask?.cancel()
             filterThumbnailTask?.cancel()
+            clipThumbnailTask?.cancel()
             musicImportTask?.cancel()
             mediaOverlayImportTask?.cancel()
             networkStickerTask?.cancel()
@@ -555,6 +565,9 @@ struct StoryEditorPreviewView: View {
         }
         .onReceive(editor.$project) { project in
             onProjectChange(project)
+            if project.tracks.videoClips.contains(where: { clipThumbnails[$0.id] == nil }) {
+                scheduleClipThumbnails()
+            }
             currentTime = min(currentTime, duration)
             let signature = basePreviewSignature(for: project)
             guard signature != basePreviewSignature else {
@@ -644,16 +657,9 @@ struct StoryEditorPreviewView: View {
 
     private var editablePreviewSurface: some View {
         GeometryReader { proxy in
-            let reservedHeight = min(editorToolReservedHeight, proxy.size.height * 0.38)
-            VStack(spacing: 0) {
-                previewSurface
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-                if reservedHeight > 0 {
-                    Color.black
-                        .frame(height: reservedHeight)
-                }
-            }
+            previewSurface
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
         .ignoresSafeArea()
@@ -665,7 +671,7 @@ struct StoryEditorPreviewView: View {
                 HStack(spacing: 10) {
                     Button {
                         stopPlayback()
-                        onBack()
+                        onClose()
                     } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 15, weight: .bold))
@@ -675,7 +681,7 @@ struct StoryEditorPreviewView: View {
                     }
                     .frame(width: 44, height: 44)
                     .foregroundStyle(.white)
-                    .accessibilityLabel("Back")
+                    .accessibilityLabel("Close editor")
 
                     VStack(alignment: .leading, spacing: 3) {
                         ProgressView(value: currentTime, total: duration)
@@ -739,32 +745,120 @@ struct StoryEditorPreviewView: View {
         .accessibilityLabel(title)
     }
 
-    private var storyShareButtonOverlay: some View {
+    private var storyBottomToolbar: some View {
         GeometryReader { proxy in
             VStack {
                 Spacer()
-                HStack {
-                    Spacer()
+                HStack(spacing: 4) {
+                    creationToolbarButton("Text", systemImage: "textformat") {
+                        beginTextComposer()
+                    }
+                    creationToolbarButton("Stickers", systemImage: "face.smiling") {
+                        openTool(.stickers)
+                    }
+                    creationToolbarButton("Look", systemImage: "camera.filters") {
+                        openTool(.look)
+                    }
+                    creationToolbarButton("Music", systemImage: "music.note") {
+                        openTool(.music)
+                    }
+                    creationToolbarButton("Draw", systemImage: "pencil.tip") {
+                        beginDrawing()
+                    }
+
+                    Menu {
+                        Button {
+                            openTool(.clip)
+                        } label: {
+                            Label("Edit clips", systemImage: "film.stack")
+                        }
+                        if shouldShowAudioTool {
+                            Button {
+                                openTool(.audio)
+                            } label: {
+                                Label("Audio", systemImage: "speaker.wave.2")
+                            }
+                        }
+                        Button {
+                            stopPlayback()
+                            activeTool = nil
+                            isImportingMediaOverlay = true
+                        } label: {
+                            Label("Add photo or video", systemImage: "photo.on.rectangle.angled")
+                        }
+                        Button {
+                            stopPlayback()
+                            onBack()
+                        } label: {
+                            Label("Retake story", systemImage: "camera.rotate")
+                        }
+                    } label: {
+                        creationToolbarLabel("More", systemImage: "ellipsis")
+                    }
+                    .accessibilityLabel("More editing tools")
+
+                    Spacer(minLength: 2)
+
                     Button(action: shareStory) {
-                        Label("Next", systemImage: "arrow.right")
-                            .font(.system(size: 13, weight: .bold))
-                            .labelStyle(.titleAndIcon)
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 15, weight: .bold))
                             .foregroundStyle(.black)
-                            .padding(.horizontal, 16)
-                            .frame(height: 42)
+                            .frame(width: 46, height: 46)
                             .background(C.watch)
-                            .clipShape(Capsule())
-                            .shadow(color: .black.opacity(0.28), radius: 10, y: 4)
+                            .clipShape(Circle())
                     }
                     .accessibilityLabel("Continue to share settings")
-                    .padding(.trailing, max(proxy.safeAreaInsets.trailing + 18, 18))
-                    .padding(.bottom, max(proxy.safeAreaInsets.bottom + 104, 124))
                 }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 7)
+                .background(.ultraThinMaterial.opacity(0.94))
+                .background(Color.black.opacity(0.44))
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Color.white.opacity(0.11)))
+                .shadow(color: .black.opacity(0.32), radius: 16, y: 7)
+                .padding(.horizontal, 10)
+                .padding(.bottom, max(proxy.safeAreaInsets.bottom + 8, 14))
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
         .allowsHitTesting(activeTool == nil && !isTextComposerPresented && !isMentionComposerPresented && stickerComposerKind == nil)
         .opacity(activeTool == nil && !isTextComposerPresented && !isMentionComposerPresented && stickerComposerKind == nil ? 1 : 0)
+    }
+
+    private func creationToolbarButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            creationToolbarLabel(title, systemImage: systemImage)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
+
+    private func creationToolbarLabel(_ title: String, systemImage: String) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .bold))
+                .frame(width: 34, height: 24)
+            Text(title)
+                .font(.system(size: 9, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+        .foregroundStyle(.white)
+        .frame(width: 42, height: 48)
+        .contentShape(Rectangle())
+    }
+
+    private func openTool(_ tool: StoryEditorTool) {
+        stopPlayback()
+        cancelLiveToolPreview()
+        activeTool = tool
+    }
+
+    private func beginOverlayTiming() {
+        guard let range = editor.selectedOverlay?.timeRange else { return }
+        overlayTimingStart = range.start.time.seconds
+        overlayTimingDuration = range.duration.time.seconds
+        openTool(.timing)
     }
 
     private func shareStory() {
@@ -1482,78 +1576,9 @@ struct StoryEditorPreviewView: View {
         }
     }
 
-    private var storySideTools: some View {
-        GeometryReader { proxy in
-            let topInset = max(proxy.safeAreaInsets.top + 84, 96)
-            let bottomInset = max(proxy.safeAreaInsets.bottom + 112, 142)
-            let trailingInset = max(proxy.safeAreaInsets.trailing + 14, 14)
-            let railWidth: CGFloat = 54
-            let availableHeight = max(180, proxy.size.height - topInset - bottomInset)
-
-            VStack(spacing: 0) {
-                Spacer(minLength: topInset)
-                HStack {
-                    Spacer()
-                    ScrollView(.vertical, showsIndicators: false) {
-                        VStack(spacing: 10) {
-                            if editor.selectedClip != nil {
-                                storyToolButton(.clip, icon: "slider.horizontal.3")
-                                storyToolButton(.look, icon: "camera.filters")
-                            }
-                            if shouldShowAudioTool {
-                                storyToolButton(.audio, icon: editor.selectedClip?.muted == true ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                            }
-                            Button {
-                                beginTextComposer()
-                            } label: {
-                                Text("Aa")
-                                    .font(.system(size: 17, weight: .bold))
-                                    .frame(width: 44, height: 44)
-                                    .background(Color.black.opacity(0.30))
-                                    .clipShape(Circle())
-                            }
-                            .foregroundStyle(.white)
-                            .accessibilityLabel("Add text")
-                            storyToolButton(.stickers, icon: "face.smiling")
-                            Button {
-                                stopPlayback()
-                                activeTool = nil
-                                isImportingMediaOverlay = true
-                            } label: {
-                                Image(systemName: "photo.on.rectangle.angled")
-                                    .font(.system(size: 16, weight: .bold))
-                                    .frame(width: 44, height: 44)
-                                    .background(Color.black.opacity(0.30))
-                                    .foregroundStyle(.white)
-                                    .clipShape(Circle())
-                            }
-                            .accessibilityLabel("Add photo or video")
-                            storyToolButton(.music, icon: "music.note")
-                            Button {
-                                beginDrawing()
-                            } label: {
-                                Image(systemName: "pencil.tip")
-                                    .font(.system(size: 16, weight: .bold))
-                                    .frame(width: 44, height: 44)
-                                    .background(Color.black.opacity(0.30))
-                                    .clipShape(Circle())
-                            }
-                            .foregroundStyle(.white)
-                            .accessibilityLabel("Draw")
-                        }
-                    }
-                    .scrollClipDisabled()
-                    .frame(width: railWidth, height: availableHeight, alignment: .top)
-                    .padding(.trailing, trailingInset)
-                }
-                Spacer(minLength: bottomInset)
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height)
-        }
-    }
-
     private var selectedOverlayCanvasMenu: some View {
         VStack {
+            Spacer()
             HStack(spacing: 8) {
                 if editor.selectedTextOverlay != nil {
                     canvasMenuButton("Edit", systemImage: "textformat") {
@@ -1568,6 +1593,9 @@ struct StoryEditorPreviewView: View {
                 canvasMenuButton("Forward", systemImage: "square.2.layers.3d.top.filled") {
                     Task { await editor.bringSelectedOverlayForward() }
                 }
+                canvasMenuButton("Timing", systemImage: "timer") {
+                    beginOverlayTiming()
+                }
                 canvasMenuButton("Duplicate", systemImage: "plus.square.on.square") {
                     Task { await editor.duplicateSelectedOverlay() }
                 }
@@ -1581,8 +1609,7 @@ struct StoryEditorPreviewView: View {
             .clipShape(Capsule())
             .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
             .padding(.horizontal, 12)
-            .padding(.top, 68)
-            Spacer()
+            .padding(.bottom, 92)
         }
     }
 
@@ -1613,26 +1640,6 @@ struct StoryEditorPreviewView: View {
         filterBaselineClip = nil
         audioBaselineClip = nil
         musicBaselineClip = nil
-    }
-
-    private func storyToolButton(_ tool: StoryEditorTool, icon: String) -> some View {
-        Button {
-            if activeTool == tool {
-                cancelLiveToolPreview()
-                activeTool = nil
-            } else {
-                cancelLiveToolPreview()
-                activeTool = tool
-            }
-        } label: {
-            Image(systemName: icon)
-                .font(.system(size: 16, weight: .bold))
-                .frame(width: 44, height: 44)
-                .background(activeTool == tool ? C.watch : Color.black.opacity(0.30))
-                .foregroundStyle(activeTool == tool ? .black : .white)
-                .clipShape(Circle())
-        }
-        .accessibilityLabel(tool.rawValue.capitalized)
     }
 
     @ViewBuilder
@@ -1704,6 +1711,8 @@ struct StoryEditorPreviewView: View {
             stickerTrayControls
         case .music:
             musicControls
+        case .timing:
+            overlayTimingControls
         }
     }
 
@@ -1717,6 +1726,8 @@ struct StoryEditorPreviewView: View {
             return 260
         case .stickers:
             return 320
+        case .timing:
+            return 300
         }
     }
 
@@ -1727,6 +1738,7 @@ struct StoryEditorPreviewView: View {
         case .audio: return "Audio"
         case .stickers: return "Stickers"
         case .music: return "Music"
+        case .timing: return "Timing"
         }
     }
 
@@ -1752,10 +1764,87 @@ struct StoryEditorPreviewView: View {
         if let baseline = musicBaselineClip, let music = editor.project.tracks.audioClips.first {
             await editor.commitMusicVolume(music.volume, baselineClip: baseline)
         }
+        if activeTool == .timing {
+            await editor.updateSelectedOverlayTime(start: overlayTimingStart, duration: overlayTimingDuration)
+        }
     }
 
     private func beginLookPreview(from clip: VideoClip) {
         filterBaselineClip = filterBaselineClip ?? clip
+    }
+
+    private var overlayTimingControls: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Choose when this item appears in the story.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(C.textMuted)
+
+            GeometryReader { proxy in
+                let total = max(duration, 0.2)
+                let startX = proxy.size.width * overlayTimingStart / total
+                let width = proxy.size.width * overlayTimingDuration / total
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(C.elevated)
+                    Capsule()
+                        .fill(C.watch)
+                        .frame(width: max(width, 8))
+                        .offset(x: startX)
+                }
+            }
+            .frame(height: 8)
+            .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Starts")
+                    Spacer()
+                    Text(formatTime(overlayTimingStart))
+                        .fontDesign(.monospaced)
+                }
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(C.textMuted)
+                Slider(
+                    value: Binding(
+                        get: { overlayTimingStart },
+                        set: { value in
+                            overlayTimingStart = value
+                            overlayTimingDuration = min(
+                                overlayTimingDuration,
+                                max(duration - value, 0.2)
+                            )
+                        }
+                    ),
+                    in: 0...max(duration - 0.2, 0.2)
+                )
+                .tint(C.watch)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Duration")
+                    Spacer()
+                    Text(formatTime(overlayTimingDuration))
+                        .fontDesign(.monospaced)
+                }
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(C.textMuted)
+                Slider(
+                    value: $overlayTimingDuration,
+                    in: 0.2...max(duration - overlayTimingStart, 0.2)
+                )
+                .tint(C.watch)
+            }
+
+            Button("Show for full story") {
+                overlayTimingStart = 0
+                overlayTimingDuration = duration
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .buttonStyle(.plain)
+            .foregroundStyle(C.watch)
+        }
+        .padding(.vertical, 4)
     }
 
     private func lookControls(for clip: VideoClip) -> some View {
@@ -2129,6 +2218,24 @@ struct StoryEditorPreviewView: View {
         }
     }
 
+    private func scheduleClipThumbnails() {
+        clipThumbnailTask?.cancel()
+        guard let assetStore else { return }
+        let clips = editor.project.tracks.videoClips.filter { clipThumbnails[$0.id] == nil }
+        guard !clips.isEmpty else { return }
+        clipThumbnailTask = Task { @MainActor in
+            for clip in clips {
+                guard !Task.isCancelled else { return }
+                if let source = await filterThumbnailSource(for: clip, assetStore: assetStore) {
+                    clipThumbnails[clip.id] = source.storyClipThumbnail
+                }
+                await Task.yield()
+            }
+            let validIDs = Set(editor.project.tracks.videoClips.map(\.id))
+            clipThumbnails = clipThumbnails.filter { validIDs.contains($0.key) }
+        }
+    }
+
     private func filterThumbnailSource(for clip: VideoClip, assetStore: AssetStore) async -> UIImage? {
         let url = assetStore.absoluteURL(for: clip.assetRef.relativePath)
         if clip.assetRef.kind == .image {
@@ -2197,21 +2304,57 @@ struct StoryEditorPreviewView: View {
                         cancelLiveToolPreview()
                         editor.selectClip(clip.id)
                     } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Clip \(index + 1)")
-                                .font(.system(size: 11, weight: .bold))
-                            Text(formatTime(clip.timelineDuration.seconds))
-                                .font(.system(size: 10, weight: .medium))
-                                .fontDesign(.monospaced)
+                        ZStack(alignment: .bottomLeading) {
+                            if let thumbnail = clipThumbnails[clip.id] {
+                                Image(uiImage: thumbnail)
+                                    .resizable()
+                                    .scaledToFill()
+                            } else {
+                                Rectangle()
+                                    .fill(C.elevated)
+                                    .overlay {
+                                        Image(systemName: clip.assetRef.kind == .video ? "video.fill" : "photo.fill")
+                                            .foregroundStyle(C.textTertiary)
+                                    }
+                            }
+
+                            LinearGradient(
+                                colors: [.clear, .black.opacity(0.82)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+
+                            HStack {
+                                Text("\(index + 1)")
+                                    .font(.system(size: 10, weight: .bold))
+                                Spacer()
+                                Text(formatTime(clip.timelineDuration.seconds))
+                                    .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                            }
+                            .foregroundStyle(.white)
+                            .padding(6)
                         }
-                        .foregroundStyle(editor.selectedClipID == clip.id ? .black : C.text)
-                        .frame(width: 78, alignment: .leading)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 8)
-                        .background(editor.selectedClipID == clip.id ? C.watch : C.elevated)
-                        .clipShape(RoundedRectangle(cornerRadius: 7))
+                        .frame(width: 82, height: 62)
+                        .clipShape(RoundedRectangle(cornerRadius: 9))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 9)
+                                .stroke(editor.selectedClipID == clip.id ? C.watch : Color.white.opacity(0.12), lineWidth: editor.selectedClipID == clip.id ? 3 : 1)
+                        }
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Clip \(index + 1), \(formatTime(clip.timelineDuration.seconds))")
+                    .draggable(clip.id.uuidString)
+                    .dropDestination(for: String.self) { items, _ in
+                        guard let rawID = items.first,
+                              let sourceID = UUID(uuidString: rawID),
+                              let sourceIndex = editor.project.tracks.videoClips.firstIndex(where: { $0.id == sourceID }),
+                              sourceIndex != index else {
+                            return false
+                        }
+                        editor.selectClip(sourceID)
+                        Task { await editor.moveSelectedClip(by: index - sourceIndex) }
+                        return true
+                    }
                 }
             }
         }
@@ -2290,6 +2433,14 @@ struct StoryEditorPreviewView: View {
 
     private var stickerTrayControls: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Text("Quick stickers")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(C.textMuted)
+            stickerPicker
+
+            Text("Interactive")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(C.textMuted)
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
                 ForEach(StoryStickerTool.allCases) { tool in
                     Button {
@@ -2315,13 +2466,12 @@ struct StoryEditorPreviewView: View {
             }
 
             if !editor.project.tracks.overlays.isEmpty {
+                Text("On this story")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(C.textMuted)
                 overlayStrip
             }
         }
-        .padding(12)
-        .background(C.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
     }
 
     private func handleStickerTool(_ tool: StoryStickerTool) {
@@ -5071,6 +5221,21 @@ private enum StoryEditorPreviewError: LocalizedError {
 private extension UIImage {
     var storyFilterThumbnail: UIImage {
         let target = CGSize(width: 108, height: 136)
+        let widthScale = target.width / max(size.width, 1)
+        let heightScale = target.height / max(size.height, 1)
+        let scale = max(widthScale, heightScale)
+        let drawSize = CGSize(width: size.width * scale, height: size.height * scale)
+        let origin = CGPoint(
+            x: (target.width - drawSize.width) / 2,
+            y: (target.height - drawSize.height) / 2
+        )
+        return UIGraphicsImageRenderer(size: target).image { _ in
+            draw(in: CGRect(origin: origin, size: drawSize))
+        }
+    }
+
+    var storyClipThumbnail: UIImage {
+        let target = CGSize(width: 164, height: 124)
         let widthScale = target.width / max(size.width, 1)
         let heightScale = target.height / max(size.height, 1)
         let scale = max(widthScale, heightScale)

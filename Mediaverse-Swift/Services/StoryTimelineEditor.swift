@@ -47,6 +47,11 @@ final class StoryTimelineEditor: ObservableObject {
         return project.tracks.videoClips.firstIndex { $0.id == selectedClipID }
     }
 
+    var selectedOverlay: Overlay? {
+        guard let selectedOverlayID else { return nil }
+        return project.tracks.overlays.first { $0.id == selectedOverlayID }
+    }
+
     private var fullStoryOverlayTimeRange: TimelineRange {
         TimelineRange(
             start: CMTimeValueBox(seconds: 0),

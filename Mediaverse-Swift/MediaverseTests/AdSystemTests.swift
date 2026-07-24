@@ -144,6 +144,41 @@ final class StoryTimelineOverlayEditingTests: XCTestCase {
         XCTAssertFalse(editor.canUndo)
         XCTAssertEqual(editor.project, project)
     }
+
+    func testOverlayTimingClampsToStoryAndIsUndoable() async {
+        var project = Project.storyDraft(title: "Overlay timing", destination: nil)
+        let asset = AssetRef.make(
+            kind: .image,
+            relativePath: "media/story.jpg",
+            naturalWidth: 1080,
+            naturalHeight: 1920,
+            nominalFrameRate: 0,
+            durationSeconds: 5
+        )
+        try! project.addStoryClip(.storyClip(assetRef: asset, durationSeconds: 5))
+        let overlay = TextOverlay(
+            text: "Timed",
+            transform: .identity,
+            timeRange: TimelineRange(
+                start: CMTimeValueBox(seconds: 0),
+                duration: CMTimeValueBox(seconds: 5)
+            )
+        )
+        project.tracks.overlays = [.text(overlay)]
+        let editor = StoryTimelineEditor(project: project)
+        editor.selectOverlay(overlay.id)
+
+        await editor.updateSelectedOverlayTime(start: 4.8, duration: 4)
+
+        let updated = try! XCTUnwrap(editor.selectedOverlay)
+        XCTAssertEqual(updated.timeRange.start.time.seconds, 4.8, accuracy: 0.001)
+        XCTAssertEqual(updated.timeRange.duration.time.seconds, 0.2, accuracy: 0.001)
+        XCTAssertTrue(editor.canUndo)
+
+        await editor.undo()
+
+        XCTAssertEqual(editor.selectedOverlay?.timeRange, overlay.timeRange)
+    }
 }
 
 final class StoryProjectAssetCleanupTests: XCTestCase {
