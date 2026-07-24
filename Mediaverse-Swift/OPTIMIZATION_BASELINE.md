@@ -258,3 +258,13 @@ Metrics are intentionally passive: they do not emit network traffic, persist use
 - A failed refresh preserves the current playable feed and uses the existing non-blocking pagination error banner.
 - Preserved feed reseeding, ad-state reset, curation slots, current-item selection, playback configuration, and refresh-control behavior.
 - Verified with 8 routing contract tests, pager-lifecycle inspection, diff-integrity checks, and a complete unsigned dual-architecture iOS Simulator build.
+
+### Corrective QA: Shorts cache-first revalidation
+
+- Restored in-memory and prewarmed Shorts feeds still render immediately for zero-wait playback.
+- Cached startup feeds now trigger a silent network revalidation instead of becoming the final feed until manual refresh.
+- Revalidation explicitly bypasses both the five-minute prewarm cache and the shared 45-second Shorts API response cache.
+- The existing feed seed is retained for continuity, and the current Short remains selected when it still exists in the refreshed response.
+- Revalidation publishes only while the original feed generation, feed tab, and seed still own the screen; failure leaves cached playback untouched.
+- Preserved manual refresh reseeding, pagination, curation, ads, playback prewarming, and visible UI.
+- Verified with 8 routing contract tests, cache/ownership invariant inspection, diff-integrity checks, and a complete unsigned dual-architecture iOS Simulator build.

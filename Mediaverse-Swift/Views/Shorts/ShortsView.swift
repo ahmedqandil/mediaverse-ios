@@ -654,6 +654,7 @@ struct ShortsView: View {
     @State private var pendingShortViewTask: Task<Void, Never>?
     @State private var imagePrefetchTask: Task<Void, Never>?
     @State private var activationRetryTask: Task<Void, Never>?
+    @State private var feedRevalidationTask: Task<Void, Never>?
     @State private var feedGeneration = UUID()
     @State private var skippedShortsAdItemIds = Set<String>()
     @State private var pendingShortsAdItemIds = Set<String>()
@@ -943,6 +944,8 @@ struct ShortsView: View {
                         configurePlayback(ensureAutoplay: true)
                     }
                 } else {
+                    feedRevalidationTask?.cancel()
+                    feedRevalidationTask = nil
                     pendingShortViewTask?.cancel()
                     pendingShortViewTask = nil
                     activationRetryTask?.cancel()
@@ -1456,10 +1459,14 @@ struct ShortsView: View {
     private func loadInitial(replacingExisting: Bool = false) async {
         guard !isLoading else { return }
         let generation = feedGeneration
-        if !replacingExisting, restoreRootFeedSessionIfNeeded() || !shorts.isEmpty {
+        let restoredCachedSession = !replacingExisting && restoreRootFeedSessionIfNeeded()
+        if restoredCachedSession || (!replacingExisting && !shorts.isEmpty) {
             ensureInitialShortSelection()
             configurePlayback(ensureAutoplay: true)
             recordShortViewIfNeeded(itemID: currentID)
+            if restoredCachedSession {
+                scheduleCachedFeedRevalidation()
+            }
             return
         }
 
@@ -1542,6 +1549,9 @@ struct ShortsView: View {
             saveRootFeedSessionIfNeeded()
             configurePlayback(ensureAutoplay: true)
             recordShortViewIfNeeded(itemID: currentID)
+            if prewarmedFeed != nil {
+                scheduleCachedFeedRevalidation()
+            }
         } catch {
             guard feedGeneration == generation, !Task.isCancelled else { return }
             if replacingExisting {
@@ -1565,6 +1575,52 @@ struct ShortsView: View {
         loadError = nil
         paginationError = nil
         await loadInitial(replacingExisting: true)
+    }
+
+    private func scheduleCachedFeedRevalidation() {
+        guard canPersistRootFeedSession, feedRevalidationTask == nil else { return }
+        let generation = feedGeneration
+        let requestedFeed = feed
+        let requestedSeed = feedSessionSeed
+        let requestedIDs = feedSessionIDs
+        feedRevalidationTask = Task {
+            defer {
+                if feedGeneration == generation {
+                    feedRevalidationTask = nil
+                }
+            }
+            do {
+                let refreshed = try await APIClient.shared.fetchShorts(
+                    feed: requestedFeed.rawValue,
+                    limit: requestedIDs.map { min(30, max(10, $0.count + 10)) } ?? 10,
+                    seed: requestedSeed,
+                    ids: requestedIDs,
+                    forceRefresh: true
+                )
+                guard !Task.isCancelled,
+                      feedGeneration == generation,
+                      feed == requestedFeed,
+                      feedSessionSeed == requestedSeed else { return }
+                let refreshedShorts = uniqueByID(refreshed.shorts)
+                guard !refreshedShorts.isEmpty else { return }
+                let previousCurrentID = currentID
+                skippedShortsAdItemIds.removeAll()
+                pendingShortsAdItemIds.removeAll()
+                filledShortsAdDecisions.removeAll()
+                filledShortsAdPolicies.removeAll()
+                shorts = refreshedShorts
+                nextCursor = refreshed.nextCursor
+                currentID = previousCurrentID.flatMap { id in
+                    refreshedShorts.contains(where: { $0.id == id }) ? id : nil
+                } ?? refreshedShorts.first?.id
+                emptyReason = nil
+                paginationError = nil
+                saveRootFeedSessionIfNeeded()
+                configurePlayback(ensureAutoplay: true)
+            } catch {
+                // Cached playback remains valid when silent revalidation fails.
+            }
+        }
     }
 
     private func resolveInitialShorts(

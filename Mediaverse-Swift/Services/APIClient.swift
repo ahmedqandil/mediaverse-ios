@@ -551,7 +551,8 @@ actor APIClient {
         seed: String? = nil,
         source: String? = nil,
         sourceId: String? = nil,
-        ids: [String]? = nil
+        ids: [String]? = nil,
+        forceRefresh: Bool = false
     ) async throws -> ShortsResponse {
         let normalizedFeed = feed.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let cappedLimit = min(max(limit, 1), 30)
@@ -584,6 +585,10 @@ actor APIClient {
             if !normalizedIDs.isEmpty {
                 components.queryItems?.append(URLQueryItem(name: "ids", value: normalizedIDs.joined(separator: ",")))
             }
+        }
+
+        if forceRefresh {
+            components.queryItems?.append(URLQueryItem(name: "_refresh", value: UUID().uuidString))
         }
 
         guard let path = components.url?.absoluteString else {
