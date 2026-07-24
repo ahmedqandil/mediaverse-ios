@@ -87,6 +87,9 @@ struct StoryViewerView: View {
         .onChange(of: repository.groups) { _, _ in
             reconcileAfterRepositoryChange()
         }
+        .onChange(of: inAppBrowser.item) { _, item in
+            setPaused(item != nil)
+        }
         .alert("Delete story?", isPresented: Binding(
             get: { storyPendingDelete != nil },
             set: {
@@ -614,11 +617,11 @@ struct StoryViewerView: View {
         let pending = candidates.filter { !preloadedStoryIds.contains($0.id) }
         trimStoryPreloadState(keeping: candidates)
         guard !pending.isEmpty else { return }
-        pending.forEach { preloadedStoryIds.insert($0.id) }
 
         preloadTask = Task {
             for story in pending {
                 guard !Task.isCancelled else { return }
+                guard preloadedStoryIds.insert(story.id).inserted else { continue }
                 await preloadStory(story, priority: preloadPriority(for: story))
             }
         }
@@ -645,10 +648,19 @@ struct StoryViewerView: View {
     }
 
     private func preloadStory(_ story: StoryItem, priority: CacheWarmupPriority) async {
-        guard let url = C.mediaURL(story.mediaUrl) else { return }
+        guard let url = C.mediaURL(story.mediaUrl) else {
+            _ = preloadedStoryIds.remove(story.id)
+            return
+        }
 
         do {
             let localURL = try await StoryMediaCache.shared.cachedURL(for: url, priority: priority)
+            guard !Task.isCancelled else {
+                await MainActor.run {
+                    _ = preloadedStoryIds.remove(story.id)
+                }
+                return
+            }
             if story.isVideoMedia {
                 let asset = AVURLAsset(url: localURL)
                 let loadedDuration: CMTime? = try? await asset.load(.duration)
