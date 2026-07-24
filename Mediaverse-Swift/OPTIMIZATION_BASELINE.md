@@ -249,3 +249,12 @@ Metrics are intentionally passive: they do not emit network traffic, persist use
 - Verified that image memory/disk caches, Shorts player/asset pools, memory-pressure eviction, and startup warmups are bounded and cancellable; no behavior-changing cache rewrite was warranted.
 - Preserved post animations, inserted-post behavior, playback handoff, mini-player/fullscreen transitions, ads, autoplay, progress cadence, and all visible UI.
 - Verified with 8 routing contract tests, lifecycle/cache invariant inspection, a clean unsigned dual-architecture iOS Simulator build, and an iPhone 17 Pro Simulator install/launch smoke test with a live app process and no fatal startup log entries.
+
+### Corrective QA: Shorts single-pager refresh
+
+- Pull-to-refresh no longer empties the live Shorts array while its UIKit pager still owns the active refresh gesture.
+- The existing pager and current playback remain mounted until the replacement response is ready, then the feed data is swapped atomically.
+- Prevented the outgoing refresh-control pager and newly created feed pager from appearing together during downward overscroll.
+- A failed refresh preserves the current playable feed and uses the existing non-blocking pagination error banner.
+- Preserved feed reseeding, ad-state reset, curation slots, current-item selection, playback configuration, and refresh-control behavior.
+- Verified with 8 routing contract tests, pager-lifecycle inspection, diff-integrity checks, and a complete unsigned dual-architecture iOS Simulator build.

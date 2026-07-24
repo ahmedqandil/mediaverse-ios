@@ -1453,17 +1453,17 @@ struct ShortsView: View {
         )
     }
 
-    private func loadInitial() async {
+    private func loadInitial(replacingExisting: Bool = false) async {
         guard !isLoading else { return }
         let generation = feedGeneration
-        if restoreRootFeedSessionIfNeeded() || !shorts.isEmpty {
+        if !replacingExisting, restoreRootFeedSessionIfNeeded() || !shorts.isEmpty {
             ensureInitialShortSelection()
             configurePlayback(ensureAutoplay: true)
             recordShortViewIfNeeded(itemID: currentID)
             return
         }
 
-        isLoading = shorts.isEmpty
+        isLoading = replacingExisting || shorts.isEmpty
         loadError = nil
         paginationError = nil
 
@@ -1524,6 +1524,15 @@ struct ShortsView: View {
             let uniqueShorts = shouldPromoteInitialShort
                 ? prioritizeInitialShort(in: uniqueByID(resolved.shorts))
                 : uniqueByID(resolved.shorts)
+            if replacingExisting {
+                playbackManager.reset()
+                shortsFeedListings = curationShortsFeeds
+                recordedShortViewIds.removeAll()
+                skippedShortsAdItemIds.removeAll()
+                pendingShortsAdItemIds.removeAll()
+                filledShortsAdDecisions.removeAll()
+                filledShortsAdPolicies.removeAll()
+            }
             shorts = uniqueShorts
             nextCursor = resolved.nextCursor
             emptyReason = uniqueShorts.isEmpty ? (resp.reason ?? "empty") : nil
@@ -1535,7 +1544,11 @@ struct ShortsView: View {
             recordShortViewIfNeeded(itemID: currentID)
         } catch {
             guard feedGeneration == generation, !Task.isCancelled else { return }
-            loadError = error.localizedDescription
+            if replacingExisting {
+                paginationError = error.localizedDescription
+            } else {
+                loadError = error.localizedDescription
+            }
         }
         if feedGeneration == generation {
             isLoading = false
@@ -1545,23 +1558,13 @@ struct ShortsView: View {
     private func refreshShorts() async {
         guard !isLoading else { return }
         feedGeneration = UUID()
-        playbackManager.reset()
         playbackManager.clearRootFeedSnapshot()
         feedSessionSeed = UUID().uuidString
         feedSessionIDs = nil
-        shortsFeedListings = []
-        recordedShortViewIds.removeAll()
-        skippedShortsAdItemIds.removeAll()
-        pendingShortsAdItemIds.removeAll()
-        filledShortsAdDecisions.removeAll()
-        filledShortsAdPolicies.removeAll()
-        shorts = []
-        nextCursor = nil
-        currentID = nil
         emptyReason = nil
         loadError = nil
         paginationError = nil
-        await loadInitial()
+        await loadInitial(replacingExisting: true)
     }
 
     private func resolveInitialShorts(
