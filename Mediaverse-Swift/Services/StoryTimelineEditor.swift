@@ -6,6 +6,13 @@ struct StoryTimelineCommand {
     let before: Project
     let after: Project
     let label: String
+    let beforeSelection: StoryTimelineSelection
+    let afterSelection: StoryTimelineSelection
+}
+
+struct StoryTimelineSelection: Equatable {
+    var clipID: UUID?
+    var overlayID: UUID?
 }
 
 @MainActor
@@ -14,12 +21,15 @@ final class StoryTimelineEditor: ObservableObject {
     @Published var selectedClipID: UUID?
     @Published var selectedOverlayID: UUID?
     @Published var errorMessage: String?
+    @Published private(set) var isSaving = false
+    @Published private(set) var persistenceErrorMessage: String?
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
 
     private var undoStack: [StoryTimelineCommand] = []
     private var redoStack: [StoryTimelineCommand] = []
     private var pendingOverlayEditBaseline: Project?
+    private var saveRevision = 0
     private let maxCommands = 50
 
     init(project: Project) {
@@ -154,8 +164,11 @@ final class StoryTimelineEditor: ObservableObject {
         left = left.copyWith(newID: UUID())
         updated.tracks.videoClips.remove(at: match.index)
         updated.tracks.videoClips.insert(contentsOf: [left, right], at: match.index)
-        await commit(updated, label: "Split")
-        selectedClipID = right.id
+        await commit(
+            updated,
+            label: "Split",
+            selectionAfter: StoryTimelineSelection(clipID: right.id, overlayID: selectedOverlayID)
+        )
     }
 
     func deleteSelectedClip() async {
@@ -166,8 +179,12 @@ final class StoryTimelineEditor: ObservableObject {
         var updated = project
         updated.tracks.videoClips.remove(at: index)
         let nextIndex = min(index, updated.tracks.videoClips.count - 1)
-        await commit(updated, label: "Delete")
-        selectedClipID = updated.tracks.videoClips.indices.contains(nextIndex) ? updated.tracks.videoClips[nextIndex].id : nil
+        let nextClipID = updated.tracks.videoClips.indices.contains(nextIndex) ? updated.tracks.videoClips[nextIndex].id : nil
+        await commit(
+            updated,
+            label: "Delete",
+            selectionAfter: StoryTimelineSelection(clipID: nextClipID, overlayID: selectedOverlayID)
+        )
     }
 
     func duplicateSelectedClip() async {
@@ -179,8 +196,11 @@ final class StoryTimelineEditor: ObservableObject {
             errorMessage = "Duplicating this clip would exceed the 10 second story limit."
             return
         }
-        await commit(updated, label: "Duplicate")
-        selectedClipID = duplicate.id
+        await commit(
+            updated,
+            label: "Duplicate",
+            selectionAfter: StoryTimelineSelection(clipID: duplicate.id, overlayID: selectedOverlayID)
+        )
     }
 
     func previewSelectedClipTrim(to durationSeconds: Double) {
@@ -241,8 +261,11 @@ final class StoryTimelineEditor: ObservableObject {
         )
         var updated = project
         updated.tracks.overlays.append(.text(overlay))
-        await commit(updated, label: "Add Text")
-        selectedOverlayID = overlay.id
+        await commit(
+            updated,
+            label: "Add Text",
+            selectionAfter: StoryTimelineSelection(clipID: selectedClipID, overlayID: overlay.id)
+        )
     }
 
     func updateSelectedText(_ text: String, style: TextOverlayStyle? = nil) async {
@@ -279,8 +302,11 @@ final class StoryTimelineEditor: ObservableObject {
         )
         var updated = project
         updated.tracks.overlays.append(.sticker(sticker))
-        await commit(updated, label: "Add Sticker")
-        selectedOverlayID = sticker.id
+        await commit(
+            updated,
+            label: "Add Sticker",
+            selectionAfter: StoryTimelineSelection(clipID: selectedClipID, overlayID: sticker.id)
+        )
     }
 
     func addLinkOverlay(label: String, url: String, at timelineSeconds: Double) async {
@@ -298,8 +324,11 @@ final class StoryTimelineEditor: ObservableObject {
         )
         var updated = project
         updated.tracks.overlays.append(.link(link))
-        await commit(updated, label: "Add Link")
-        selectedOverlayID = link.id
+        await commit(
+            updated,
+            label: "Add Link",
+            selectionAfter: StoryTimelineSelection(clipID: selectedClipID, overlayID: link.id)
+        )
     }
 
     func updateSelectedLink(label: String, url: String) async {
@@ -339,8 +368,11 @@ final class StoryTimelineEditor: ObservableObject {
         )
         var updated = project
         updated.tracks.overlays.append(.interactive(overlay))
-        await commit(updated, label: "Add Sticker")
-        selectedOverlayID = overlay.id
+        await commit(
+            updated,
+            label: "Add Sticker",
+            selectionAfter: StoryTimelineSelection(clipID: selectedClipID, overlayID: overlay.id)
+        )
     }
 
     func updateSelectedInteractiveOverlay(title: String, subtitle: String?, options: [String], targetDate: Date?) async {
@@ -393,6 +425,7 @@ final class StoryTimelineEditor: ObservableObject {
             let timeRange = fullStoryOverlayTimeRange
             let duration = timeRange.duration.time.seconds
             let store = await ProjectStore.shared.assetStore(for: project.id)
+            try Task.checkCancellation()
             let relativePath = try store.importData(imageData, extension: fileExtension)
             let assetRef = AssetRef.make(
                 kind: .image,
@@ -411,9 +444,13 @@ final class StoryTimelineEditor: ObservableObject {
             )
             var updated = project
             updated.tracks.overlays.append(.sticker(overlay))
-            await commit(updated, label: label)
-            selectedOverlayID = overlay.id
+            await commit(
+                updated,
+                label: label,
+                selectionAfter: StoryTimelineSelection(clipID: selectedClipID, overlayID: overlay.id)
+            )
         } catch {
+            guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -432,9 +469,11 @@ final class StoryTimelineEditor: ObservableObject {
             let height = abs(transformed.height) > 0 ? abs(transformed.height) : abs(naturalSize.height)
             let frameRate = (try? await track.load(.nominalFrameRate)) ?? 0
             let sourceDuration = max((try? await asset.load(.duration).seconds) ?? 0, 0.2)
+            try Task.checkCancellation()
             let timeRange = fullStoryOverlayTimeRange
             let duration = min(sourceDuration, timeRange.duration.time.seconds)
             let store = await ProjectStore.shared.assetStore(for: project.id)
+            try Task.checkCancellation()
             let relativePath = try store.importFile(url, extension: url.pathExtension.isEmpty ? "mov" : url.pathExtension)
             let assetRef = AssetRef.make(
                 kind: .video,
@@ -454,9 +493,13 @@ final class StoryTimelineEditor: ObservableObject {
             )
             var updated = project
             updated.tracks.overlays.append(.sticker(overlay))
-            await commit(updated, label: "Add Video")
-            selectedOverlayID = overlay.id
+            await commit(
+                updated,
+                label: "Add Video",
+                selectionAfter: StoryTimelineSelection(clipID: selectedClipID, overlayID: overlay.id)
+            )
         } catch {
+            guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -466,6 +509,7 @@ final class StoryTimelineEditor: ObservableObject {
             let timeRange = fullStoryOverlayTimeRange
             let duration = timeRange.duration.time.seconds
             let store = await ProjectStore.shared.assetStore(for: project.id)
+            try Task.checkCancellation()
             let relativePath = try store.importData(imageData, extension: "png")
             let assetRef = AssetRef.make(
                 kind: .image,
@@ -483,9 +527,13 @@ final class StoryTimelineEditor: ObservableObject {
             )
             var updated = project
             updated.tracks.overlays.append(.drawing(drawing))
-            await commit(updated, label: "Add Drawing")
-            selectedOverlayID = drawing.id
+            await commit(
+                updated,
+                label: "Add Drawing",
+                selectionAfter: StoryTimelineSelection(clipID: selectedClipID, overlayID: drawing.id)
+            )
         } catch {
+            guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -804,11 +852,13 @@ final class StoryTimelineEditor: ObservableObject {
         do {
             let asset = AVURLAsset(url: url)
             let duration = try await asset.load(.duration).seconds
+            try Task.checkCancellation()
             guard duration > 0 else {
                 errorMessage = "Could not read the selected audio file."
                 return
             }
             let store = await ProjectStore.shared.assetStore(for: project.id)
+            try Task.checkCancellation()
             let relativePath = try store.importFile(url, extension: "m4a")
             let assetRef = AssetRef.make(
                 kind: .audio,
@@ -832,6 +882,7 @@ final class StoryTimelineEditor: ObservableObject {
             updated.tracks.audioClips = [clip]
             await commit(updated, label: "Music")
         } catch {
+            guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -873,8 +924,11 @@ final class StoryTimelineEditor: ObservableObject {
         guard let id = selectedOverlayID else { return }
         var updated = project
         updated.tracks.overlays.removeAll { $0.id == id }
-        await commit(updated, label: "Delete Overlay")
-        selectedOverlayID = nil
+        await commit(
+            updated,
+            label: "Delete Overlay",
+            selectionAfter: StoryTimelineSelection(clipID: selectedClipID, overlayID: nil)
+        )
     }
 
     func duplicateSelectedOverlay() async {
@@ -883,8 +937,11 @@ final class StoryTimelineEditor: ObservableObject {
         var updated = project
         let duplicate = duplicatedOverlay(from: updated.tracks.overlays[index])
         updated.tracks.overlays.insert(duplicate, at: index + 1)
-        await commit(updated, label: "Duplicate Overlay")
-        selectedOverlayID = duplicate.id
+        await commit(
+            updated,
+            label: "Duplicate Overlay",
+            selectionAfter: StoryTimelineSelection(clipID: selectedClipID, overlayID: duplicate.id)
+        )
     }
 
     func bringSelectedOverlayForward() async {
@@ -970,6 +1027,8 @@ final class StoryTimelineEditor: ObservableObject {
         guard let command = undoStack.popLast() else { return }
         redoStack.append(command)
         project = command.before
+        selectedClipID = command.beforeSelection.clipID
+        selectedOverlayID = command.beforeSelection.overlayID
         reconcileSelection()
         await persist()
         updateUndoRedoState()
@@ -979,6 +1038,8 @@ final class StoryTimelineEditor: ObservableObject {
         guard let command = redoStack.popLast() else { return }
         undoStack.append(command)
         project = command.after
+        selectedClipID = command.afterSelection.clipID
+        selectedOverlayID = command.afterSelection.overlayID
         reconcileSelection()
         await persist()
         updateUndoRedoState()
@@ -995,7 +1056,12 @@ final class StoryTimelineEditor: ObservableObject {
         }
     }
 
-    private func commit(_ updatedProject: Project, label: String, before beforeProject: Project? = nil) async {
+    private func commit(
+        _ updatedProject: Project,
+        label: String,
+        before beforeProject: Project? = nil,
+        selectionAfter: StoryTimelineSelection? = nil
+    ) async {
         var before = beforeProject ?? project
         before.updatedAt = project.updatedAt
         var comparableUpdated = updatedProject
@@ -1007,22 +1073,45 @@ final class StoryTimelineEditor: ObservableObject {
         }
         var updated = updatedProject
         updated.updatedAt = Date()
-        undoStack.append(StoryTimelineCommand(before: before, after: updated, label: label))
+        let beforeSelection = StoryTimelineSelection(clipID: selectedClipID, overlayID: selectedOverlayID)
+        let afterSelection = selectionAfter ?? beforeSelection
+        undoStack.append(
+            StoryTimelineCommand(
+                before: before,
+                after: updated,
+                label: label,
+                beforeSelection: beforeSelection,
+                afterSelection: afterSelection
+            )
+        )
         if undoStack.count > maxCommands {
             undoStack.removeFirst()
         }
         redoStack.removeAll()
         project = updated
+        selectedClipID = afterSelection.clipID
+        selectedOverlayID = afterSelection.overlayID
+        reconcileSelection()
         errorMessage = nil
         await persist()
         updateUndoRedoState()
     }
 
     private func persist() async {
+        saveRevision += 1
+        let revision = saveRevision
+        isSaving = true
         do {
             try await ProjectStore.shared.save(project)
+            if revision == saveRevision {
+                persistenceErrorMessage = nil
+                isSaving = false
+            }
         } catch {
-            errorMessage = error.localizedDescription
+            if revision == saveRevision {
+                persistenceErrorMessage = error.localizedDescription
+                isSaving = false
+            }
         }
     }
 

@@ -180,6 +180,7 @@ private final class StoryLocationSearchModel: NSObject, ObservableObject, MKLoca
     @Published private(set) var errorMessage: String?
 
     private let completer = MKLocalSearchCompleter()
+    private var resolveGeneration = 0
 
     override init() {
         super.init()
@@ -199,8 +200,10 @@ private final class StoryLocationSearchModel: NSObject, ObservableObject, MKLoca
     }
 
     func clear() {
+        resolveGeneration &+= 1
         completions = []
         errorMessage = nil
+        isResolving = false
         completer.queryFragment = ""
     }
 
@@ -222,14 +225,19 @@ private final class StoryLocationSearchModel: NSObject, ObservableObject, MKLoca
     }
 
     func resolve(_ completion: MKLocalSearchCompletion) async -> StoryResolvedLocation? {
+        resolveGeneration &+= 1
+        let generation = resolveGeneration
         isResolving = true
         errorMessage = nil
-        defer { isResolving = false }
+        defer {
+            if generation == resolveGeneration { isResolving = false }
+        }
 
         let request = MKLocalSearch.Request(completion: completion)
         request.resultTypes = [.address, .pointOfInterest]
         do {
             let response = try await MKLocalSearch(request: request).start()
+            guard !Task.isCancelled, generation == resolveGeneration else { return nil }
             guard let item = response.mapItems.first else {
                 errorMessage = "No matching place found."
                 return nil
@@ -243,6 +251,7 @@ private final class StoryLocationSearchModel: NSObject, ObservableObject, MKLoca
                 longitude: coordinate.longitude
             )
         } catch {
+            guard !Task.isCancelled, generation == resolveGeneration else { return nil }
             errorMessage = error.localizedDescription
             return nil
         }
@@ -303,6 +312,7 @@ private enum StoryDrawingColor: String, CaseIterable, Identifiable {
 }
 
 struct StoryEditorPreviewView: View {
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @StateObject private var editor: StoryTimelineEditor
     @StateObject private var locationSearch = StoryLocationSearchModel()
     let onProjectChange: (Project) -> Void
@@ -325,6 +335,10 @@ struct StoryEditorPreviewView: View {
     @State private var previewPlayerEndObserver: NSObjectProtocol?
     @State private var previewPlayerStatusObserver: NSKeyValueObservation?
     @State private var previewPlaybackWatchdogTask: Task<Void, Never>?
+    @State private var musicImportTask: Task<Void, Never>?
+    @State private var mediaOverlayImportTask: Task<Void, Never>?
+    @State private var networkStickerTask: Task<Void, Never>?
+    @State private var drawingImportTask: Task<Void, Never>?
     @State private var shouldResumePlaybackAfterToolPreview = false
     @State private var newOverlayText = ""
     @State private var newLinkLabel = ""
@@ -389,6 +403,12 @@ struct StoryEditorPreviewView: View {
 
     private var duration: Double {
         max(editor.project.totalDurationSeconds, 0.1)
+    }
+
+    private var saveStatusText: String {
+        if editor.isSaving { return "Saving…" }
+        if editor.persistenceErrorMessage != nil { return "Not saved" }
+        return "Saved"
     }
 
     private var canShareStory: Bool {
@@ -489,26 +509,31 @@ struct StoryEditorPreviewView: View {
                     .zIndex(7)
             }
         }
-        .animation(.spring(response: 0.25, dampingFraction: 0.86), value: activeTool?.id)
-        .onAppear {
-            Task {
-                await Task.yield()
-                try? await Task.sleep(nanoseconds: 90_000_000)
-                guard !Task.isCancelled else { return }
-                assetStore = await ProjectStore.shared.assetStore(for: project.id)
-                basePreviewSignature = basePreviewSignature(for: project)
-                if hasVideoPreviewClip, !usesRenderedToolPreview {
-                    configureVideoPreviewPlayer()
-                } else {
-                    destroyPreviewPlayer()
-                    schedulePreviewRender(after: 90_000_000)
-                }
-                presentFilterHUD()
+        .animation(accessibilityReduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.86), value: activeTool?.id)
+        .task {
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 90_000_000)
+            guard !Task.isCancelled else { return }
+            try? await ProjectStore.shared.pruneUnreferencedAssets(in: project)
+            guard !Task.isCancelled else { return }
+            assetStore = await ProjectStore.shared.assetStore(for: project.id)
+            basePreviewSignature = basePreviewSignature(for: project)
+            if hasVideoPreviewClip, !usesRenderedToolPreview {
+                configureVideoPreviewPlayer()
+            } else {
+                destroyPreviewPlayer()
+                schedulePreviewRender(after: 90_000_000)
             }
+            presentFilterHUD()
         }
         .onDisappear {
             previewRenderTask?.cancel()
             filterHUDTask?.cancel()
+            musicImportTask?.cancel()
+            mediaOverlayImportTask?.cancel()
+            networkStickerTask?.cancel()
+            drawingImportTask?.cancel()
+            locationSearch.clear()
             filterHUDVisible = false
             shouldResumePlaybackAfterToolPreview = false
             destroyPreviewPlayer()
@@ -557,9 +582,11 @@ struct StoryEditorPreviewView: View {
         .fileImporter(isPresented: $isImportingMusic, allowedContentTypes: [.audio]) { result in
             switch result {
             case .success(let url):
-                Task {
+                musicImportTask?.cancel()
+                musicImportTask = Task {
                     let scoped = url.startAccessingSecurityScopedResource()
                     defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    guard !Task.isCancelled else { return }
                     await editor.importMusic(from: url)
                 }
             case .failure(let error):
@@ -575,14 +602,16 @@ struct StoryEditorPreviewView: View {
         .sheet(isPresented: $isShowingGiphyPicker) {
             GiphyStickerPickerView { sticker in
                 isShowingGiphyPicker = false
-                Task { await addGiphySticker(sticker) }
+                networkStickerTask?.cancel()
+                networkStickerTask = Task { await addGiphySticker(sticker) }
             }
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
         .onChange(of: mediaOverlaySelection) { _, item in
             guard let item else { return }
-            Task { await handleMediaOverlaySelection(item) }
+            mediaOverlayImportTask?.cancel()
+            mediaOverlayImportTask = Task { await handleMediaOverlaySelection(item) }
         }
     }
 
@@ -624,11 +653,11 @@ struct StoryEditorPreviewView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         ProgressView(value: currentTime, total: duration)
                             .tint(C.watch)
-                        Text("\(formatTime(currentTime)) / \(formatTime(duration)) · \(isOverlayInteracting ? "Editing" : "Saved")")
+                        Text("\(formatTime(currentTime)) / \(formatTime(duration)) · \(isOverlayInteracting ? "Editing" : saveStatusText)")
                             .font(.system(size: 9, weight: .semibold).monospacedDigit())
                             .foregroundStyle(.white.opacity(0.76))
                             .lineLimit(1)
-                            .accessibilityLabel("Playhead \(formatTime(currentTime)) of \(formatTime(duration)). \(isOverlayInteracting ? "Editing sticker." : "Draft saved.")")
+                            .accessibilityLabel("Playhead \(formatTime(currentTime)) of \(formatTime(duration)). \(isOverlayInteracting ? "Editing sticker." : saveStatusText).")
                     }
                     .frame(maxWidth: proxy.size.width < 380 ? 96 : 150)
 
@@ -3775,6 +3804,7 @@ struct StoryEditorPreviewView: View {
                 throw StoryEditorPreviewError.mediaOverlayImportFailed
             }
             let (data, _) = try await URLSession.shared.data(from: url)
+            try Task.checkCancellation()
             let fileExtension = url.pathExtension.isEmpty ? asset.fallbackExtension : url.pathExtension
             await editor.addStickerImageOverlay(
                 imageData: data,
@@ -3785,6 +3815,7 @@ struct StoryEditorPreviewView: View {
                 at: currentTime
             )
         } catch {
+            guard !Task.isCancelled else { return }
             await MainActor.run {
                 renderError = error.localizedDescription
             }
@@ -3794,6 +3825,7 @@ struct StoryEditorPreviewView: View {
     private func handleMediaOverlaySelection(_ item: PhotosPickerItem) async {
         do {
             if let video = try await item.loadTransferable(type: PickedStoryOverlayVideo.self) {
+                try Task.checkCancellation()
                 await MainActor.run { mediaOverlaySelection = nil }
                 await editor.addVideoOverlay(from: video.url, at: currentTime)
                 return
@@ -3803,6 +3835,7 @@ struct StoryEditorPreviewView: View {
                   let image = UIImage(data: data) else {
                 throw StoryEditorPreviewError.mediaOverlayImportFailed
             }
+            try Task.checkCancellation()
             let normalized = image.normalizedForStoryMedia
             guard let jpeg = normalized.jpegData(compressionQuality: 0.92) else {
                 throw StoryEditorPreviewError.mediaOverlayImportFailed
@@ -3812,6 +3845,7 @@ struct StoryEditorPreviewView: View {
             await MainActor.run { mediaOverlaySelection = nil }
             await editor.addImageOverlay(imageData: jpeg, width: width, height: height, at: currentTime)
         } catch {
+            guard !Task.isCancelled else { return }
             await MainActor.run {
                 mediaOverlaySelection = nil
                 renderError = error.localizedDescription
@@ -4092,7 +4126,8 @@ struct StoryEditorPreviewView: View {
         let savedTime = currentTime
         drawing = PKDrawing()
         isDrawingPresented = false
-        Task {
+        drawingImportTask?.cancel()
+        drawingImportTask = Task {
             await editor.addDrawingOverlay(
                 imageData: data,
                 width: cgImage.width,

@@ -118,6 +118,11 @@ final class StoryTimelineOverlayEditingTests: XCTestCase {
 
         XCTAssertTrue(editor.project.tracks.overlays.isEmpty)
         XCTAssertNil(editor.selectedOverlayID)
+
+        await editor.redo()
+
+        XCTAssertEqual(editor.project.tracks.overlays.count, 1)
+        XCTAssertEqual(editor.selectedOverlayID, editor.project.tracks.overlays.first?.id)
     }
 
     func testApplyingUnchangedTextDoesNotCreateUndoCommand() async {
@@ -138,6 +143,34 @@ final class StoryTimelineOverlayEditingTests: XCTestCase {
 
         XCTAssertFalse(editor.canUndo)
         XCTAssertEqual(editor.project, project)
+    }
+}
+
+final class StoryProjectAssetCleanupTests: XCTestCase {
+    func testPruneRemovesOnlyUnreferencedMediaFiles() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ProjectStoreTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ProjectStore(rootURL: root)
+        var project = Project.storyDraft(title: "Cleanup test", destination: nil)
+        let assetStore = await store.assetStore(for: project.id)
+        try assetStore.ensureDirectories()
+        let keptPath = try assetStore.importData(Data("kept".utf8), extension: "jpg")
+        let removedPath = try assetStore.importData(Data("unused".utf8), extension: "png")
+        let keptAsset = AssetRef.make(
+            kind: .image,
+            relativePath: keptPath,
+            naturalWidth: 100,
+            naturalHeight: 100,
+            nominalFrameRate: 0,
+            durationSeconds: 5
+        )
+        project.tracks.videoClips = [.storyClip(assetRef: keptAsset, durationSeconds: 5)]
+
+        try await store.pruneUnreferencedAssets(in: project)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: assetStore.absoluteURL(for: keptPath).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: assetStore.absoluteURL(for: removedPath).path))
     }
 }
 

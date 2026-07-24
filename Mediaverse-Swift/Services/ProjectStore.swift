@@ -47,7 +47,7 @@ actor ProjectStore {
     private let decoder: JSONDecoder
     private let rootURL: URL
 
-    init(fileManager: FileManager = .default) {
+    init(fileManager: FileManager = .default, rootURL: URL? = nil) {
         self.fileManager = fileManager
         self.encoder = JSONEncoder()
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -55,7 +55,7 @@ actor ProjectStore {
 
         let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
-        self.rootURL = applicationSupport
+        self.rootURL = rootURL ?? applicationSupport
             .appendingPathComponent("Projects", isDirectory: true)
     }
 
@@ -141,6 +141,39 @@ actor ProjectStore {
 
     func assetStore(for id: UUID) -> AssetStore {
         AssetStore(projectID: id, baseURL: rootURL)
+    }
+
+    func pruneUnreferencedAssets(in project: Project) throws {
+        let store = assetStore(for: project.id)
+        guard fileManager.fileExists(atPath: store.mediaURL.path) else { return }
+        let referencedPaths = Set(assetRefs(in: project).map(\.relativePath))
+        let files = try fileManager.contentsOfDirectory(
+            at: store.mediaURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+        for file in files {
+            let relativePath = "media/\(file.lastPathComponent)"
+            guard !referencedPaths.contains(relativePath),
+                  (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+            try fileManager.removeItem(at: file)
+        }
+    }
+
+    private func assetRefs(in project: Project) -> [AssetRef] {
+        var refs = project.tracks.videoClips.map(\.assetRef)
+        refs.append(contentsOf: project.tracks.audioClips.map(\.assetRef))
+        for overlay in project.tracks.overlays {
+            switch overlay {
+            case .sticker(let sticker):
+                if let assetRef = sticker.assetRef { refs.append(assetRef) }
+            case .drawing(let drawing):
+                refs.append(drawing.assetRef)
+            case .text, .link, .interactive:
+                break
+            }
+        }
+        return refs
     }
 
     private func ensureRoot() throws {

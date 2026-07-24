@@ -1039,7 +1039,9 @@ struct StoryCreatorCoordinator: View {
 
         do {
             try await updateDraftDestination(selectedPublisher)
+            try Task.checkCancellation()
             let uploadContext = try await ensureStoryUploadContext(for: selectedPublisher)
+            try Task.checkCancellation()
             guard let project = currentProject else {
                 throw StoryCreatorError.message("Story draft is missing. Choose media again.")
             }
@@ -1052,8 +1054,14 @@ struct StoryCreatorCoordinator: View {
                 ctaLabel: ctaLabel,
                 ctaUrl: ctaUrl
             )
+            try Task.checkCancellation()
             StoryBackgroundPublisher.shared.enqueue(request)
             dismiss()
+        } catch is CancellationError {
+            errorText = "Publishing canceled. No story was created."
+            reopenPostDrawerAfterPublishFailure()
+            publishPhase = .idle
+            publishProgress = 0
         } catch {
             errorText = error.localizedDescription
             reopenPostDrawerAfterPublishFailure()
