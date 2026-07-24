@@ -1,5 +1,20 @@
 import Foundation
 
+enum StoriesRequestPolicy {
+    static func shouldRetry(method: String) -> Bool {
+        method.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == "GET"
+    }
+
+    static func isAllowedUploadURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http",
+              url.host?.isEmpty == false else {
+            return false
+        }
+        return true
+    }
+}
+
 actor StoriesAPIClient {
     static let shared = StoriesAPIClient()
 
@@ -190,7 +205,7 @@ actor StoriesAPIClient {
         do {
             try validate(response, data: responseData)
             return responseData
-        } catch StoriesError.serverUnavailable where retrying {
+        } catch StoriesError.serverUnavailable where retrying && StoriesRequestPolicy.shouldRetry(method: method) {
             try await Task.sleep(nanoseconds: 350_000_000)
             return try await data(path, method: method, body: body, authenticated: authenticated, retrying: false)
         }
@@ -233,7 +248,9 @@ actor StoriesAPIClient {
     }
 
     private func validate(_ response: URLResponse, data: Data) throws {
-        guard let http = response as? HTTPURLResponse else { return }
+        guard let http = response as? HTTPURLResponse else {
+            throw StoriesError.serverUnavailable()
+        }
         guard !(200..<300).contains(http.statusCode) else { return }
         let serverMessage = serverErrorMessage(from: data)
         switch http.statusCode {

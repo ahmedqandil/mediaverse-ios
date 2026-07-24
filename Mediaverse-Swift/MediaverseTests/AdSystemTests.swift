@@ -447,3 +447,31 @@ final class StoryMediaCacheValidationTests: XCTestCase {
         XCTAssertFalse(StoryMediaCache.isSuccessfulResponse(nil))
     }
 }
+
+final class StoriesRequestPolicyTests: XCTestCase {
+    func testRetriesOnlySafeReadRequests() {
+        XCTAssertTrue(StoriesRequestPolicy.shouldRetry(method: "GET"))
+        XCTAssertTrue(StoriesRequestPolicy.shouldRetry(method: " get "))
+        XCTAssertFalse(StoriesRequestPolicy.shouldRetry(method: "POST"))
+        XCTAssertFalse(StoriesRequestPolicy.shouldRetry(method: "DELETE"))
+        XCTAssertFalse(StoriesRequestPolicy.shouldRetry(method: "PATCH"))
+    }
+
+    func testUploadURLRequiresHTTPTransportAndHost() throws {
+        XCTAssertTrue(
+            StoriesRequestPolicy.isAllowedUploadURL(
+                try XCTUnwrap(URL(string: "https://uploads.example.com/story.mp4?signature=abc"))
+            )
+        )
+        XCTAssertFalse(
+            StoriesRequestPolicy.isAllowedUploadURL(
+                try XCTUnwrap(URL(string: "file:///tmp/story.mp4"))
+            )
+        )
+        XCTAssertFalse(
+            StoriesRequestPolicy.isAllowedUploadURL(
+                try XCTUnwrap(URL(string: "westreem://upload/story"))
+            )
+        )
+    }
+}
