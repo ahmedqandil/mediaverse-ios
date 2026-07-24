@@ -78,6 +78,7 @@ actor StoryExportService {
             }
             return true
         }
+        extendPhotoStoryWithOverlaysToMaxDuration(&mediaProject)
         return mediaProject
     }
 

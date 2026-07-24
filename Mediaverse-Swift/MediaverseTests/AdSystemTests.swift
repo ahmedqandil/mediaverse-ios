@@ -21,6 +21,29 @@ final class StoryTimedMediaOverlayTests: XCTestCase {
         XCTAssertTrue(storyProjectRequiresAnimatedExport(projectWithOverlay(kind: .video, path: "media/overlay.mov")))
     }
 
+    func testPhotoStoryWithStickerExtendsToTenSeconds() {
+        var project = projectWithOverlay(kind: .image, path: "media/sticker.gif")
+
+        extendPhotoStoryWithOverlaysToMaxDuration(&project)
+
+        XCTAssertEqual(project.totalDurationSeconds, 10, accuracy: 0.001)
+        XCTAssertEqual(project.tracks.overlays.first?.timeRange.duration.time.seconds ?? -1, 10, accuracy: 0.001)
+    }
+
+    func testCustomStickerTimingIsNotExpanded() {
+        var project = projectWithOverlay(kind: .image, path: "media/sticker.gif")
+        project.tracks.overlays[0].timeRange = TimelineRange(
+            start: CMTimeValueBox(seconds: 1),
+            duration: CMTimeValueBox(seconds: 2)
+        )
+
+        extendPhotoStoryWithOverlaysToMaxDuration(&project)
+
+        XCTAssertEqual(project.totalDurationSeconds, 10, accuracy: 0.001)
+        XCTAssertEqual(project.tracks.overlays[0].timeRange.start.time.seconds, 1, accuracy: 0.001)
+        XCTAssertEqual(project.tracks.overlays[0].timeRange.duration.time.seconds, 2, accuracy: 0.001)
+    }
+
     private func projectWithOverlay(kind: AssetKind, path: String) -> Project {
         var project = Project.storyDraft(title: "Animated export", destination: nil)
         let background = AssetRef.make(

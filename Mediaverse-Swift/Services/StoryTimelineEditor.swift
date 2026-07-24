@@ -1113,16 +1113,18 @@ final class StoryTimelineEditor: ObservableObject {
         before beforeProject: Project? = nil,
         selectionAfter: StoryTimelineSelection? = nil
     ) async {
+        var normalizedProject = updatedProject
+        extendPhotoStoryWithOverlaysToMaxDuration(&normalizedProject)
         var before = beforeProject ?? project
         before.updatedAt = project.updatedAt
-        var comparableUpdated = updatedProject
+        var comparableUpdated = normalizedProject
         comparableUpdated.updatedAt = before.updatedAt
         guard comparableUpdated != before else {
             project = before
             errorMessage = nil
             return
         }
-        var updated = updatedProject
+        var updated = normalizedProject
         updated.updatedAt = Date()
         let beforeSelection = StoryTimelineSelection(clipID: selectedClipID, overlayID: selectedOverlayID)
         let afterSelection = selectionAfter ?? beforeSelection

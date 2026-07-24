@@ -156,12 +156,33 @@ enum Overlay: Codable, Identifiable, Equatable {
     }
 
     var timeRange: TimelineRange {
-        switch self {
-        case .text(let overlay): return overlay.timeRange
-        case .sticker(let overlay): return overlay.timeRange
-        case .drawing(let overlay): return overlay.timeRange
-        case .link(let overlay): return overlay.timeRange
-        case .interactive(let overlay): return overlay.timeRange
+        get {
+            switch self {
+            case .text(let overlay): return overlay.timeRange
+            case .sticker(let overlay): return overlay.timeRange
+            case .drawing(let overlay): return overlay.timeRange
+            case .link(let overlay): return overlay.timeRange
+            case .interactive(let overlay): return overlay.timeRange
+            }
+        }
+        set {
+            switch self {
+            case .text(var overlay):
+                overlay.timeRange = newValue
+                self = .text(overlay)
+            case .sticker(var overlay):
+                overlay.timeRange = newValue
+                self = .sticker(overlay)
+            case .drawing(var overlay):
+                overlay.timeRange = newValue
+                self = .drawing(overlay)
+            case .link(var overlay):
+                overlay.timeRange = newValue
+                self = .link(overlay)
+            case .interactive(var overlay):
+                overlay.timeRange = newValue
+                self = .interactive(overlay)
+            }
         }
     }
 }
@@ -367,6 +388,40 @@ struct Transition: Codable, Equatable {
 struct TimelineRange: Codable, Equatable {
     var start: CMTimeValueBox
     var duration: CMTimeValueBox
+}
+
+func extendPhotoStoryWithOverlaysToMaxDuration(_ project: inout Project) {
+    guard !project.tracks.overlays.isEmpty,
+          !project.tracks.videoClips.isEmpty,
+          project.tracks.videoClips.allSatisfy({ $0.assetRef.kind == .image }) else {
+        return
+    }
+
+    let originalDuration = project.totalDurationSeconds
+    guard originalDuration < storyMaxDurationSeconds - 0.01,
+          let lastIndex = project.tracks.videoClips.indices.last else {
+        return
+    }
+
+    let extraDuration = storyMaxDurationSeconds - originalDuration
+    let lastClip = project.tracks.videoClips[lastIndex]
+    let extendedSourceDuration = lastClip.sourceDurationSeconds + extraDuration * max(lastClip.speed, 0.01)
+    project.tracks.videoClips[lastIndex].sourceDuration = CMTimeValueBox(seconds: extendedSourceDuration)
+    project.tracks.videoClips[lastIndex].assetRef.durationSeconds = max(
+        project.tracks.videoClips[lastIndex].assetRef.durationSeconds,
+        extendedSourceDuration
+    )
+
+    for index in project.tracks.overlays.indices {
+        let range = project.tracks.overlays[index].timeRange
+        let start = range.start.time.seconds
+        let end = start + range.duration.time.seconds
+        guard start <= 0.01, abs(end - originalDuration) <= 0.05 else { continue }
+        project.tracks.overlays[index].timeRange = TimelineRange(
+            start: CMTimeValueBox(seconds: 0),
+            duration: CMTimeValueBox(seconds: storyMaxDurationSeconds)
+        )
+    }
 }
 
 struct CMTimeValueBox: Codable, Equatable {
