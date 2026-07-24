@@ -108,7 +108,7 @@ struct StoryCreatorCoordinator: View {
     }
 
     private var resolvedPublisher: UploadContext? {
-        selectedPublisher ?? (publishers.count == 1 ? publishers.first : nil)
+        selectedPublisher ?? preselectedPublisher ?? (publishers.count == 1 ? publishers.first : nil)
     }
 
     private var filteredPublishers: [UploadContext] {
@@ -189,7 +189,11 @@ struct StoryCreatorCoordinator: View {
         case .editor:
             editorStep
         case .media:
-            cameraLaunchStep
+            if isPreparingMedia {
+                cameraLaunchStep
+            } else {
+                mediaRecoveryStep
+            }
         default:
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -280,8 +284,8 @@ struct StoryCreatorCoordinator: View {
 
     private var mediaStep: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let selectedPublisher {
-                publisherSummary(selectedPublisher)
+            if let resolvedPublisher {
+                publisherSummary(resolvedPublisher)
             }
 
             if let draftMedia {
@@ -305,8 +309,27 @@ struct StoryCreatorCoordinator: View {
     private var cameraLaunchStep: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            ProgressView()
-                .tint(C.watch)
+            VStack(spacing: 12) {
+                ProgressView()
+                    .tint(C.watch)
+                Text("Preparing story...")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.75))
+            }
+        }
+    }
+
+    private var mediaRecoveryStep: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                header
+                if let errorText {
+                    errorBanner(errorText)
+                }
+                mediaStep
+            }
+            .padding(C.pagePad)
+            .padding(.bottom, 28)
         }
     }
 
@@ -377,10 +400,10 @@ struct StoryCreatorCoordinator: View {
 
                 if publishers.count > 1 {
                     destinationLookup
-                } else if publishers.isEmpty {
-                    loadingRow(isLoadingPublishers ? "Loading destinations..." : "No available story destinations.")
                 } else if let publisher = resolvedPublisher {
                     selectedDestinationSummary(publisher)
+                } else {
+                    loadingRow(isLoadingPublishers ? "Loading destinations..." : "No available story destinations.")
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -425,17 +448,17 @@ struct StoryCreatorCoordinator: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(C.textMuted)
 
-            if let selectedPublisher {
-                selectedDestinationSummary(selectedPublisher)
+            if let resolvedPublisher {
+                selectedDestinationSummary(resolvedPublisher)
             }
 
-            TextField(selectedPublisher == nil ? "Search channel or show" : "Search to change destination", text: $destinationSearch)
+            TextField(resolvedPublisher == nil ? "Search channel or show" : "Search to change destination", text: $destinationSearch)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .storyTextFieldStyle()
 
             if destinationSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(selectedPublisher == nil ? "Search for a channel or show to post this story." : "Only the selected destination is shown until you search.")
+                Text(resolvedPublisher == nil ? "Search for a channel or show to post this story." : "Only the selected destination is shown until you search.")
                     .font(.system(size: 11))
                     .foregroundStyle(C.textTertiary)
             } else if filteredPublishers.isEmpty {
@@ -449,7 +472,7 @@ struct StoryCreatorCoordinator: View {
                         selectedPublisher = publisher
                         destinationSearch = ""
                     } label: {
-                        publisherRow(publisher, selected: publisher.id == selectedPublisher?.id)
+                        publisherRow(publisher, selected: publisher.id == resolvedPublisher?.id)
                     }
                     .buttonStyle(.plain)
                 }
@@ -812,6 +835,7 @@ struct StoryCreatorCoordinator: View {
             step = .editor
         } catch {
             errorText = error.localizedDescription
+            step = .media
         }
     }
 
@@ -836,6 +860,7 @@ struct StoryCreatorCoordinator: View {
             step = .editor
         } catch {
             errorText = error.localizedDescription
+            step = .media
         }
     }
 
@@ -858,6 +883,7 @@ struct StoryCreatorCoordinator: View {
             step = .editor
         } catch {
             errorText = error.localizedDescription
+            step = .media
         }
     }
 
