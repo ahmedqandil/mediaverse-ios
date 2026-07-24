@@ -113,10 +113,25 @@ final class MetalPetalStoryFilterProcessor {
         return try? context.makeCIImage(from: output)
     }
 
-    func livePreviewImage(from pixelBuffer: CVPixelBuffer, filterId: String?, adjustments: ColorAdjust) -> MTIImage? {
+    func livePreviewImage(
+        from pixelBuffer: CVPixelBuffer,
+        filterId: String?,
+        adjustments: ColorAdjust,
+        effectStack: StoryEffectStack? = nil
+    ) -> MTIImage? {
         guard let context else { return nil }
         let preset = StoryEffectCatalog.preset(id: filterId)
-        var output = MTIImage(cvPixelBuffer: pixelBuffer, alphaType: .alphaIsOne)
+        let source = CIImage(cvPixelBuffer: pixelBuffer)
+        let stack = effectStack
+        let lookInput: CIImage
+        if let stack,
+           stack.version >= StoryEffectStack.currentVersion,
+           let lut = preset.lut {
+            lookInput = StoryColorLUT.apply(lut, to: source)
+        } else {
+            lookInput = source
+        }
+        var output = MTIImage(ciImage: lookInput, isOpaque: true)
         if adjustments.brightness != 0 {
             output = output.adjusting(brightness: adjustments.brightness)
         }
@@ -134,7 +149,32 @@ final class MetalPetalStoryFilterProcessor {
             let filtered = StoryCoreImageEffects.smoothSkin(ciOutput)
             return MTIImage(ciImage: filtered, isOpaque: true)
         }
-        return applyRenderEffect(preset.renderEffect, to: output)
+        guard var rendered = applyRenderEffect(preset.renderEffect, to: output) else { return nil }
+        if let stack, stack.beauty.isEnabled,
+           let ciOutput = try? context.makeCIImage(from: rendered) {
+            rendered = MTIImage(
+                ciImage: StoryCoreImageEffects.faceAwareBeauty(ciOutput, settings: stack.beauty),
+                isOpaque: true
+            )
+        }
+        for effect in stack?.creativeEffects ?? [] where effect != .none && effect != .skinSmooth {
+            guard let effectOutput = applyRenderEffect(effect, to: rendered) else { continue }
+            if let base = try? context.makeCIImage(from: rendered),
+               let target = try? context.makeCIImage(from: effectOutput) {
+                let amount = min(max(stack?.creativeEffectIntensity ?? 1, 0), 1)
+                let mask = CIImage(
+                    color: CIColor(red: CGFloat(amount), green: CGFloat(amount), blue: CGFloat(amount), alpha: 1)
+                ).cropped(to: base.extent)
+                let blended = target.applyingFilter("CIBlendWithAlphaMask", parameters: [
+                    kCIInputBackgroundImageKey: base,
+                    kCIInputMaskImageKey: mask
+                ])
+                rendered = MTIImage(ciImage: blended, isOpaque: true)
+            } else {
+                rendered = effectOutput
+            }
+        }
+        return rendered
     }
 
     private func applyRenderEffect(_ effect: StoryRenderEffect, to input: MTIImage) -> MTIImage? {

@@ -875,7 +875,8 @@ struct StoryCreatorCoordinator: View {
                 image: normalized,
                 jpegData: jpegData,
                 filterId: photo.filterId,
-                adjustments: photo.adjustments
+                adjustments: photo.adjustments,
+                effectStack: photo.effectStack
             )
             let preview = StoryFrameFilterRenderer.renderImage(
                 normalized,
@@ -954,7 +955,8 @@ struct StoryCreatorCoordinator: View {
         image: UIImage,
         jpegData: Data,
         filterId: String? = nil,
-        adjustments: ColorAdjust = .neutral
+        adjustments: ColorAdjust = .neutral,
+        effectStack: StoryEffectStack? = nil
     ) async throws -> Project {
         var project = Project.storyDraft(
             title: "Story Draft",
@@ -977,6 +979,7 @@ struct StoryCreatorCoordinator: View {
             var clip = VideoClip.storyClip(assetRef: assetRef, durationSeconds: storyMaxDurationSeconds)
             clip.filterId = filterId
             clip.adjustments = adjustments
+            clip.effectStack = effectStack
             try project.addStoryClip(clip)
             try await ProjectStore.shared.save(project)
             return project
@@ -993,7 +996,8 @@ struct StoryCreatorCoordinator: View {
                 duration: durationSeconds,
                 speed: 1,
                 filterId: nil,
-                adjustments: .neutral
+                adjustments: .neutral,
+                effectStack: nil
             ),
             asset
         )])
@@ -1032,6 +1036,7 @@ struct StoryCreatorCoordinator: View {
                 clip.speed = min(max(segment.speed, 0.5), 2)
                 clip.filterId = segment.filterId
                 clip.adjustments = segment.adjustments
+                clip.effectStack = segment.effectStack
                 try project.addStoryClip(clip)
             }
 

@@ -49,6 +49,7 @@ struct StoryCapturedSegment: Identifiable, Equatable {
     let speed: Double
     let filterId: String?
     let adjustments: ColorAdjust
+    let effectStack: StoryEffectStack?
 }
 
 struct StoryCapturedPhoto {
@@ -56,6 +57,7 @@ struct StoryCapturedPhoto {
     let image: UIImage
     let filterId: String?
     let adjustments: ColorAdjust
+    let effectStack: StoryEffectStack?
 }
 
 struct StoryCameraView: View {
@@ -463,7 +465,8 @@ struct StoryCameraView: View {
                     data: photo.data,
                     image: photo.image,
                     filterId: controller.selectedFilterId,
-                    adjustments: controller.selectedAdjustments
+                    adjustments: controller.selectedAdjustments,
+                    effectStack: controller.selectedEffectStack
                 ))
             case .failure(let error):
                 controller.errorText = error.localizedDescription
@@ -506,7 +509,8 @@ struct StoryCameraView: View {
                     data: jpeg,
                     image: normalized,
                     filterId: controller.selectedFilterId,
-                    adjustments: controller.selectedAdjustments
+                    adjustments: controller.selectedAdjustments,
+                    effectStack: controller.selectedEffectStack
                 ))
             }
         } catch {
@@ -689,6 +693,7 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
     @Published private(set) var exposureBias: Float = 0
     @Published private(set) var selectedFilterId: String? = StoryEffectCatalog.presets.first?.id
     @Published private(set) var selectedAdjustments: ColorAdjust = StoryEffectCatalog.presets.first?.adjustments ?? .neutral
+    @Published private(set) var selectedEffectStack: StoryEffectStack? = nil
     @Published var showGrid = false
     @Published var errorText: String?
     @Published private(set) var torchMode: AVCaptureDevice.TorchMode = .off
@@ -711,6 +716,7 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
     private var pendingSegmentSpeed: Double = 1
     private var pendingSegmentFilterId: String?
     private var pendingSegmentAdjustments: ColorAdjust = .neutral
+    private var pendingSegmentEffectStack: StoryEffectStack?
     private var segmentTimer: Task<Void, Never>?
     private var currentSegmentMaxDuration: Double = 0
     private var currentSegmentSpeed: Double = 1
@@ -773,6 +779,9 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
         guard !isRecording else { return }
         selectedFilterId = preset.id
         selectedAdjustments = preset.adjustments
+        var stack = StoryEffectStack.none
+        stack.lookId = preset.id
+        selectedEffectStack = stack
         let shouldEnableLivePreview = isLiveFilterActive
         setFilteredPreviewOutputEnabled(shouldEnableLivePreview)
         if !shouldEnableLivePreview {
@@ -853,6 +862,7 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
         pendingSegmentSpeed = currentSegmentSpeed
         pendingSegmentFilterId = selectedFilterId
         pendingSegmentAdjustments = selectedAdjustments
+        pendingSegmentEffectStack = selectedEffectStack
         currentRecordingDuration = 0
 
         sessionQueue.async { [weak self] in
@@ -997,7 +1007,8 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
               let image = MetalPetalStoryFilterProcessor.shared.livePreviewImage(
                 from: pixelBuffer,
                 filterId: selectedFilterId,
-                adjustments: selectedAdjustments
+                adjustments: selectedAdjustments,
+                effectStack: selectedEffectStack
               ) else {
             clearFilteredPreview()
             return
@@ -1194,11 +1205,13 @@ extension StoryCameraController: AVCaptureFileOutputRecordingDelegate {
         let speed = pendingSegmentSpeed
         let filterId = pendingSegmentFilterId
         let adjustments = pendingSegmentAdjustments
+        let effectStack = pendingSegmentEffectStack
         outputURL = nil
         pendingSegmentDuration = 0
         pendingSegmentSpeed = 1
         pendingSegmentFilterId = nil
         pendingSegmentAdjustments = .neutral
+        pendingSegmentEffectStack = nil
 
         if discardRecordingOnFinish {
             StoryTemporaryMedia.removeIfOwned(outputFileURL)
@@ -1219,7 +1232,8 @@ extension StoryCameraController: AVCaptureFileOutputRecordingDelegate {
                 duration: duration,
                 speed: speed,
                 filterId: filterId,
-                adjustments: adjustments
+                adjustments: adjustments,
+                effectStack: effectStack
             )
             self.segments.append(segment)
             self.lastCapturedPreviewSegment = segment

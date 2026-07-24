@@ -925,6 +925,17 @@ final class StoryLocationActionTests: XCTestCase {
 
 @MainActor
 final class StoryLookEditingTests: XCTestCase {
+    func testCameraSelectionCarriesVersionedLookIntoEditorDraft() {
+        let controller = StoryCameraController()
+        let preset = StoryEffectCatalog.preset(id: "cinema")
+
+        controller.selectFilter(preset)
+
+        XCTAssertEqual(controller.selectedFilterId, "cinema")
+        XCTAssertEqual(controller.selectedEffectStack?.version, StoryEffectStack.currentVersion)
+        XCTAssertEqual(controller.selectedEffectStack?.lookId, "cinema")
+    }
+
     func testFilterIntensityPreviewClampsWithoutCreatingUndo() {
         let editor = StoryTimelineEditor(project: projectWithClip())
 
