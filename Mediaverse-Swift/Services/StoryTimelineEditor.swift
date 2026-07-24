@@ -241,6 +241,35 @@ final class StoryTimelineEditor: ObservableObject {
         await commitSelectedClipTrim(to: durationSeconds, baselineClip: nil)
     }
 
+    func previewSelectedClipRange(startSeconds: Double, endSeconds: Double) {
+        guard let index = selectedClipIndex else { return }
+        var updated = project
+        updateClipRange(in: &updated, at: index, startSeconds: startSeconds, endSeconds: endSeconds)
+        guard validateStoryDuration(updated) else {
+            errorMessage = "Trim would exceed the 10 second story limit."
+            return
+        }
+        project = updated
+        selectedClipID = updated.tracks.videoClips[index].id
+        errorMessage = nil
+    }
+
+    func commitSelectedClipRange(startSeconds: Double, endSeconds: Double, baselineClip: VideoClip?) async {
+        guard let index = selectedClipIndex else { return }
+        var before = project
+        if let baselineClip {
+            before.tracks.videoClips[index] = baselineClip
+        }
+        var updated = project
+        updateClipRange(in: &updated, at: index, startSeconds: startSeconds, endSeconds: endSeconds)
+        guard validateStoryDuration(updated) else {
+            errorMessage = "Trim would exceed the 10 second story limit."
+            return
+        }
+        await commit(updated, label: "Trim Clip", before: before)
+        selectedClipID = updated.tracks.videoClips[index].id
+    }
+
     func moveSelectedClip(by offset: Int) async {
         guard let index = selectedClipIndex else { return }
         let target = index + offset
@@ -1151,6 +1180,15 @@ final class StoryTimelineEditor: ObservableObject {
         let maxDuration = original.assetRef.durationSeconds - original.sourceStartSeconds
         let clamped = min(max(timelineDurationSeconds * max(original.speed, 0.01), 0.2), max(maxDuration, 0.2))
         project.tracks.videoClips[index].sourceDuration = CMTimeValueBox(seconds: clamped)
+    }
+
+    private func updateClipRange(in project: inout Project, at index: Int, startSeconds: Double, endSeconds: Double) {
+        let clip = project.tracks.videoClips[index]
+        let assetDuration = max(clip.assetRef.durationSeconds, 0.2)
+        let start = min(max(startSeconds, 0), max(assetDuration - 0.2, 0))
+        let end = min(max(endSeconds, start + 0.2), assetDuration)
+        project.tracks.videoClips[index].sourceStart = CMTimeValueBox(seconds: start)
+        project.tracks.videoClips[index].sourceDuration = CMTimeValueBox(seconds: max(end - start, 0.2))
     }
 
     private func clipLocation(at timelineSeconds: Double) -> (clip: VideoClip, index: Int, start: CMTime)? {

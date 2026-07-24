@@ -14,6 +14,15 @@ import MetalPetal
 enum StoryAnimatedImage {
     static func frame(at seconds: Double, from url: URL) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return frame(at: seconds, source: source)
+    }
+
+    static func frame(at seconds: Double, from data: Data) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return frame(at: seconds, source: source)
+    }
+
+    private static func frame(at seconds: Double, source: CGImageSource) -> CGImage? {
         let count = CGImageSourceGetCount(source)
         guard count > 1 else { return nil }
 

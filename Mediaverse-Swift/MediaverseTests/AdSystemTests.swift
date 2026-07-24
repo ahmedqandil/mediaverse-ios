@@ -16,6 +16,54 @@ final class StoryTimedMediaOverlayTests: XCTestCase {
 }
 
 @MainActor
+final class StoryClipRangeEditingTests: XCTestCase {
+    func testClipRangeUpdatesBothInAndOutPoints() {
+        let editor = StoryTimelineEditor(project: projectWithClip(duration: 8))
+
+        editor.previewSelectedClipRange(startSeconds: 2, endSeconds: 6.5)
+
+        XCTAssertEqual(editor.selectedClip?.sourceStartSeconds ?? -1, 2, accuracy: 0.001)
+        XCTAssertEqual(editor.selectedClip?.sourceDurationSeconds ?? -1, 4.5, accuracy: 0.001)
+        XCTAssertFalse(editor.canUndo)
+    }
+
+    func testClipRangeClampsToAssetAndMinimumDuration() {
+        let editor = StoryTimelineEditor(project: projectWithClip(duration: 8))
+
+        editor.previewSelectedClipRange(startSeconds: 20, endSeconds: 20)
+
+        XCTAssertEqual(editor.selectedClip?.sourceStartSeconds ?? -1, 7.8, accuracy: 0.001)
+        XCTAssertEqual(editor.selectedClip?.sourceDurationSeconds ?? -1, 0.2, accuracy: 0.001)
+    }
+
+    func testCommittedClipRangeIsUndoable() async {
+        let editor = StoryTimelineEditor(project: projectWithClip(duration: 8))
+        let baseline = try! XCTUnwrap(editor.selectedClip)
+
+        await editor.commitSelectedClipRange(startSeconds: 1, endSeconds: 5, baselineClip: baseline)
+        XCTAssertTrue(editor.canUndo)
+        XCTAssertEqual(editor.selectedClip?.sourceStartSeconds ?? -1, 1, accuracy: 0.001)
+
+        await editor.undo()
+        XCTAssertEqual(editor.selectedClip, baseline)
+    }
+
+    private func projectWithClip(duration: Double) -> Project {
+        var project = Project.storyDraft(title: "Trim test", destination: nil)
+        let asset = AssetRef.make(
+            kind: .video,
+            relativePath: "media/source.mov",
+            naturalWidth: 1080,
+            naturalHeight: 1920,
+            nominalFrameRate: 30,
+            durationSeconds: duration
+        )
+        try! project.addStoryClip(.storyClip(assetRef: asset, durationSeconds: duration))
+        return project
+    }
+}
+
+@MainActor
 final class StoryTimelineMusicEditingTests: XCTestCase {
     func testMusicVolumePreviewClampsWithoutCreatingUndoCommand() {
         let editor = StoryTimelineEditor(project: projectWithMusic(volume: 0.5))

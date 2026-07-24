@@ -1995,6 +1995,8 @@ struct StoryEditorPreviewView: View {
         VStack(alignment: .leading, spacing: 12) {
             clipStrip
 
+            clipTrimControls(for: clip)
+
             HStack(spacing: 8) {
                 editorButton("Split", systemImage: "scissors") {
                     await editor.split(at: currentTime)
@@ -2074,6 +2076,85 @@ struct StoryEditorPreviewView: View {
         .background(C.surface)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
+    }
+
+    private func clipTrimControls(for clip: VideoClip) -> some View {
+        let assetDuration = max(clip.assetRef.durationSeconds, 0.2)
+        let sourceEnd = min(clip.sourceStartSeconds + clip.sourceDurationSeconds, assetDuration)
+        return VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Label("Trim", systemImage: "timeline.selection")
+                    .font(.system(size: 12, weight: .bold))
+                Spacer()
+                Text("\(formatTime(clip.sourceStartSeconds)) – \(formatTime(sourceEnd))")
+                    .font(.system(size: 11, weight: .bold).monospacedDigit())
+                    .foregroundStyle(C.watch)
+            }
+            .foregroundStyle(C.text)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Start")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(C.textMuted)
+                Slider(
+                    value: Binding(
+                        get: { clip.sourceStartSeconds },
+                        set: { start in
+                            clipBaselineClip = clipBaselineClip ?? clip
+                            editor.previewSelectedClipRange(startSeconds: start, endSeconds: sourceEnd)
+                        }
+                    ),
+                    in: 0...max(sourceEnd - 0.2, 0.001),
+                    onEditingChanged: { editing in
+                        guard !editing else { return }
+                        let current = editor.selectedClip ?? clip
+                        Task {
+                            await editor.commitSelectedClipRange(
+                                startSeconds: current.sourceStartSeconds,
+                                endSeconds: current.sourceStartSeconds + current.sourceDurationSeconds,
+                                baselineClip: clipBaselineClip
+                            )
+                            clipBaselineClip = nil
+                        }
+                    }
+                )
+                .tint(C.watch)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("End")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(C.textMuted)
+                Slider(
+                    value: Binding(
+                        get: { sourceEnd },
+                        set: { end in
+                            clipBaselineClip = clipBaselineClip ?? clip
+                            editor.previewSelectedClipRange(startSeconds: clip.sourceStartSeconds, endSeconds: end)
+                        }
+                    ),
+                    in: min(clip.sourceStartSeconds + 0.2, assetDuration)...assetDuration,
+                    onEditingChanged: { editing in
+                        guard !editing else { return }
+                        let current = editor.selectedClip ?? clip
+                        Task {
+                            await editor.commitSelectedClipRange(
+                                startSeconds: current.sourceStartSeconds,
+                                endSeconds: current.sourceStartSeconds + current.sourceDurationSeconds,
+                                baselineClip: clipBaselineClip
+                            )
+                            clipBaselineClip = nil
+                        }
+                    }
+                )
+                .tint(C.watch)
+            }
+        }
+        .padding(12)
+        .background(C.elevated)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Clip trim controls")
     }
 
     private func filterControls(for clip: VideoClip) -> some View {
@@ -5006,18 +5087,63 @@ private struct GiphyStickerPickerView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            TextField("", text: $query, prompt: Text("Search stickers").foregroundStyle(C.textMuted))
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .foregroundStyle(C.text)
-                .tint(C.watch)
-                .padding(.horizontal, 12)
-                .frame(height: 44)
-                .background(C.surface)
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(C.borderSubtle, lineWidth: 1))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
+            HStack {
+                Text("GIF stickers")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(C.text)
+                Spacer()
+                Text("Powered by GIPHY")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(C.textMuted)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+
+            HStack(spacing: 9) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(C.textMuted)
+
+                TextField("Search GIF stickers", text: $query)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.search)
+                    .foregroundStyle(C.text)
+                    .tint(C.watch)
+
+                if !query.isEmpty {
+                    Button {
+                        query = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(C.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear GIF search")
+                }
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 46)
+            .background(C.surface)
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(C.borderSubtle, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, 16)
+
+            HStack {
+                Text(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                     ? "Trending"
+                     : "Results for “\(query.trimmingCharacters(in: .whitespacesAndNewlines))”")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(C.textMuted)
+                    .lineLimit(1)
+                Spacer()
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(C.watch)
+                }
+            }
+            .padding(.horizontal, 16)
 
             if let errorText {
                 Text(errorText)
@@ -5028,17 +5154,28 @@ private struct GiphyStickerPickerView: View {
             }
 
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 10) {
-                    ForEach(stickers) { sticker in
-                        Button {
-                            onSelect(sticker)
-                        } label: {
-                            GiphyStickerCell(sticker: sticker)
+                if stickers.isEmpty, !isLoading {
+                    ContentUnavailableView(
+                        query.isEmpty ? "No trending GIFs" : "No GIFs found",
+                        systemImage: "sparkles",
+                        description: Text(query.isEmpty ? "Try again in a moment." : "Try a shorter or different search.")
+                    )
+                    .foregroundStyle(C.textMuted)
+                    .padding(.top, 50)
+                } else {
+                    LazyVGrid(columns: columns, spacing: 10) {
+                        ForEach(stickers) { sticker in
+                            Button {
+                                onSelect(sticker)
+                            } label: {
+                                GiphyStickerCell(sticker: sticker)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(sticker.title.isEmpty ? "GIF sticker" : sticker.title)
                         }
-                        .buttonStyle(.plain)
                     }
+                    .padding(.horizontal, 16)
                 }
-                .padding(.horizontal, 16)
 
                 if stickers.count < totalCount || (!stickers.isEmpty && totalCount == 0) {
                     Button {
@@ -5055,10 +5192,6 @@ private struct GiphyStickerPickerView: View {
                 }
             }
 
-            Text("Powered by GIPHY")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(C.textMuted)
-                .padding(.bottom, 10)
         }
         .background(C.bg.ignoresSafeArea())
         .task { await load(reset: true) }
@@ -5108,21 +5241,65 @@ private struct GiphyStickerCell: View {
     let sticker: GiphySticker
 
     var body: some View {
-        CachedRemoteImage(
-            url: URL(string: sticker.preview.url),
-            targetSize: CGSize(width: 120, height: 120)
-        ) { image in
-            image
-                .resizable()
-                .scaledToFit()
-        } placeholder: {
-            ProgressView()
-                .tint(C.watch)
-        }
+        AnimatedRemoteStickerView(url: URL(string: sticker.preview.url))
         .frame(maxWidth: .infinity)
         .aspectRatio(1, contentMode: .fit)
         .background(C.surface)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct AnimatedRemoteStickerView: View {
+    let url: URL?
+
+    @State private var data: Data?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let data {
+                TimelineView(.animation(minimumInterval: 1.0 / 12.0, paused: false)) { context in
+                    if let frame = StoryAnimatedImage.frame(
+                        at: context.date.timeIntervalSinceReferenceDate,
+                        from: data
+                    ) {
+                        Image(decorative: frame, scale: 1)
+                            .resizable()
+                            .scaledToFit()
+                    } else if let image = UIImage(data: data) {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                    } else {
+                        Color.clear
+                    }
+                }
+            } else if failed {
+                Image(systemName: "photo")
+                    .foregroundStyle(C.textMuted)
+            } else {
+                ProgressView()
+                    .tint(C.watch)
+            }
+        }
+        .task(id: url) {
+            guard let url else {
+                failed = true
+                return
+            }
+            do {
+                let (downloaded, response) = try await URLSession.shared.data(from: url)
+                guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+                    failed = true
+                    return
+                }
+                data = downloaded
+                failed = false
+            } catch {
+                guard !Task.isCancelled else { return }
+                failed = true
+            }
+        }
     }
 }
 
