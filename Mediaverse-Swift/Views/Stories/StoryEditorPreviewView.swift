@@ -620,9 +620,16 @@ struct StoryEditorPreviewView: View {
                     .foregroundStyle(.white)
                     .accessibilityLabel("Back")
 
-                    ProgressView(value: currentTime, total: duration)
-                        .tint(C.watch)
-                        .frame(maxWidth: proxy.size.width < 380 ? 96 : 150)
+                    VStack(alignment: .leading, spacing: 3) {
+                        ProgressView(value: currentTime, total: duration)
+                            .tint(C.watch)
+                        Text("\(formatTime(currentTime)) / \(formatTime(duration)) · \(isOverlayInteracting ? "Editing" : "Saved")")
+                            .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.76))
+                            .lineLimit(1)
+                            .accessibilityLabel("Playhead \(formatTime(currentTime)) of \(formatTime(duration)). \(isOverlayInteracting ? "Editing sticker." : "Draft saved.")")
+                    }
+                    .frame(maxWidth: proxy.size.width < 380 ? 96 : 150)
 
                     Spacer(minLength: 8)
 
@@ -2548,10 +2555,63 @@ struct StoryEditorPreviewView: View {
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(C.text)
                 .lineLimit(2)
-            editorButton("Delete Sticker", systemImage: "trash", role: .destructive) {
-                await editor.deleteSelectedOverlay()
+
+            Text("Keep the complete sticker inside the dashed safe area so viewer controls never cover it.")
+                .font(.system(size: 10))
+                .foregroundStyle(C.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                editorButton("Center Sticker", systemImage: "scope") {
+                    await applyInteractiveTransform(
+                        overlay,
+                        Transform2D(
+                            scale: overlay.transform.scale,
+                            rotation: overlay.transform.rotation,
+                            tx: 0,
+                            ty: 0
+                        )
+                    )
+                }
+                editorButton("Reset Sticker Size", systemImage: "arrow.up.left.and.arrow.down.right") {
+                    await applyInteractiveTransform(
+                        overlay,
+                        Transform2D(
+                            scale: 1,
+                            rotation: overlay.transform.rotation,
+                            tx: overlay.transform.tx,
+                            ty: overlay.transform.ty
+                        )
+                    )
+                }
+                editorButton("Reset Sticker Rotation", systemImage: "rotate.left") {
+                    await applyInteractiveTransform(
+                        overlay,
+                        Transform2D(
+                            scale: overlay.transform.scale,
+                            rotation: 0,
+                            tx: overlay.transform.tx,
+                            ty: overlay.transform.ty
+                        )
+                    )
+                }
+                editorButton("Delete Sticker", systemImage: "trash", role: .destructive) {
+                    await editor.deleteSelectedOverlay()
+                }
             }
         }
+    }
+
+    private func applyInteractiveTransform(_ overlay: StoryInteractiveOverlay, _ transform: Transform2D) async {
+        let viewport = CGSize(width: 390, height: 844)
+        let constrained = StoryOverlayLayout.clampedInteractiveTransform(
+            transform,
+            stickerSize: StoryOverlayLayout.estimatedStickerSize(for: overlay),
+            canvas: project.canvas,
+            viewportSize: viewport
+        )
+        editor.setOverlayTransformLive(id: overlay.id, transform: constrained)
+        await editor.persistInteractiveOverlayEdits()
     }
 
     private var interactiveOverlayLayer: some View {
@@ -2607,6 +2667,22 @@ struct StoryEditorPreviewView: View {
                         .zIndex(19_000)
                 }
 
+                if isOverlayInteracting {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(C.watch.opacity(0.72), style: StrokeStyle(lineWidth: 1.25, dash: [7, 5]))
+                        .frame(
+                            width: StoryOverlayLayout.safeFrame(for: project.canvas, in: proxy.size).width,
+                            height: StoryOverlayLayout.safeFrame(for: project.canvas, in: proxy.size).height
+                        )
+                        .position(
+                            x: StoryOverlayLayout.safeFrame(for: project.canvas, in: proxy.size).midX,
+                            y: StoryOverlayLayout.safeFrame(for: project.canvas, in: proxy.size).midY
+                        )
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                        .zIndex(18_000)
+                }
+
                 OverlayCanvasGestureLayer(
                     targets: targets,
                     selectedOverlayID: editor.selectedOverlayID,
@@ -2623,7 +2699,23 @@ struct StoryEditorPreviewView: View {
                         selectOverlayForGesture(overlay)
                     },
                     onChange: { id, transform in
-                        let snapped = snappedOverlayTransform(transform, previewScale: previewScale)
+                        let overlay = visibleOverlays.first(where: { $0.element.id == id })?.element
+                        let constrainedTransform: Transform2D
+                        if let overlay, case .interactive = overlay {
+                            let stickerSize = measuredInteractiveStickerSizes[id] ?? interactiveViewerStickerHitSize(for: overlay)
+                            constrainedTransform = StoryOverlayLayout.clampedInteractiveTransform(
+                                transform,
+                                stickerSize: stickerSize,
+                                canvas: project.canvas,
+                                viewportSize: proxy.size
+                            )
+                        } else {
+                            constrainedTransform = transform
+                        }
+                        let snapped = snappedOverlayTransform(constrainedTransform, previewScale: previewScale)
+                        if snapped.guide.hasVisibleGuide, !overlayAlignmentGuide.hasVisibleGuide {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                        }
                         editor.setOverlayTransformLive(id: id, transform: snapped.transform)
                         overlayAlignmentGuide = snapped.guide
                     },
@@ -2766,27 +2858,7 @@ struct StoryEditorPreviewView: View {
 
     private func interactiveViewerStickerHitSize(for overlay: Overlay) -> CGSize {
         guard case .interactive(let interactive) = overlay else { return .zero }
-
-        switch interactive.kind {
-        case .link:
-            let metadata = editorInteractiveMetadata(interactive.options)
-            let labelWidth = CGFloat(interactive.title.count) * 8 + 58
-            let urlWidth = CGFloat(shortenedHost(from: metadata["url"] ?? interactive.subtitle)?.count ?? 0) * 6 + 58
-            return CGSize(width: max(118, min(260, max(labelWidth, urlWidth))), height: 46)
-        case .mention:
-            return CGSize(width: max(118, min(240, CGFloat(interactive.title.count) * 8 + 76)), height: 46)
-        case .location:
-            return CGSize(width: max(96, min(260, CGFloat(interactive.title.count) * 8 + 44)), height: 34)
-        case .countdown:
-            return CGSize(width: 132, height: 64)
-        case .poll, .quiz:
-            let options = visibleInteractiveOptions(interactive.options)
-            return CGSize(width: 260, height: CGFloat(56 + max(options.count, 2) * 46))
-        case .question:
-            return CGSize(width: 240, height: 110)
-        case .addYours, .avatar:
-            return CGSize(width: 220, height: 92)
-        }
+        return StoryOverlayLayout.estimatedStickerSize(for: interactive)
     }
 
     private func overlayVisual(for overlay: Overlay, state: OverlayInteractionState, previewScale: CGFloat) -> AnyView {

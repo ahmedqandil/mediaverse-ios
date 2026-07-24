@@ -455,6 +455,12 @@ struct StoryViewerView: View {
             let stickerScale = StoryOverlayLayout.stickerPresentationScale(for: canvas, in: viewportSize)
             ZStack {
                 ForEach(Array(story.overlays.enumerated()), id: \.offset) { index, overlay in
+                    let base = StoryOverlayLayout.clampedBase(
+                        overlay.base,
+                        stickerSize: StoryOverlayLayout.estimatedStickerSize(for: overlay),
+                        canvas: canvas,
+                        viewportSize: viewportSize
+                    )
                     StoryOverlayStickerView(
                         overlay: overlay,
                         storyId: story.id,
@@ -464,9 +470,9 @@ struct StoryViewerView: View {
                         setPaused: setPaused(_:)
                     )
                         .fixedSize(horizontal: true, vertical: true)
-                        .scaleEffect((overlay.base.scale ?? 1.0) * stickerScale)
-                        .rotationEffect(.degrees(overlay.base.rotation ?? 0))
-                        .position(StoryOverlayLayout.position(for: overlay.base, canvas: canvas, in: viewportSize))
+                        .scaleEffect((base.scale ?? 1.0) * stickerScale)
+                        .rotationEffect(.degrees(base.rotation ?? 0))
+                        .position(StoryOverlayLayout.position(for: base, canvas: canvas, in: viewportSize))
                 }
             }
             .frame(width: viewportSize.width, height: viewportSize.height)

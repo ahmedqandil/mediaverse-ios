@@ -2,14 +2,19 @@ import SwiftUI
 import UIKit
 
 struct StoryOverlayLayout {
+    static let minimumScale = 0.25
+    static let maximumScale = 4.0
+    static let safeBounds = CGRect(x: 0.04, y: 0.12, width: 0.92, height: 0.70)
+
     static func normalizedBase(from transform: Transform2D, canvas: CanvasSpec) -> StoryOverlayBase {
         let width = Double(max(canvas.width, 1))
         let height = Double(max(canvas.height, 1))
+        let sanitized = sanitizedTransform(transform)
         return StoryOverlayBase(
-            x: clamp01(0.5 + transform.tx / width),
-            y: clamp01(0.5 - transform.ty / height),
-            scale: transform.scale,
-            rotation: transform.rotation * 180 / .pi
+            x: clamp01(0.5 + sanitized.tx / width),
+            y: clamp01(0.5 - sanitized.ty / height),
+            scale: sanitized.scale,
+            rotation: normalizedDegrees(sanitized.rotation * 180 / .pi)
         )
     }
 
@@ -39,9 +44,8 @@ struct StoryOverlayLayout {
 
     static func stickerPresentationScale(for canvas: CanvasSpec, in viewportSize: CGSize) -> CGFloat {
         let frame = storyFrame(for: canvas, in: viewportSize)
-        let screenSize = UIScreen.main.bounds.size
-        let baselineWidth = max(1, min(screenSize.width, screenSize.height))
-        return frame.width / baselineWidth
+        let referenceWidth: CGFloat = 390
+        return frame.width / referenceWidth
     }
 
     static func storyFrame(for canvas: CanvasSpec, in viewportSize: CGSize) -> CGRect {
@@ -62,15 +66,166 @@ struct StoryOverlayLayout {
         )
     }
 
+    static func safeFrame(for canvas: CanvasSpec, in viewportSize: CGSize) -> CGRect {
+        let frame = storyFrame(for: canvas, in: viewportSize)
+        return CGRect(
+            x: frame.minX + frame.width * safeBounds.minX,
+            y: frame.minY + frame.height * safeBounds.minY,
+            width: frame.width * safeBounds.width,
+            height: frame.height * safeBounds.height
+        )
+    }
+
+    static func estimatedStickerSize(for overlay: StoryInteractiveOverlay) -> CGSize {
+        switch overlay.kind {
+        case .link:
+            return CGSize(width: max(118, min(260, CGFloat(overlay.title.count) * 8 + 76)), height: 46)
+        case .mention:
+            return CGSize(width: max(118, min(240, CGFloat(overlay.title.count) * 8 + 76)), height: 46)
+        case .location:
+            return CGSize(width: max(96, min(260, CGFloat(overlay.title.count) * 8 + 44)), height: 34)
+        case .countdown:
+            return CGSize(width: 132, height: 64)
+        case .poll, .quiz:
+            let optionCount = overlay.options.filter { !$0.contains("=") }.count
+            return CGSize(width: 260, height: CGFloat(56 + max(optionCount, 2) * 46))
+        case .question:
+            return CGSize(width: 240, height: 110)
+        case .addYours, .avatar:
+            return CGSize(width: 220, height: 92)
+        }
+    }
+
+    static func safeNormalizedBase(for overlay: StoryInteractiveOverlay, canvas: CanvasSpec) -> StoryOverlayBase {
+        let canonicalViewport = CGSize(width: 390, height: 844)
+        let transform = clampedInteractiveTransform(
+            overlay.transform,
+            stickerSize: estimatedStickerSize(for: overlay),
+            canvas: canvas,
+            viewportSize: canonicalViewport
+        )
+        return normalizedBase(from: transform, canvas: canvas)
+    }
+
+    static func clampedBase(
+        _ base: StoryOverlayBase,
+        stickerSize: CGSize,
+        canvas: CanvasSpec,
+        viewportSize: CGSize
+    ) -> StoryOverlayBase {
+        let transform = clampedInteractiveTransform(
+            transform(from: sanitizedBase(base), canvas: canvas),
+            stickerSize: stickerSize,
+            canvas: canvas,
+            viewportSize: viewportSize
+        )
+        return normalizedBase(from: transform, canvas: canvas)
+    }
+
+    static func estimatedStickerSize(for overlay: StoryOverlay) -> CGSize {
+        switch overlay {
+        case .link(_, let data):
+            return CGSize(width: max(118, min(260, CGFloat((data.label ?? data.url).count) * 8 + 76)), height: 46)
+        case .mention(_, let data):
+            return CGSize(width: max(118, min(240, CGFloat(data.displayName.count) * 8 + 76)), height: 46)
+        case .location(_, let data):
+            return CGSize(width: max(96, min(260, CGFloat(data.name.count) * 8 + 44)), height: 34)
+        case .countdown:
+            return CGSize(width: 132, height: 64)
+        case .poll(_, let data):
+            return CGSize(width: 260, height: CGFloat(56 + max(data.options.count, 2) * 46))
+        case .quiz(_, let data):
+            return CGSize(width: 260, height: CGFloat(56 + max(data.options.count, 2) * 46))
+        case .question:
+            return CGSize(width: 240, height: 110)
+        case .unknown:
+            return CGSize(width: 220, height: 92)
+        }
+    }
+
     static func transform(from base: StoryOverlayBase, canvas: CanvasSpec) -> Transform2D {
         let width = Double(max(canvas.width, 1))
         let height = Double(max(canvas.height, 1))
-        return Transform2D(
-            scale: base.scale ?? 1,
-            rotation: (base.rotation ?? 0) * .pi / 180,
-            tx: (base.x - 0.5) * width,
-            ty: (0.5 - base.y) * height
+        return sanitizedTransform(
+            Transform2D(
+                scale: base.scale ?? 1,
+                rotation: (base.rotation ?? 0) * .pi / 180,
+                tx: (clamp01(base.x) - 0.5) * width,
+                ty: (0.5 - clamp01(base.y)) * height
+            )
         )
+    }
+
+    static func clampedInteractiveTransform(
+        _ transform: Transform2D,
+        stickerSize: CGSize,
+        canvas: CanvasSpec,
+        viewportSize: CGSize
+    ) -> Transform2D {
+        let frame = storyFrame(for: canvas, in: viewportSize)
+        guard frame.width > 0, frame.height > 0 else {
+            return sanitizedTransform(transform)
+        }
+
+        var sanitized = sanitizedTransform(transform)
+        let presentationScale = stickerPresentationScale(for: canvas, in: viewportSize)
+        let baseWidth = max(stickerSize.width * presentationScale, 1)
+        let baseHeight = max(stickerSize.height * presentationScale, 1)
+        let safeFrame = safeFrame(for: canvas, in: viewportSize)
+
+        let cosine = abs(cos(CGFloat(sanitized.rotation)))
+        let sine = abs(sin(CGFloat(sanitized.rotation)))
+        let rotatedBaseWidth = baseWidth * cosine + baseHeight * sine
+        let rotatedBaseHeight = baseWidth * sine + baseHeight * cosine
+        let maximumFittingScale = min(
+            safeFrame.width / max(rotatedBaseWidth, 1),
+            safeFrame.height / max(rotatedBaseHeight, 1)
+        )
+        sanitized.scale = min(sanitized.scale, max(minimumScale, Double(maximumFittingScale)))
+
+        let halfWidth = rotatedBaseWidth * CGFloat(sanitized.scale) / 2
+        let halfHeight = rotatedBaseHeight * CGFloat(sanitized.scale) / 2
+        let proposedCenter = position(for: sanitized, canvas: canvas, in: viewportSize)
+        let minimumX = safeFrame.minX + halfWidth
+        let maximumX = safeFrame.maxX - halfWidth
+        let minimumY = safeFrame.minY + halfHeight
+        let maximumY = safeFrame.maxY - halfHeight
+        let clampedCenter = CGPoint(
+            x: minimumX <= maximumX ? min(max(proposedCenter.x, minimumX), maximumX) : safeFrame.midX,
+            y: minimumY <= maximumY ? min(max(proposedCenter.y, minimumY), maximumY) : safeFrame.midY
+        )
+        let normalizedX = (clampedCenter.x - frame.minX) / frame.width
+        let normalizedY = (clampedCenter.y - frame.minY) / frame.height
+        sanitized.tx = Double(normalizedX - 0.5) * Double(max(canvas.width, 1))
+        sanitized.ty = Double(0.5 - normalizedY) * Double(max(canvas.height, 1))
+        return sanitized
+    }
+
+    static func sanitizedBase(_ base: StoryOverlayBase) -> StoryOverlayBase {
+        StoryOverlayBase(
+            x: clamp01(finite(base.x, fallback: 0.5)),
+            y: clamp01(finite(base.y, fallback: 0.5)),
+            scale: min(max(finite(base.scale ?? 1, fallback: 1), minimumScale), maximumScale),
+            rotation: normalizedDegrees(finite(base.rotation ?? 0, fallback: 0))
+        )
+    }
+
+    private static func sanitizedTransform(_ transform: Transform2D) -> Transform2D {
+        Transform2D(
+            scale: min(max(finite(transform.scale, fallback: 1), minimumScale), maximumScale),
+            rotation: finite(transform.rotation, fallback: 0),
+            tx: finite(transform.tx, fallback: 0),
+            ty: finite(transform.ty, fallback: 0)
+        )
+    }
+
+    private static func finite(_ value: Double, fallback: Double) -> Double {
+        value.isFinite ? value : fallback
+    }
+
+    private static func normalizedDegrees(_ value: Double) -> Double {
+        let normalized = value.truncatingRemainder(dividingBy: 360)
+        return normalized < -180 ? normalized + 360 : (normalized > 180 ? normalized - 360 : normalized)
     }
 
     private static func clamp01(_ value: Double) -> Double {

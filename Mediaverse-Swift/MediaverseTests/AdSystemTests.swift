@@ -188,3 +188,158 @@ final class SGAIPlaybackTests: XCTestCase {
         XCTAssertFalse(state.shouldFire(event: "start", impressionId: nil))
     }
 }
+
+final class StoryOverlayLayoutTests: XCTestCase {
+    private let canvas = CanvasSpec.storyDefault
+
+    func testTransformAndNormalizedBaseRoundTrip() {
+        let original = Transform2D(scale: 1.4, rotation: .pi / 3, tx: 260, ty: -410)
+
+        let base = StoryOverlayLayout.normalizedBase(from: original, canvas: canvas)
+        let restored = StoryOverlayLayout.transform(from: base, canvas: canvas)
+
+        XCTAssertEqual(restored.tx, original.tx, accuracy: 0.0001)
+        XCTAssertEqual(restored.ty, original.ty, accuracy: 0.0001)
+        XCTAssertEqual(restored.scale, original.scale, accuracy: 0.0001)
+        XCTAssertEqual(restored.rotation, original.rotation, accuracy: 0.0001)
+    }
+
+    func testCoordinatesUseFittedStoryFrame() {
+        let viewport = CGSize(width: 844, height: 390)
+        let frame = StoryOverlayLayout.storyFrame(for: canvas, in: viewport)
+        let center = StoryOverlayLayout.position(
+            for: StoryOverlayBase(x: 0.5, y: 0.5, scale: 1, rotation: 0),
+            canvas: canvas,
+            in: viewport
+        )
+
+        XCTAssertEqual(center.x, frame.midX, accuracy: 0.0001)
+        XCTAssertEqual(center.y, frame.midY, accuracy: 0.0001)
+        XCTAssertLessThan(frame.width, viewport.width)
+        XCTAssertEqual(frame.height, viewport.height, accuracy: 0.0001)
+    }
+
+    func testFullRotatedStickerBoundsStayInsideSafeFrame() {
+        let viewports = [
+            CGSize(width: 320, height: 568),
+            CGSize(width: 390, height: 844),
+            CGSize(width: 430, height: 932)
+        ]
+        let rotations = [0.0, Double.pi / 4, Double.pi / 2, Double.pi]
+
+        for viewport in viewports {
+            for rotation in rotations {
+                let stickerSize = CGSize(width: 260, height: 240)
+                let clamped = StoryOverlayLayout.clampedInteractiveTransform(
+                    Transform2D(scale: 4, rotation: rotation, tx: 10_000, ty: 10_000),
+                    stickerSize: stickerSize,
+                    canvas: canvas,
+                    viewportSize: viewport
+                )
+                let center = StoryOverlayLayout.position(for: clamped, canvas: canvas, in: viewport)
+                let safeFrame = StoryOverlayLayout.safeFrame(for: canvas, in: viewport)
+                let presentationScale = StoryOverlayLayout.stickerPresentationScale(for: canvas, in: viewport)
+                let width = stickerSize.width * presentationScale
+                let height = stickerSize.height * presentationScale
+                let cosine = abs(cos(CGFloat(clamped.rotation)))
+                let sine = abs(sin(CGFloat(clamped.rotation)))
+                let halfWidth = (width * cosine + height * sine) * CGFloat(clamped.scale) / 2
+                let halfHeight = (width * sine + height * cosine) * CGFloat(clamped.scale) / 2
+
+                XCTAssertGreaterThanOrEqual(center.x - halfWidth, safeFrame.minX - 0.001)
+                XCTAssertLessThanOrEqual(center.x + halfWidth, safeFrame.maxX + 0.001)
+                XCTAssertGreaterThanOrEqual(center.y - halfHeight, safeFrame.minY - 0.001)
+                XCTAssertLessThanOrEqual(center.y + halfHeight, safeFrame.maxY + 0.001)
+                XCTAssertGreaterThanOrEqual(clamped.scale, StoryOverlayLayout.minimumScale)
+                XCTAssertLessThanOrEqual(clamped.scale, StoryOverlayLayout.maximumScale)
+            }
+        }
+    }
+
+    func testMalformedServerCoordinatesAreSanitized() {
+        let sanitized = StoryOverlayLayout.sanitizedBase(
+            StoryOverlayBase(x: .infinity, y: -.infinity, scale: .nan, rotation: .infinity)
+        )
+
+        XCTAssertEqual(sanitized.x, 0.5)
+        XCTAssertEqual(sanitized.y, 0.5)
+        XCTAssertEqual(sanitized.scale, 1)
+        XCTAssertEqual(sanitized.rotation, 0)
+    }
+
+    func testPublishMappingUsesSafeBounds() {
+        let overlay = StoryInteractiveOverlay(
+            kind: .poll,
+            title: "A long poll question",
+            subtitle: nil,
+            options: ["One", "Two", "Three", "Four"],
+            targetDate: nil,
+            transform: Transform2D(scale: 4, rotation: .pi / 4, tx: 5_000, ty: -5_000),
+            timeRange: TimelineRange(
+                start: CMTimeValueBox(seconds: 0),
+                duration: CMTimeValueBox(seconds: 5)
+            )
+        )
+
+        let base = StoryOverlayLayout.safeNormalizedBase(for: overlay, canvas: canvas)
+
+        XCTAssertGreaterThanOrEqual(base.x, StoryOverlayLayout.safeBounds.minX)
+        XCTAssertLessThanOrEqual(base.x, StoryOverlayLayout.safeBounds.maxX)
+        XCTAssertGreaterThanOrEqual(base.y, StoryOverlayLayout.safeBounds.minY)
+        XCTAssertLessThanOrEqual(base.y, StoryOverlayLayout.safeBounds.maxY)
+        XCTAssertGreaterThanOrEqual(base.scale ?? 0, StoryOverlayLayout.minimumScale)
+        XCTAssertLessThanOrEqual(base.scale ?? 10, StoryOverlayLayout.maximumScale)
+    }
+
+    func testRotationAndScaleAreNormalizedForPayload() {
+        let base = StoryOverlayLayout.normalizedBase(
+            from: Transform2D(scale: 99, rotation: .pi * 7, tx: 0, ty: 0),
+            canvas: canvas
+        )
+
+        XCTAssertEqual(base.scale ?? 0, StoryOverlayLayout.maximumScale, accuracy: 0.0001)
+        XCTAssertEqual(base.rotation ?? 0, 180, accuracy: 0.0001)
+    }
+
+    func testPresentationScaleDependsOnStoryViewport() {
+        let compact = StoryOverlayLayout.stickerPresentationScale(
+            for: canvas,
+            in: CGSize(width: 320, height: 568)
+        )
+        let regular = StoryOverlayLayout.stickerPresentationScale(
+            for: canvas,
+            in: CGSize(width: 390, height: 844)
+        )
+
+        XCTAssertEqual(compact, 320.0 / 390.0, accuracy: 0.0001)
+        XCTAssertEqual(regular, 1, accuracy: 0.0001)
+    }
+
+    func testEveryInteractiveStickerHasUsableGeometry() {
+        let kinds: [StoryInteractiveStickerKind] = [
+            .link, .location, .mention, .addYours, .poll, .quiz, .question, .countdown, .avatar
+        ]
+
+        for kind in kinds {
+            let overlay = StoryInteractiveOverlay(
+                kind: kind,
+                title: "Sticker",
+                options: kind == .poll || kind == .quiz ? ["One", "Two"] : [],
+                transform: Transform2D(scale: 1, rotation: 0, tx: 0, ty: 0),
+                timeRange: TimelineRange(
+                    start: CMTimeValueBox(seconds: 0),
+                    duration: CMTimeValueBox(seconds: 5)
+                )
+            )
+            let size = StoryOverlayLayout.estimatedStickerSize(for: overlay)
+            let base = StoryOverlayLayout.safeNormalizedBase(for: overlay, canvas: canvas)
+
+            XCTAssertGreaterThanOrEqual(size.width, 44, "\(kind) width")
+            XCTAssertGreaterThanOrEqual(size.height, 34, "\(kind) height")
+            XCTAssertTrue(base.x.isFinite, "\(kind) x")
+            XCTAssertTrue(base.y.isFinite, "\(kind) y")
+            XCTAssertTrue((base.scale ?? 0).isFinite, "\(kind) scale")
+            XCTAssertTrue((base.rotation ?? 0).isFinite, "\(kind) rotation")
+        }
+    }
+}

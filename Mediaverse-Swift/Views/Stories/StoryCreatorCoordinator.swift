@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreImage
 import SwiftUI
 import UserNotifications
 import UniformTypeIdentifiers
@@ -44,6 +45,15 @@ private enum StoryDraftMedia {
         switch self {
         case .image: return 5
         case .video(_, let duration, _): return duration
+        }
+    }
+
+    var previewImage: UIImage? {
+        switch self {
+        case .image(_, let preview):
+            return preview
+        case .video(_, _, let thumbnail):
+            return thumbnail
         }
     }
 
@@ -581,8 +591,14 @@ struct StoryCreatorCoordinator: View {
 
     private func sharePreviewRow(_ media: StoryDraftMedia) -> some View {
         HStack(spacing: 12) {
-            mediaPreview(media)
-                .frame(width: 58, height: 104)
+            Group {
+                if let currentProject {
+                    StoryFinalSharePreview(project: currentProject, fallbackImage: media.previewImage)
+                } else {
+                    mediaPreview(media)
+                }
+            }
+                .frame(width: 72, height: 128)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .allowsHitTesting(false)
 
@@ -593,6 +609,9 @@ struct StoryCreatorCoordinator: View {
                 Text(media.mediaType == "image" ? "5 seconds" : "\(media.duration) seconds")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(C.textMuted)
+                Text("Final viewer preview")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(C.watch)
                 if !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(caption)
                         .font(.system(size: 11))
@@ -1183,6 +1202,95 @@ struct StoryCreatorCoordinator: View {
     }
 }
 
+private struct StoryFinalSharePreview: View {
+    let project: Project
+    let fallbackImage: UIImage?
+
+    @State private var renderedImage: UIImage?
+    @State private var isRendering = false
+
+    private let compositor = StoryCompositor()
+    private let ciContext = CIContext(options: [.cacheIntermediates: false])
+
+    var body: some View {
+        GeometryReader { proxy in
+            let overlays = storyOverlays(in: project) ?? []
+            let stickerScale = StoryOverlayLayout.stickerPresentationScale(for: project.canvas, in: proxy.size)
+
+            ZStack {
+                Color.black
+
+                if let image = renderedImage ?? fallbackImage {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                }
+
+                ForEach(Array(overlays.enumerated()), id: \.offset) { index, overlay in
+                    let base = StoryOverlayLayout.clampedBase(
+                        overlay.base,
+                        stickerSize: StoryOverlayLayout.estimatedStickerSize(for: overlay),
+                        canvas: project.canvas,
+                        viewportSize: proxy.size
+                    )
+                    StoryOverlayStickerView(
+                        overlay: overlay,
+                        overlayIndex: index,
+                        isInteractive: false
+                    )
+                    .fixedSize(horizontal: true, vertical: true)
+                    .scaleEffect((base.scale ?? 1) * stickerScale)
+                    .rotationEffect(.degrees(base.rotation ?? 0))
+                    .position(StoryOverlayLayout.position(for: base, canvas: project.canvas, in: proxy.size))
+                }
+
+                if isRendering {
+                    ProgressView()
+                        .tint(.white)
+                        .padding(8)
+                        .background(.black.opacity(0.42))
+                        .clipShape(Circle())
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .clipped()
+        }
+        .task(id: project.updatedAt) {
+            await renderPreview()
+        }
+        .accessibilityLabel("Final story viewer preview")
+    }
+
+    private func renderPreview() async {
+        isRendering = true
+        defer { isRendering = false }
+
+        var mediaProject = project
+        mediaProject.tracks.overlays.removeAll { overlay in
+            if case .interactive = overlay { return true }
+            return false
+        }
+        do {
+            let store = await ProjectStore.shared.assetStore(for: project.id)
+            let requestedTime = min(
+                max(project.coverTimeSeconds, 0),
+                max(project.totalDurationSeconds - 0.01, 0)
+            )
+            let buffer = try await compositor.render(
+                project: mediaProject,
+                assetStore: store,
+                at: CMTime(seconds: requestedTime, preferredTimescale: projectTimeScale),
+                quality: .full
+            )
+            let image = CIImage(cvPixelBuffer: buffer)
+            guard let cgImage = ciContext.createCGImage(image, from: image.extent) else { return }
+            renderedImage = UIImage(cgImage: cgImage)
+        } catch {
+            renderedImage = nil
+        }
+    }
+}
+
 private func storyCaptionPayload(caption: String, project: Project) -> String? {
     let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
     let captionHandles = Set(storyMentionHandles(in: trimmedCaption))
@@ -1211,7 +1319,7 @@ private func storyMentionHandles(in project: Project) -> [String] {
 private func storyOverlays(in project: Project) -> [StoryOverlay]? {
     let overlays = project.tracks.overlays.compactMap { overlay -> StoryOverlay? in
         guard case .interactive(let interactive) = overlay else { return nil }
-        let base = StoryOverlayLayout.normalizedBase(from: interactive.transform, canvas: project.canvas)
+        let base = StoryOverlayLayout.safeNormalizedBase(for: interactive, canvas: project.canvas)
         switch interactive.kind {
         case .link:
             let metadata = optionDictionary(interactive.options)
