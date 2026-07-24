@@ -389,6 +389,7 @@ struct StoryEditorPreviewView: View {
     @State private var clipBaselineClip: VideoClip?
     @State private var filterBaselineClip: VideoClip?
     @State private var lookSection: StoryLookSection = .filters
+    @State private var selectedBeautyControl: StoryBeautyControl = .smooth
     @State private var filterCategory: StoryFilterCategory = .popular
     @State private var audioBaselineClip: VideoClip?
     @State private var musicBaselineClip: AudioClip?
@@ -1802,7 +1803,7 @@ struct StoryEditorPreviewView: View {
         case .clip:
             return 360
         case .look:
-            return 420
+            return 300
         case .audio, .music:
             return 260
         case .stickers:
@@ -2284,11 +2285,7 @@ struct StoryEditorPreviewView: View {
 
     private func beautyControls(for clip: VideoClip) -> some View {
         let beauty = clip.resolvedEffectStack.beauty
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("Face-aware controls only affect detected faces. The editor preview is the final render.")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(C.textTertiary)
-
+        return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 beautyPresetButton("Off", settings: .off, current: beauty)
                 beautyPresetButton("Natural", settings: .natural, current: beauty)
@@ -2309,80 +2306,40 @@ struct StoryEditorPreviewView: View {
                 )
             }
 
-            adjustmentSlider(
-                "Beauty",
-                value: beauty.intensity,
-                range: 0...1,
-                displayValue: Int((beauty.intensity * 100).rounded())
-            ) { value in
-                previewBeauty(clip) { $0.intensity = value }
-            }
-            adjustmentSlider(
-                "Smooth",
-                value: beauty.skinSmoothing,
-                range: 0...1,
-                displayValue: Int((beauty.skinSmoothing * 100).rounded())
-            ) { value in
-                previewBeauty(clip) { $0.skinSmoothing = value }
-            }
-            adjustmentSlider(
-                "Skin tone",
-                value: beauty.skinTone,
-                range: -1...1
-            ) { value in
-                previewBeauty(clip) { $0.skinTone = value }
-            }
-            adjustmentSlider(
-                "Face light",
-                value: beauty.brightness,
-                range: -1...1
-            ) { value in
-                previewBeauty(clip) { $0.brightness = value }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(StoryBeautyControl.allCases) { control in
+                        Button {
+                            selectedBeautyControl = control
+                        } label: {
+                            VStack(spacing: 5) {
+                                Image(systemName: control.systemImage)
+                                    .font(.system(size: 15, weight: .bold))
+                                Text(control.title)
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .lineLimit(1)
+                            }
+                            .foregroundStyle(selectedBeautyControl == control ? .black : C.textMuted)
+                            .frame(width: 58, height: 48)
+                            .background(selectedBeautyControl == control ? C.watch : C.elevated)
+                            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(selectedBeautyControl == control ? .isSelected : [])
+                    }
+                }
+                .padding(.vertical, 1)
             }
 
-            Text("Details")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(C.textMuted)
-                .padding(.top, 2)
-
             adjustmentSlider(
-                "Eyes",
-                value: beauty.eyeBrightening,
-                range: 0...1,
-                displayValue: Int((beauty.eyeBrightening * 100).rounded())
+                selectedBeautyControl.title,
+                value: selectedBeautyControl.value(in: beauty),
+                range: selectedBeautyControl.range,
+                displayValue: Int((selectedBeautyControl.value(in: beauty) * 100).rounded())
             ) { value in
-                previewBeauty(clip) { $0.eyeBrightening = value }
-            }
-            adjustmentSlider(
-                "Under eyes",
-                value: beauty.underEye,
-                range: 0...1,
-                displayValue: Int((beauty.underEye * 100).rounded())
-            ) { value in
-                previewBeauty(clip) { $0.underEye = value }
-            }
-            adjustmentSlider(
-                "Teeth",
-                value: beauty.teethWhitening,
-                range: 0...1,
-                displayValue: Int((beauty.teethWhitening * 100).rounded())
-            ) { value in
-                previewBeauty(clip) { $0.teethWhitening = value }
-            }
-            adjustmentSlider(
-                "Lips",
-                value: beauty.lipColor,
-                range: -1...1
-            ) { value in
-                previewBeauty(clip) { $0.lipColor = value }
-            }
-            adjustmentSlider(
-                "Contour",
-                value: beauty.contour,
-                range: 0...1,
-                displayValue: Int((beauty.contour * 100).rounded())
-            ) { value in
-                previewBeauty(clip) { $0.contour = value }
+                previewBeauty(clip) {
+                    selectedBeautyControl.set(value, in: &$0)
+                }
             }
         }
     }
@@ -4881,6 +4838,83 @@ private enum StoryLookSection: String, CaseIterable, Identifiable {
     case adjust = "Adjust"
 
     var id: String { rawValue }
+}
+
+private enum StoryBeautyControl: String, CaseIterable, Identifiable {
+    case strength
+    case smooth
+    case tone
+    case light
+    case eyes
+    case underEye
+    case teeth
+    case lips
+    case contour
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .strength: return "Beauty"
+        case .smooth: return "Smooth"
+        case .tone: return "Tone"
+        case .light: return "Light"
+        case .eyes: return "Eyes"
+        case .underEye: return "Under eye"
+        case .teeth: return "Teeth"
+        case .lips: return "Lips"
+        case .contour: return "Contour"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .strength: return "wand.and.stars"
+        case .smooth: return "drop.fill"
+        case .tone: return "paintpalette.fill"
+        case .light: return "sun.max.fill"
+        case .eyes: return "eye.fill"
+        case .underEye: return "eye.circle"
+        case .teeth: return "mouth.fill"
+        case .lips: return "heart.fill"
+        case .contour: return "face.smiling"
+        }
+    }
+
+    var range: ClosedRange<Float> {
+        switch self {
+        case .tone, .light, .lips: return -1...1
+        default: return 0...1
+        }
+    }
+
+    func value(in settings: StoryBeautySettings) -> Float {
+        switch self {
+        case .strength: return settings.intensity
+        case .smooth: return settings.skinSmoothing
+        case .tone: return settings.skinTone
+        case .light: return settings.brightness
+        case .eyes: return settings.eyeBrightening
+        case .underEye: return settings.underEye
+        case .teeth: return settings.teethWhitening
+        case .lips: return settings.lipColor
+        case .contour: return settings.contour
+        }
+    }
+
+    func set(_ value: Float, in settings: inout StoryBeautySettings) {
+        switch self {
+        case .strength: settings.intensity = value
+        case .smooth: settings.skinSmoothing = value
+        case .tone: settings.skinTone = value
+        case .light: settings.brightness = value
+        case .eyes: settings.eyeBrightening = value
+        case .underEye: settings.underEye = value
+        case .teeth: settings.teethWhitening = value
+        case .lips: settings.lipColor = value
+        case .contour: settings.contour = value
+        }
+    }
 }
 
 private enum StoryFilterCategory: String, CaseIterable, Identifiable {
