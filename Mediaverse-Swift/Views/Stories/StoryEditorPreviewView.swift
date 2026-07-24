@@ -31,6 +31,7 @@ private struct PickedStoryOverlayVideo: Transferable {
 
 private enum StoryEditorTool: String, Identifiable, Equatable {
     case clip
+    case transform
     case look
     case audio
     case stickers
@@ -390,6 +391,7 @@ struct StoryEditorPreviewView: View {
     @State private var canvasTransformBaselineClip: VideoClip?
     @State private var canvasGestureVisualScale: CGFloat = 1
     @State private var canvasGestureVisualRotation: Angle = .zero
+    @State private var canvasGestureVisualOffset: CGSize = .zero
     @State private var filterBaselineClip: VideoClip?
     @State private var lookSection: StoryLookSection = .filters
     @State private var selectedBeautyControl: StoryBeautyControl = .smooth
@@ -813,6 +815,11 @@ struct StoryEditorPreviewView: View {
                     }
 
                     Menu {
+                        Button {
+                            openTool(.transform)
+                        } label: {
+                            Label("Move and resize", systemImage: "arrow.up.left.and.arrow.down.right")
+                        }
                         Button {
                             openTool(.clip)
                         } label: {
@@ -1765,27 +1772,45 @@ struct StoryEditorPreviewView: View {
         canvasTransformBaselineClip = clip
         canvasGestureVisualScale = 1
         canvasGestureVisualRotation = .zero
+        canvasGestureVisualOffset = .zero
     }
 
-    private func updateCanvasMediaTransform(scale: Double, rotation: Double) {
+    private func updateCanvasMediaTransform(
+        scale: Double,
+        rotation: Double,
+        translation: CGSize,
+        viewportSize: CGSize
+    ) {
         guard canvasTransformBaselineClip != nil else { return }
         canvasGestureVisualScale = CGFloat(scale)
         canvasGestureVisualRotation = Angle(radians: rotation)
+        canvasGestureVisualOffset = translation
     }
 
-    private func finishCanvasMediaTransform(scale: Double, rotation: Double) {
+    private func finishCanvasMediaTransform(
+        scale: Double,
+        rotation: Double,
+        translation: CGSize,
+        viewportSize: CGSize
+    ) {
         guard let baseline = canvasTransformBaselineClip else {
             canvasGestureVisualScale = 1
             canvasGestureVisualRotation = .zero
+            canvasGestureVisualOffset = .zero
             return
         }
         var transform = baseline.transform
         transform.scale = min(max(baseline.transform.scale * scale, 0.5), 4)
         transform.rotation = baseline.transform.rotation + rotation
+        if viewportSize.width > 0, viewportSize.height > 0 {
+            transform.tx += Double(translation.width / viewportSize.width) * Double(project.canvas.width)
+            transform.ty -= Double(translation.height / viewportSize.height) * Double(project.canvas.height)
+        }
         editor.previewSelectedClipTransform(transform)
         canvasTransformBaselineClip = nil
         canvasGestureVisualScale = 1
         canvasGestureVisualRotation = .zero
+        canvasGestureVisualOffset = .zero
         Task {
             await editor.commitSelectedClipTransform(transform, baselineClip: baseline)
         }
@@ -1846,6 +1871,8 @@ struct StoryEditorPreviewView: View {
             if let clip = editor.selectedClip {
                 clipInspectorControls(for: clip)
             }
+        case .transform:
+            mediaTransformControls
         case .look:
             if let clip = editor.selectedClip {
                 lookControls(for: clip)
@@ -1869,6 +1896,8 @@ struct StoryEditorPreviewView: View {
         switch tool {
         case .clip:
             return 360
+        case .transform:
+            return 210
         case .look:
             return 300
         case .audio, .music:
@@ -1883,11 +1912,38 @@ struct StoryEditorPreviewView: View {
     private func toolDrawerTitle(_ tool: StoryEditorTool) -> String {
         switch tool {
         case .clip: return "Clip"
+        case .transform: return "Move & Resize"
         case .look: return "Look"
         case .audio: return "Audio"
         case .stickers: return "Stickers"
         case .music: return "Music"
         case .timing: return "Timing"
+        }
+    }
+
+    private var mediaTransformControls: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Drag to move", systemImage: "hand.draw")
+            Label("Pinch to zoom", systemImage: "arrow.up.left.and.arrow.down.right")
+            Label("Twist two fingers to rotate", systemImage: "rotate.right")
+        }
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(.white.opacity(0.82))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .trailing) {
+            Button("Reset") {
+                guard let clip = editor.selectedClip else { return }
+                let baseline = clip
+                let identity = Transform2D.identity
+                editor.previewSelectedClipTransform(identity)
+                Task {
+                    await editor.commitSelectedClipTransform(identity, baselineClip: baseline)
+                }
+            }
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(C.watch)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Reset media position, size, and rotation")
         }
     }
 
@@ -4328,6 +4384,7 @@ struct StoryEditorPreviewView: View {
             }
             .scaleEffect(canvasGestureVisualScale)
             .rotationEffect(canvasGestureVisualRotation)
+            .offset(canvasGestureVisualOffset)
 
             if isDrawingPresented {
                 StoryDrawingCanvas(
@@ -5130,8 +5187,8 @@ private struct InteractiveStickerSizePreferenceKey: PreferenceKey {
 
 private struct CanvasMediaTransformGestureLayer: UIViewRepresentable {
     let onBegin: () -> Void
-    let onChange: (Double, Double) -> Void
-    let onEnd: (Double, Double) -> Void
+    let onChange: (Double, Double, CGSize, CGSize) -> Void
+    let onEnd: (Double, Double, CGSize, CGSize) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onBegin: onBegin, onChange: onChange, onEnd: onEnd)
@@ -5150,12 +5207,21 @@ private struct CanvasMediaTransformGestureLayer: UIViewRepresentable {
             target: context.coordinator,
             action: #selector(Coordinator.handleTransform(_:))
         )
+        let pan = UIPanGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleTransform(_:))
+        )
+        pan.maximumNumberOfTouches = 2
         pinch.delegate = context.coordinator
         rotation.delegate = context.coordinator
+        pan.delegate = context.coordinator
+        pan.cancelsTouchesInView = false
         view.addGestureRecognizer(pinch)
         view.addGestureRecognizer(rotation)
+        view.addGestureRecognizer(pan)
         context.coordinator.pinch = pinch
         context.coordinator.rotation = rotation
+        context.coordinator.pan = pan
         return view
     }
 
@@ -5167,18 +5233,20 @@ private struct CanvasMediaTransformGestureLayer: UIViewRepresentable {
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var onBegin: () -> Void
-        var onChange: (Double, Double) -> Void
-        var onEnd: (Double, Double) -> Void
+        var onChange: (Double, Double, CGSize, CGSize) -> Void
+        var onEnd: (Double, Double, CGSize, CGSize) -> Void
         var isTransforming = false
         var lastScale = 1.0
         var lastRotation = 0.0
+        var lastTranslation = CGSize.zero
         weak var pinch: UIPinchGestureRecognizer?
         weak var rotation: UIRotationGestureRecognizer?
+        weak var pan: UIPanGestureRecognizer?
 
         init(
             onBegin: @escaping () -> Void,
-            onChange: @escaping (Double, Double) -> Void,
-            onEnd: @escaping (Double, Double) -> Void
+            onChange: @escaping (Double, Double, CGSize, CGSize) -> Void,
+            onEnd: @escaping (Double, Double, CGSize, CGSize) -> Void
         ) {
             self.onBegin = onBegin
             self.onChange = onChange
@@ -5190,6 +5258,7 @@ private struct CanvasMediaTransformGestureLayer: UIViewRepresentable {
                 isTransforming = true
                 lastScale = 1
                 lastRotation = 0
+                lastTranslation = .zero
                 onBegin()
             }
 
@@ -5200,15 +5269,22 @@ private struct CanvasMediaTransformGestureLayer: UIViewRepresentable {
             if let rotation, rotation.state == .began || rotation.state == .changed {
                 lastRotation = Double(rotation.rotation)
             }
-            onChange(lastScale, lastRotation)
+            if let pan, pan.state == .began || pan.state == .changed {
+                let translation = pan.translation(in: pan.view)
+                lastTranslation = CGSize(width: translation.x, height: translation.y)
+            }
+            let viewportSize = recognizer.view?.bounds.size ?? .zero
+            onChange(lastScale, lastRotation, lastTranslation, viewportSize)
 
             if interactionsEnded {
                 let finalScale = lastScale
                 let finalRotation = lastRotation
+                let finalTranslation = lastTranslation
                 isTransforming = false
                 lastScale = 1
                 lastRotation = 0
-                onEnd(finalScale, finalRotation)
+                lastTranslation = .zero
+                onEnd(finalScale, finalRotation, finalTranslation, viewportSize)
             }
         }
 
@@ -5220,7 +5296,7 @@ private struct CanvasMediaTransformGestureLayer: UIViewRepresentable {
         }
 
         private var interactionsEnded: Bool {
-            [pinch, rotation].compactMap { $0 }.allSatisfy { recognizer in
+            [pan, pinch, rotation].compactMap { $0 }.allSatisfy { recognizer in
                 switch recognizer.state {
                 case .possible, .ended, .cancelled, .failed:
                     return true
