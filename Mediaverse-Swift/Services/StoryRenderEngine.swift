@@ -483,6 +483,7 @@ private final class StorySemanticFaceParser: @unchecked Sendable {
     private let model: MLModel?
     private let cache = NSCache<NSString, CIImage>()
     private let inputSize = 512
+    private var didReportAvailability = false
 
     private init() {
         let configuration = MLModelConfiguration()
@@ -501,6 +502,12 @@ private final class StorySemanticFaceParser: @unchecked Sendable {
         trackingKey: String?,
         time: Double?
     ) -> CIImage? {
+        if !didReportAvailability {
+            didReportAvailability = true
+            #if DEBUG
+            print("[StoryBeauty] semanticFaceParser=\(model == nil ? "unavailable" : "ready")")
+            #endif
+        }
         guard model != nil, !faces.isEmpty else { return nil }
         let timeBucket = Int(((time ?? 0) * 15).rounded(.down))
         let cacheKey = "\(trackingKey ?? "still"):\(timeBucket):\(Int(image.extent.width))x\(Int(image.extent.height))" as NSString
@@ -522,8 +529,14 @@ private final class StorySemanticFaceParser: @unchecked Sendable {
                 .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 2.5])
                 .cropped(to: image.extent)
             cache.setObject(feathered, forKey: cacheKey)
+            #if DEBUG
+            print("[StoryBeauty] semanticMask faces=\(faces.count) key=\(cacheKey)")
+            #endif
             return feathered
         }
+        #if DEBUG
+        print("[StoryBeauty] semanticMask failed; using adaptive fallback")
+        #endif
         return nil
     }
 
@@ -1102,9 +1115,21 @@ private enum StoryCoreImageEffects {
                 "inputCubeData": skinMaskCubeData
             ])
             .cropped(to: extent)
-        let semanticSkin = combined.applyingFilter("CIMultiplyCompositing", parameters: [
+        var semanticSkin = combined.applyingFilter("CIMultiplyCompositing", parameters: [
             kCIInputBackgroundImageKey: skinLikelihood
         ]).cropped(to: extent)
+        let safetyAmount = CGFloat(highEndMasterAmount(intensity) * 0.46)
+        if safetyAmount > 0.001 {
+            let safetyMask = combined.applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: safetyAmount, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: 0, y: safetyAmount, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: safetyAmount, w: 0),
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: safetyAmount)
+            ]).cropped(to: extent)
+            semanticSkin = semanticSkin.applyingFilter("CIMaximumCompositing", parameters: [
+                kCIInputBackgroundImageKey: safetyMask
+            ]).cropped(to: extent)
+        }
 
         let protectedPoints = faces.flatMap {
             $0.eyePoints + $0.eyebrowPoints + $0.lipPoints
