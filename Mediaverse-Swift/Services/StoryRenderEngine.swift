@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreImage
+import CoreML
 import CoreMedia
 import CoreVideo
 import CryptoKit
@@ -475,6 +476,151 @@ private final class StoryFaceAnalyzer: @unchecked Sendable {
     }
 }
 
+private final class StorySemanticFaceParser: @unchecked Sendable {
+    static let shared = StorySemanticFaceParser()
+
+    private let context = CIContext(options: [.cacheIntermediates: false])
+    private let model: MLModel?
+    private let cache = NSCache<NSString, CIImage>()
+    private let inputSize = 512
+
+    private init() {
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = .all
+        if let url = Bundle.main.url(forResource: "FaceParser", withExtension: "mlmodelc") {
+            model = try? MLModel(contentsOf: url, configuration: configuration)
+        } else {
+            model = nil
+        }
+        cache.countLimit = 48
+    }
+
+    func skinMask(
+        for image: CIImage,
+        faces: [StoryDetectedFace],
+        trackingKey: String?,
+        time: Double?
+    ) -> CIImage? {
+        guard model != nil, !faces.isEmpty else { return nil }
+        let timeBucket = Int(((time ?? 0) * 15).rounded(.down))
+        let cacheKey = "\(trackingKey ?? "still"):\(timeBucket):\(Int(image.extent.width))x\(Int(image.extent.height))" as NSString
+        if let cached = cache.object(forKey: cacheKey) {
+            return cached
+        }
+
+        var combined: CIImage?
+        for face in faces {
+            guard let mask = mask(for: face, in: image) else { continue }
+            combined = combined.map {
+                mask.applyingFilter("CIMaximumCompositing", parameters: [
+                    kCIInputBackgroundImageKey: $0
+                ])
+            } ?? mask
+        }
+        if let combined {
+            let feathered = combined
+                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 2.5])
+                .cropped(to: image.extent)
+            cache.setObject(feathered, forKey: cacheKey)
+            return feathered
+        }
+        return nil
+    }
+
+    private func mask(for face: StoryDetectedFace, in image: CIImage) -> CIImage? {
+        guard let model else { return nil }
+        let expanded = face.bounds.insetBy(
+            dx: -face.bounds.width * 0.24,
+            dy: -face.bounds.height * 0.30
+        ).intersection(image.extent)
+        guard expanded.width > 1, expanded.height > 1,
+              let faceImage = context.createCGImage(image, from: expanded),
+              let input = try? MLFeatureValue(
+                cgImage: faceImage,
+                pixelsWide: inputSize,
+                pixelsHigh: inputSize,
+                pixelFormatType: kCVPixelFormatType_32BGRA,
+                options: nil
+              ),
+              let provider = try? MLDictionaryFeatureProvider(dictionary: ["image": input]),
+              let prediction = try? model.prediction(from: provider),
+              let maskArray = prediction.featureValue(for: "skin_mask")?.multiArrayValue,
+              let maskImage = makeMaskImage(from: maskArray) else {
+            return nil
+        }
+
+        return CIImage(cgImage: maskImage)
+            .transformed(by: CGAffineTransform(
+                scaleX: expanded.width / CGFloat(inputSize),
+                y: expanded.height / CGFloat(inputSize)
+            ))
+            .transformed(by: CGAffineTransform(
+                translationX: expanded.minX,
+                y: expanded.minY
+            ))
+            .cropped(to: image.extent)
+    }
+
+    private func makeMaskImage(from mask: MLMultiArray) -> CGImage? {
+        let shape = mask.shape.map(\.intValue)
+        let strides = mask.strides.map(\.intValue)
+        guard shape.count == 4,
+              shape[0] == 1,
+              shape[1] == 1,
+              shape[2] == inputSize,
+              shape[3] == inputSize else {
+            return nil
+        }
+
+        var pixels = [UInt8](repeating: 0, count: inputSize * inputSize)
+        switch mask.dataType {
+        case .float16:
+            let values = mask.dataPointer.bindMemory(to: Float16.self, capacity: mask.count)
+            fillMask(&pixels, strides: strides) { Float(values[$0]) }
+        case .float32:
+            let values = mask.dataPointer.bindMemory(to: Float.self, capacity: mask.count)
+            fillMask(&pixels, strides: strides) { values[$0] }
+        case .double:
+            let values = mask.dataPointer.bindMemory(to: Double.self, capacity: mask.count)
+            fillMask(&pixels, strides: strides) { Float(values[$0]) }
+        default:
+            return nil
+        }
+
+        let data = Data(pixels)
+        guard let provider = CGDataProvider(data: data as CFData),
+              let colorSpace = CGColorSpace(name: CGColorSpace.linearGray) else {
+            return nil
+        }
+        return CGImage(
+            width: inputSize,
+            height: inputSize,
+            bitsPerComponent: 8,
+            bitsPerPixel: 8,
+            bytesPerRow: inputSize,
+            space: colorSpace,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: true,
+            intent: .defaultIntent
+        )
+    }
+
+    private func fillMask(
+        _ pixels: inout [UInt8],
+        strides: [Int],
+        value: (Int) -> Float
+    ) {
+        for y in 0..<inputSize {
+            for x in 0..<inputSize {
+                let index = y * strides[2] + x * strides[3]
+                pixels[y * inputSize + x] = value(index) > 0.5 ? 255 : 0
+            }
+        }
+    }
+}
+
 private enum StoryCoreImageEffects {
     private static let faceAnalyzer = StoryFaceAnalyzer()
     private static let skinMaskCubeDimension = 32
@@ -598,7 +744,9 @@ private enum StoryCoreImageEffects {
             for: faces,
             image: image,
             extent: image.extent,
-            intensity: settings.intensity
+            intensity: settings.intensity,
+            trackingKey: trackingKey,
+            time: time
         ) else {
             return image
         }
@@ -909,7 +1057,9 @@ private enum StoryCoreImageEffects {
         for faces: [StoryDetectedFace],
         image: CIImage,
         extent: CGRect,
-        intensity: Float
+        intensity: Float,
+        trackingKey: String?,
+        time: Double?
     ) -> CIImage? {
         var combined: CIImage?
         for face in faces {
@@ -941,7 +1091,12 @@ private enum StoryCoreImageEffects {
         }
         guard let combined else { return nil }
 
-        let skinLikelihood = image
+        let skinLikelihood = StorySemanticFaceParser.shared.skinMask(
+            for: image,
+            faces: faces,
+            trackingKey: trackingKey,
+            time: time
+        ) ?? image
             .applyingFilter("CIColorCube", parameters: [
                 "inputCubeDimension": skinMaskCubeDimension,
                 "inputCubeData": skinMaskCubeData
