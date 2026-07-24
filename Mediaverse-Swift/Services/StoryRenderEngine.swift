@@ -251,7 +251,7 @@ enum StoryFrameFilterRenderer {
         guard hasActiveFilter(filterId: filterId, intensity: intensity, adjustments: adjustments) else { return nil }
         let source = CIImage(cvPixelBuffer: pixelBuffer)
         let longestSide = max(source.extent.width, source.extent.height)
-        let scale = min(1, 540 / max(longestSide, 1))
+        let scale = min(1, 1080 / max(longestSide, 1))
         let previewInput = source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         guard let output = filteredCIImage(previewInput, filterId: filterId, intensity: intensity, adjustments: adjustments),
               let cgImage = ciContext.createCGImage(output, from: output.extent) else { return nil }

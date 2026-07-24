@@ -4077,7 +4077,7 @@ struct StoryEditorPreviewView: View {
             if usesRenderedToolPreview, let renderedImage {
                 Image(uiImage: renderedImage)
                     .resizable()
-                    .scaledToFit()
+                    .scaledToFill()
             } else if let previewPlayer {
                 StoryEditorPlayerView(player: previewPlayer)
                     .onAppear {
@@ -4088,7 +4088,7 @@ struct StoryEditorPreviewView: View {
             } else if let renderedImage {
                 Image(uiImage: renderedImage)
                     .resizable()
-                    .scaledToFit()
+                    .scaledToFill()
             } else if isRendering {
                 ProgressView()
                     .tint(C.watch)
@@ -4182,27 +4182,6 @@ struct StoryEditorPreviewView: View {
                 originalClip.adjustments = .neutral
                 return originalClip
             }
-        }
-        let originalWidth = max(project.canvas.width, 1)
-        let originalHeight = max(project.canvas.height, 1)
-        let previewWidth = min(originalWidth, 360)
-        let previewHeight = max(1, Int((Double(previewWidth) / Double(originalWidth) * Double(originalHeight)).rounded()))
-        let scale = Double(previewWidth) / Double(originalWidth)
-        previewProject.canvas = CanvasSpec(
-            width: previewWidth,
-            height: previewHeight,
-            fps: project.canvas.fps,
-            backgroundColor: project.canvas.backgroundColor
-        )
-        previewProject.tracks.videoClips = previewProject.tracks.videoClips.map { clip in
-            var scaledClip = clip
-            scaledClip.transform = Transform2D(
-                scale: clip.transform.scale,
-                rotation: clip.transform.rotation,
-                tx: clip.transform.tx * scale,
-                ty: clip.transform.ty * scale
-            )
-            return scaledClip
         }
         return previewProject
     }
@@ -4327,7 +4306,7 @@ struct StoryEditorPreviewView: View {
             }
             try Task.checkCancellation()
             let normalized = image.normalizedForStoryMedia
-            guard let jpeg = normalized.jpegData(compressionQuality: 0.92) else {
+            guard let jpeg = normalized.jpegData(compressionQuality: 0.98) else {
                 throw StoryEditorPreviewError.mediaOverlayImportFailed
             }
             let width = normalized.cgImage?.width ?? Int(normalized.size.width * normalized.scale)
@@ -5393,13 +5372,13 @@ private struct StoryEditorPlayerView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> StoryEditorPlayerLayerView {
         let view = StoryEditorPlayerLayerView()
-        view.playerLayer.videoGravity = .resizeAspect
+        view.playerLayer.videoGravity = .resizeAspectFill
         view.playerLayer.player = player
         return view
     }
 
     func updateUIView(_ view: StoryEditorPlayerLayerView, context: Context) {
-        view.playerLayer.videoGravity = .resizeAspect
+        view.playerLayer.videoGravity = .resizeAspectFill
         view.playerLayer.player = player
     }
 }

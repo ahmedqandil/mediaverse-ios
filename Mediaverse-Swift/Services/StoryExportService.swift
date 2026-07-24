@@ -34,6 +34,13 @@ func storyProjectRequiresAnimatedExport(_ project: Project) -> Bool {
     }
 }
 
+func storyAspectFillScale(source: CGSize, canvas: CGSize) -> CGFloat {
+    max(
+        canvas.width / max(source.width, 1),
+        canvas.height / max(source.height, 1)
+    )
+}
+
 actor StoryExportService {
     private let compositor: StoryCompositor
     private let ciContext: CIContext
@@ -99,7 +106,7 @@ actor StoryExportService {
 
     private func exportCacheKey(for project: Project, assetStore: AssetStore) throws -> String {
         let input = ExportCacheInput(
-            schemaVersion: 3,
+            schemaVersion: 4,
             project: project,
             codec: "h264",
             nativePreset: AVAssetExportPresetHighestQuality,
@@ -275,7 +282,10 @@ actor StoryExportService {
         let displaySize = CGSize(width: abs(transformedRect.width), height: abs(transformedRect.height))
         let safeDisplayWidth = max(displaySize.width, 1)
         let safeDisplayHeight = max(displaySize.height, 1)
-        let scale = min(canvasSize.width / safeDisplayWidth, canvasSize.height / safeDisplayHeight)
+        let scale = storyAspectFillScale(
+            source: CGSize(width: safeDisplayWidth, height: safeDisplayHeight),
+            canvas: canvasSize
+        )
         let scaledSize = CGSize(width: safeDisplayWidth * scale, height: safeDisplayHeight * scale)
         let normalized = preferredTransform.concatenating(CGAffineTransform(
             translationX: -transformedRect.minX,
@@ -308,7 +318,7 @@ actor StoryExportService {
             throw StoryExportError.imageConversionFailed
         }
         let uiImage = UIImage(cgImage: cgImage)
-        guard let data = uiImage.jpegData(compressionQuality: 0.92) else {
+        guard let data = uiImage.jpegData(compressionQuality: 0.96) else {
             throw StoryExportError.imageEncodingFailed
         }
         let url = FileManager.default.temporaryDirectory
@@ -434,8 +444,8 @@ actor StoryExportService {
 
     private func targetVideoBitrate(width: Int, height: Int, fps: Int) -> Int {
         let pixelsPerSecond = Double(max(width, 1) * max(height, 1) * max(fps, 1))
-        let target = Int(pixelsPerSecond * 0.1)
-        return min(max(target, 2_500_000), 12_000_000)
+        let target = Int(pixelsPerSecond * 0.16)
+        return min(max(target, 4_000_000), 16_000_000)
     }
 
     private func muxOriginalAudioIfNeeded(

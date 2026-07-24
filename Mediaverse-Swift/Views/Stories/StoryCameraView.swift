@@ -497,7 +497,7 @@ struct StoryCameraView: View {
                 throw StoryCameraError.libraryImportFailed
             }
             let normalized = image.storyPortraitNormalized
-            guard let jpeg = normalized.jpegData(compressionQuality: 0.92) else {
+            guard let jpeg = normalized.jpegData(compressionQuality: 0.98) else {
                 throw StoryCameraError.libraryImportFailed
             }
             await MainActor.run {
@@ -787,7 +787,7 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
         errorText = nil
         pendingPhotoCompletion = completion
         let settings = AVCapturePhotoSettings()
-        settings.photoQualityPrioritization = .speed
+        settings.photoQualityPrioritization = .quality
         if let connection = photoOutput.connection(with: .video) {
             connection.setStoryPortraitOrientation()
             connection.isVideoMirrored = currentPosition == .front && connection.isVideoMirroringSupported
@@ -1025,8 +1025,8 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
                     return
                 }
                 self.session.beginConfiguration()
-                if self.session.canSetSessionPreset(.hd1280x720) {
-                    self.session.sessionPreset = .hd1280x720
+                if self.session.canSetSessionPreset(.hd1920x1080) {
+                    self.session.sessionPreset = .hd1920x1080
                 } else {
                     self.session.sessionPreset = .high
                 }
@@ -1063,7 +1063,7 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
 
                 if self.session.canAddOutput(self.photoOutput) {
                     self.session.addOutput(self.photoOutput)
-                    self.photoOutput.maxPhotoQualityPrioritization = .speed
+                    self.photoOutput.maxPhotoQualityPrioritization = .quality
                 }
                 if let connection = self.photoOutput.connection(with: .video) {
                     connection.setStoryPortraitOrientation()
@@ -1145,7 +1145,7 @@ extension StoryCameraController: AVCapturePhotoCaptureDelegate {
         }
 
         let normalized = image.normalizedForStoryMedia
-        guard let jpeg = normalized.jpegData(compressionQuality: 0.92) else {
+        guard let jpeg = normalized.jpegData(compressionQuality: 0.98) else {
             finishPhotoCapture(.failure(StoryCameraError.photoEncodingFailed))
             return
         }

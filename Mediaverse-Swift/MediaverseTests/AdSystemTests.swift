@@ -89,6 +89,27 @@ final class StoryTimedMediaOverlayTests: XCTestCase {
     }
 }
 
+final class StoryMediaQualityTests: XCTestCase {
+    func testNativeVideoUsesSameAspectFillGeometryAsStoryRenderer() {
+        XCTAssertEqual(
+            storyAspectFillScale(
+                source: CGSize(width: 1920, height: 1080),
+                canvas: CGSize(width: 1080, height: 1920)
+            ),
+            1920.0 / 1080.0,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            storyAspectFillScale(
+                source: CGSize(width: 1080, height: 1920),
+                canvas: CGSize(width: 1080, height: 1920)
+            ),
+            1,
+            accuracy: 0.0001
+        )
+    }
+}
+
 @MainActor
 final class StoryClipRangeEditingTests: XCTestCase {
     func testClipRangeUpdatesBothInAndOutPoints() {

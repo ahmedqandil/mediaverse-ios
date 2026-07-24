@@ -862,7 +862,15 @@ struct StoryCreatorCoordinator: View {
 
         do {
             let normalized = photo.image.storyPortraitNormalized
-            let jpegData = normalized.jpegData(compressionQuality: 0.92) ?? photo.data
+            let preservesPixels: Bool
+            if let source = photo.image.cgImage, let output = normalized.cgImage {
+                preservesPixels = source.width == output.width && source.height == output.height
+            } else {
+                preservesPixels = false
+            }
+            let jpegData = preservesPixels
+                ? photo.data
+                : (normalized.jpegData(compressionQuality: 0.98) ?? photo.data)
             currentProject = try await createImageDraft(
                 image: normalized,
                 jpegData: jpegData,
@@ -874,7 +882,7 @@ struct StoryCreatorCoordinator: View {
                 filterId: photo.filterId,
                 adjustments: photo.adjustments
             )
-            draftMedia = .image(data: preview.jpegData(compressionQuality: 0.88) ?? jpegData, preview: preview)
+            draftMedia = .image(data: preview.jpegData(compressionQuality: 0.96) ?? jpegData, preview: preview)
             errorText = nil
             step = .editor
         } catch {

@@ -4,7 +4,7 @@ import Foundation
 actor StoryExportCache {
     static let shared = StoryExportCache()
     private static let metricsNamespace = "story.export"
-    private static let cacheVersion = "v3"
+    private static let cacheVersion = "v4"
 
     private struct Entry: Codable {
         let key: String
