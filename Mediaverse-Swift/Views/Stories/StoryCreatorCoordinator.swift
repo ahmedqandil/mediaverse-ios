@@ -872,21 +872,26 @@ struct StoryCreatorCoordinator: View {
             destination: nil
         )
         _ = try await ProjectStore.shared.create(project)
-        let store = await ProjectStore.shared.assetStore(for: project.id)
-        let relativePath = try store.importData(jpegData, extension: "jpg")
-        let pixelWidth = image.cgImage?.width ?? Int(image.size.width * image.scale)
-        let pixelHeight = image.cgImage?.height ?? Int(image.size.height * image.scale)
-        let assetRef = AssetRef.make(
-            kind: .image,
-            relativePath: relativePath,
-            naturalWidth: pixelWidth,
-            naturalHeight: pixelHeight,
-            nominalFrameRate: 0,
-            durationSeconds: 5
-        )
-        try project.addStoryClip(.storyClip(assetRef: assetRef, durationSeconds: 5))
-        try await ProjectStore.shared.save(project)
-        return project
+        do {
+            let store = await ProjectStore.shared.assetStore(for: project.id)
+            let relativePath = try store.importData(jpegData, extension: "jpg")
+            let pixelWidth = image.cgImage?.width ?? Int(image.size.width * image.scale)
+            let pixelHeight = image.cgImage?.height ?? Int(image.size.height * image.scale)
+            let assetRef = AssetRef.make(
+                kind: .image,
+                relativePath: relativePath,
+                naturalWidth: pixelWidth,
+                naturalHeight: pixelHeight,
+                nominalFrameRate: 0,
+                durationSeconds: 5
+            )
+            try project.addStoryClip(.storyClip(assetRef: assetRef, durationSeconds: 5))
+            try await ProjectStore.shared.save(project)
+            return project
+        } catch {
+            try? await ProjectStore.shared.delete(id: project.id)
+            throw error
+        }
     }
 
     private func createVideoDraft(sourceURL: URL, asset: AVAsset, durationSeconds: Double) async throws -> (project: Project, mediaURL: URL) {
@@ -912,34 +917,41 @@ struct StoryCreatorCoordinator: View {
             destination: nil
         )
         _ = try await ProjectStore.shared.create(project)
-        let store = await ProjectStore.shared.assetStore(for: project.id)
-        var firstRelativePath: String?
+        do {
+            let store = await ProjectStore.shared.assetStore(for: project.id)
+            var firstRelativePath: String?
 
-        for (segment, asset) in segments {
-            let pathExtension = segment.url.pathExtension.isEmpty ? "mov" : segment.url.pathExtension
-            let relativePath = try store.importFile(segment.url, extension: pathExtension)
-            if firstRelativePath == nil { firstRelativePath = relativePath }
-            let metrics = try await videoMetrics(asset)
-            let durationSeconds = min(segment.duration, (try? await asset.load(.duration).seconds) ?? segment.duration)
-            let assetRef = AssetRef.make(
-                kind: .video,
-                relativePath: relativePath,
-                naturalWidth: Int(metrics.width),
-                naturalHeight: Int(metrics.height),
-                nominalFrameRate: metrics.frameRate,
-                durationSeconds: durationSeconds,
-                preferredTransform: metrics.transform
-            )
-            var clip = VideoClip.storyClip(assetRef: assetRef, durationSeconds: durationSeconds)
-            clip.speed = min(max(segment.speed, 0.5), 2)
-            clip.filterId = segment.filterId
-            clip.adjustments = segment.adjustments
-            try project.addStoryClip(clip)
+            for (segment, asset) in segments {
+                let pathExtension = segment.url.pathExtension.isEmpty ? "mov" : segment.url.pathExtension
+                let relativePath = try store.importFile(segment.url, extension: pathExtension)
+                if firstRelativePath == nil { firstRelativePath = relativePath }
+                let metrics = try await videoMetrics(asset)
+                let durationSeconds = min(segment.duration, (try? await asset.load(.duration).seconds) ?? segment.duration)
+                let assetRef = AssetRef.make(
+                    kind: .video,
+                    relativePath: relativePath,
+                    naturalWidth: Int(metrics.width),
+                    naturalHeight: Int(metrics.height),
+                    nominalFrameRate: metrics.frameRate,
+                    durationSeconds: durationSeconds,
+                    preferredTransform: metrics.transform
+                )
+                var clip = VideoClip.storyClip(assetRef: assetRef, durationSeconds: durationSeconds)
+                clip.speed = min(max(segment.speed, 0.5), 2)
+                clip.filterId = segment.filterId
+                clip.adjustments = segment.adjustments
+                try project.addStoryClip(clip)
+            }
+
+            try await ProjectStore.shared.save(project)
+            guard let previewPath = firstRelativePath else {
+                throw StoryCreatorError.message("Could not prepare the recorded story preview.")
+            }
+            return (project, store.absoluteURL(for: previewPath))
+        } catch {
+            try? await ProjectStore.shared.delete(id: project.id)
+            throw error
         }
-
-        try await ProjectStore.shared.save(project)
-        let previewPath = firstRelativePath ?? ""
-        return (project, store.absoluteURL(for: previewPath))
     }
 
     private func videoMetrics(_ asset: AVAsset) async throws -> (width: CGFloat, height: CGFloat, frameRate: Float, transform: CGAffineTransform) {
@@ -1019,7 +1031,9 @@ struct StoryCreatorCoordinator: View {
     }
 
     private func ensureStoryUploadContext(for publisher: UploadContext) async throws -> ActiveContext? {
-        guard publisher.type == "channel" else { return nil }
+        guard publisher.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "channel" else {
+            return nil
+        }
         let context = ActiveContext(
             id: publisher.id,
             type: "channel",
