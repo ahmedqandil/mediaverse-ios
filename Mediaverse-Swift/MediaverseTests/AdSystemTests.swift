@@ -1132,6 +1132,8 @@ final class StoryLookEditingTests: XCTestCase {
         let decoded = try JSONDecoder().decode(StoryBeautySettings.self, from: data)
 
         XCTAssertEqual(decoded.eyeBrightening, 0)
+        XCTAssertEqual(decoded.wrinkleReduction, 0)
+        XCTAssertEqual(decoded.skinGlow, 0)
         XCTAssertEqual(decoded.underEye, 0)
         XCTAssertEqual(decoded.teethWhitening, 0)
         XCTAssertEqual(decoded.lipColor, 0)
@@ -1145,6 +1147,8 @@ final class StoryLookEditingTests: XCTestCase {
 
         XCTAssertEqual(beauty.intensity, 1)
         XCTAssertGreaterThan(beauty.skinSmoothing, 0.7)
+        XCTAssertGreaterThan(beauty.wrinkleReduction, 0.6)
+        XCTAssertGreaterThan(beauty.skinGlow, 0.4)
         XCTAssertGreaterThan(beauty.brightness, 0)
         XCTAssertGreaterThan(beauty.eyeBrightening, 0)
         XCTAssertTrue(beauty.isEnabled)

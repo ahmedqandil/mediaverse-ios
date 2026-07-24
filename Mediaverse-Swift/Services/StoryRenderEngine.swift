@@ -122,6 +122,18 @@ final class MetalPetalStoryFilterProcessor {
         return try? context.makeCIImage(from: output)
     }
 
+    func applySkinSmoothing(_ image: CIImage, amount: Float, radius: Float) -> CIImage? {
+        guard let context, let device, MTIHighPassSkinSmoothingFilter.isSupported(on: device) else {
+            return nil
+        }
+        let filter = MTIHighPassSkinSmoothingFilter()
+        filter.inputImage = MTIImage(ciImage: image, isOpaque: true)
+        filter.amount = min(max(amount, 0), 1)
+        filter.radius = max(radius, 1)
+        guard let output = filter.outputImage else { return nil }
+        return try? context.makeCIImage(from: output)
+    }
+
     func livePreviewImage(
         from pixelBuffer: CVPixelBuffer,
         filterId: String?,
@@ -324,14 +336,37 @@ private enum StoryCoreImageEffects {
             return fallbackBeauty(image, settings: settings)
         }
 
-        let smoothing = max(settings.skinSmoothing * settings.intensity, 0)
-        var target = smoothing > 0.001
-            ? blendedSkinSmoothing(
-                image,
-                smoothness: 6 + smoothing * 16,
-                intensity: min(0.30 + smoothing * 0.90, 0.93)
+        let smoothing = max(
+            (settings.skinSmoothing + settings.wrinkleReduction * 0.72) * settings.intensity,
+            0
+        )
+        var target = strongSkinSmoothing(image, amount: smoothing)
+
+        let wrinkleAmount = settings.wrinkleReduction * settings.intensity
+        if wrinkleAmount > 0.001 {
+            let reducedTexture = target.applyingFilter("CINoiseReduction", parameters: [
+                "inputNoiseLevel": 0.025 + wrinkleAmount * 0.07,
+                "inputSharpness": max(0.55 - wrinkleAmount * 0.32, 0.12)
+            ]).cropped(to: image.extent)
+            target = mix(
+                base: target,
+                target: reducedTexture,
+                amount: min(0.18 + wrinkleAmount * 0.68, 0.82)
             )
-            : image
+        }
+
+        let glowAmount = settings.skinGlow * settings.intensity
+        if glowAmount > 0.001 {
+            let glow = target.applyingFilter("CIBloom", parameters: [
+                kCIInputRadiusKey: 5 + glowAmount * 13,
+                kCIInputIntensityKey: 0.25 + glowAmount * 0.72
+            ]).cropped(to: image.extent)
+            target = mix(
+                base: target,
+                target: glow,
+                amount: min(0.15 + glowAmount * 0.58, 0.68)
+            )
+        }
 
         let brightness = settings.brightness * settings.intensity * 0.16
         if abs(brightness) > 0.001 {
@@ -368,14 +403,31 @@ private enum StoryCoreImageEffects {
         settings: StoryBeautySettings
     ) -> CIImage {
         let settings = settings.clamped()
-        let smoothing = settings.skinSmoothing * settings.intensity
-        var output = image
-        if smoothing > 0.001 {
-            output = blendedSkinSmoothing(
-                output,
-                smoothness: 6 + smoothing * 14,
-                intensity: min(0.24 + smoothing * 0.72, 0.82)
+        let smoothing = (
+            settings.skinSmoothing + settings.wrinkleReduction * 0.72
+        ) * settings.intensity
+        var output = strongSkinSmoothing(image, amount: smoothing)
+
+        let wrinkleAmount = settings.wrinkleReduction * settings.intensity
+        if wrinkleAmount > 0.001 {
+            let reducedTexture = output.applyingFilter("CINoiseReduction", parameters: [
+                "inputNoiseLevel": 0.025 + wrinkleAmount * 0.06,
+                "inputSharpness": max(0.52 - wrinkleAmount * 0.28, 0.14)
+            ]).cropped(to: image.extent)
+            output = mix(
+                base: output,
+                target: reducedTexture,
+                amount: min(0.16 + wrinkleAmount * 0.58, 0.72)
             )
+        }
+
+        let glowAmount = settings.skinGlow * settings.intensity
+        if glowAmount > 0.001 {
+            let glow = output.applyingFilter("CIBloom", parameters: [
+                kCIInputRadiusKey: 4 + glowAmount * 10,
+                kCIInputIntensityKey: 0.2 + glowAmount * 0.6
+            ]).cropped(to: image.extent)
+            output = mix(base: output, target: glow, amount: min(glowAmount * 0.52, 0.52))
         }
 
         let brightness = settings.brightness * settings.intensity * 0.10
@@ -393,6 +445,29 @@ private enum StoryCoreImageEffects {
             ])
         }
         return output.cropped(to: image.extent)
+    }
+
+    private static func strongSkinSmoothing(_ image: CIImage, amount: Float) -> CIImage {
+        guard amount > 0.001 else { return image }
+        let clamped = min(max(amount, 0), 1)
+        #if canImport(MetalPetal)
+        if let metal = MetalPetalStoryFilterProcessor.shared.applySkinSmoothing(
+            image,
+            amount: min(0.42 + clamped * 0.58, 1),
+            radius: 8 + clamped * 18
+        ) {
+            return mix(
+                base: image,
+                target: metal.cropped(to: image.extent),
+                amount: min(0.38 + clamped * 0.62, 1)
+            )
+        }
+        #endif
+        return blendedSkinSmoothing(
+            image,
+            smoothness: 7 + clamped * 18,
+            intensity: min(0.34 + clamped * 0.62, 0.96)
+        )
     }
 
     private static func applyFeatureBeauty(

@@ -2361,6 +2361,8 @@ struct StoryEditorPreviewView: View {
                     settings: StoryBeautySettings(
                         intensity: 0.78,
                         skinSmoothing: 0.72,
+                        wrinkleReduction: 0.68,
+                        skinGlow: 0.48,
                         skinTone: 0.14,
                         brightness: 0.12,
                         eyeBrightening: 0.22,
@@ -4446,6 +4448,8 @@ struct StoryEditorPreviewView: View {
             "\(stack.lookIntensity)",
             "\(beauty.intensity)",
             "\(beauty.skinSmoothing)",
+            "\(beauty.wrinkleReduction)",
+            "\(beauty.skinGlow)",
             "\(beauty.skinTone)",
             "\(beauty.brightness)",
             "\(beauty.eyeBrightening)",
@@ -4914,6 +4918,8 @@ private enum StoryLookSection: String, CaseIterable, Identifiable {
 private enum StoryBeautyControl: String, CaseIterable, Identifiable {
     case strength
     case smooth
+    case wrinkles
+    case glow
     case tone
     case light
     case eyes
@@ -4928,6 +4934,8 @@ private enum StoryBeautyControl: String, CaseIterable, Identifiable {
         switch self {
         case .strength: return "Beauty"
         case .smooth: return "Smooth"
+        case .wrinkles: return "Wrinkles"
+        case .glow: return "Glow"
         case .tone: return "Tone"
         case .light: return "Light"
         case .eyes: return "Eyes"
@@ -4942,6 +4950,8 @@ private enum StoryBeautyControl: String, CaseIterable, Identifiable {
         switch self {
         case .strength: return "wand.and.stars"
         case .smooth: return "drop.fill"
+        case .wrinkles: return "lines.measurement.horizontal"
+        case .glow: return "sparkles"
         case .tone: return "paintpalette.fill"
         case .light: return "sun.max.fill"
         case .eyes: return "eye.fill"
@@ -4963,6 +4973,8 @@ private enum StoryBeautyControl: String, CaseIterable, Identifiable {
         switch self {
         case .strength: return settings.intensity
         case .smooth: return settings.skinSmoothing
+        case .wrinkles: return settings.wrinkleReduction
+        case .glow: return settings.skinGlow
         case .tone: return settings.skinTone
         case .light: return settings.brightness
         case .eyes: return settings.eyeBrightening
@@ -4977,6 +4989,8 @@ private enum StoryBeautyControl: String, CaseIterable, Identifiable {
         switch self {
         case .strength: settings.setMasterIntensity(value)
         case .smooth: settings.skinSmoothing = value
+        case .wrinkles: settings.wrinkleReduction = value
+        case .glow: settings.skinGlow = value
         case .tone: settings.skinTone = value
         case .light: settings.brightness = value
         case .eyes: settings.eyeBrightening = value

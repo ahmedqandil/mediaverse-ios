@@ -3,6 +3,8 @@ import Foundation
 struct StoryBeautySettings: Codable, Equatable {
     var intensity: Float
     var skinSmoothing: Float
+    var wrinkleReduction: Float
+    var skinGlow: Float
     var skinTone: Float
     var brightness: Float
     var eyeBrightening: Float
@@ -14,6 +16,8 @@ struct StoryBeautySettings: Codable, Equatable {
     static let off = StoryBeautySettings(
         intensity: 0,
         skinSmoothing: 0,
+        wrinkleReduction: 0,
+        skinGlow: 0,
         skinTone: 0,
         brightness: 0,
         eyeBrightening: 0,
@@ -26,6 +30,8 @@ struct StoryBeautySettings: Codable, Equatable {
     static let natural = StoryBeautySettings(
         intensity: 0.62,
         skinSmoothing: 0.46,
+        wrinkleReduction: 0.32,
+        skinGlow: 0.20,
         skinTone: 0.10,
         brightness: 0.08,
         eyeBrightening: 0.12,
@@ -38,6 +44,8 @@ struct StoryBeautySettings: Codable, Equatable {
     var isEnabled: Bool {
         intensity > 0.001 && (
             skinSmoothing > 0.001 ||
+            wrinkleReduction > 0.001 ||
+            skinGlow > 0.001 ||
             abs(skinTone) > 0.001 ||
             abs(brightness) > 0.001 ||
             eyeBrightening > 0.001 ||
@@ -52,6 +60,8 @@ struct StoryBeautySettings: Codable, Equatable {
         StoryBeautySettings(
             intensity: min(max(intensity, 0), 1),
             skinSmoothing: min(max(skinSmoothing, 0), 1),
+            wrinkleReduction: min(max(wrinkleReduction, 0), 1),
+            skinGlow: min(max(skinGlow, 0), 1),
             skinTone: min(max(skinTone, -1), 1),
             brightness: min(max(brightness, -1), 1),
             eyeBrightening: min(max(eyeBrightening, 0), 1),
@@ -69,6 +79,8 @@ struct StoryBeautySettings: Codable, Equatable {
         // The master Beauty control must produce a visible result by itself.
         // Individual controls remain independently adjustable after this seed.
         skinSmoothing = 0.75
+        wrinkleReduction = 0.62
+        skinGlow = 0.42
         skinTone = 0.12
         brightness = 0.14
         eyeBrightening = 0.22
@@ -80,6 +92,8 @@ struct StoryBeautySettings: Codable, Equatable {
 
     private var hasConfiguredControls: Bool {
         skinSmoothing > 0.001 ||
+            wrinkleReduction > 0.001 ||
+            skinGlow > 0.001 ||
             abs(skinTone) > 0.001 ||
             abs(brightness) > 0.001 ||
             eyeBrightening > 0.001 ||
@@ -92,6 +106,8 @@ struct StoryBeautySettings: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case intensity
         case skinSmoothing
+        case wrinkleReduction
+        case skinGlow
         case skinTone
         case brightness
         case eyeBrightening
@@ -104,6 +120,8 @@ struct StoryBeautySettings: Codable, Equatable {
     init(
         intensity: Float,
         skinSmoothing: Float,
+        wrinkleReduction: Float = 0,
+        skinGlow: Float = 0,
         skinTone: Float,
         brightness: Float,
         eyeBrightening: Float = 0,
@@ -114,6 +132,8 @@ struct StoryBeautySettings: Codable, Equatable {
     ) {
         self.intensity = intensity
         self.skinSmoothing = skinSmoothing
+        self.wrinkleReduction = wrinkleReduction
+        self.skinGlow = skinGlow
         self.skinTone = skinTone
         self.brightness = brightness
         self.eyeBrightening = eyeBrightening
@@ -127,6 +147,8 @@ struct StoryBeautySettings: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         intensity = try container.decodeIfPresent(Float.self, forKey: .intensity) ?? 0
         skinSmoothing = try container.decodeIfPresent(Float.self, forKey: .skinSmoothing) ?? 0
+        wrinkleReduction = try container.decodeIfPresent(Float.self, forKey: .wrinkleReduction) ?? 0
+        skinGlow = try container.decodeIfPresent(Float.self, forKey: .skinGlow) ?? 0
         skinTone = try container.decodeIfPresent(Float.self, forKey: .skinTone) ?? 0
         brightness = try container.decodeIfPresent(Float.self, forKey: .brightness) ?? 0
         eyeBrightening = try container.decodeIfPresent(Float.self, forKey: .eyeBrightening) ?? 0
