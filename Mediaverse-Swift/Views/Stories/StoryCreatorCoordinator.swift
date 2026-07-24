@@ -43,7 +43,7 @@ private enum StoryDraftMedia {
 
     var duration: Int {
         switch self {
-        case .image: return 5
+        case .image: return Int(storyMaxDurationSeconds)
         case .video(_, let duration, _): return duration
         }
     }
@@ -663,7 +663,7 @@ struct StoryCreatorCoordinator: View {
                 Text(media.mediaType == "image" ? "Image story" : "Video story")
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(C.text)
-                Text(media.mediaType == "image" ? "5 seconds" : "\(media.duration) seconds")
+                Text("\(media.duration) seconds")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(C.textMuted)
                 Text("Final viewer preview")
@@ -964,9 +964,9 @@ struct StoryCreatorCoordinator: View {
                 naturalWidth: pixelWidth,
                 naturalHeight: pixelHeight,
                 nominalFrameRate: 0,
-                durationSeconds: 5
+                durationSeconds: storyMaxDurationSeconds
             )
-            var clip = VideoClip.storyClip(assetRef: assetRef, durationSeconds: 5)
+            var clip = VideoClip.storyClip(assetRef: assetRef, durationSeconds: storyMaxDurationSeconds)
             clip.filterId = filterId
             clip.adjustments = adjustments
             try project.addStoryClip(clip)
@@ -1779,7 +1779,7 @@ private enum StoryUploadPipeline {
     }
 
     private static func validatedDuration(for export: StoryExportResult, mediaType: String) async throws -> Int {
-        guard mediaType == "video" else { return 5 }
+        guard mediaType == "video" else { return Int(storyMaxDurationSeconds) }
         let asset = AVURLAsset(url: export.url)
         let seconds = (try? await asset.load(.duration).seconds) ?? Double(export.duration)
         guard seconds.isFinite, seconds > 0 else {

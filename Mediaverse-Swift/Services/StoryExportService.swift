@@ -78,7 +78,7 @@ actor StoryExportService {
             }
             return true
         }
-        extendPhotoStoryWithOverlaysToMaxDuration(&mediaProject)
+        extendPhotoStoryToMaxDuration(&mediaProject)
         return mediaProject
     }
 
@@ -320,7 +320,7 @@ actor StoryExportService {
             url: url,
             mimeType: "image/jpeg",
             mediaType: "image",
-            duration: 5
+            duration: Int(storyMaxDurationSeconds)
         )
     }
 

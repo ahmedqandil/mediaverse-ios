@@ -390,9 +390,8 @@ struct TimelineRange: Codable, Equatable {
     var duration: CMTimeValueBox
 }
 
-func extendPhotoStoryWithOverlaysToMaxDuration(_ project: inout Project) {
-    guard !project.tracks.overlays.isEmpty,
-          !project.tracks.videoClips.isEmpty,
+func extendPhotoStoryToMaxDuration(_ project: inout Project) {
+    guard !project.tracks.videoClips.isEmpty,
           project.tracks.videoClips.allSatisfy({ $0.assetRef.kind == .image }) else {
         return
     }

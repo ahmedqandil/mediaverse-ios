@@ -33,8 +33,10 @@ final class StoryTimelineEditor: ObservableObject {
     private let maxCommands = 50
 
     init(project: Project) {
-        self.project = project
-        self.selectedClipID = project.tracks.videoClips.first?.id
+        var normalizedProject = project
+        extendPhotoStoryToMaxDuration(&normalizedProject)
+        self.project = normalizedProject
+        self.selectedClipID = normalizedProject.tracks.videoClips.first?.id
     }
 
     var selectedClip: VideoClip? {
@@ -1114,7 +1116,7 @@ final class StoryTimelineEditor: ObservableObject {
         selectionAfter: StoryTimelineSelection? = nil
     ) async {
         var normalizedProject = updatedProject
-        extendPhotoStoryWithOverlaysToMaxDuration(&normalizedProject)
+        extendPhotoStoryToMaxDuration(&normalizedProject)
         var before = beforeProject ?? project
         before.updatedAt = project.updatedAt
         var comparableUpdated = normalizedProject

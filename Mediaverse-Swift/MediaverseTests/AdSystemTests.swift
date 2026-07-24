@@ -24,10 +24,20 @@ final class StoryTimedMediaOverlayTests: XCTestCase {
     func testPhotoStoryWithStickerExtendsToTenSeconds() {
         var project = projectWithOverlay(kind: .image, path: "media/sticker.gif")
 
-        extendPhotoStoryWithOverlaysToMaxDuration(&project)
+        extendPhotoStoryToMaxDuration(&project)
 
         XCTAssertEqual(project.totalDurationSeconds, 10, accuracy: 0.001)
         XCTAssertEqual(project.tracks.overlays.first?.timeRange.duration.time.seconds ?? -1, 10, accuracy: 0.001)
+    }
+
+    func testPlainPhotoStoryAlsoExtendsToTenSeconds() {
+        var project = projectWithOverlay(kind: .image, path: "media/sticker.png")
+        project.tracks.overlays.removeAll()
+
+        extendPhotoStoryToMaxDuration(&project)
+
+        XCTAssertEqual(project.totalDurationSeconds, 10, accuracy: 0.001)
+        XCTAssertTrue(project.tracks.overlays.isEmpty)
     }
 
     func testCustomStickerTimingIsNotExpanded() {
@@ -37,7 +47,7 @@ final class StoryTimedMediaOverlayTests: XCTestCase {
             duration: CMTimeValueBox(seconds: 2)
         )
 
-        extendPhotoStoryWithOverlaysToMaxDuration(&project)
+        extendPhotoStoryToMaxDuration(&project)
 
         XCTAssertEqual(project.totalDurationSeconds, 10, accuracy: 0.001)
         XCTAssertEqual(project.tracks.overlays[0].timeRange.start.time.seconds, 1, accuracy: 0.001)
