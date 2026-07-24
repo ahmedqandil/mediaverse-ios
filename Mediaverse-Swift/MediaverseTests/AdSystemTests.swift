@@ -1055,6 +1055,50 @@ final class StoryLookEditingTests: XCTestCase {
         XCTAssertEqual(editor.selectedClip, original)
     }
 
+    func testBeautyChangesFrameWhenFaceLandmarksAreUnavailable() throws {
+        var originalClip = try XCTUnwrap(projectWithClip().tracks.videoClips.first)
+        originalClip.effectStack = StoryEffectStack.none
+        var editedClip = originalClip
+        var beautyStack = StoryEffectStack.none
+        beautyStack.beauty = .natural
+        editedClip.effectStack = beautyStack
+        let source = CIFilter(
+            name: "CICheckerboardGenerator",
+            parameters: [
+                "inputColor0": CIColor(red: 0.72, green: 0.48, blue: 0.38),
+                "inputColor1": CIColor(red: 0.40, green: 0.22, blue: 0.18),
+                "inputWidth": 5,
+                "inputSharpness": 0.7
+            ]
+        )!.outputImage!.cropped(to: CGRect(x: 0, y: 0, width: 64, height: 64))
+        let canvas = CanvasSpec(
+            width: 64,
+            height: 64,
+            fps: 30,
+            backgroundColor: RGBAColor(r: 0, g: 0, b: 0, a: 1)
+        )
+        let graph = StoryEffectGraph()
+
+        let original = graph.render(
+            sourceImage: source,
+            time: .zero,
+            clip: originalClip,
+            overlays: [],
+            canvas: canvas,
+            useMetalPetal: false
+        )
+        let edited = graph.render(
+            sourceImage: source,
+            time: .zero,
+            clip: editedClip,
+            overlays: [],
+            canvas: canvas,
+            useMetalPetal: false
+        )
+
+        XCTAssertNotEqual(try rgbaBytes(original), try rgbaBytes(edited))
+    }
+
     func testEffectStackDecodesBeforeCreativeIntensityWasAdded() throws {
         let stack = StoryEffectStack(
             version: 1,

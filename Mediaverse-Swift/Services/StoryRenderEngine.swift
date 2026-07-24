@@ -320,7 +320,9 @@ private enum StoryCoreImageEffects {
         let settings = settings.clamped()
         guard settings.isEnabled else { return image }
         let faces = faceAnalyzer.faces(in: image)
-        guard !faces.isEmpty else { return image }
+        guard !faces.isEmpty else {
+            return fallbackBeauty(image, settings: settings)
+        }
 
         let smoothing = max(settings.skinSmoothing * settings.intensity, 0)
         var target = smoothing > 0.001
@@ -359,6 +361,38 @@ private enum StoryCoreImageEffects {
             settings: settings
         )
         return result
+    }
+
+    private static func fallbackBeauty(
+        _ image: CIImage,
+        settings: StoryBeautySettings
+    ) -> CIImage {
+        let settings = settings.clamped()
+        let smoothing = settings.skinSmoothing * settings.intensity
+        var output = image
+        if smoothing > 0.001 {
+            output = blendedSkinSmoothing(
+                output,
+                smoothness: 6 + smoothing * 14,
+                intensity: min(0.24 + smoothing * 0.72, 0.82)
+            )
+        }
+
+        let brightness = settings.brightness * settings.intensity * 0.10
+        if abs(brightness) > 0.001 {
+            output = output.applyingFilter("CIColorControls", parameters: [
+                kCIInputBrightnessKey: brightness
+            ])
+        }
+
+        let tone = settings.skinTone * settings.intensity
+        if abs(tone) > 0.001 {
+            output = output.applyingFilter("CITemperatureAndTint", parameters: [
+                "inputNeutral": CIVector(x: 6500, y: 0),
+                "inputTargetNeutral": CIVector(x: 6500 + CGFloat(tone) * 420, y: 0)
+            ])
+        }
+        return output.cropped(to: image.extent)
     }
 
     private static func applyFeatureBeauty(
