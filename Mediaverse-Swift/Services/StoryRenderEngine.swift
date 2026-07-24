@@ -7,6 +7,7 @@ import Foundation
 import ImageIO
 import Metal
 import UIKit
+import Vision
 #if canImport(MetalPetal)
 import MetalPetal
 #endif
@@ -263,19 +264,18 @@ private struct StoryDetectedFace {
     let leftEyePosition: CGPoint?
     let rightEyePosition: CGPoint?
     let mouthPosition: CGPoint?
+    let eyePoints: [CGPoint]
+    let eyebrowPoints: [CGPoint]
+    let lipPoints: [CGPoint]
+    let nosePoints: [CGPoint]
+    let contourPoints: [CGPoint]
 }
 
 private final class StoryFaceAnalyzer: @unchecked Sendable {
-    private let detector = CIDetector(
-        ofType: CIDetectorTypeFace,
-        context: nil,
-        options: [CIDetectorAccuracy: CIDetectorAccuracyLow]
-    )
     private let lock = NSLock()
     private let maximumAnalysisSide: CGFloat = 360
 
     func faces(in image: CIImage) -> [StoryDetectedFace] {
-        guard let detector else { return [] }
         let extent = image.extent
         let longestSide = max(extent.width, extent.height)
         guard longestSide > 0 else { return [] }
@@ -289,35 +289,84 @@ private final class StoryFaceAnalyzer: @unchecked Sendable {
             .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
 
         lock.lock()
-        let features = detector.features(in: analysisImage).compactMap { $0 as? CIFaceFeature }
-        lock.unlock()
+        defer { lock.unlock() }
+        let request = VNDetectFaceLandmarksRequest()
+        let handler = VNImageRequestHandler(ciImage: analysisImage, orientation: .up)
+        do {
+            try handler.perform([request])
+        } catch {
+            return []
+        }
+        let analysisExtent = analysisImage.extent
+        return (request.results ?? []).map { observation in
+            detectedFace(
+                from: observation,
+                analysisExtent: analysisExtent,
+                sourceExtent: extent,
+                scale: scale
+            )
+        }
+    }
 
-        func fullResolutionPoint(_ point: CGPoint) -> CGPoint {
+    private func detectedFace(
+        from observation: VNFaceObservation,
+        analysisExtent: CGRect,
+        sourceExtent: CGRect,
+        scale: CGFloat
+    ) -> StoryDetectedFace {
+        let box = observation.boundingBox
+        let faceBounds = CGRect(
+            x: analysisExtent.minX + box.minX * analysisExtent.width,
+            y: analysisExtent.minY + box.minY * analysisExtent.height,
+            width: box.width * analysisExtent.width,
+            height: box.height * analysisExtent.height
+        )
+
+        func sourcePoint(_ point: CGPoint) -> CGPoint {
             CGPoint(
-                x: point.x / scale + extent.minX,
-                y: point.y / scale + extent.minY
+                x: point.x / scale + sourceExtent.minX,
+                y: point.y / scale + sourceExtent.minY
             )
         }
 
-        return features.map { feature in
-            StoryDetectedFace(
-                bounds: CGRect(
-                    x: feature.bounds.minX / scale + extent.minX,
-                    y: feature.bounds.minY / scale + extent.minY,
-                    width: feature.bounds.width / scale,
-                    height: feature.bounds.height / scale
-                ),
-                leftEyePosition: feature.hasLeftEyePosition
-                    ? fullResolutionPoint(feature.leftEyePosition)
-                    : nil,
-                rightEyePosition: feature.hasRightEyePosition
-                    ? fullResolutionPoint(feature.rightEyePosition)
-                    : nil,
-                mouthPosition: feature.hasMouthPosition
-                    ? fullResolutionPoint(feature.mouthPosition)
-                    : nil
+        func points(_ region: VNFaceLandmarkRegion2D?) -> [CGPoint] {
+            guard let region else { return [] }
+            return region.normalizedPoints.map { point in
+                sourcePoint(CGPoint(
+                    x: faceBounds.minX + CGFloat(point.x) * faceBounds.width,
+                    y: faceBounds.minY + CGFloat(point.y) * faceBounds.height
+                ))
+            }
+        }
+
+        func center(of points: [CGPoint]) -> CGPoint? {
+            guard !points.isEmpty else { return nil }
+            return CGPoint(
+                x: points.reduce(0) { $0 + $1.x } / CGFloat(points.count),
+                y: points.reduce(0) { $0 + $1.y } / CGFloat(points.count)
             )
         }
+
+        let landmarks = observation.landmarks
+        let leftEye = points(landmarks?.leftEye)
+        let rightEye = points(landmarks?.rightEye)
+        let outerLips = points(landmarks?.outerLips)
+        return StoryDetectedFace(
+            bounds: CGRect(
+                x: faceBounds.minX / scale + sourceExtent.minX,
+                y: faceBounds.minY / scale + sourceExtent.minY,
+                width: faceBounds.width / scale,
+                height: faceBounds.height / scale
+            ),
+            leftEyePosition: center(of: leftEye),
+            rightEyePosition: center(of: rightEye),
+            mouthPosition: center(of: outerLips),
+            eyePoints: leftEye + rightEye,
+            eyebrowPoints: points(landmarks?.leftEyebrow) + points(landmarks?.rightEyebrow),
+            lipPoints: outerLips + points(landmarks?.innerLips),
+            nosePoints: points(landmarks?.nose) + points(landmarks?.noseCrest),
+            contourPoints: points(landmarks?.faceContour)
+        )
     }
 }
 
@@ -552,6 +601,35 @@ private enum StoryCoreImageEffects {
                 result = blend(base: result, target: target, mask: mask)
             }
 
+            let clarityAmount = settings.faceClarity * master
+            if clarityAmount > 0.001 {
+                let target = result
+                    .applyingFilter("CISharpenLuminance", parameters: [
+                        kCIInputSharpnessKey: 0.28 + clarityAmount * 0.82
+                    ])
+                    .applyingFilter("CIUnsharpMask", parameters: [
+                        kCIInputRadiusKey: 1.1 + clarityAmount * 1.8,
+                        kCIInputIntensityKey: 0.35 + clarityAmount * 0.9
+                    ])
+                    .applyingFilter("CIColorControls", parameters: [
+                        kCIInputContrastKey: 1 + clarityAmount * 0.08
+                    ])
+                let featurePoints =
+                    face.eyePoints +
+                    face.eyebrowPoints +
+                    face.lipPoints +
+                    face.nosePoints +
+                    face.contourPoints
+                if let mask = featureMask(
+                    points: featurePoints,
+                    radius: unit * 0.045,
+                    extent: image.extent,
+                    intensity: clarityAmount
+                ) {
+                    result = blend(base: result, target: target, mask: mask)
+                }
+            }
+
             if settings.contour > 0.001 {
                 let amount = settings.contour * master
                 let uncontoured = result
@@ -599,6 +677,28 @@ private enum StoryCoreImageEffects {
             ]
         )?.outputImage
         return (mask ?? CIImage.empty()).cropped(to: extent)
+    }
+
+    private static func featureMask(
+        points: [CGPoint],
+        radius: CGFloat,
+        extent: CGRect,
+        intensity: Float
+    ) -> CIImage? {
+        guard !points.isEmpty else { return nil }
+        return points.reduce(nil as CIImage?) { combined, point in
+            let mask = radialMask(
+                center: point,
+                radius: radius,
+                extent: extent,
+                intensity: intensity
+            )
+            return combined.map {
+                mask.applyingFilter("CIMaximumCompositing", parameters: [
+                    kCIInputBackgroundImageKey: $0
+                ])
+            } ?? mask
+        }
     }
 
     private static func blend(base: CIImage, target: CIImage, mask: CIImage) -> CIImage {

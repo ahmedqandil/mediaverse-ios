@@ -5,6 +5,7 @@ struct StoryBeautySettings: Codable, Equatable {
     var skinSmoothing: Float
     var wrinkleReduction: Float
     var skinGlow: Float
+    var faceClarity: Float
     var skinTone: Float
     var brightness: Float
     var eyeBrightening: Float
@@ -18,6 +19,7 @@ struct StoryBeautySettings: Codable, Equatable {
         skinSmoothing: 0,
         wrinkleReduction: 0,
         skinGlow: 0,
+        faceClarity: 0,
         skinTone: 0,
         brightness: 0,
         eyeBrightening: 0,
@@ -32,6 +34,7 @@ struct StoryBeautySettings: Codable, Equatable {
         skinSmoothing: 0.46,
         wrinkleReduction: 0.32,
         skinGlow: 0.20,
+        faceClarity: 0.18,
         skinTone: 0.10,
         brightness: 0.08,
         eyeBrightening: 0.12,
@@ -46,6 +49,7 @@ struct StoryBeautySettings: Codable, Equatable {
             skinSmoothing > 0.001 ||
             wrinkleReduction > 0.001 ||
             skinGlow > 0.001 ||
+            faceClarity > 0.001 ||
             abs(skinTone) > 0.001 ||
             abs(brightness) > 0.001 ||
             eyeBrightening > 0.001 ||
@@ -62,6 +66,7 @@ struct StoryBeautySettings: Codable, Equatable {
             skinSmoothing: min(max(skinSmoothing, 0), 1),
             wrinkleReduction: min(max(wrinkleReduction, 0), 1),
             skinGlow: min(max(skinGlow, 0), 1),
+            faceClarity: min(max(faceClarity, 0), 1),
             skinTone: min(max(skinTone, -1), 1),
             brightness: min(max(brightness, -1), 1),
             eyeBrightening: min(max(eyeBrightening, 0), 1),
@@ -81,6 +86,7 @@ struct StoryBeautySettings: Codable, Equatable {
         skinSmoothing = 0.75
         wrinkleReduction = 0.62
         skinGlow = 0.42
+        faceClarity = 0.32
         skinTone = 0.12
         brightness = 0.14
         eyeBrightening = 0.22
@@ -94,6 +100,7 @@ struct StoryBeautySettings: Codable, Equatable {
         skinSmoothing > 0.001 ||
             wrinkleReduction > 0.001 ||
             skinGlow > 0.001 ||
+            faceClarity > 0.001 ||
             abs(skinTone) > 0.001 ||
             abs(brightness) > 0.001 ||
             eyeBrightening > 0.001 ||
@@ -108,6 +115,7 @@ struct StoryBeautySettings: Codable, Equatable {
         case skinSmoothing
         case wrinkleReduction
         case skinGlow
+        case faceClarity
         case skinTone
         case brightness
         case eyeBrightening
@@ -122,6 +130,7 @@ struct StoryBeautySettings: Codable, Equatable {
         skinSmoothing: Float,
         wrinkleReduction: Float = 0,
         skinGlow: Float = 0,
+        faceClarity: Float = 0,
         skinTone: Float,
         brightness: Float,
         eyeBrightening: Float = 0,
@@ -134,6 +143,7 @@ struct StoryBeautySettings: Codable, Equatable {
         self.skinSmoothing = skinSmoothing
         self.wrinkleReduction = wrinkleReduction
         self.skinGlow = skinGlow
+        self.faceClarity = faceClarity
         self.skinTone = skinTone
         self.brightness = brightness
         self.eyeBrightening = eyeBrightening
@@ -149,6 +159,7 @@ struct StoryBeautySettings: Codable, Equatable {
         skinSmoothing = try container.decodeIfPresent(Float.self, forKey: .skinSmoothing) ?? 0
         wrinkleReduction = try container.decodeIfPresent(Float.self, forKey: .wrinkleReduction) ?? 0
         skinGlow = try container.decodeIfPresent(Float.self, forKey: .skinGlow) ?? 0
+        faceClarity = try container.decodeIfPresent(Float.self, forKey: .faceClarity) ?? 0
         skinTone = try container.decodeIfPresent(Float.self, forKey: .skinTone) ?? 0
         brightness = try container.decodeIfPresent(Float.self, forKey: .brightness) ?? 0
         eyeBrightening = try container.decodeIfPresent(Float.self, forKey: .eyeBrightening) ?? 0

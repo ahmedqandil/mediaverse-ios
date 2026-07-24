@@ -2363,6 +2363,7 @@ struct StoryEditorPreviewView: View {
                         skinSmoothing: 0.72,
                         wrinkleReduction: 0.68,
                         skinGlow: 0.48,
+                        faceClarity: 0.30,
                         skinTone: 0.14,
                         brightness: 0.12,
                         eyeBrightening: 0.22,
@@ -4450,6 +4451,7 @@ struct StoryEditorPreviewView: View {
             "\(beauty.skinSmoothing)",
             "\(beauty.wrinkleReduction)",
             "\(beauty.skinGlow)",
+            "\(beauty.faceClarity)",
             "\(beauty.skinTone)",
             "\(beauty.brightness)",
             "\(beauty.eyeBrightening)",
@@ -4920,6 +4922,7 @@ private enum StoryBeautyControl: String, CaseIterable, Identifiable {
     case smooth
     case wrinkles
     case glow
+    case clarity
     case tone
     case light
     case eyes
@@ -4936,6 +4939,7 @@ private enum StoryBeautyControl: String, CaseIterable, Identifiable {
         case .smooth: return "Smooth"
         case .wrinkles: return "Wrinkles"
         case .glow: return "Glow"
+        case .clarity: return "Clarity"
         case .tone: return "Tone"
         case .light: return "Light"
         case .eyes: return "Eyes"
@@ -4952,6 +4956,7 @@ private enum StoryBeautyControl: String, CaseIterable, Identifiable {
         case .smooth: return "drop.fill"
         case .wrinkles: return "lines.measurement.horizontal"
         case .glow: return "sparkles"
+        case .clarity: return "viewfinder"
         case .tone: return "paintpalette.fill"
         case .light: return "sun.max.fill"
         case .eyes: return "eye.fill"
@@ -4975,6 +4980,7 @@ private enum StoryBeautyControl: String, CaseIterable, Identifiable {
         case .smooth: return settings.skinSmoothing
         case .wrinkles: return settings.wrinkleReduction
         case .glow: return settings.skinGlow
+        case .clarity: return settings.faceClarity
         case .tone: return settings.skinTone
         case .light: return settings.brightness
         case .eyes: return settings.eyeBrightening
@@ -4991,6 +4997,7 @@ private enum StoryBeautyControl: String, CaseIterable, Identifiable {
         case .smooth: settings.skinSmoothing = value
         case .wrinkles: settings.wrinkleReduction = value
         case .glow: settings.skinGlow = value
+        case .clarity: settings.faceClarity = value
         case .tone: settings.skinTone = value
         case .light: settings.brightness = value
         case .eyes: settings.eyeBrightening = value
