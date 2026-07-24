@@ -478,6 +478,17 @@ private final class StoryFaceAnalyzer: @unchecked Sendable {
 private enum StoryCoreImageEffects {
     private static let faceAnalyzer = StoryFaceAnalyzer()
 
+    private static func boostedAmount(_ value: Float, master: Float) -> Float {
+        let normalized = min(max(value, 0), 1)
+        guard normalized > 0, master > 0 else { return 0 }
+        return min(pow(normalized, 0.72) * min(max(master, 0), 1) * 1.4, 1)
+    }
+
+    private static func boostedSignedAmount(_ value: Float, master: Float) -> Float {
+        let sign: Float = value < 0 ? -1 : 1
+        return sign * boostedAmount(abs(value), master: master)
+    }
+
     static func smoothSkin(_ image: CIImage, smoothness: Float = 8.0, intensity: Float = 0.6) -> CIImage {
         blendedSkinSmoothing(image, smoothness: smoothness, intensity: intensity)
     }
@@ -495,22 +506,25 @@ private enum StoryCoreImageEffects {
             return fallbackBeauty(image, settings: settings)
         }
 
-        let smoothing = max(
-            (settings.skinSmoothing + settings.wrinkleReduction * 0.72) * settings.intensity,
-            0
-        )
+        let smoothAmount = boostedAmount(settings.skinSmoothing, master: settings.intensity)
+        let wrinkleAmount = boostedAmount(settings.wrinkleReduction, master: settings.intensity)
+        let smoothing = min(smoothAmount + wrinkleAmount * 0.82, 1)
         var target = strongSkinSmoothing(image, amount: smoothing)
 
-        let wrinkleAmount = settings.wrinkleReduction * settings.intensity
         if wrinkleAmount > 0.001 {
-            let reducedTexture = target.applyingFilter("CINoiseReduction", parameters: [
-                "inputNoiseLevel": 0.025 + wrinkleAmount * 0.07,
-                "inputSharpness": max(0.55 - wrinkleAmount * 0.32, 0.12)
-            ]).cropped(to: image.extent)
+            let reducedTexture = target
+                .applyingFilter("CINoiseReduction", parameters: [
+                    "inputNoiseLevel": 0.04 + wrinkleAmount * 0.16,
+                    "inputSharpness": max(0.42 - wrinkleAmount * 0.34, 0.04)
+                ])
+                .applyingFilter("CIGaussianBlur", parameters: [
+                    kCIInputRadiusKey: 0.45 + wrinkleAmount * 1.35
+                ])
+                .cropped(to: image.extent)
             target = mix(
                 base: target,
                 target: reducedTexture,
-                amount: min(0.18 + wrinkleAmount * 0.68, 0.82)
+                amount: min(0.32 + wrinkleAmount * 0.68, 1)
             )
         }
 
@@ -534,12 +548,17 @@ private enum StoryCoreImageEffects {
             ])
         }
 
-        let tone = settings.skinTone * settings.intensity
+        let tone = boostedSignedAmount(settings.skinTone, master: settings.intensity)
         if abs(tone) > 0.001 {
-            target = target.applyingFilter("CITemperatureAndTint", parameters: [
-                "inputNeutral": CIVector(x: 6500, y: 0),
-                "inputTargetNeutral": CIVector(x: 6500 + CGFloat(tone) * 650, y: 0)
-            ])
+            target = target
+                .applyingFilter("CITemperatureAndTint", parameters: [
+                    "inputNeutral": CIVector(x: 6500, y: 0),
+                    "inputTargetNeutral": CIVector(x: 6500 + CGFloat(tone) * 1_850, y: CGFloat(tone) * 45)
+                ])
+                .applyingFilter("CIColorControls", parameters: [
+                    kCIInputSaturationKey: 1 + abs(tone) * 0.16,
+                    kCIInputBrightnessKey: CGFloat(tone) * 0.035
+                ])
         }
 
         guard let mask = faceMask(for: faces, extent: image.extent, intensity: settings.intensity) else {
@@ -562,21 +581,25 @@ private enum StoryCoreImageEffects {
         settings: StoryBeautySettings
     ) -> CIImage {
         let settings = settings.clamped()
-        let smoothing = (
-            settings.skinSmoothing + settings.wrinkleReduction * 0.72
-        ) * settings.intensity
+        let smoothAmount = boostedAmount(settings.skinSmoothing, master: settings.intensity)
+        let wrinkleAmount = boostedAmount(settings.wrinkleReduction, master: settings.intensity)
+        let smoothing = min(smoothAmount + wrinkleAmount * 0.82, 1)
         var output = strongSkinSmoothing(image, amount: smoothing)
 
-        let wrinkleAmount = settings.wrinkleReduction * settings.intensity
         if wrinkleAmount > 0.001 {
-            let reducedTexture = output.applyingFilter("CINoiseReduction", parameters: [
-                "inputNoiseLevel": 0.025 + wrinkleAmount * 0.06,
-                "inputSharpness": max(0.52 - wrinkleAmount * 0.28, 0.14)
-            ]).cropped(to: image.extent)
+            let reducedTexture = output
+                .applyingFilter("CINoiseReduction", parameters: [
+                    "inputNoiseLevel": 0.04 + wrinkleAmount * 0.14,
+                    "inputSharpness": max(0.42 - wrinkleAmount * 0.32, 0.05)
+                ])
+                .applyingFilter("CIGaussianBlur", parameters: [
+                    kCIInputRadiusKey: 0.4 + wrinkleAmount * 1.1
+                ])
+                .cropped(to: image.extent)
             output = mix(
                 base: output,
                 target: reducedTexture,
-                amount: min(0.16 + wrinkleAmount * 0.58, 0.72)
+                amount: min(0.28 + wrinkleAmount * 0.65, 0.93)
             )
         }
 
@@ -596,12 +619,17 @@ private enum StoryCoreImageEffects {
             ])
         }
 
-        let tone = settings.skinTone * settings.intensity
+        let tone = boostedSignedAmount(settings.skinTone, master: settings.intensity)
         if abs(tone) > 0.001 {
-            output = output.applyingFilter("CITemperatureAndTint", parameters: [
-                "inputNeutral": CIVector(x: 6500, y: 0),
-                "inputTargetNeutral": CIVector(x: 6500 + CGFloat(tone) * 420, y: 0)
-            ])
+            output = output
+                .applyingFilter("CITemperatureAndTint", parameters: [
+                    "inputNeutral": CIVector(x: 6500, y: 0),
+                    "inputTargetNeutral": CIVector(x: 6500 + CGFloat(tone) * 1_500, y: CGFloat(tone) * 35)
+                ])
+                .applyingFilter("CIColorControls", parameters: [
+                    kCIInputSaturationKey: 1 + abs(tone) * 0.12,
+                    kCIInputBrightnessKey: CGFloat(tone) * 0.025
+                ])
         }
         return output.cropped(to: image.extent)
     }
@@ -613,19 +641,19 @@ private enum StoryCoreImageEffects {
         if let metal = MetalPetalStoryFilterProcessor.shared.applySkinSmoothing(
             image,
             amount: min(0.42 + clamped * 0.58, 1),
-            radius: 8 + clamped * 18
+            radius: 10 + clamped * 28
         ) {
             return mix(
                 base: image,
                 target: metal.cropped(to: image.extent),
-                amount: min(0.38 + clamped * 0.62, 1)
+                amount: min(0.46 + clamped * 0.72, 1)
             )
         }
         #endif
         return blendedSkinSmoothing(
             image,
-            smoothness: 7 + clamped * 18,
-            intensity: min(0.34 + clamped * 0.62, 0.96)
+            smoothness: 9 + clamped * 27,
+            intensity: min(0.42 + clamped * 0.66, 1)
         )
     }
 
@@ -711,18 +739,19 @@ private enum StoryCoreImageEffects {
                 result = blend(base: result, target: target, mask: mask)
             }
 
-            let clarityAmount = settings.faceClarity * master
+            let clarityAmount = boostedAmount(settings.faceClarity, master: master)
             if clarityAmount > 0.001 {
                 let target = result
                     .applyingFilter("CISharpenLuminance", parameters: [
-                        kCIInputSharpnessKey: 0.28 + clarityAmount * 0.82
+                        kCIInputSharpnessKey: 0.42 + clarityAmount * 1.75
                     ])
                     .applyingFilter("CIUnsharpMask", parameters: [
-                        kCIInputRadiusKey: 1.1 + clarityAmount * 1.8,
-                        kCIInputIntensityKey: 0.35 + clarityAmount * 0.9
+                        kCIInputRadiusKey: 1.2 + clarityAmount * 2.8,
+                        kCIInputIntensityKey: 0.55 + clarityAmount * 1.65
                     ])
                     .applyingFilter("CIColorControls", parameters: [
-                        kCIInputContrastKey: 1 + clarityAmount * 0.08
+                        kCIInputContrastKey: 1 + clarityAmount * 0.18,
+                        kCIInputSaturationKey: 1 + clarityAmount * 0.08
                     ])
                 let featurePoints =
                     face.eyePoints +
@@ -732,9 +761,9 @@ private enum StoryCoreImageEffects {
                     face.contourPoints
                 if let mask = featureMask(
                     points: featurePoints,
-                    radius: unit * 0.045,
+                    radius: unit * 0.065,
                     extent: image.extent,
-                    intensity: clarityAmount
+                    intensity: min(clarityAmount * 1.35, 1)
                 ) {
                     result = blend(base: result, target: target, mask: mask)
                 }
