@@ -49,6 +49,64 @@ final class StoryTimelineMusicEditingTests: XCTestCase {
     }
 }
 
+@MainActor
+final class StoryTimelineOverlayEditingTests: XCTestCase {
+    func testLiveOverlayTransformCommitsAsSingleUndoableEdit() async {
+        var project = Project.storyDraft(title: "Overlay test", destination: nil)
+        let overlay = TextOverlay(
+            text: "Hello",
+            transform: .identity,
+            timeRange: TimelineRange(
+                start: CMTimeValueBox(seconds: 0),
+                duration: CMTimeValueBox(seconds: 5)
+            )
+        )
+        project.tracks.overlays = [.text(overlay)]
+        let editor = StoryTimelineEditor(project: project)
+
+        editor.setOverlayTransformLive(
+            id: overlay.id,
+            transform: Transform2D(scale: 1.5, rotation: 0.2, tx: 120, ty: -80)
+        )
+        editor.setOverlayTransformLive(
+            id: overlay.id,
+            transform: Transform2D(scale: 1.75, rotation: 0.3, tx: 160, ty: -100)
+        )
+        await editor.persistInteractiveOverlayEdits()
+
+        XCTAssertTrue(editor.canUndo)
+        XCTAssertEqual(editor.selectedTextOverlay?.transform.tx, 160)
+
+        await editor.undo()
+
+        guard case .text(let restored) = editor.project.tracks.overlays.first else {
+            return XCTFail("Expected restored text overlay")
+        }
+        XCTAssertEqual(restored.transform, .identity)
+        XCTAssertFalse(editor.canUndo)
+        XCTAssertTrue(editor.canRedo)
+    }
+
+    func testUnchangedOverlayGestureDoesNotCreateUndoCommand() async {
+        var project = Project.storyDraft(title: "Overlay test", destination: nil)
+        let overlay = TextOverlay(
+            text: "Hello",
+            transform: .identity,
+            timeRange: TimelineRange(
+                start: CMTimeValueBox(seconds: 0),
+                duration: CMTimeValueBox(seconds: 5)
+            )
+        )
+        project.tracks.overlays = [.text(overlay)]
+        let editor = StoryTimelineEditor(project: project)
+
+        editor.setOverlayTransformLive(id: overlay.id, transform: .identity)
+        await editor.persistInteractiveOverlayEdits()
+
+        XCTAssertFalse(editor.canUndo)
+    }
+}
+
 final class AdBreakSchedulerTests: XCTestCase {
     func testFindsBreakCrossedByLargePlaybackJump() {
         let breaks = [

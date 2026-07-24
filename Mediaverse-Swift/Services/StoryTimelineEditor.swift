@@ -19,6 +19,7 @@ final class StoryTimelineEditor: ObservableObject {
 
     private var undoStack: [StoryTimelineCommand] = []
     private var redoStack: [StoryTimelineCommand] = []
+    private var pendingOverlayEditBaseline: Project?
     private let maxCommands = 50
 
     init(project: Project) {
@@ -524,11 +525,12 @@ final class StoryTimelineEditor: ObservableObject {
     }
 
     func setOverlayScale(id: UUID, scale: Double) async {
-        updateOverlayScale(id: id, scale: scale)
+        setOverlayScaleLive(id: id, scale: scale)
         await persistInteractiveOverlayEdits()
     }
 
     func setOverlayPositionLive(id: UUID, tx: Double, ty: Double) {
+        beginOverlayEditIfNeeded()
         var updated = project
         guard let index = updated.tracks.overlays.firstIndex(where: { $0.id == id }) else { return }
         switch updated.tracks.overlays[index] {
@@ -558,10 +560,12 @@ final class StoryTimelineEditor: ObservableObject {
     }
 
     func setOverlayScaleLive(id: UUID, scale: Double) {
+        beginOverlayEditIfNeeded()
         updateOverlayScale(id: id, scale: scale)
     }
 
     func setOverlayTransformLive(id: UUID, transform: Transform2D) {
+        beginOverlayEditIfNeeded()
         let clampedTransform = Transform2D(
             scale: min(max(transform.scale, 0.25), 4),
             rotation: transform.rotation,
@@ -592,10 +596,16 @@ final class StoryTimelineEditor: ObservableObject {
     }
 
     func persistInteractiveOverlayEdits() async {
-        var updated = project
-        updated.updatedAt = Date()
-        project = updated
-        await persist()
+        guard let baseline = pendingOverlayEditBaseline else { return }
+        pendingOverlayEditBaseline = nil
+        guard baseline != project else { return }
+        await commit(project, label: "Transform Overlay", before: baseline)
+    }
+
+    private func beginOverlayEditIfNeeded() {
+        if pendingOverlayEditBaseline == nil {
+            pendingOverlayEditBaseline = project
+        }
     }
 
     private func updateOverlayScale(id: UUID, scale: Double) {
