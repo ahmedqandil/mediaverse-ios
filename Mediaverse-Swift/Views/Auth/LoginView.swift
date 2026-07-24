@@ -20,7 +20,9 @@ struct LoginView: View {
                     brandHeader
                         .padding(.bottom, 32)
 
-                    if auth.magicLinkPending {
+                    if auth.biometricUnlockRequired {
+                        biometricUnlockView
+                    } else if auth.magicLinkPending {
                         magicLinkSentView
                     } else {
                         signInCard
@@ -39,19 +41,23 @@ struct LoginView: View {
         VStack(spacing: 12) {
             ZStack {
                 Circle()
-                    .fill(C.watch.opacity(0.12))
-                    .frame(width: 48, height: 48)
+                    .fill(C.watch.opacity(0.14))
+                    .frame(width: 52, height: 52)
+                    .overlay {
+                        Circle().stroke(C.watch.opacity(0.26), lineWidth: 1)
+                    }
                 Image(systemName: "play.fill")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(C.watch)
             }
             VStack(spacing: 4) {
                 Text("WeStreem")
-                    .font(.system(size: 26, weight: .bold))
+                    .font(.system(size: 28, weight: .black))
+                    .fontDesign(.rounded)
                     .foregroundStyle(C.text)
                 Text("Your streaming superapp")
                     .font(.system(size: 14))
-                    .foregroundStyle(C.textTertiary)
+                    .foregroundStyle(C.textMuted)
             }
         }
     }
@@ -62,13 +68,14 @@ struct LoginView: View {
                 Text("Sign in")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(C.text)
-                Text("We'll send a magic link to your inbox - no password needed.")
+                Text("We'll send a magic link to your inbox. No password needed.")
                     .font(.system(size: 14))
-                    .foregroundStyle(C.textTertiary)
+                    .foregroundStyle(C.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             googleButton
+            biometricButton
             divider
             emailForm
 
@@ -80,9 +87,100 @@ struct LoginView: View {
                 .padding(.top, 2)
         }
         .padding(28)
-        .background(Color.white.opacity(0.03))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .background(C.surface)
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(C.border, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+
+    @ViewBuilder
+    private var biometricButton: some View {
+        if auth.biometricUnlockEnabled && auth.biometricUnlockAvailable && SessionStorage.token != nil {
+            Button {
+                Task { await auth.unlockWithBiometrics() }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "faceid")
+                        .font(.system(size: 18, weight: .semibold))
+                    Text("Continue with \(auth.biometricTypeName)")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .foregroundStyle(C.text)
+                .frame(maxWidth: .infinity)
+                .frame(height: 46)
+                .background(C.elevated)
+                .overlay(RoundedRectangle(cornerRadius: 23).stroke(C.border, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 23))
+            }
+            .buttonStyle(.plain)
+            .disabled(isLoading)
+        }
+    }
+
+    private var biometricUnlockView: some View {
+        VStack(spacing: 18) {
+            ZStack {
+                Circle()
+                    .fill(C.watch.opacity(0.10))
+                    .frame(width: 64, height: 64)
+                Image(systemName: "faceid")
+                    .font(.system(size: 32, weight: .medium))
+                    .foregroundStyle(C.watch)
+            }
+
+            VStack(spacing: 8) {
+                Text("Unlock WeStreem")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(C.text)
+                Text("Use \(auth.biometricTypeName) to continue with your saved session.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(C.textMuted)
+                    .multilineTextAlignment(.center)
+            }
+
+            if let message = auth.biometricErrorMessage {
+                Text(message)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.red.opacity(0.9))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.red.opacity(0.10))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.red.opacity(0.15), lineWidth: 1))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
+            Button {
+                Task { await auth.unlockWithBiometrics() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "faceid")
+                    Text("Unlock with \(auth.biometricTypeName)")
+                }
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.black)
+                .frame(maxWidth: .infinity)
+                .frame(height: 46)
+                .background(C.watch)
+                .clipShape(RoundedRectangle(cornerRadius: 23))
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                auth.useFullSignInInstead()
+            } label: {
+                Text("Use another sign-in method")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(C.textMuted)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(28)
+        .background(C.surface)
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(C.border, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .task {
+            await auth.unlockWithBiometrics()
+        }
     }
 
     private var googleButton: some View {
@@ -93,24 +191,21 @@ struct LoginView: View {
                 googleMark
                 Text("Continue with Google")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(C.text)
+                    .foregroundStyle(Color(hex: "#1F1F1F"))
             }
             .frame(maxWidth: .infinity)
             .frame(height: 46)
-            .background(Color.white.opacity(0.04))
-            .overlay(RoundedRectangle(cornerRadius: 23).stroke(Color.white.opacity(0.12), lineWidth: 1))
+            .background(Color.white)
+            .overlay(RoundedRectangle(cornerRadius: 23).stroke(Color(hex: "#DADCE0"), lineWidth: 1))
             .clipShape(RoundedRectangle(cornerRadius: 23))
         }
         .buttonStyle(.plain)
         .disabled(isLoading)
+        .opacity(isLoading ? 0.65 : 1)
     }
 
     private var googleMark: some View {
-        ZStack {
-            Text("G")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(Color(hex: "#4285F4"))
-        }
+        GoogleLogoMark()
         .frame(width: 18, height: 18)
     }
 
@@ -129,19 +224,29 @@ struct LoginView: View {
             VStack(alignment: .leading, spacing: 7) {
                 Text("EMAIL ADDRESS")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(C.textMuted)
-                TextField("you@example.com", text: $email)
-                    .keyboardType(.emailAddress)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .textContentType(.emailAddress)
-                    .font(.system(size: 14))
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 13)
-                    .background(Color.white.opacity(0.06))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.10), lineWidth: 1))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .foregroundStyle(C.text)
+                    .foregroundStyle(C.textMuted.opacity(0.92))
+                ZStack(alignment: .leading) {
+                    if email.isEmpty {
+                        Text("you@example.com")
+                            .font(.system(size: 14))
+                            .foregroundStyle(C.textTertiary)
+                            .allowsHitTesting(false)
+                    }
+
+                    TextField("", text: $email)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .textContentType(.emailAddress)
+                        .font(.system(size: 14))
+                        .foregroundStyle(C.text)
+                        .tint(C.watch)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 13)
+                .background(C.elevated)
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(C.border, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
             }
 
             if let errorMsg {
@@ -163,7 +268,9 @@ struct LoginView: View {
                     if isLoading {
                         ProgressView().tint(.black)
                     } else {
-                        Text("Continue with email ->")
+                        Text("Continue with email")
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 12, weight: .bold))
                     }
                 }
                 .font(.system(size: 14, weight: .semibold))
@@ -196,13 +303,14 @@ struct LoginView: View {
                     .foregroundStyle(C.text)
                 Text("We sent a sign-in link to")
                     .font(.system(size: 14))
-                    .foregroundStyle(C.textTertiary)
+                    .foregroundStyle(C.textMuted)
                 Text(auth.magicLinkEmail)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(C.watch)
                     .lineLimit(1)
             }
 
+            #if DEBUG
             if let debugURL = auth.magicLinkDebugURL {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("NO EMAIL CONFIGURED - TAP TO SIGN IN:")
@@ -225,10 +333,11 @@ struct LoginView: View {
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(C.watch.opacity(0.20), lineWidth: 1))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             }
+            #endif
 
             Text("Click the link in the email to sign in. It expires in 24 hours.\nIf you don't see it, check your spam folder.")
                 .font(.system(size: 12))
-                .foregroundStyle(C.textTertiary)
+                .foregroundStyle(C.textMuted)
                 .multilineTextAlignment(.center)
                 .lineSpacing(3)
 
@@ -239,15 +348,15 @@ struct LoginView: View {
                 email = ""
                 errorMsg = nil
             } label: {
-                Text("<- Use a different email")
+                Label("Use a different email", systemImage: "arrow.left")
                     .font(.system(size: 14))
                     .foregroundStyle(C.textMuted)
             }
             .buttonStyle(.plain)
         }
         .padding(28)
-        .background(Color.white.opacity(0.03))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .background(C.surface)
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(C.border, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
@@ -277,6 +386,7 @@ struct LoginView: View {
         }
     }
 
+    #if DEBUG
     private func signInWithDebugMagicLink(_ debugURL: String) async {
         guard let url = URL(string: debugURL) else { return }
         isLoading = true
@@ -289,5 +399,51 @@ struct LoginView: View {
                 errorMsg = error.localizedDescription
             }
         }
+    }
+    #endif
+}
+
+private struct GoogleLogoMark: View {
+    var body: some View {
+        GeometryReader { proxy in
+            let size = min(proxy.size.width, proxy.size.height)
+            let lineWidth = size * 0.18
+            let rect = CGRect(
+                x: (proxy.size.width - size) / 2 + lineWidth / 2,
+                y: (proxy.size.height - size) / 2 + lineWidth / 2,
+                width: size - lineWidth,
+                height: size - lineWidth
+            )
+
+            Canvas { context, _ in
+                func strokeArc(start: Angle, end: Angle, color: Color) {
+                    var path = Path()
+                    path.addArc(
+                        center: CGPoint(x: rect.midX, y: rect.midY),
+                        radius: rect.width / 2,
+                        startAngle: start,
+                        endAngle: end,
+                        clockwise: false
+                    )
+                    context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                }
+
+                strokeArc(start: .degrees(-38), end: .degrees(45), color: Color(hex: "#4285F4"))
+                strokeArc(start: .degrees(45), end: .degrees(145), color: Color(hex: "#34A853"))
+                strokeArc(start: .degrees(145), end: .degrees(215), color: Color(hex: "#FBBC05"))
+                strokeArc(start: .degrees(215), end: .degrees(322), color: Color(hex: "#EA4335"))
+
+                var bar = Path()
+                bar.move(to: CGPoint(x: rect.midX, y: rect.midY))
+                bar.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+                context.stroke(bar, with: .color(Color(hex: "#4285F4")), style: StrokeStyle(lineWidth: lineWidth, lineCap: .butt))
+
+                var shortStem = Path()
+                shortStem.move(to: CGPoint(x: rect.maxX, y: rect.midY))
+                shortStem.addLine(to: CGPoint(x: rect.maxX - rect.width * 0.16, y: rect.midY + rect.height * 0.22))
+                context.stroke(shortStem, with: .color(Color(hex: "#4285F4")), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+            }
+        }
+        .accessibilityHidden(true)
     }
 }

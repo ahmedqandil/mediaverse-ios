@@ -1,5 +1,6 @@
 import SwiftUI
 import AuthenticationServices
+import LocalAuthentication
 
 /// Manages authentication state for the entire app.
 /// Handles magic-link email flow and Google OAuth via ASWebAuthenticationSession.
@@ -11,51 +12,103 @@ final class AuthManager: ObservableObject {
     @Published var isLoading       = true
     @Published var isAuthenticated = false
     @Published var currentUser: UserProfile?
+    @Published var biometricUnlockAvailable = false
+    @Published var biometricUnlockEnabled = false
+    @Published var biometricUnlockRequired = false
+    @Published var biometricTypeName = "Face ID"
+    @Published var biometricErrorMessage: String?
 
     // Magic-link step 1: waiting for user to tap the emailed link
     @Published var magicLinkPending  = false
     @Published var magicLinkEmail    = ""
     @Published var magicLinkDebugURL: String?
+    @Published var pendingDeviceActivationCode: String?
 
     private var webAuthSession: ASWebAuthenticationSession?
+    private var sessionExpiredObserver: NSObjectProtocol?
+    private var refreshTask: Task<Void, Never>?
+    private var authGeneration = UUID()
 
     // MARK: - Init
 
     init() {
+        observeSessionExpiry()
+        refreshBiometricCapability()
+        biometricUnlockEnabled = SessionStorage.biometricUnlockEnabled
+
         if SessionStorage.token != nil {
-            // Token was stored from a previous session — restore immediately.
-            // Setting state synchronously prevents any race condition with background checks.
-            isAuthenticated = true
-            isLoading       = false
-            // Background-refresh the user profile (non-blocking, won't reset auth on failure)
-            Task { await refreshUser() }
+            if biometricUnlockEnabled && biometricUnlockAvailable {
+                biometricUnlockRequired = true
+                isLoading = false
+            } else {
+                restoreStoredSession()
+            }
         } else {
             Task { await checkSession() }
         }
     }
 
+    deinit {
+        if let sessionExpiredObserver {
+            NotificationCenter.default.removeObserver(sessionExpiredObserver)
+        }
+        refreshTask?.cancel()
+    }
+
     // MARK: - Session check
+
+    private func observeSessionExpiry() {
+        sessionExpiredObserver = NotificationCenter.default.addObserver(
+            forName: .sessionExpired,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                await self?.expireSessionLocally()
+            }
+        }
+    }
+
+    private func expireSessionLocally() async {
+        authGeneration = UUID()
+        refreshTask?.cancel()
+        refreshTask = nil
+        currentUser = nil
+        isAuthenticated = false
+        isLoading = false
+        biometricUnlockRequired = false
+        pendingDeviceActivationCode = nil
+        await CacheMaintenanceService.shared.clearUserScopedCaches()
+    }
 
     /// Full network check. Only used on cold start when no stored token exists.
     func checkSession() async {
-        defer { isLoading = false }
+        let generation = authGeneration
         do {
             let user = try await APIClient.shared.fetchSession()
+            guard authGeneration == generation else { return }
             currentUser     = user
             isAuthenticated = user != nil
             // If server returned a user, nothing more needed.
             // If nil, isAuthenticated stays false → LoginView.
         } catch {
+            guard authGeneration == generation else { return }
             isAuthenticated = false
+        }
+        if authGeneration == generation {
+            isLoading = false
         }
     }
 
     /// Background user-profile refresh. Never resets auth on failure.
-    private func refreshUser() async {
+    private func refreshUser(generation: UUID) async {
         if let user = try? await APIClient.shared.fetchSession() {
+            guard authGeneration == generation else { return }
             currentUser = user
         }
-        isLoading = false
+        if authGeneration == generation {
+            isLoading = false
+        }
     }
 
     // MARK: - Post-login state setter
@@ -63,11 +116,16 @@ final class AuthManager: ObservableObject {
     /// Called immediately after any successful login (magic link or Google OAuth).
     /// Sets auth state synchronously so there's zero risk of a race condition.
     private func didAuthenticate() {
+        authGeneration = UUID()
+        let generation = authGeneration
         isAuthenticated  = true
         isLoading        = false
         magicLinkPending = false
+        biometricUnlockRequired = false
+        enableBiometricUnlockIfAvailable()
         // Fetch user profile in background — doesn't block the UI transition
-        Task { await refreshUser() }
+        Task { await refreshUser(generation: generation) }
+        Task { await PushNotificationManager.shared.retryRegistrationIfAuthorized() }
     }
 
     // MARK: - Magic link
@@ -80,36 +138,151 @@ final class AuthManager: ObservableObject {
         magicLinkPending  = true
     }
 
-    /// Step 2: called from onOpenURL when the deep link arrives.
-    /// Handles both magic-link and Google OAuth callbacks.
+    /// Step 2: called from onOpenURL/universal links when the deep link arrives.
+    /// Handles magic-link, Google OAuth, and web-style device pairing links.
     func handleDeepLink(_ url: URL) {
-        Task { try? await authenticate(from: url) }
+        Task { await handleIncomingLink(url) }
+    }
+
+    static func isAuthenticationLink(_ url: URL) -> Bool {
+        let isCustomScheme = url.scheme == "westreem"
+        let isUniversalLink = url.scheme == "https" && [ "westreem.com", "www.westreem.com" ].contains(url.host ?? "")
+        guard isCustomScheme || isUniversalLink else { return false }
+        let route = deepLinkRouteName(from: url)
+        return route == "verify" || route == "auth/verify" || route == "auth/google"
+    }
+
+    private func handleIncomingLink(_ url: URL) async {
+        if let code = Self.deviceActivationCode(from: url) {
+            pendingDeviceActivationCode = code
+            return
+        }
+
+        try? await authenticate(from: url)
+    }
+
+    func requestDeviceActivation(code: String) {
+        guard let normalized = Self.normalizedActivationCode(code) else { return }
+        pendingDeviceActivationCode = normalized
     }
 
     private func authenticate(from url: URL) async throws {
-        guard url.scheme == "westreem",
+        let isCustomScheme   = url.scheme == "westreem"
+        // Fix 4: also accept universal links from westreem.com (AASA now covers /auth/verify)
+        let isUniversalLink  = url.scheme == "https" &&
+            ["westreem.com", "www.westreem.com"].contains(url.host ?? "")
+
+        guard (isCustomScheme || isUniversalLink),
               let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
         else { throw APIError.badURL(url.absoluteString) }
 
-        let path = url.path
+        let route = Self.deepLinkRouteName(from: url)
 
-        if path == "/verify" {
-            // Magic link: westreem:///verify?token=...
+        if route == "verify" || route == "auth/verify" {
+            // Magic link: westreem:///verify?token=... OR https://westreem.com/auth/verify?token=...
             guard let token = comps.queryItems?.first(where: { $0.name == "token" })?.value
             else { throw APIError.unauthorized }
 
             let ok = try await APIClient.shared.verifyMagicLink(token: token)
             if ok { didAuthenticate() }
-        } else if path == "/auth/google" {
+        } else if route == "auth/google" {
             // Google OAuth fallback: westreem:///auth/google?sessionToken=...
             guard let jwt = comps.queryItems?.first(where: { $0.name == "sessionToken" })?.value
             else { throw APIError.unauthorized }
 
             await APIClient.shared.storeSessionToken(jwt)
             didAuthenticate()
+        } else if route == "activate" {
+            guard let code = Self.deviceActivationCode(from: url) else { throw APIError.badURL(url.absoluteString) }
+            pendingDeviceActivationCode = code
         } else {
             throw APIError.badURL(url.absoluteString)
         }
+    }
+
+    static func deviceActivationCode(from userInfo: [AnyHashable: Any]) -> String? {
+        let codeKeys = ["code", "userCode", "user_code", "activationCode", "activation_code", "pairingCode", "pairing_code", "deviceCode", "device_code"]
+        for key in codeKeys {
+            if let value = stringValue(for: key, in: userInfo), let normalized = normalizedActivationCode(value) {
+                return normalized
+            }
+        }
+
+        let linkKeys = ["linkUrl", "link_url", "url", "deeplink", "deepLink", "activationUrl", "activation_url", "pairingUrl", "pairing_url"]
+        for key in linkKeys {
+            guard let value = stringValue(for: key, in: userInfo), let url = URL(string: value) else { continue }
+            if let code = deviceActivationCode(from: url) {
+                return code
+            }
+        }
+        return nil
+    }
+
+    private static func deepLinkRouteName(from url: URL) -> String {
+        let host = url.host ?? ""
+        let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if host == "auth", path == "google" { return "auth/google" }
+        if !path.isEmpty { return path }
+        return host
+    }
+
+    static func deviceActivationCode(from url: URL) -> String? {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        let pathParts = url.path
+            .split(separator: "/")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        let route = deepLinkRouteName(from: url).lowercased()
+        let host = (url.host ?? "").lowercased()
+        let isAppScheme = url.scheme == "westreem"
+        let isWebLink = ["westreem.com", "www.westreem.com"].contains(host)
+        let isActivationRoute = route == "activate"
+            || route == "pair"
+            || route == "pairing"
+            || route == "device/activate"
+            || route == "device/pair"
+            || route == "devices/activate"
+            || route == "devices/pair"
+            || route == "auth/device/activate"
+            || route == "auth/device/pair"
+            || pathParts.contains("activate") && (pathParts.contains("device") || pathParts.contains("devices") || pathParts.contains("auth"))
+            || pathParts.contains("pair")
+            || pathParts.contains("pairing")
+
+        guard (isAppScheme || isWebLink), isActivationRoute else { return nil }
+
+        let queryNames = ["code", "userCode", "user_code", "activationCode", "activation_code", "pairingCode", "pairing_code", "deviceCode", "device_code"]
+        for name in queryNames {
+            if let value = components.queryItems?.first(where: { $0.name == name })?.value,
+               let normalized = normalizedActivationCode(value) {
+                return normalized
+            }
+        }
+
+        if let candidate = pathParts.last, let normalized = normalizedActivationCode(candidate) {
+            return normalized
+        }
+        return nil
+    }
+
+    static func normalizedActivationCode(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let routeWords = Set(["activate", "pair", "pairing", "device", "devices", "auth"])
+        guard !trimmed.isEmpty, !routeWords.contains(trimmed.lowercased()) else { return nil }
+        return trimmed.uppercased()
+    }
+
+    private static func stringValue(for key: String, in userInfo: [AnyHashable: Any]) -> String? {
+        if let value = userInfo[key] as? String, !value.isEmpty { return value }
+        if let value = userInfo[AnyHashable(key)] as? String, !value.isEmpty { return value }
+        if let value = userInfo[key] as? CustomStringConvertible {
+            let string = value.description
+            if !string.isEmpty { return string }
+        }
+        if let value = userInfo[AnyHashable(key)] as? CustomStringConvertible {
+            let string = value.description
+            if !string.isEmpty { return string }
+        }
+        return nil
     }
 
     private func callbackURL(from startURL: URL) async throws -> URL {
@@ -151,13 +324,138 @@ final class AuthManager: ObservableObject {
         try await authenticate(from: callbackURL)
     }
 
+    // MARK: - Token refresh (Fix 6)
+
+    /// Decode the `exp` claim from the JWT payload without verifying the signature.
+    /// Used only to decide whether a refresh call is worth making — the server still
+    /// verifies the full token.
+    static func tokenExpiry(_ jwt: String) -> Date? {
+        let parts = jwt.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return nil }
+        var b64 = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let rem = b64.count % 4
+        if rem > 0 { b64 += String(repeating: "=", count: 4 - rem) }
+        guard let data = Data(base64Encoded: b64),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let exp  = json["exp"] as? TimeInterval else { return nil }
+        return Date(timeIntervalSince1970: exp)
+    }
+
+    /// Call on foreground resume. Silently refreshes if the token expires within 24 h.
+    /// Never signs the user out — a failed refresh just retains the old token.
+    func refreshSessionIfNeeded() {
+        guard isAuthenticated,
+              let token  = SessionStorage.token,
+              let expiry = Self.tokenExpiry(token) else { return }
+        let hoursLeft = expiry.timeIntervalSinceNow / 3_600
+        guard hoursLeft < 24, refreshTask == nil else { return }
+        let generation = authGeneration
+        refreshTask = Task { @MainActor in
+            defer {
+                if authGeneration == generation {
+                    refreshTask = nil
+                }
+            }
+            try? await APIClient.shared.refreshMobileToken()
+        }
+    }
+
     // MARK: - Sign out
 
     func signOut() async {
+        authGeneration = UUID()
+        refreshTask?.cancel()
+        refreshTask = nil
         try? await APIClient.shared.signOut()
         await APIClient.shared.clearSessionToken()
+        await CacheMaintenanceService.shared.clearUserScopedCaches()
         currentUser     = nil
         isAuthenticated = false
+        biometricUnlockRequired = false
+    }
+
+    // MARK: - Biometric unlock
+
+    func unlockWithBiometrics() async {
+        biometricErrorMessage = nil
+        refreshBiometricCapability()
+
+        guard biometricUnlockAvailable else {
+            biometricErrorMessage = "\(biometricTypeName) is not available on this device."
+            restoreStoredSession()
+            return
+        }
+
+        let context = LAContext()
+        context.localizedCancelTitle = "Use sign in"
+        var error: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
+            biometricErrorMessage = error?.localizedDescription ?? "\(biometricTypeName) is unavailable."
+            return
+        }
+
+        do {
+            let reason = "Unlock WeStreem with \(biometricTypeName)."
+            let success = try await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason)
+            if success {
+                restoreStoredSession()
+            }
+        } catch {
+            biometricErrorMessage = error.localizedDescription
+        }
+    }
+
+    func useFullSignInInstead() {
+        biometricUnlockRequired = false
+        biometricErrorMessage = nil
+        isAuthenticated = false
+        isLoading = false
+    }
+
+    private func restoreStoredSession() {
+        guard SessionStorage.token != nil else {
+            isAuthenticated = false
+            isLoading = false
+            return
+        }
+        authGeneration = UUID()
+        let generation = authGeneration
+        isAuthenticated = true
+        isLoading = false
+        biometricUnlockRequired = false
+        Task { await refreshUser(generation: generation) }
+        Task { await PushNotificationManager.shared.retryRegistrationIfAuthorized() }
+    }
+
+    private func enableBiometricUnlockIfAvailable() {
+        refreshBiometricCapability()
+        guard biometricUnlockAvailable else { return }
+        SessionStorage.biometricUnlockEnabled = true
+        biometricUnlockEnabled = true
+    }
+
+    private func refreshBiometricCapability() {
+        #if targetEnvironment(simulator)
+        biometricUnlockAvailable = false
+        biometricTypeName = "biometrics"
+        return
+        #else
+        let context = LAContext()
+        var error: NSError?
+        biometricUnlockAvailable = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
+        switch context.biometryType {
+        case .faceID:
+            biometricTypeName = "Face ID"
+        case .touchID:
+            biometricTypeName = "Touch ID"
+        case .opticID:
+            biometricTypeName = "Optic ID"
+        default:
+            biometricTypeName = "biometrics"
+        }
+        #endif
     }
 }
 

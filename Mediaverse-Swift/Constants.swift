@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum C {
     // ── API ──────────────────────────────────────────────────────────────────
@@ -9,13 +10,76 @@ enum C {
             ?? "https://www.westreem.com"
     }
 
+    /// Separate ad decision/serving service. Override in scheme environment variables.
+    static var adServerURL: String {
+        ProcessInfo.processInfo.environment["MEDIAVERSE_AD_SERVER_URL"]
+            ?? ProcessInfo.processInfo.environment["AD_SERVER_URL"]
+            ?? ProcessInfo.processInfo.environment["NEXT_PUBLIC_AD_SERVER_URL"]
+            ?? "https://mediaverse-adserver.fly.dev/v1"
+    }
+
+    static let productionBackendHosts: Set<String> = [
+        "westreem.com",
+        "www.westreem.com"
+    ]
+
+    static let productionAdHosts: Set<String> = [
+        "mediaverse-adserver.fly.dev"
+    ]
+
+    static func isTrustedBackendURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(),
+              let host = url.host?.lowercased() else {
+            return false
+        }
+
+        #if DEBUG
+        if scheme == "http", ["localhost", "127.0.0.1", "::1"].contains(host) {
+            return true
+        }
+        #endif
+
+        guard scheme == "https" else { return false }
+        return productionBackendHosts.contains(host) || host.hasSuffix(".westreem.com")
+    }
+
+    static func isTrustedAdURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(),
+              let host = url.host?.lowercased() else {
+            return false
+        }
+
+        #if DEBUG
+        if scheme == "http", ["localhost", "127.0.0.1", "::1"].contains(host) {
+            return true
+        }
+        #endif
+
+        guard scheme == "https" else { return false }
+        return productionAdHosts.contains(host)
+    }
+
+    static func isTrustedBrowserURL(_ url: URL) -> Bool {
+        isTrustedBackendURL(url)
+    }
+
+    static func pathSegment(_ value: String) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/?#[]@!$&'()*+,;=")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+    }
+
     static func mediaURL(_ value: String?) -> URL? {
         guard let value, !value.isEmpty else { return nil }
         if let url = URL(string: value), url.scheme != nil {
+            guard url.scheme?.lowercased() == "https" else { return nil }
             return url
         }
         let path = value.hasPrefix("/") ? value : "/\(value)"
-        return URL(string: baseURL + path)
+        guard let url = URL(string: baseURL + path), isTrustedBackendURL(url) else {
+            return nil
+        }
+        return url
     }
 
     // ── Colors (exact match to web globals.css CSS variables) ─────────────
@@ -29,8 +93,8 @@ enum C {
 
     // Text hierarchy
     static let text         = Color(hex: "#F0F0F5")                              // --text-primary
-    static let textMuted    = Color(red: 240/255, green: 240/255, blue: 245/255).opacity(0.55)  // --text-secondary
-    static let textTertiary = Color(red: 240/255, green: 240/255, blue: 245/255).opacity(0.28)  // --text-tertiary
+    static let textMuted    = Color(red: 240/255, green: 240/255, blue: 245/255).opacity(0.64)  // --text-secondary
+    static let textTertiary = Color(red: 240/255, green: 240/255, blue: 245/255).opacity(0.48)  // --text-tertiary
 
     // Borders
     static let borderSubtle  = Color.white.opacity(0.06)   // --border-subtle
@@ -50,6 +114,42 @@ enum C {
     // ── Layout ───────────────────────────────────────────────────────────────
     static let cardRadius: CGFloat  = 12
     static let pagePad: CGFloat     = 16
+    static let sectionSpacing: CGFloat = 36
+    static let rowSpacing: CGFloat = 18
+    static let gridSpacing: CGFloat = 24
+    static let heroHeight: CGFloat = 290
+    static let bottomMenuClearance: CGFloat = 96
+    static let tabPillHeight: CGFloat = 36
+    static let tabPillMinWidth: CGFloat = 104
+    static let mainTabWidth: CGFloat = 86
+    static let mainTabHeight: CGFloat = 60
+
+    // ── Media aspect ratios ───────────────────────────────────────────────────
+    // Container ratios are driven by the server content type, not the source
+    // image dimensions. This keeps shorts vertical, shows/posters portrait, and
+    // regular videos/episodes landscape across feeds, search, and collections.
+    static func mediaAspectRatio(forContentType type: String?) -> CGFloat {
+        switch normalizedContentType(type) {
+        case "short", "shorts", "reel", "reels", "vertical", "microdrama", "microdramas", "micro-drama", "micro-dramas":
+            return 9.0 / 16.0
+        case "show", "shows", "series", "tv", "poster", "posters":
+            return 2.0 / 3.0
+        default:
+            return 16.0 / 9.0
+        }
+    }
+
+    static func normalizedContentType(_ type: String?) -> String {
+        type?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "_", with: "-")
+        ?? ""
+    }
+
+    static func lightHaptic() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
 }
 
 extension Color {
@@ -62,4 +162,23 @@ extension Color {
         let b = Double( rgb        & 0xFF) / 255
         self.init(red: r, green: g, blue: b)
     }
+}
+
+extension Notification.Name {
+    static let appContextDidChange = Notification.Name("appContextDidChange")
+    static let mentionNavigationRequested = Notification.Name("mentionNavigationRequested")
+    static let pushRouteRequested = Notification.Name("pushRouteRequested")
+    static let deviceActivationRequested = Notification.Name("deviceActivationRequested")
+    static let userFollowChanged = Notification.Name("userFollowChanged")
+    static let uploadRequested = Notification.Name("uploadRequested")
+    static let uploadEligibilityChanged = Notification.Name("uploadEligibilityChanged")
+    static let profileTabRequested = Notification.Name("profileTabRequested")
+    static let exploreSectionRequested = Notification.Name("exploreSectionRequested")
+    static let shortsTabRequested = Notification.Name("shortsTabRequested")
+    static let commentsOverlayVisibilityChanged = Notification.Name("commentsOverlayVisibilityChanged")
+    static let shortsAdPlaybackVisibilityChanged = Notification.Name("shortsAdPlaybackVisibilityChanged")
+    static let routedShortsVisibilityChanged = Notification.Name("routedShortsVisibilityChanged")
+    static let mainTabScrollToTopRequested = Notification.Name("mainTabScrollToTopRequested")
+    static let notificationCountsDidChange = Notification.Name("notificationCountsDidChange")
+    static let sessionExpired = Notification.Name("sessionExpired")
 }

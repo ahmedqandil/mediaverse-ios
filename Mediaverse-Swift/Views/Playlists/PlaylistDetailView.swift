@@ -31,7 +31,9 @@ struct PlaylistDetailView: View {
 
     // Thumbnail width for item rows (web: w-32 = 128pt)
     private let thumbW: CGFloat = 128
-    private var thumbH: CGFloat { (thumbW * 9 / 16).rounded() }
+    private func thumbH(forContentType type: String?) -> CGFloat {
+        (thumbW / C.mediaAspectRatio(forContentType: type)).rounded()
+    }
 
     var body: some View {
         ZStack {
@@ -105,7 +107,7 @@ struct PlaylistDetailView: View {
             switch route {
             case .video(let id):   VideoWatchView(videoId: id, playlistId: playlistId)
             case .episode(let id): EpisodeWatchView(episodeId: id)
-            case .short(let id, let showId, let channelId): ShortsView(initialShortId: id, contextShowId: showId, contextChannelId: channelId)
+            case .short(let id, let showId, let channelId): ShortsView(initialShortId: id, contextShowId: showId, contextChannelId: channelId, showsDismissControls: true)
             default: EmptyView()
             }
         }
@@ -122,7 +124,7 @@ struct PlaylistDetailView: View {
                 // ── Cover mosaic ──────────────────────────────────────────────
                 let thumbURLs = items.compactMap { $0.video?.thumbnailUrl }
                 thumbnailMosaic(thumbURLs: thumbURLs)
-                    .aspectRatio(16/9, contentMode: .fit)
+                    .aspectRatio(C.mediaAspectRatio(forContentType: pl.type), contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                     .padding(.horizontal, C.pagePad)
 
@@ -250,22 +252,32 @@ struct PlaylistDetailView: View {
 
             // Thumbnail → watch
             playlistVideoLink(video: video) {
-                ZStack(alignment: .bottomTrailing) {
-                    AsyncImage(url: C.mediaURL(video.thumbnailUrl)) { phase in
-                        switch phase {
-                        case .success(let img): img.resizable().scaledToFill()
-                        default: Rectangle().fill(Color.white.opacity(0.08))
-                        }
+                let thumbnailHeight = thumbH(forContentType: video.type)
+                ZStack {
+                    CachedRemoteImage(
+                        url: C.mediaURL(video.thumbnailUrl),
+                        targetSize: CGSize(width: thumbW, height: thumbnailHeight)
+                    ) { img in
+                        img.resizable().scaledToFill()
+                    } placeholder: {
+                        Rectangle().fill(Color.white.opacity(0.08))
                     }
-                    .frame(width: thumbW, height: thumbH)
+                    .frame(width: thumbW, height: thumbnailHeight)
                     .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: 6))
 
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(.black.opacity(0.48), in: Circle())
+
                     if let dur = video.duration {
                         durationBadge(dur)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     }
                 }
-                .frame(width: thumbW, height: thumbH)
+                .frame(width: thumbW, height: thumbnailHeight)
             }
             .buttonStyle(.plain)
 
@@ -340,6 +352,9 @@ struct PlaylistDetailView: View {
             NavigationLink(value: AppRoute.media(id: video.id, type: video.type)) {
                 content()
             }
+            .simultaneousGesture(TapGesture().onEnded {
+                ShortNavigationCache.shared.seedIDs(orderedShortIDs())
+            })
         } else {
             NavigationLink {
                 VideoWatchView(videoId: video.id, playlistId: playlistId)
@@ -388,11 +403,13 @@ struct PlaylistDetailView: View {
     }
 
     private func mosaicImage(_ url: String) -> some View {
-        AsyncImage(url: C.mediaURL(url)) { phase in
-            switch phase {
-            case .success(let img): img.resizable().scaledToFill()
-            default: Rectangle().fill(Color.white.opacity(0.08))
-            }
+        CachedRemoteImage(
+            url: C.mediaURL(url),
+            targetSize: CGSize(width: 180, height: 102)
+        ) { img in
+            img.resizable().scaledToFill()
+        } placeholder: {
+            Rectangle().fill(Color.white.opacity(0.08))
         }
         .clipped()
     }
@@ -421,9 +438,22 @@ struct PlaylistDetailView: View {
 
     // MARK: - Actions
 
+    private func orderedShortIDs() -> [String] {
+        items.compactMap { item in
+            guard item.video?.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "short" else { return nil }
+            return item.video?.id
+        }
+    }
+
     private func playAll() {
         let list = shuffled ? items.shuffled() : items
         guard let first = list.first?.video else { return }
+        if first.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "short" {
+            ShortNavigationCache.shared.seedIDs(list.compactMap { item in
+                guard item.video?.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "short" else { return nil }
+                return item.video?.id
+            })
+        }
         playDest = AppRoute.media(id: first.id, type: first.type)
     }
 

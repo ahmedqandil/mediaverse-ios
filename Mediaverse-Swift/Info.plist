@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Mediaverse</string>
+	<string>WeStreem</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -35,15 +35,32 @@
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<false/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>127.0.0.1</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+			<key>localhost</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+		</dict>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Mediaverse uses the camera so you can record videos and stories to upload.</string>
+	<string>WeStreem uses the camera so you can record videos and stories to upload.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>WeStreem uses Face ID to unlock your saved session on this device.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Mediaverse uses the microphone to include audio when recording upload videos and stories.</string>
+	<string>WeStreem uses the microphone to include audio when recording upload videos and stories.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Mediaverse saves exported videos and stories to your photo library when you choose to save them.</string>
+	<string>WeStreem saves exported videos and stories to your photo library when you choose to save them.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Mediaverse uses your photo library so you can choose videos, images, and stories to upload.</string>
+	<string>WeStreem uses your photo library so you can choose videos, images, and stories to upload.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

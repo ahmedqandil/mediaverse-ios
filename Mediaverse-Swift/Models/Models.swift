@@ -1,5 +1,7 @@
 import Foundation
 
+private let movieShowTypes: Set<String> = ["movie", "special", "documentary"]
+
 // ── Shared sub-types ──────────────────────────────────────────────────────────
 
 struct ChannelStub: Codable, Identifiable {
@@ -13,6 +15,11 @@ struct ShowStub: Codable, Identifiable {
     let id: String
     let title: String
     let coverUrl: String?
+    let showType: String?
+
+    var isMovie: Bool {
+        movieShowTypes.contains(showType?.lowercased() ?? "")
+    }
 }
 
 struct SeasonStub: Codable, Identifiable {
@@ -25,21 +32,59 @@ struct CommentUser: Codable, Identifiable {
     let id: String
     let name: String?
     let image: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, image, avatarUrl, avatar_url, imageUrl, image_url, profileImage, profile_image
+    }
+
+    init(id: String, name: String?, image: String?) {
+        self.id = id
+        self.name = name
+        self.image = image
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        image = try c.decodeFirstPresentString(forKeys: [
+            .image,
+            .avatarUrl,
+            .avatar_url,
+            .imageUrl,
+            .image_url,
+            .profileImage,
+            .profile_image
+        ])
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encodeIfPresent(name, forKey: .name)
+        try c.encodeIfPresent(image, forKey: .image)
+    }
 }
 
 struct Comment: Codable, Identifiable {
     let id: String
     let content: String?      // nil when isRemoved == true
+    let contentHtml: String?
     let isRemoved: Bool?
+    let deletedAt: String?
+    let removedAt: String?
     let likes: Int?
     let createdAt: String
     let parentId: String?
     let user: CommentUser?
+    let actorChannel: ChannelStub?
+    let actorShow: ShowStub?
     let replies: [Comment]?
     let replyCount: Int?
 
     private enum CodingKeys: String, CodingKey {
-        case id, content, isRemoved, likes, createdAt, parentId, user, replies
+        case id, content, contentHtml, isRemoved, deletedAt, removedAt, likes, createdAt, parentId, user
+        case actorChannel, actor_channel, actorShow, actor_show, replies
         case count = "_count"
     }
 
@@ -50,21 +95,31 @@ struct Comment: Codable, Identifiable {
     init(
         id: String,
         content: String?,
+        contentHtml: String? = nil,
         isRemoved: Bool?,
+        deletedAt: String? = nil,
+        removedAt: String? = nil,
         likes: Int?,
         createdAt: String,
         parentId: String?,
         user: CommentUser?,
+        actorChannel: ChannelStub? = nil,
+        actorShow: ShowStub? = nil,
         replies: [Comment]?,
         replyCount: Int?
     ) {
         self.id = id
         self.content = content
+        self.contentHtml = contentHtml
         self.isRemoved = isRemoved
+        self.deletedAt = deletedAt
+        self.removedAt = removedAt
         self.likes = likes
         self.createdAt = createdAt
         self.parentId = parentId
         self.user = user
+        self.actorChannel = actorChannel
+        self.actorShow = actorShow
         self.replies = replies
         self.replyCount = replyCount
     }
@@ -73,11 +128,18 @@ struct Comment: Codable, Identifiable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         content = try c.decodeIfPresent(String.self, forKey: .content)
+        contentHtml = try c.decodeIfPresent(String.self, forKey: .contentHtml)
         isRemoved = try c.decodeIfPresent(Bool.self, forKey: .isRemoved)
+        deletedAt = try c.decodeIfPresent(String.self, forKey: .deletedAt)
+        removedAt = try c.decodeIfPresent(String.self, forKey: .removedAt)
         likes = try c.decodeIfPresent(Int.self, forKey: .likes)
         createdAt = try c.decode(String.self, forKey: .createdAt)
         parentId = try c.decodeIfPresent(String.self, forKey: .parentId)
         user = try c.decodeIfPresent(CommentUser.self, forKey: .user)
+        actorChannel = try c.decodeIfPresent(ChannelStub.self, forKey: .actorChannel)
+            ?? c.decodeIfPresent(ChannelStub.self, forKey: .actor_channel)
+        actorShow = try c.decodeIfPresent(ShowStub.self, forKey: .actorShow)
+            ?? c.decodeIfPresent(ShowStub.self, forKey: .actor_show)
         replies = try c.decodeIfPresent([Comment].self, forKey: .replies)
         replyCount = try c.decodeIfPresent(CountWrapper.self, forKey: .count)?.replies
     }
@@ -86,11 +148,16 @@ struct Comment: Codable, Identifiable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
         try c.encodeIfPresent(content, forKey: .content)
+        try c.encodeIfPresent(contentHtml, forKey: .contentHtml)
         try c.encodeIfPresent(isRemoved, forKey: .isRemoved)
+        try c.encodeIfPresent(deletedAt, forKey: .deletedAt)
+        try c.encodeIfPresent(removedAt, forKey: .removedAt)
         try c.encodeIfPresent(likes, forKey: .likes)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encodeIfPresent(parentId, forKey: .parentId)
         try c.encodeIfPresent(user, forKey: .user)
+        try c.encodeIfPresent(actorChannel, forKey: .actorChannel)
+        try c.encodeIfPresent(actorShow, forKey: .actorShow)
         try c.encodeIfPresent(replies, forKey: .replies)
     }
 }
@@ -103,6 +170,9 @@ struct FeedVideo: Codable, Identifiable {
     let thumbnailUrl: String?
     let videoUrl: String?
     let duration: Double?
+    let aspectRatio: Double?
+    let width: Int?
+    let height: Int?
     let views: Int
     let type: String?
     let publishedAt: String?
@@ -116,33 +186,237 @@ struct FeedResponse: Codable {
     let nextCursor: String?
 }
 
-// ── Home feed config (from /api/feed-config) ──────────────────────────────────
-// Mirrors the backend HomeFeedConfig so the iOS app drives carousel ordering,
-// interleave interval, and slot count from the same admin settings as the web
-// (HomeFeedClient.tsx uses the same mobileCarouselEvery / carouselSlots).
+enum AnyJSON: Codable, Equatable {
+    case string(String)
+    case int(Int)
+    case double(Double)
+    case bool(Bool)
+    case object([String: AnyJSON])
+    case array([AnyJSON])
+    case null
 
-struct HomeFeedConfig: Decodable {
-    let mobileCarouselEvery: Int    // insert a carousel after every N videos
-    let mobileCarouselCount: Int    // max number of carousel slots to show
-    let carouselSlots: [CarouselSlotDef]
-
-    /// A single carousel strip — type ∈ { "shows", "channels", "shorts", "videos", "microdramas" }
-    struct CarouselSlotDef: Decodable, Identifiable {
-        let id:    String
-        let type:  String
-        let label: String
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Int.self) {
+            self = .int(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .double(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([String: AnyJSON].self) {
+            self = .object(value)
+        } else if let value = try? container.decode([AnyJSON].self) {
+            self = .array(value)
+        } else {
+            self = .null
+        }
     }
 
-    /// Offline / API-unavailable fallback — matches backend DEFAULT constant exactly.
-    static let `default` = HomeFeedConfig(
-        mobileCarouselEvery: 3,
-        mobileCarouselCount: 3,
-        carouselSlots: [
-            CarouselSlotDef(id: "slot_1", type: "shows",    label: "TV Shows & Series"),
-            CarouselSlotDef(id: "slot_2", type: "channels", label: "Channels"),
-            CarouselSlotDef(id: "slot_3", type: "shorts",   label: "Shorts"),
-        ]
-    )
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value): try container.encode(value)
+        case .int(let value): try container.encode(value)
+        case .double(let value): try container.encode(value)
+        case .bool(let value): try container.encode(value)
+        case .object(let value): try container.encode(value)
+        case .array(let value): try container.encode(value)
+        case .null: try container.encodeNil()
+        }
+    }
+
+    var stringValue: String? {
+        switch self {
+        case .string(let value): return value
+        case .int(let value): return String(value)
+        case .double(let value): return String(value)
+        case .bool(let value): return String(value)
+        default: return nil
+        }
+    }
+
+    var intValue: Int? {
+        switch self {
+        case .int(let value): return value
+        case .double(let value): return Int(value)
+        case .string(let value): return Int(value)
+        default: return nil
+        }
+    }
+
+    var doubleValue: Double? {
+        switch self {
+        case .double(let value): return value
+        case .int(let value): return Double(value)
+        case .string(let value): return Double(value)
+        default: return nil
+        }
+    }
+
+    var boolValue: Bool? {
+        switch self {
+        case .bool(let value): return value
+        case .string(let value):
+            switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true", "1", "yes": return true
+            case "false", "0", "no": return false
+            default: return nil
+            }
+        default: return nil
+        }
+    }
+}
+
+struct CurationPageResponse: Decodable {
+    let ok: Bool
+    let pageKey: String
+    let data: AssembledPage
+}
+
+struct AssembledPage: Decodable {
+    let pageKey: String
+    let rankMode: String
+    let listings: [AssembledListing]
+    let sections: [PageSection]
+}
+
+struct AssembledListing: Decodable, Identifiable {
+    let listingId: String
+    let listingTitle: String?
+    let badge: String?
+    let seeAllUrl: String?
+    let accentColor: String?
+    let sponsoredBy: String?
+    let templateType: String
+    let contentTypeHint: String?
+    let infiniteLoad: Bool
+    let items: [ContentItem]
+    let feedSlots: [AssembledListing]?
+    let feedConfig: FeedConfig?
+
+    private enum CodingKeys: String, CodingKey {
+        case listingId
+        case listingTitle
+        case badge
+        case seeAllUrl
+        case accentColor
+        case sponsoredBy
+        case templateType
+        case contentTypeHint
+        case infiniteLoad
+        case items
+        case feedSlots
+        case feedConfig
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        listingId = try container.decode(String.self, forKey: .listingId)
+        listingTitle = try container.decodeIfPresent(String.self, forKey: .listingTitle)
+        badge = try container.decodeIfPresent(String.self, forKey: .badge)
+        seeAllUrl = try container.decodeIfPresent(String.self, forKey: .seeAllUrl)
+        accentColor = try container.decodeIfPresent(String.self, forKey: .accentColor)
+        sponsoredBy = try container.decodeIfPresent(String.self, forKey: .sponsoredBy)
+        templateType = try container.decode(String.self, forKey: .templateType)
+        contentTypeHint = try container.decodeIfPresent(String.self, forKey: .contentTypeHint)
+        infiniteLoad = try container.decodeIfPresent(Bool.self, forKey: .infiniteLoad) ?? false
+        items = try container.decodeIfPresent([ContentItem].self, forKey: .items) ?? []
+        feedSlots = try container.decodeIfPresent([AssembledListing].self, forKey: .feedSlots)
+        feedConfig = try container.decodeIfPresent(FeedConfig.self, forKey: .feedConfig)
+    }
+
+    var id: String { listingId }
+}
+
+extension AssembledListing {
+    var normalizedTemplateType: String {
+        templateType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+}
+
+struct FeedConfig: Decodable {
+    let mobileEvery: Int
+    let mobileCount: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case mobileEvery
+        case mobileCount
+    }
+
+    init(mobileEvery: Int = 5, mobileCount: Int = 3) {
+        self.mobileEvery = mobileEvery
+        self.mobileCount = mobileCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        mobileEvery = try container.decodeIfPresent(Int.self, forKey: .mobileEvery) ?? 5
+        mobileCount = try container.decodeIfPresent(Int.self, forKey: .mobileCount) ?? 3
+    }
+}
+
+struct PageSection: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let order: Int
+    let type: String
+    let assembled: [AssembledListing]?
+}
+
+extension AssembledPage {
+    var hasCurationSurface: Bool {
+        !listings.isEmpty || sections.contains { $0.assembled?.isEmpty == false }
+    }
+
+    var sortedSections: [PageSection] {
+        sections.sorted { $0.order < $1.order }
+    }
+
+    var activeListings: [AssembledListing] {
+        if !listings.isEmpty { return listings }
+        return sortedSections
+            .flatMap { $0.assembled ?? [] }
+    }
+
+    func listings(forSectionID sectionID: String?) -> [AssembledListing] {
+        if let sectionID,
+           let listings = sections.first(where: { $0.id == sectionID || $0.name == sectionID })?.assembled {
+            return listings
+        }
+        if let listings = sortedSections.first?.assembled {
+            return listings
+        }
+        return listings
+    }
+
+    var curationItems: [ContentItem] {
+        let listingItems = listings.flatMap(\.items)
+        let sectionItems = sections
+            .compactMap(\.assembled)
+            .flatMap { $0 }
+            .flatMap(\.items)
+        return listingItems + sectionItems
+    }
+}
+
+struct ContentItem: Decodable, Identifiable {
+    let entityType: String
+    let entityId: String
+    let title: String
+    let thumbnailUrl: String?
+    let coverUrl: String?
+    let meta: [String: AnyJSON]?
+
+    var id: String { "\(entityType)-\(entityId)" }
+
+    func metaString(_ key: String) -> String? { meta?[key]?.stringValue }
+    func metaInt(_ key: String) -> Int? { meta?[key]?.intValue }
+    func metaDouble(_ key: String) -> Double? { meta?[key]?.doubleValue }
+    func metaBool(_ key: String) -> Bool? { meta?[key]?.boolValue }
 }
 
 // ── Shorts ────────────────────────────────────────────────────────────────────
@@ -183,6 +457,68 @@ struct Short: Codable, Identifiable {
     let linkedEpisodeId: String?
     let linkedClip: ShortLinkedClip?
     let linkedEpisode: ShortLinkedEpisode?
+    let adPolicy: EffectiveAdPolicy?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, description, videoUrl, thumbnailUrl, views, likes, duration
+        case channelId, showId, channel, linkedClipId, linkedEpisodeId, linkedClip, linkedEpisode, adPolicy
+    }
+
+    init(
+        id: String,
+        title: String,
+        description: String?,
+        videoUrl: String?,
+        thumbnailUrl: String?,
+        views: Int,
+        likes: Int,
+        duration: Double?,
+        channelId: String?,
+        showId: String?,
+        channel: ChannelStub?,
+        linkedClipId: String?,
+        linkedEpisodeId: String?,
+        linkedClip: ShortLinkedClip?,
+        linkedEpisode: ShortLinkedEpisode?,
+        adPolicy: EffectiveAdPolicy? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.description = description
+        self.videoUrl = videoUrl
+        self.thumbnailUrl = thumbnailUrl
+        self.views = views
+        self.likes = likes
+        self.duration = duration
+        self.channelId = channelId
+        self.showId = showId
+        self.channel = channel
+        self.linkedClipId = linkedClipId
+        self.linkedEpisodeId = linkedEpisodeId
+        self.linkedClip = linkedClip
+        self.linkedEpisode = linkedEpisode
+        self.adPolicy = adPolicy
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        videoUrl = try container.decodeIfPresent(String.self, forKey: .videoUrl)
+        thumbnailUrl = try container.decodeIfPresent(String.self, forKey: .thumbnailUrl)
+        views = try container.decodeIfPresent(Int.self, forKey: .views) ?? 0
+        likes = try container.decodeIfPresent(Int.self, forKey: .likes) ?? 0
+        duration = try container.decodeIfPresent(Double.self, forKey: .duration)
+        channelId = try container.decodeIfPresent(String.self, forKey: .channelId)
+        showId = try container.decodeIfPresent(String.self, forKey: .showId)
+        channel = try container.decodeIfPresent(ChannelStub.self, forKey: .channel)
+        linkedClipId = try container.decodeIfPresent(String.self, forKey: .linkedClipId)
+        linkedEpisodeId = try container.decodeIfPresent(String.self, forKey: .linkedEpisodeId)
+        linkedClip = try container.decodeIfPresent(ShortLinkedClip.self, forKey: .linkedClip)
+        linkedEpisode = try container.decodeIfPresent(ShortLinkedEpisode.self, forKey: .linkedEpisode)
+        adPolicy = try container.decodeIfPresent(EffectiveAdPolicy.self, forKey: .adPolicy)
+    }
 }
 
 struct ShortsResponse: Codable {
@@ -284,6 +620,7 @@ struct VideoDetail: Decodable, Identifiable {
     let showFollowerCount: Int
     let linkedClip: LinkedClip?
     let linkedEpisode: LinkedEpisode?
+    let adPolicy: EffectiveAdPolicy?
 }
 
 // ── Episode detail ────────────────────────────────────────────────────────────
@@ -323,10 +660,15 @@ struct EpisodeShow: Codable, Identifiable {
     let id: String
     let title: String
     let coverUrl: String?
+    let showType: String?
     let genre: String?
     let language: String?
     let contentRating: String?
     let seasons: [EpisodeSeason]?
+
+    var isMovie: Bool {
+        movieShowTypes.contains(showType?.lowercased() ?? "")
+    }
 }
 
 struct EpisodeDetail: Codable, Identifiable {
@@ -339,6 +681,7 @@ struct EpisodeDetail: Codable, Identifiable {
     let episodeNumber: Int
     let seasonId: String
     let views: Int?
+    let comingSoon: Bool?
     let likes: [LikeRecord]    // all Like rows for this episode (userId + type)
     let comments: [Comment]
     let season: EpisodeSeason
@@ -348,13 +691,91 @@ struct EpisodeDetail: Codable, Identifiable {
     let followerCount: Int
     let paywallInfo: PaywallInfo?
     let rentalInfo: RentalInfo?
+    let adPolicy: EffectiveAdPolicy?
+}
+
+struct EffectiveAdPolicy: Codable {
+    let adsEnabled: Bool
+    let reason: String?
+    let adLoad: Int?
+    let cadenceKind: String?
+    let cadenceValue: Int?
+    let frequencySec: Int?
+    let firstAfter: Int?
+    let skippable: Bool?
+    let skipAfterSec: Int?
+    let minGapSec: Int?
+    let maxDurationSec: Int?
+    let maxAdDurationSec: Int?
+    let pods: AdPolicyPods?
+    let adRemoval: AdRemovalOffer?
+
+    static func disabled(reason: String? = nil) -> EffectiveAdPolicy {
+        EffectiveAdPolicy(
+            adsEnabled: false,
+            reason: reason,
+            adLoad: nil,
+            cadenceKind: nil,
+            cadenceValue: nil,
+            frequencySec: nil,
+            firstAfter: nil,
+            skippable: nil,
+            skipAfterSec: nil,
+            minGapSec: nil,
+            maxDurationSec: nil,
+            maxAdDurationSec: nil,
+            pods: nil,
+            adRemoval: nil
+        )
+    }
+
+    static func enabledFallback(reason: String? = nil) -> EffectiveAdPolicy {
+        EffectiveAdPolicy(
+            adsEnabled: true,
+            reason: reason,
+            adLoad: nil,
+            cadenceKind: nil,
+            cadenceValue: nil,
+            frequencySec: nil,
+            firstAfter: nil,
+            skippable: nil,
+            skipAfterSec: nil,
+            minGapSec: nil,
+            maxDurationSec: nil,
+            maxAdDurationSec: nil,
+            pods: nil,
+            adRemoval: nil
+        )
+    }
+
+    func applying(to base: PlatformShortsAdsConfig) -> PlatformShortsAdsConfig {
+        PlatformShortsAdsConfig(
+            enabled: adsEnabled,
+            cadenceKind: cadenceKind ?? base.cadenceKind,
+            cadenceValue: cadenceValue ?? frequencySec ?? base.cadenceValue,
+            firstAfter: firstAfter ?? base.firstAfter,
+            skippable: skippable ?? base.skippable,
+            skipAfterSec: skipAfterSec ?? base.skipAfterSec,
+            maxAds: adLoad ?? base.maxAds,
+            maxDurationSec: maxDurationSec ?? maxAdDurationSec ?? pods?.maxAdDurationSec ?? base.maxDurationSec,
+            placements: base.placements
+        )
+    }
+}
+
+struct AdPolicyPods: Codable {
+    let prerollMaxAds: Int?
+    let prerollMaxBreakSec: Int?
+    let midrollMaxAds: Int?
+    let midrollMaxBreakSec: Int?
+    let maxAdDurationSec: Int?
 }
 
 struct PaywallInfo: Codable {
     let productId: String
     let productName: String
     let entitlementType: String  // "PPV" | "SVOD"
-    let networkId: String
+    let networkId: String?
     let price: Double?           // in cents
     let currency: String?
     let seasonId: String?
@@ -377,13 +798,123 @@ struct RentalInfo: Codable {
     let productName: String
 }
 
+// ── TV-to-phone handoff ───────────────────────────────────────────────────────
+
+struct DeviceHandoffResponse: Codable, Identifiable {
+    let publicId: String
+    let kind: String?
+    let status: String
+    let expiresAt: String?
+    let destination: DeviceHandoffDestination?
+    let checkoutPath: String?
+
+    var id: String { publicId }
+}
+
+struct DeviceHandoffDestination: Codable, Hashable {
+    let type: String
+    let scope: String?
+    let networkId: String?
+    let networkSlug: String?
+    let showId: String?
+    let productId: String?
+    let intent: String?
+}
+
+struct DeviceHandoffActionResponse: Codable {
+    let ok: Bool?
+    let status: String?
+}
+
+struct EntitlementOffers: Codable {
+    let canSubscribe: Bool
+    let canRent: Bool
+
+    static let empty = EntitlementOffers(canSubscribe: false, canRent: false)
+}
+
+struct EntitlementRentProduct: Codable {
+    let id: String
+    let name: String?
+    let price: Double?
+    let currency: String?
+    let seasonId: String?
+    let networkId: String?
+}
+
 /// Response from GET /api/entitlement/check
 struct EntitlementCheckResponse: Codable {
     let hasAccess: Bool
+    let visible: Bool
+    let playable: Bool
     /// "NO_MEDIA" | "NOT_YET_AVAILABLE" | "NO_SCHEDULE" | "SCHEDULE_ENDED" | nil
     let code: String?
     let entitlementType: String?   // "AVOD" | "SVOD" | "PPV"
     let productId: String?
+    let offeredTypes: [String]
+    let offers: EntitlementOffers
+    let rentProduct: EntitlementRentProduct?
+
+    private enum CodingKeys: String, CodingKey {
+        case hasAccess, allowed, visible, playable, code, reason, entitlementType, type, productId, offeredTypes, offers, rentProduct
+    }
+
+    init(
+        hasAccess: Bool,
+        visible: Bool = true,
+        playable: Bool? = nil,
+        code: String?,
+        entitlementType: String?,
+        productId: String?,
+        offeredTypes: [String] = [],
+        offers: EntitlementOffers = .empty,
+        rentProduct: EntitlementRentProduct? = nil
+    ) {
+        self.hasAccess = hasAccess
+        self.visible = visible
+        self.playable = playable ?? hasAccess
+        self.code = code
+        self.entitlementType = entitlementType
+        self.productId = productId
+        self.offeredTypes = offeredTypes
+        self.offers = offers
+        self.rentProduct = rentProduct
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedHasAccess = try c.decodeIfPresent(Bool.self, forKey: .hasAccess)
+        let decodedAllowed = try c.decodeIfPresent(Bool.self, forKey: .allowed)
+        let decodedVisible = try c.decodeIfPresent(Bool.self, forKey: .visible)
+        let decodedPlayable = try c.decodeIfPresent(Bool.self, forKey: .playable)
+        let decodedCode = try c.decodeIfPresent(String.self, forKey: .code)
+        let decodedReason = try c.decodeIfPresent(String.self, forKey: .reason)
+        let decodedEntitlementType = try c.decodeIfPresent(String.self, forKey: .entitlementType)
+        let decodedType = try c.decodeIfPresent(String.self, forKey: .type)
+
+        playable = decodedPlayable ?? decodedHasAccess ?? decodedAllowed ?? false
+        hasAccess = decodedHasAccess ?? decodedAllowed ?? playable
+        visible = decodedVisible ?? true
+        code = decodedCode ?? decodedReason
+        entitlementType = decodedEntitlementType ?? decodedType
+        productId = try c.decodeIfPresent(String.self, forKey: .productId)
+        offeredTypes = (try? c.decodeIfPresent([String].self, forKey: .offeredTypes)) ?? []
+        offers = (try? c.decodeIfPresent(EntitlementOffers.self, forKey: .offers)) ?? .empty
+        rentProduct = try c.decodeIfPresent(EntitlementRentProduct.self, forKey: .rentProduct)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(hasAccess, forKey: .hasAccess)
+        try c.encode(visible, forKey: .visible)
+        try c.encode(playable, forKey: .playable)
+        try c.encodeIfPresent(code, forKey: .code)
+        try c.encodeIfPresent(entitlementType, forKey: .entitlementType)
+        try c.encodeIfPresent(productId, forKey: .productId)
+        try c.encode(offeredTypes, forKey: .offeredTypes)
+        try c.encode(offers, forKey: .offers)
+        try c.encodeIfPresent(rentProduct, forKey: .rentProduct)
+    }
 }
 
 /// Response from POST /api/checkout/ppv or /api/checkout/svod
@@ -395,17 +926,142 @@ struct CheckoutResponse: Codable {
     let redirectUrl: String?
 }
 
+struct UserSubscriptionsResponse: Decodable {
+    let subscriptions: [UserSubscription]
+}
+
+struct UserSubscription: Decodable, Identifiable {
+    struct Network: Decodable {
+        let id: String?
+        let name: String?
+        let logoUrl: String?
+    }
+
+    struct Product: Decodable {
+        struct PricingTier: Decodable {
+            let currency: String?
+            let localizedPrices: [String: String]?
+        }
+
+        let id: String?
+        let name: String?
+        let pricingTier: PricingTier?
+    }
+
+    let id: String
+    let status: String
+    let currentPeriodStart: String?
+    let currentPeriodEnd: String?
+    let cancelAtPeriodEnd: Bool?
+    let cancelledAt: String?
+    let network: Network?
+    let product: Product?
+}
+
+struct UserRentalsResponse: Decodable {
+    let rentals: [UserRental]
+}
+
+struct UserRental: Decodable, Identifiable {
+    struct Terms: Decodable {
+        let entitlementDurationSecs: Int?
+        let playbackWindowSecs: Int?
+        let maxPlays: Int?
+    }
+
+    /// The show/movie a rental belongs to. Present nested under season.show and
+    /// episode.season.show in the /api/me/rentals payload.
+    struct ShowRef: Decodable {
+        let id: String?
+        let title: String?
+        let coverUrl: String?
+    }
+
+    /// episode.season carries the show — needed because a movie's episode title is a
+    /// generic "Feature", so the row must fall back to the show/movie title.
+    struct NestedSeason: Decodable {
+        let seasonNumber: Int?
+        let show: ShowRef?
+    }
+
+    struct RentalContext: Decodable {
+        let id: String?
+        let title: String?
+        let name: String?
+        let thumbnailUrl: String?
+        let coverUrl: String?
+        let seasonNumber: Int?
+        let episodeNumber: Int?
+        let show: ShowRef?          // populated on `season`
+        let season: NestedSeason?   // populated on `episode` (carries the show)
+    }
+
+    let id: String
+    let status: String?
+    let validTo: String?
+    let firstPlayedAt: String?
+    let playbackExpiresAt: String?
+    let playsUsed: Int?
+    let terms: Terms?
+    let season: RentalContext?
+    let episode: RentalContext?
+    let product: RentalContext?
+
+    /// The show/movie this rental unlocks — season-scoped rentals resolve via season.show,
+    /// episode-scoped via episode.season.show. Drives both the row title and its link.
+    var resolvedShow: ShowRef? {
+        season?.show ?? episode?.season?.show
+    }
+    var resolvedShowId: String? { resolvedShow?.id }
+}
+
+struct VideoPlaylistResponse: Decodable {
+    let playlist: VideoPlaylist?
+}
+
+struct VideoPlaylist: Decodable, Identifiable {
+    let id: String
+    let title: String
+    let items: [VideoPlaylistItem]
+}
+
+struct VideoPlaylistItem: Decodable, Identifiable {
+    let id: String
+    let position: Int?
+    let title: String
+    let description: String?
+    let videoUrl: String?
+    let thumbnailUrl: String?
+    let thumbnailFocus: String?
+    let duration: Double?
+    let views: Int?
+    let likes: Int?
+    let channelId: String?
+    let showId: String?
+    let channel: ChannelStub?
+    let linkedClipId: String?
+    let linkedEpisodeId: String?
+    let linkedClip: ShortLinkedClip?
+    let linkedEpisode: ShortLinkedEpisode?
+}
+
 // ── Active context ────────────────────────────────────────────────────────────
 
 /// Mirrors ActiveContext in active-context.ts
 struct ActiveContext: Codable, Identifiable {
     var id: String
-    let type: String          // "admin" | "network" | "channel" | "user"
+    let type: String          // "admin" | "network" | "channel" | "show" | "user"
     let name: String
-    let channelId: String?
-    let damEnabled: Bool?
-    let canCreateShows: Bool?
-    let canPublishMicrodramas: Bool?
+    var channelId: String? = nil
+    var showId: String? = nil
+    var networkId: String? = nil
+    var networkName: String? = nil
+    var damEnabled: Bool? = nil
+    var canCreateShows: Bool? = nil
+    var canPublishMicrodramas: Bool? = nil
+    var avatarUrl: String? = nil
+    var image: String? = nil
+    var bannerUrl: String? = nil
 }
 
 struct ContextsResponse: Codable {
@@ -426,8 +1082,11 @@ struct UploadContext: Codable, Identifiable {
     let type: String          // "channel" | "show"
     let id: String
     let name: String
-    let avatarUrl: String?
-    let networkName: String?
+    var avatarUrl: String? = nil
+    var channelId: String? = nil
+    var showId: String? = nil
+    var networkId: String? = nil
+    var networkName: String? = nil
 }
 
 struct UploadContextsResponse: Codable {
@@ -514,6 +1173,48 @@ struct ProfileChannel: Codable, Identifiable {
     let avatarUrl: String?
     let bannerUrl: String?
     let followerCount: Int?
+}
+
+struct BackstageChannelSettings: Codable, Identifiable {
+    let id: String
+    let name: String
+    let handle: String?
+    let avatarUrl: String?
+    let bannerUrl: String?
+    let channelType: String?
+    let status: String?
+}
+
+struct DevicePairingCodeResponse: Codable {
+    let userCode: String
+    let deviceCode: String
+    let activationUrl: String?
+    let qrCodeUrl: String?
+    let expiresIn: Int
+    let pollInterval: Int
+}
+
+struct DevicePairingPollResponse: Codable {
+    let status: String
+    let token: String?
+    let userId: String?
+}
+
+struct DevicePairingActivationResponse: Codable {
+    let ok: Bool?
+    let deviceName: String?
+}
+
+struct PairedDevice: Codable, Identifiable, Equatable {
+    let id: String
+    let deviceName: String
+    let deviceType: String
+    let lastSeenAt: String?
+    let createdAt: String
+}
+
+struct PairedDevicesResponse: Codable {
+    let devices: [PairedDevice]
 }
 
 struct ProfileResponse: Decodable {
@@ -635,6 +1336,7 @@ struct ChannelDetail: Decodable, Identifiable {
     struct VideoItem: Codable, Identifiable {
         let id: String
         let title: String
+        let videoUrl: String?
         let thumbnailUrl: String?
         let views: Int
         let duration: Double?
@@ -752,11 +1454,12 @@ struct ShowEpisodeItem: Decodable, Identifiable {
     let status: String
     let comingSoon: Bool
     let playable: Bool?
+    let offeredTypes: [String]
     let schedule: ShowEpisodeSchedule?
 
     private enum CodingKeys: String, CodingKey {
         case id, episodeNumber, title, description, thumbnailUrl, videoUrl, duration
-        case airDate, status, comingSoon, playable, schedule
+        case airDate, status, comingSoon, playable, offeredTypes, schedule
     }
 
     init(from decoder: Decoder) throws {
@@ -772,6 +1475,7 @@ struct ShowEpisodeItem: Decodable, Identifiable {
         status = try c.flexString(.status) ?? "published"
         comingSoon = try c.flexBool(.comingSoon) ?? false
         playable = try c.flexBool(.playable)
+        offeredTypes = try c.flexStringArray(.offeredTypes)
         schedule = try c.decodeIfPresent(ShowEpisodeSchedule.self, forKey: .schedule)
     }
 
@@ -779,15 +1483,23 @@ struct ShowEpisodeItem: Decodable, Identifiable {
         struct Window: Decodable {
             let scope: String
             let premiereAt: String?
+            let finaleAt: String?
+            let blackout: Bool
+            let entitlementType: String?
+            let productId: String?
 
             private enum CodingKeys: String, CodingKey {
-                case scope, premiereAt
+                case scope, premiereAt, finaleAt, blackout, entitlementType, productId
             }
 
             init(from decoder: Decoder) throws {
                 let c = try decoder.container(keyedBy: CodingKeys.self)
                 scope = try c.flexString(.scope) ?? "worldwide"
                 premiereAt = try c.flexString(.premiereAt)
+                finaleAt = try c.flexString(.finaleAt)
+                blackout = try c.flexBool(.blackout) ?? false
+                entitlementType = try c.flexString(.entitlementType)
+                productId = try c.flexString(.productId)
             }
         }
         let templateId: String?
@@ -815,10 +1527,11 @@ struct ShowSeasonData: Decodable, Identifiable {
     let endDate: String?
     let status: String
     let comingSoon: Bool
+    let offeredTypes: [String]
     let episodes: [ShowEpisodeItem]
 
     private enum CodingKeys: String, CodingKey {
-        case id, seasonNumber, title, description, coverUrl, airDate, endDate, status, comingSoon, episodes
+        case id, seasonNumber, title, description, coverUrl, airDate, endDate, status, comingSoon, offeredTypes, episodes
     }
 
     init(from decoder: Decoder) throws {
@@ -832,6 +1545,7 @@ struct ShowSeasonData: Decodable, Identifiable {
         endDate = try c.flexString(.endDate)
         status = try c.flexString(.status) ?? "published"
         comingSoon = try c.flexBool(.comingSoon) ?? false
+        offeredTypes = try c.flexStringArray(.offeredTypes)
         episodes = (try? c.decodeIfPresent([ShowEpisodeItem].self, forKey: .episodes)) ?? []
     }
 }
@@ -861,6 +1575,10 @@ struct ShowData: Decodable, Identifiable {
     let userSeasonRentals: [String]              // seasonIds with active rentals
     let isFollowing: Bool?
     let followerCount: Int?
+
+    var isMovie: Bool {
+        movieShowTypes.contains(showType.lowercased())
+    }
 
     private enum CodingKeys: String, CodingKey {
         case id, title, description, coverUrl, bannerUrl, trailerUrl, showType, genre
@@ -908,6 +1626,10 @@ struct RelatedShow: Decodable, Identifiable {
     let status: String
     let entitlementType: String?
 
+    var isMovie: Bool {
+        movieShowTypes.contains(showType.lowercased())
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id, title, coverUrl, genre, showType, contentRating, status, entitlementType
     }
@@ -941,6 +1663,15 @@ struct ShowPageResponse: Decodable {
 }
 
 private extension KeyedDecodingContainer {
+    func decodeFirstPresentString(forKeys keys: [Key]) throws -> String? {
+        for key in keys {
+            if let value = try flexString(key), !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
     func flexString(_ key: Key) throws -> String? {
         if let value = try? decodeIfPresent(String.self, forKey: key) {
             return value
@@ -1034,7 +1765,7 @@ struct ShowClip: Codable, Identifiable {
 
 struct SuggestItem: Codable, Identifiable {
     let id: String
-    let type: String        // "channel" | "show" | "video" | "episode"
+    let type: String        // "channel" | "show" | "video" | "short" | "episode"
     let title: String
     let imageUrl: String?
     let meta: String?       // e.g. "S1 · 12 eps" for shows
@@ -1046,13 +1777,19 @@ struct SearchResultChannel: Decodable, Identifiable {
     let name: String
     let handle: String?
     let avatarUrl: String?
+    let avatarFocus: String?
+    let verified: Bool?
     let followerCount: Int?
+    let videoCount: Int?
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, handle, avatarUrl
+        case id, name, handle, avatarUrl, avatarFocus, verified
         case countWrapper = "_count"
     }
-    private struct CountWrapper: Codable { let followers: Int }
+    private struct CountWrapper: Codable {
+        let followers: Int?
+        let videos: Int?
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -1060,8 +1797,11 @@ struct SearchResultChannel: Decodable, Identifiable {
         name         = try c.decode(String.self, forKey: .name)
         handle       = try c.decodeIfPresent(String.self, forKey: .handle)
         avatarUrl    = try c.decodeIfPresent(String.self, forKey: .avatarUrl)
+        avatarFocus  = try c.decodeIfPresent(String.self, forKey: .avatarFocus)
+        verified     = try c.decodeIfPresent(Bool.self, forKey: .verified)
         let cw       = try c.decodeIfPresent(CountWrapper.self, forKey: .countWrapper)
         followerCount = cw?.followers
+        videoCount = cw?.videos
     }
 }
 
@@ -1069,9 +1809,30 @@ struct SearchResultShow: Codable, Identifiable {
     let id: String
     let title: String
     let coverUrl: String?
+    let coverFocus: String?
     let genre: String?
     let showType: String?
     let entitlementType: String?
+    let contentRating: String?
+    let productionYear: String?
+    let count: CountWrapper?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, coverUrl, coverFocus, genre, showType, entitlementType, contentRating, productionYear
+        case count = "_count"
+    }
+
+    struct CountWrapper: Codable {
+        let seasons: Int?
+    }
+
+    var isMovie: Bool {
+        movieShowTypes.contains(showType?.lowercased() ?? "")
+    }
+
+    var seasonCount: Int? {
+        count?.seasons
+    }
 }
 
 struct SearchResultEpisodeSeason: Codable {
@@ -1083,7 +1844,10 @@ struct SearchResultEpisode: Codable, Identifiable {
     let id: String
     let title: String
     let thumbnailUrl: String?
+    let thumbnailFocus: String?
     let episodeNumber: Int?
+    let duration: Double?
+    let views: Int?
     let season: SearchResultEpisodeSeason?
 }
 
@@ -1091,6 +1855,7 @@ struct SearchResultVideo: Codable, Identifiable {
     let id: String
     let title: String
     let thumbnailUrl: String?
+    let thumbnailFocus: String?
     let duration: Double?
     let views: Int?
     let type: String?
@@ -1102,6 +1867,20 @@ struct SearchResults: Decodable {
     let shows: [SearchResultShow]?
     let episodes: [SearchResultEpisode]?
     let videos: [SearchResultVideo]?
+
+    var isEmpty: Bool {
+        (channels?.isEmpty ?? true)
+            && (shows?.isEmpty ?? true)
+            && (episodes?.isEmpty ?? true)
+            && (videos?.isEmpty ?? true)
+    }
+
+    var totalCount: Int {
+        (channels?.count ?? 0)
+            + (shows?.count ?? 0)
+            + (episodes?.count ?? 0)
+            + (videos?.count ?? 0)
+    }
 }
 
 // ── Like response ─────────────────────────────────────────────────────────────
@@ -1119,6 +1898,25 @@ struct PostUser: Decodable {
     let id: String
     let name: String?
     let image: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, image, avatarUrl, avatar_url, imageUrl, image_url, profileImage, profile_image
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        image = try c.decodeFirstPresentString(forKeys: [
+            .image,
+            .avatarUrl,
+            .avatar_url,
+            .imageUrl,
+            .image_url,
+            .profileImage,
+            .profile_image
+        ])
+    }
 }
 
 /// A user-created clip post — markIn..markOut on a video or episode
@@ -1149,13 +1947,26 @@ struct UserPost: Identifiable, Decodable {
     let markIn: Int          // seconds
     let markOut: Int         // seconds
     let caption: String?
+    let captionHtml: String?
+    let thumbnailUrl: String?
     let isSpoiler: Bool
     let createdAt: String
     let likeCount: Int       // server: _count.likes mapped to likeCount
+    let commentCount: Int?   // server: _count.comments when included
     let myLike: Bool
     let user: PostUser?
     let video: MediaVideo?
     let episode: MediaEpisode?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, userId, markIn, markOut, caption, captionHtml, thumbnailUrl, isSpoiler, createdAt, likeCount, commentCount, myLike, user, video, episode
+        case count = "_count"
+    }
+
+    private struct CountWrapper: Decodable {
+        let likes: Int?
+        let comments: Int?
+    }
 
     init(
         id: String,
@@ -1163,9 +1974,12 @@ struct UserPost: Identifiable, Decodable {
         markIn: Int,
         markOut: Int,
         caption: String?,
+        captionHtml: String? = nil,
+        thumbnailUrl: String? = nil,
         isSpoiler: Bool,
         createdAt: String,
         likeCount: Int,
+        commentCount: Int? = nil,
         myLike: Bool,
         user: PostUser?,
         video: MediaVideo? = nil,
@@ -1176,13 +1990,38 @@ struct UserPost: Identifiable, Decodable {
         self.markIn = markIn
         self.markOut = markOut
         self.caption = caption
+        self.captionHtml = captionHtml
+        self.thumbnailUrl = thumbnailUrl
         self.isSpoiler = isSpoiler
         self.createdAt = createdAt
         self.likeCount = likeCount
+        self.commentCount = commentCount
         self.myLike = myLike
         self.user = user
         self.video = video
         self.episode = episode
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        userId = try c.decode(String.self, forKey: .userId)
+        markIn = try c.decode(Int.self, forKey: .markIn)
+        markOut = try c.decode(Int.self, forKey: .markOut)
+        caption = try c.decodeIfPresent(String.self, forKey: .caption)
+        captionHtml = try c.decodeIfPresent(String.self, forKey: .captionHtml)
+        thumbnailUrl = try c.decodeIfPresent(String.self, forKey: .thumbnailUrl)
+        isSpoiler = try c.decode(Bool.self, forKey: .isSpoiler)
+        createdAt = try c.decode(String.self, forKey: .createdAt)
+        let count = try c.decodeIfPresent(CountWrapper.self, forKey: .count)
+        let decodedLikeCount = try c.decodeIfPresent(Int.self, forKey: .likeCount)
+        let decodedCommentCount = try c.decodeIfPresent(Int.self, forKey: .commentCount)
+        likeCount = count?.likes ?? decodedLikeCount ?? 0
+        commentCount = count?.comments ?? decodedCommentCount
+        myLike = try c.decodeIfPresent(Bool.self, forKey: .myLike) ?? false
+        user = try c.decodeIfPresent(PostUser.self, forKey: .user)
+        video = try c.decodeIfPresent(MediaVideo.self, forKey: .video)
+        episode = try c.decodeIfPresent(MediaEpisode.self, forKey: .episode)
     }
 }
 
@@ -1197,11 +2036,34 @@ struct PostComment: Identifiable, Decodable {
     let id: String
     let userId: String
     let content: String
+    let contentHtml: String?
     let likes: Int           // direct integer field on PostComment model
     let parentId: String?
     let createdAt: String
     let user: PostUser?
     let replies: [PostComment]?
+
+    init(
+        id: String,
+        userId: String,
+        content: String,
+        contentHtml: String? = nil,
+        likes: Int,
+        parentId: String?,
+        createdAt: String,
+        user: PostUser?,
+        replies: [PostComment]?
+    ) {
+        self.id = id
+        self.userId = userId
+        self.content = content
+        self.contentHtml = contentHtml
+        self.likes = likes
+        self.parentId = parentId
+        self.createdAt = createdAt
+        self.user = user
+        self.replies = replies
+    }
 }
 
 /// Response from POST /api/posts/[id]/comments/[commentId]/like
@@ -1242,6 +2104,42 @@ struct ShowBrowseCard: Decodable, Identifiable {
     let showType: String?
     let trailerUrl: String?     // clips[0].videoUrl when ?withClips=1
 
+    var isMovie: Bool {
+        movieShowTypes.contains(showType?.lowercased() ?? "")
+    }
+
+    init(
+        id: String,
+        title: String,
+        description: String?,
+        coverUrl: String?,
+        bannerUrl: String?,
+        genre: String?,
+        entitlementType: String?,
+        productionYear: String?,
+        language: String?,
+        contentRating: String?,
+        movieDuration: Double?,
+        seasonCount: Int,
+        showType: String?,
+        trailerUrl: String?
+    ) {
+        self.id = id
+        self.title = title
+        self.description = description
+        self.coverUrl = coverUrl
+        self.bannerUrl = bannerUrl
+        self.genre = genre
+        self.entitlementType = entitlementType
+        self.productionYear = productionYear
+        self.language = language
+        self.contentRating = contentRating
+        self.movieDuration = movieDuration
+        self.seasonCount = seasonCount
+        self.showType = showType
+        self.trailerUrl = trailerUrl
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id, title, description, coverUrl, bannerUrl, genre, entitlementType, productionYear
         case language, contentRating, showType
@@ -1275,6 +2173,143 @@ struct ShowBrowseCard: Decodable, Identifiable {
     }
 }
 
+extension ContentItem {
+    var curationDisplayTitle: String {
+        let display = metaString("displayTitle") ?? metaString("displayName") ?? metaString("name")
+        if let display = display?.trimmingCharacters(in: .whitespacesAndNewlines), !display.isEmpty {
+            return display
+        }
+        return title
+    }
+
+    var trailerURL: URL? {
+        C.mediaURL(metaString("trailerUrl") ?? metaString("trailerURL") ?? metaString("previewUrl"))
+    }
+
+    var appRoute: AppRoute {
+        switch entityType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "show":
+            return .show(entityId)
+        case "short":
+            return .short(entityId, showId: metaString("showId"), channelId: metaString("channelId"))
+        case "episode":
+            return .episode(entityId)
+        case "channel":
+            return .channel(metaString("channelHandle") ?? metaString("handle") ?? entityId)
+        default:
+            return .media(id: entityId, type: metaString("type") ?? entityType, showId: metaString("showId"), channelId: metaString("channelId"))
+        }
+    }
+
+    var asFeedVideo: FeedVideo {
+        FeedVideo(
+            id: entityId,
+            title: curationDisplayTitle,
+            thumbnailUrl: thumbnailUrl ?? coverUrl,
+            videoUrl: metaString("videoUrl"),
+            duration: metaDouble("duration"),
+            aspectRatio: metaDouble("aspectRatio"),
+            width: metaInt("width"),
+            height: metaInt("height"),
+            views: metaInt("views") ?? 0,
+            type: metaString("type") ?? entityType,
+            publishedAt: metaString("publishedAt"),
+            createdAt: metaString("createdAt") ?? "",
+            channel: asChannelStub,
+            show: asShowStub
+        )
+    }
+
+    var asShowBrowseCard: ShowBrowseCard {
+        ShowBrowseCard(
+            id: entityId,
+            title: curationDisplayTitle,
+            description: metaString("description"),
+            coverUrl: thumbnailUrl ?? coverUrl,
+            bannerUrl: coverUrl ?? thumbnailUrl,
+            genre: metaString("genre"),
+            entitlementType: metaString("entitlementType"),
+            productionYear: metaString("productionYear"),
+            language: metaString("language"),
+            contentRating: metaString("contentRating"),
+            movieDuration: metaDouble("duration"),
+            seasonCount: metaInt("seasons") ?? 0,
+            showType: metaString("showType"),
+            trailerUrl: metaString("trailerUrl")
+        )
+    }
+
+    var asChannelBrowseCard: ChannelBrowseCard {
+        let displayName = curationDisplayTitle
+        return ChannelBrowseCard(
+            id: entityId,
+            name: displayName,
+            handle: metaString("handle") ?? metaString("channelHandle") ?? entityId,
+            description: metaString("description"),
+            avatarUrl: thumbnailUrl,
+            bannerUrl: coverUrl,
+            verified: metaBool("verified") ?? false,
+            channelType: metaString("channelType"),
+            status: metaString("status"),
+            _count: ChannelBrowseCard.Count(followers: metaInt("followers") ?? 0, videos: metaInt("videos") ?? 0)
+        )
+    }
+
+    var asMicrodramaListShow: MicrodramaListShow {
+        MicrodramaListShow(
+            id: entityId,
+            title: curationDisplayTitle,
+            description: metaString("description"),
+            coverUrl: thumbnailUrl ?? coverUrl,
+            bannerUrl: coverUrl ?? thumbnailUrl,
+            genre: metaString("genre"),
+            network: nil,
+            seasonCount: metaInt("seasons") ?? 0,
+            followerCount: metaInt("followers") ?? 0
+        )
+    }
+
+    var asShort: Short {
+        Short(
+            id: entityId,
+            title: curationDisplayTitle,
+            description: metaString("description"),
+            videoUrl: metaString("videoUrl"),
+            thumbnailUrl: thumbnailUrl ?? coverUrl,
+            views: metaInt("views") ?? 0,
+            likes: metaInt("likes") ?? 0,
+            duration: metaDouble("duration"),
+            channelId: metaString("channelId"),
+            showId: metaString("showId"),
+            channel: asChannelStub,
+            linkedClipId: nil,
+            linkedEpisodeId: nil,
+            linkedClip: nil,
+            linkedEpisode: nil
+        )
+    }
+
+    var asChannelStub: ChannelStub? {
+        guard let channelName = metaString("channelName") else { return nil }
+        return ChannelStub(
+            id: metaString("channelId") ?? metaString("channelHandle") ?? channelName,
+            name: channelName,
+            handle: metaString("channelHandle"),
+            avatarUrl: metaString("channelAvatarUrl")
+        )
+    }
+
+    var asShowStub: ShowStub? {
+        guard let showTitle = metaString("showTitle") else { return nil }
+        return ShowStub(
+            id: metaString("showId") ?? entityId,
+            title: showTitle,
+            coverUrl: coverUrl ?? thumbnailUrl,
+            showType: metaString("showType")
+        )
+    }
+}
+
 // ── Microdramas ───────────────────────────────────────────────────────────────
 
 struct MicrodramaNetwork: Codable {
@@ -1291,6 +2326,28 @@ struct MicrodramaListShow: Decodable, Identifiable {
     let network: MicrodramaNetwork?
     let seasonCount: Int      // _count.seasons
     let followerCount: Int    // _count.followers
+
+    init(
+        id: String,
+        title: String,
+        description: String?,
+        coverUrl: String?,
+        bannerUrl: String?,
+        genre: String?,
+        network: MicrodramaNetwork?,
+        seasonCount: Int,
+        followerCount: Int
+    ) {
+        self.id = id
+        self.title = title
+        self.description = description
+        self.coverUrl = coverUrl
+        self.bannerUrl = bannerUrl
+        self.genre = genre
+        self.network = network
+        self.seasonCount = seasonCount
+        self.followerCount = followerCount
+    }
 
     private enum CodingKeys: String, CodingKey {
         case id, title, description, coverUrl, bannerUrl, genre, network
@@ -1321,14 +2378,16 @@ struct MicrodramaEpisode: Codable, Identifiable {
     let thumbnailUrl: String?
     let videoUrl: String?      // nil if locked
     let duration: Double?
-    let accessState: String    // "free"|"svod"|"ppv"|"ad_unlock"|"locked"
-    let adUnlockAvailable: Bool?
+    let accessState: String    // "free"|"svod"|"ppv"|"locked"
 }
 
 struct MicrodramaConfig: Codable {
     let freeEpisodeCount: Int
-    let adUnlockEnabled: Bool
-    let adUnlockStartEpisode: Int
+}
+
+struct MicrodramaOffers: Codable {
+    let canSubscribe: Bool
+    let canRent: Bool
 }
 
 struct MicrodramaShowDetail: Codable, Identifiable {
@@ -1346,18 +2405,17 @@ struct MicrodramaShowDetail: Codable, Identifiable {
     let status: String
     let showType: String
     let network: MicrodramaNetwork?
+
+    var isMovie: Bool {
+        movieShowTypes.contains(showType.lowercased())
+    }
 }
 
 struct MicrodramaEpisodesResponse: Codable {
     let show: MicrodramaShowDetail
     let config: MicrodramaConfig?
     let episodes: [MicrodramaEpisode]
-}
-
-struct AdUnlockResponse: Codable {
-    let granted: Bool
-    let remainingToday: Int
-    let error: String?
+    let offers: MicrodramaOffers?
 }
 
 // ── Following feed ────────────────────────────────────────────────────────────
@@ -1686,6 +2744,199 @@ struct AppNotification: Codable, Identifiable {
     let createdAt: String
     let contextType: String?
     let contextId: String?
+    let contentType: String?
+    let videoId: String?
+    let shortId: String?
+    let episodeId: String?
+    let episodeNumber: Int?
+    let showId: String?
+    let microdramaId: String?
+    let channelId: String?
+    let channelHandle: String?
+    let playlistId: String?
+    let collectionId: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, type, title, message, linkUrl, link_url, imageUrl, image_url, image, thumbnailUrl, thumbnail_url
+        case avatarUrl, avatar_url, profileImage, profile_image, actorImageUrl, actor_image_url, actorAvatarUrl, actor_avatar_url
+        case channelAvatarUrl, channel_avatar_url, showCoverUrl, show_cover_url, coverUrl, cover_url
+        case read, createdAt, created_at, contextType, context_type, contextId, context_id
+        case contentType, content_type, mediaType, media_type, kind
+        case videoId, video_id, targetVideoId, target_video_id
+        case shortId, short_id, targetShortId, target_short_id
+        case episodeId, episode_id, targetEpisodeId, target_episode_id
+        case episodeNumber, episode_number, targetEpisodeNumber, target_episode_number
+        case showId, show_id, targetShowId, target_show_id
+        case microdramaId, microdrama_id, targetMicrodramaId, target_microdrama_id
+        case channelId, channel_id, targetChannelId, target_channel_id
+        case channelHandle, channel_handle, targetChannelHandle, target_channel_handle
+        case playlistId, playlist_id, targetPlaylistId, target_playlist_id
+        case collectionId, collection_id, targetCollectionId, target_collection_id
+    }
+
+    init(
+        id: String,
+        type: String,
+        title: String,
+        message: String,
+        linkUrl: String?,
+        imageUrl: String?,
+        read: Bool,
+        createdAt: String,
+        contextType: String?,
+        contextId: String?,
+        contentType: String? = nil,
+        videoId: String? = nil,
+        shortId: String? = nil,
+        episodeId: String? = nil,
+        episodeNumber: Int? = nil,
+        showId: String? = nil,
+        microdramaId: String? = nil,
+        channelId: String? = nil,
+        channelHandle: String? = nil,
+        playlistId: String? = nil,
+        collectionId: String? = nil
+    ) {
+        self.id = id
+        self.type = type
+        self.title = title
+        self.message = message
+        self.linkUrl = linkUrl
+        self.imageUrl = imageUrl
+        self.read = read
+        self.createdAt = createdAt
+        self.contextType = contextType
+        self.contextId = contextId
+        self.contentType = contentType
+        self.videoId = videoId
+        self.shortId = shortId
+        self.episodeId = episodeId
+        self.episodeNumber = episodeNumber
+        self.showId = showId
+        self.microdramaId = microdramaId
+        self.channelId = channelId
+        self.channelHandle = channelHandle
+        self.playlistId = playlistId
+        self.collectionId = collectionId
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        type = try c.decodeIfPresent(String.self, forKey: .type) ?? "info"
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? "Notification"
+        message = try c.decodeIfPresent(String.self, forKey: .message) ?? ""
+        linkUrl = try c.decodeFirstPresentString(forKeys: [.linkUrl, .link_url])
+        imageUrl = try c.decodeFirstPresentString(forKeys: [
+            .imageUrl,
+            .image_url,
+            .image,
+            .thumbnailUrl,
+            .thumbnail_url,
+            .avatarUrl,
+            .avatar_url,
+            .profileImage,
+            .profile_image,
+            .actorImageUrl,
+            .actor_image_url,
+            .actorAvatarUrl,
+            .actor_avatar_url,
+            .channelAvatarUrl,
+            .channel_avatar_url,
+            .showCoverUrl,
+            .show_cover_url,
+            .coverUrl,
+            .cover_url
+        ])
+        read = try c.decodeIfPresent(Bool.self, forKey: .read) ?? false
+        createdAt = try c.decodeFirstPresentString(forKeys: [.createdAt, .created_at]) ?? ""
+        contextType = try c.decodeFirstPresentString(forKeys: [.contextType, .context_type])
+        contextId = try c.decodeFirstPresentString(forKeys: [.contextId, .context_id])
+        contentType = try c.decodeFirstPresentString(forKeys: [.contentType, .content_type, .mediaType, .media_type, .kind])
+        videoId = try c.decodeFirstPresentString(forKeys: [.videoId, .video_id, .targetVideoId, .target_video_id])
+        shortId = try c.decodeFirstPresentString(forKeys: [.shortId, .short_id, .targetShortId, .target_short_id])
+        episodeId = try c.decodeFirstPresentString(forKeys: [.episodeId, .episode_id, .targetEpisodeId, .target_episode_id])
+        episodeNumber = try c.decodeFirstPresentString(forKeys: [.episodeNumber, .episode_number, .targetEpisodeNumber, .target_episode_number])
+            .flatMap(Int.init)
+        showId = try c.decodeFirstPresentString(forKeys: [.showId, .show_id, .targetShowId, .target_show_id])
+        microdramaId = try c.decodeFirstPresentString(forKeys: [.microdramaId, .microdrama_id, .targetMicrodramaId, .target_microdrama_id])
+        channelId = try c.decodeFirstPresentString(forKeys: [.channelId, .channel_id, .targetChannelId, .target_channel_id])
+        channelHandle = try c.decodeFirstPresentString(forKeys: [.channelHandle, .channel_handle, .targetChannelHandle, .target_channel_handle])
+        playlistId = try c.decodeFirstPresentString(forKeys: [.playlistId, .playlist_id, .targetPlaylistId, .target_playlist_id])
+        collectionId = try c.decodeFirstPresentString(forKeys: [.collectionId, .collection_id, .targetCollectionId, .target_collection_id])
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(type, forKey: .type)
+        try c.encode(title, forKey: .title)
+        try c.encode(message, forKey: .message)
+        try c.encodeIfPresent(linkUrl, forKey: .linkUrl)
+        try c.encodeIfPresent(imageUrl, forKey: .imageUrl)
+        try c.encode(read, forKey: .read)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encodeIfPresent(contextType, forKey: .contextType)
+        try c.encodeIfPresent(contextId, forKey: .contextId)
+        try c.encodeIfPresent(contentType, forKey: .contentType)
+        try c.encodeIfPresent(videoId, forKey: .videoId)
+        try c.encodeIfPresent(shortId, forKey: .shortId)
+        try c.encodeIfPresent(episodeId, forKey: .episodeId)
+        try c.encodeIfPresent(episodeNumber, forKey: .episodeNumber)
+        try c.encodeIfPresent(showId, forKey: .showId)
+        try c.encodeIfPresent(microdramaId, forKey: .microdramaId)
+        try c.encodeIfPresent(channelId, forKey: .channelId)
+        try c.encodeIfPresent(channelHandle, forKey: .channelHandle)
+        try c.encodeIfPresent(playlistId, forKey: .playlistId)
+        try c.encodeIfPresent(collectionId, forKey: .collectionId)
+    }
+}
+
+extension AppNotification {
+    var appRoute: AppRoute? {
+        let normalizedContentType = C.normalizedContentType(contentType ?? type)
+        let contextShowId = contextType?.lowercased() == "show" ? contextId : nil
+        let contextChannelId = contextType?.lowercased() == "channel" ? contextId : nil
+
+        if let shortId {
+            return .short(shortId, showId: showId ?? contextShowId, channelId: channelId ?? contextChannelId)
+        }
+        if let videoId {
+            return AppRoute.media(
+                id: videoId,
+                type: normalizedContentType,
+                showId: showId ?? contextShowId,
+                channelId: channelId ?? contextChannelId
+            )
+        }
+        if let episodeId {
+            return .episode(episodeId)
+        }
+
+        let microdramaTargetId = microdramaId ?? (normalizedContentType.contains("micro") ? showId : nil)
+        if let microdramaTargetId {
+            if let episodeNumber {
+                return .microdramaWatchEp(microdramaTargetId, episodeNumber)
+            }
+            return .microdramaShow(microdramaTargetId)
+        }
+        if let showId {
+            return .show(showId)
+        }
+        if let channel = channelHandle ?? channelId {
+            return .channel(channel)
+        }
+        if let playlistId {
+            return .playlist(playlistId)
+        }
+        if let collectionId {
+            return .collection(collectionId)
+        }
+        if let linkUrl {
+            return AppRoute.route(link: linkUrl, notificationType: contentType ?? type)
+        }
+        return nil
+    }
 }
 
 struct SwitchContextBody: Encodable {
@@ -1693,6 +2944,7 @@ struct SwitchContextBody: Encodable {
     let type: String
     let name: String
     let channelId: String?
+    let showId: String?
 }
 
 struct SwitchContextResponse: Codable {

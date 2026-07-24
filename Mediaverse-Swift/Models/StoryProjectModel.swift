@@ -3,7 +3,7 @@ import CoreMedia
 import Foundation
 
 let projectTimeScale: CMTimeScale = 600
-let storyMaxDurationSeconds: Double = 60
+let storyMaxDurationSeconds: Double = 10
 
 struct Project: Codable, Identifiable, Equatable {
     let id: UUID
@@ -251,6 +251,7 @@ struct LinkOverlay: Codable, Identifiable, Equatable {
 }
 
 enum StoryInteractiveStickerKind: String, Codable, Equatable {
+    case link
     case location
     case mention
     case addYours
@@ -383,7 +384,7 @@ enum ProjectModelError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .storyDurationLimitExceeded:
-            return "Stories can be up to 60 seconds."
+            return "Stories can be up to 10 seconds."
         }
     }
 }

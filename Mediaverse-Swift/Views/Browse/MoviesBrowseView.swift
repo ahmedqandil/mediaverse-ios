@@ -7,60 +7,111 @@ struct MoviesBrowseView: View {
     private let genres = ["All", "Drama", "Action", "Comedy", "Thriller",
                           "Romance", "Sci-Fi", "Horror", "Documentary", "Animation"]
 
+    @EnvironmentObject private var platformConfig: PlatformConfigManager
     @State private var selectedGenre = "All"
+    @State private var selectedSectionID: String? = nil
+    @State private var curationSections = [PageSection]()
     @State private var movies = [ShowBrowseCard]()
+    @State private var curationListings = [AssembledListing]()
+    @State private var continueItems = [ProgressItem]()
     @State private var isLoading = true
+    private var pageConfig: PlatformBrowseItem { platformConfig.browseItem(id: "movies") }
+    private var displayGenres: [String] {
+        curationSections.isEmpty ? genres : curationSections.map(\.name)
+    }
+    private var continueWatchingItems: [ProgressItem] {
+        let movieIds = Set(movies.map(\.id))
+        return continueItems.filter { item in
+            guard let show = item.episode?.season?.show,
+                  movieIds.contains(show.id),
+                  show.isMovie else {
+                return false
+            }
+            return true
+        }
+    }
+    private var curationHeroListings: [AssembledListing] {
+        curationListings.filter { $0.normalizedTemplateType == "hero" }
+    }
+
+    private var curationContentListings: [AssembledListing] {
+        curationListings.filter { $0.normalizedTemplateType != "hero" }
+    }
 
     var body: some View {
         ZStack {
             C.bg.ignoresSafeArea()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    pageHeader
-                    genrePills
+            if !pageConfig.enabled {
+                PlatformSectionUnavailableView(item: pageConfig)
+            } else {
+                ScrollView {
+                LazyVStack(alignment: .leading, spacing: C.sectionSpacing) {
+                    if !curationListings.isEmpty {
+                        ForEach(curationHeroListings) { listing in
+                            NativeCurationListingView(listing: listing)
+                        }
+                    }
+
+                    if curationListings.isEmpty || !curationSections.isEmpty {
+                        genrePills
+                    }
 
                     if isLoading {
                         movieLoadingGrid
-                    } else if movies.isEmpty {
+                    } else if movies.isEmpty && curationListings.isEmpty {
                         emptyState
                     } else {
-                        movieGrid
+                        if !continueWatchingItems.isEmpty {
+                            ProgressExploreCarousel(items: continueWatchingItems, kind: .movies)
+                        }
+                        if !curationListings.isEmpty {
+                            ForEach(curationContentListings) { listing in
+                                NativeCurationListingView(listing: listing)
+                            }
+                        } else {
+                            movieGrid
+                        }
                     }
                 }
                 .padding(.bottom, 28)
             }
+            .refreshable {
+                C.lightHaptic()
+                await load()
+            }
+            }
         }
-        .navigationTitle("Movies & Films")
-        .navigationBarTitleDisplayMode(.large)
-        .task { await load() }
-    }
-
-    private var pageHeader: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text("Watch · Movies")
-                .font(.system(size: 11, weight: .semibold))
-                .textCase(.uppercase)
-                .foregroundStyle(C.watch)
-            Text("Movies & Films")
-                .font(.title2.bold())
-                .foregroundStyle(C.text)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            guard pageConfig.enabled else {
+                isLoading = false
+                return
+            }
+            await load()
         }
-        .padding(.horizontal, C.pagePad)
-        .padding(.top, 8)
     }
 
     private var genrePills: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(genres, id: \.self) { genre in
+                ForEach(displayGenres, id: \.self) { genre in
                     GenrePill(label: genre, selected: selectedGenre == genre) {
-                        selectedGenre = genre
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            selectedGenre = genre
+                            if let section = curationSections.first(where: { $0.name == genre }) {
+                                selectedSectionID = section.id
+                            } else {
+                                selectedSectionID = nil
+                            }
+                        }
                         Task { await load() }
                     }
                 }
             }
             .padding(.horizontal, C.pagePad)
         }
+        .padding(.top, 12)
     }
 
     private var movieGrid: some View {
@@ -86,7 +137,7 @@ struct MoviesBrowseView: View {
             ForEach(0..<15, id: \.self) { _ in
                 RoundedRectangle(cornerRadius: C.cardRadius)
                     .fill(Color.white.opacity(0.06))
-                    .aspectRatio(2/3, contentMode: .fit)
+                    .aspectRatio(C.mediaAspectRatio(forContentType: "poster"), contentMode: .fit)
                     .shimmering()
             }
         }
@@ -111,15 +162,62 @@ struct MoviesBrowseView: View {
 
     @MainActor
     private func load() async {
-        isLoading = true
+        if let cachedPage = CurationManager.shared.cachedPage(key: "movies", section: selectedSectionID, allowExpired: true), cachedPage.hasCurationSurface {
+            applyCurationPage(cachedPage)
+            isLoading = false
+        } else {
+            isLoading = movies.isEmpty && curationListings.isEmpty
+        }
+
         do {
-            movies = try await APIClient.shared.fetchMoviesBrowse(
-                genre: selectedGenre == "All" ? nil : selectedGenre
-            )
+            async let pageTask = CurationManager.shared.fetchPage(key: "movies", section: selectedSectionID)
+            async let continueTask = APIClient.shared.fetchContinueWatching()
+            let page = try await pageTask
+            applyCurationPage(page)
+            continueItems = ((try? await continueTask)?.items ?? [])
         } catch {
-            movies = []
+            if movies.isEmpty && curationListings.isEmpty {
+                continueItems = []
+                curationSections = []
+                selectedSectionID = nil
+            }
         }
         isLoading = false
+    }
+
+    @MainActor
+    private func applyCurationPage(_ page: AssembledPage) {
+        let sections = page.sortedSections
+        curationSections = sections
+        if let selectedSectionID,
+           let selectedSection = sections.first(where: { $0.id == selectedSectionID }) {
+            selectedGenre = selectedSection.name
+        } else if let firstSection = sections.first {
+            selectedSectionID = firstSection.id
+            selectedGenre = firstSection.name
+        } else if selectedSectionID != nil {
+            selectedSectionID = nil
+            selectedGenre = "All"
+        }
+        curationListings = page.listings(forSectionID: selectedSectionID)
+        let sourceItems = curationListings.isEmpty ? page.curationItems : curationListings.flatMap(\.items)
+        let curationMovies = sourceItems
+            .filter { $0.entityType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "show" }
+            .map(\.asShowBrowseCard)
+            .uniqueByID()
+        movies = curationListings.isEmpty && selectedGenre != "All"
+            ? curationMovies.filter { $0.genre?.localizedCaseInsensitiveCompare(selectedGenre) == .orderedSame }
+            : curationMovies
+    }
+
+}
+
+private extension Array where Element: Identifiable, Element.ID == String {
+    func uniqueByID() -> [Element] {
+        var seen = Set<String>()
+        return filter { item in
+            seen.insert(item.id).inserted
+        }
     }
 }
 
@@ -130,7 +228,7 @@ private struct MoviePosterCard: View {
         VStack(alignment: .leading, spacing: 7) {
             ZStack(alignment: .topTrailing) {
                 posterImage
-                    .aspectRatio(2/3, contentMode: .fit)
+                    .aspectRatio(C.mediaAspectRatio(forContentType: "poster"), contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: C.cardRadius - 2))
                     .clipped()
 
@@ -162,7 +260,7 @@ private struct MoviePosterCard: View {
     @ViewBuilder
     private var posterImage: some View {
         if let imageURL = C.mediaURL(movie.coverUrl) {
-            AsyncImage(url: imageURL) { image in
+            CachedRemoteImage(url: imageURL, targetSize: CGSize(width: 120, height: 180)) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 fallbackPoster

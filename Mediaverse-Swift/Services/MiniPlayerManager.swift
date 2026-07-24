@@ -7,6 +7,9 @@ final class MiniPlayerManager: ObservableObject {
         let player: AVPlayer
         let title: String
         let route: AppRoute
+        let isAd: Bool
+        let adPresentation: ActiveAdPresentation?
+        let sourceFrame: CGRect?
     }
 
     @Published var item: Item?
@@ -17,16 +20,23 @@ final class MiniPlayerManager: ObservableObject {
 
     func present(player: AVPlayer, title: String, route: AppRoute) {
         isExpansionHandoffActive = false
-        item = Item(player: player, title: title, route: route)
+        item = Item(player: player, title: title, route: route, isAd: false, adPresentation: nil, sourceFrame: nil)
+        player.play()
     }
 
-    func replaceAndExpand(player: AVPlayer, title: String, route: AppRoute) {
+    func presentAd(player: AVPlayer, title: String, route: AppRoute, presentation: ActiveAdPresentation?) {
+        isExpansionHandoffActive = false
+        item = Item(player: player, title: title, route: route, isAd: true, adPresentation: presentation, sourceFrame: nil)
+        player.play()
+    }
+
+    func replaceAndExpand(player: AVPlayer, title: String, route: AppRoute, sourceFrame: CGRect? = nil) {
         item?.player.pause()
         expandedItem?.player.pause()
         isExpansionHandoffActive = false
         expandedItem = nil
-        item = Item(player: player, title: title, route: route)
-        player.play()
+        item = Item(player: player, title: title, route: route, isAd: false, adPresentation: nil, sourceFrame: sourceFrame)
+        player.playImmediately(atRate: 1)
         replaceAndExpandToken += 1
     }
 
@@ -39,11 +49,15 @@ final class MiniPlayerManager: ObservableObject {
         item = nil
     }
 
-    func takeExpandedPlayer(for route: AppRoute) -> AVPlayer? {
+    func takeExpandedItem(for route: AppRoute) -> Item? {
         guard expandedItem?.route == route else { return nil }
-        let player = expandedItem?.player
+        let item = expandedItem
         expandedItem = nil
-        return player
+        return item
+    }
+
+    func takeExpandedPlayer(for route: AppRoute) -> AVPlayer? {
+        takeExpandedItem(for: route)?.player
     }
 
     func markExpandedPlayerAttached() {
@@ -58,6 +72,7 @@ final class MiniPlayerManager: ObservableObject {
 
     func close() {
         item?.player.pause()
+        expandedItem?.player.pause()
         item = nil
         expandedItem = nil
         isExpansionHandoffActive = false

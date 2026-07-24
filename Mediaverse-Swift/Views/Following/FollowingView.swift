@@ -5,15 +5,18 @@ import SwiftUI
 struct FollowingView: View {
 
     @EnvironmentObject private var auth: AuthManager
+    @EnvironmentObject private var platformConfig: PlatformConfigManager
 
-    enum Tab: String, CaseIterable {
+    enum Tab: String, CaseIterable, Identifiable {
         case videos, shorts, episodes
+        var id: String { rawValue }
         var label: String { rawValue.capitalized }
     }
 
     @State private var selectedTab: Tab = .videos
     @State private var items     = [FollowingFeedItem]()
     @State private var isLoading = true
+    private var pageConfig: PlatformBrowseItem { platformConfig.browseItem(id: "following") }
 
     private var videos:   [FollowingFeedItem] { items.filter { $0._kind != "episode" && $0.type != "short" } }
     private var shorts:   [FollowingFeedItem] { items.filter { $0._kind != "episode" && $0.type == "short" } }
@@ -30,20 +33,11 @@ struct FollowingView: View {
     var body: some View {
         ZStack {
             C.bg.ignoresSafeArea()
-            VStack(spacing: 0) {
-                // Tab strip
-                HStack(spacing: 0) {
-                    ForEach(Tab.allCases, id: \.self) { tab in
-                        TabButton(label: tab.label,
-                                  count: tabItems(tab).count,
-                                  selected: selectedTab == tab) {
-                            selectedTab = tab
-                        }
-                    }
-                }
-                .background(C.surface)
-
-                Divider().background(C.border)
+            if !pageConfig.enabled {
+                PlatformSectionUnavailableView(item: pageConfig)
+            } else {
+                VStack(spacing: 0) {
+                tabBar
 
                 if !auth.isAuthenticated {
                     unauthState
@@ -54,12 +48,28 @@ struct FollowingView: View {
                     tabContent
                 }
             }
+            }
         }
-        .navigationTitle("Following")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
         .task {
+            guard pageConfig.enabled else { isLoading = false; return }
             guard auth.isAuthenticated else { isLoading = false; return }
             await load()
+        }
+    }
+
+    private var tabBar: some View {
+        MediaverseUnderlineTabStrip(
+            items: Tab.allCases.map { tab in
+                MediaverseTabItem(id: tab.id, label: tab.label, count: tabItems(tab).count)
+            },
+            selectedID: selectedTab.id,
+            fillsWidth: true,
+            background: C.surface
+        ) { id in
+            guard let tab = Tab.allCases.first(where: { $0.id == id }) else { return }
+            selectedTab = tab
         }
     }
 
@@ -99,6 +109,10 @@ struct FollowingView: View {
             }
             .padding(C.pagePad)
         }
+        .refreshable {
+            C.lightHaptic()
+            await load()
+        }
     }
 
     private func shortsGrid(_ items: [FollowingFeedItem]) -> some View {
@@ -108,12 +122,19 @@ struct FollowingView: View {
                 spacing: 16
             ) {
                 ForEach(items) { item in
-                    NavigationLink(value: AppRoute.media(id: item.id, type: item.type, channelId: item.channel?.id)) {
+                    NavigationLink(value: AppRoute.short(item.id, showId: nil, channelId: nil)) {
                         FollowingShortCard(item: item)
                     }
+                    .simultaneousGesture(TapGesture().onEnded {
+                        ShortNavigationCache.shared.seedIDs(followingShortIDs())
+                    })
                 }
             }
             .padding(C.pagePad)
+        }
+        .refreshable {
+            C.lightHaptic()
+            await load()
         }
     }
 
@@ -154,40 +175,14 @@ struct FollowingView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private func followingShortIDs() -> [String] {
+        shorts.map(\.id)
+    }
+
     private func load() async {
-        isLoading = true
+        isLoading = items.isEmpty
         items = (try? await APIClient.shared.fetchFollowingFeed()) ?? []
         isLoading = false
-    }
-}
-
-// MARK: - Tab button
-
-private struct TabButton: View {
-    let label: String
-    let count: Int
-    let selected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Text(label).font(.subheadline.weight(selected ? .semibold : .regular))
-                if count > 0 {
-                    Text("(\(count))").font(.caption2).foregroundStyle(C.textMuted)
-                }
-            }
-            .foregroundStyle(selected ? C.text : C.textMuted)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .overlay(alignment: .bottom) {
-                if selected {
-                    Rectangle()
-                        .frame(height: 2)
-                        .foregroundStyle(C.watch)
-                }
-            }
-        }
     }
 }
 
@@ -197,12 +192,15 @@ private struct FollowingVideoCard: View {
     let item: FollowingFeedItem
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            AsyncImage(url: C.mediaURL(item.thumbnailUrl)) { img in
+            CachedRemoteImage(
+                url: C.mediaURL(item.thumbnailUrl),
+                targetSize: CGSize(width: 220, height: 124)
+            ) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 Color.white.opacity(0.06)
             }
-            .aspectRatio(16/9, contentMode: .fit)
+            .aspectRatio(C.mediaAspectRatio(forContentType: item._kind ?? item.type ?? "video"), contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: C.cardRadius - 2))
             .clipped()
 
@@ -228,12 +226,15 @@ private struct FollowingShortCard: View {
     let item: FollowingFeedItem
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            AsyncImage(url: C.mediaURL(item.thumbnailUrl)) { img in
+            CachedRemoteImage(
+                url: C.mediaURL(item.thumbnailUrl),
+                targetSize: CGSize(width: 180, height: 320)
+            ) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 Color.white.opacity(0.06)
             }
-            .aspectRatio(16/9, contentMode: .fit)
+            .aspectRatio(C.mediaAspectRatio(forContentType: item.type ?? "short"), contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: C.cardRadius - 2))
             .clipped()
 

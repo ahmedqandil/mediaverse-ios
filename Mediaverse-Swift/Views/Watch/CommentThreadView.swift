@@ -6,10 +6,11 @@ enum CommentThreadTarget: Equatable {
     case video(String)
     case episode(String)
     case collection(String)
+    case post(String)
 
     var id: String {
         switch self {
-        case .video(let id), .episode(let id), .collection(let id): return id
+        case .video(let id), .episode(let id), .collection(let id), .post(let id): return id
         }
     }
 }
@@ -19,12 +20,96 @@ enum CommentInputPosition {
     case bottom
 }
 
+struct StandardCommentsSheet: View {
+    let target: CommentThreadTarget
+    var title: String = "Comments"
+    var initialComments: [Comment]? = nil
+    var initialCount: Int? = nil
+    var autoFocusComposer: Bool = false
+    var onClose: (() -> Void)? = nil
+    var onCountChange: ((Int) -> Void)? = nil
+
+    @State private var displayedCount: Int?
+
+    init(
+        target: CommentThreadTarget,
+        title: String = "Comments",
+        initialComments: [Comment]? = nil,
+        initialCount: Int? = nil,
+        autoFocusComposer: Bool = false,
+        onClose: (() -> Void)? = nil,
+        onCountChange: ((Int) -> Void)? = nil
+    ) {
+        self.target = target
+        self.title = title
+        self.initialComments = initialComments
+        self.initialCount = initialCount
+        self.autoFocusComposer = autoFocusComposer
+        self.onClose = onClose
+        self.onCountChange = onCountChange
+        _displayedCount = State(initialValue: initialCount ?? initialComments?.totalCommentCount)
+    }
+
+    var body: some View {
+        NavigationStack {
+            CommentThreadView(
+                target: target,
+                initialComments: seedComments,
+                inputPosition: .bottom,
+                showsHeader: false,
+                autoFocusComposer: autoFocusComposer,
+                onCountChange: { count in
+                    displayedCount = count
+                    onCountChange?(count)
+                }
+            )
+            .navigationTitle(titleWithCount)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if let onClose {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(action: onClose) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(C.text)
+                                .frame(width: 34, height: 34)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Close comments")
+                    }
+                }
+            }
+        }
+        .background(C.bg)
+        .presentationDetents([.fraction(0.76), .large])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(C.bg)
+        .onAppear {
+            NotificationCenter.default.post(name: .commentsOverlayVisibilityChanged, object: true)
+        }
+        .onDisappear {
+            NotificationCenter.default.post(name: .commentsOverlayVisibilityChanged, object: false)
+        }
+    }
+
+    private var titleWithCount: String {
+        guard let displayedCount, displayedCount > 0 else { return title }
+        return "\(title) (\(displayedCount))"
+    }
+
+    private var seedComments: [Comment]? {
+        guard let initialComments, !initialComments.isEmpty else { return nil }
+        return initialComments
+    }
+}
+
 struct CommentThreadView: View {
     let target: CommentThreadTarget
     var initialComments: [Comment]? = nil
     var inputPosition: CommentInputPosition = .top
     var showsHeader: Bool = true
     var previewLimit: Int? = nil
+    var autoFocusComposer: Bool = false
     var onShowMore: ((Int) -> Void)? = nil
     var onCountChange: ((Int) -> Void)? = nil
 
@@ -36,6 +121,7 @@ struct CommentThreadView: View {
     @State private var flaggedCommentIds = Set<String>()
     @State private var loadError: String? = nil
     @State private var replyTarget: Comment? = nil
+    @FocusState private var isComposerFocused: Bool
 
     @EnvironmentObject private var auth: AuthManager
 
@@ -49,6 +135,7 @@ struct CommentThreadView: View {
         inputPosition: CommentInputPosition = .top,
         showsHeader: Bool = true,
         previewLimit: Int? = nil,
+        autoFocusComposer: Bool = false,
         onShowMore: ((Int) -> Void)? = nil,
         onCountChange: ((Int) -> Void)? = nil
     ) {
@@ -57,6 +144,7 @@ struct CommentThreadView: View {
         self.inputPosition = inputPosition
         self.showsHeader = showsHeader
         self.previewLimit = previewLimit
+        self.autoFocusComposer = autoFocusComposer
         self.onShowMore = onShowMore
         self.onCountChange = onCountChange
         _comments = State(initialValue: initialComments ?? [])
@@ -66,17 +154,22 @@ struct CommentThreadView: View {
     var body: some View {
         Group {
             if inputPosition == .bottom {
-                VStack(spacing: 0) {
-                    ScrollView {
-                        threadContent
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 14)
-                    }
-                    Divider().background(C.borderSubtle)
-                    composer
+                ScrollView {
+                    threadContent
                         .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(C.bg)
+                        .padding(.vertical, 14)
+                        .padding(.bottom, stickyComposerReserve)
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    VStack(spacing: 0) {
+                        Divider().background(C.borderSubtle)
+                        composer
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(C.bg)
+                    }
+                    .background(C.bg)
                 }
             } else {
                 VStack(alignment: .leading, spacing: 14) {
@@ -90,28 +183,48 @@ struct CommentThreadView: View {
                 }
             }
         }
-        .task { await loadIfNeeded() }
-        .onChange(of: target.id) { _, _ in
-            Task { await reload() }
+        .task(id: target.id) {
+            if autoFocusComposer {
+                Task { await focusComposerAfterSheetPresentation() }
+            }
+            await loadIfNeeded()
         }
         .animation(contentAnimation, value: isLoading)
         .animation(contentAnimation, value: commentIdentity)
     }
 
+    private var stickyComposerReserve: CGFloat {
+        76
+    }
+
+    private var supportsCommentManagement: Bool {
+        if case .post = target { return false }
+        return true
+    }
+
+    private var supportsCommentFlags: Bool {
+        if case .post = target { return false }
+        return true
+    }
+
     private var commentCount: Int {
-        comments.reduce(0) { total, comment in
-            total + 1 + (comment.replies?.count ?? comment.replyCount ?? 0)
+        displayComments.reduce(0) { total, comment in
+            total + 1 + (comment.replies?.count ?? 0)
         }
+    }
+
+    private var displayComments: [Comment] {
+        comments.compactMap { $0.removingSoftDeleted() }
     }
 
     private var composer: some View {
         HStack(alignment: .top, spacing: 10) {
-            avatar(user: nil, size: 32)
+            avatar(image: auth.currentUser?.image, name: auth.currentUser?.name, size: 32)
 
             VStack(alignment: .trailing, spacing: 8) {
                 if let replyTarget {
                     HStack(spacing: 6) {
-                        Text("Replying to \(replyTarget.user?.name ?? "comment")")
+                        Text("Replying to \(replyTarget.displayName)")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(C.textMuted)
                             .lineLimit(1)
@@ -128,68 +241,68 @@ struct CommentThreadView: View {
                     }
                 }
 
-                TextField(composerPlaceholder, text: $commentText, axis: .vertical)
-                    .font(.system(size: 13))
-                    .foregroundStyle(C.text)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, inputPosition == .bottom ? 9 : 10)
-                    .background(inputPosition == .bottom ? Color.white.opacity(0.07) : C.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: inputPosition == .bottom ? 18 : 8))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: inputPosition == .bottom ? 18 : 8)
-                            .stroke(C.border, lineWidth: 1)
-                    }
-                    .lineLimit(1...4)
-                    .disabled(!auth.isAuthenticated || isSubmitting)
-                    .onTapGesture {
-                        // Native auth flow is tab/profile driven today; keep the web parity disabled state visible.
-                    }
-
-                if !commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    HStack(spacing: 8) {
-                        Button {
-                            commentText = ""
-                            replyTarget = nil
-                        } label: {
-                            Text("Cancel")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(C.textMuted)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .background(C.elevated)
-                                .clipShape(Capsule())
+                HStack(alignment: .bottom, spacing: 8) {
+                    TextField(composerPlaceholder, text: $commentText, axis: .vertical)
+                        .font(.system(size: 13))
+                        .foregroundStyle(C.text)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, inputPosition == .bottom ? 9 : 10)
+                        .background(inputPosition == .bottom ? C.elevated : C.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: inputPosition == .bottom ? 18 : 8))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: inputPosition == .bottom ? 18 : 8)
+                                .stroke(C.border, lineWidth: 1)
                         }
-
-                        Button {
+                        .lineLimit(1...4)
+                        .submitLabel(.send)
+                        .focused($isComposerFocused)
+                        .disabled(!auth.isAuthenticated || isSubmitting)
+                        .onSubmit {
                             Task { await submitComment() }
-                        } label: {
-                            if isSubmitting {
-                                ProgressView().tint(.black)
-                                    .frame(width: 34, height: 34)
-                                    .background(C.watch)
-                                    .clipShape(Circle())
-                            } else {
-                                Text("Comment")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(C.bg)
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 8)
-                                    .background(C.watch)
-                                    .clipShape(Capsule())
+                        }
+                        .onTapGesture {
+                            if auth.isAuthenticated {
+                                isComposerFocused = true
                             }
                         }
-                        .disabled(isSubmitting)
+
+                    Button {
+                        Task { await submitComment() }
+                    } label: {
+                        ZStack {
+                            Circle()
+                                .fill(canSubmitComment ? C.watch : C.elevated)
+                                .frame(width: 38, height: 38)
+                            if isSubmitting {
+                                ProgressView()
+                                    .tint(canSubmitComment ? C.bg : C.textMuted)
+                            } else {
+                                Image(systemName: "paperplane.fill")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle(canSubmitComment ? C.bg : C.textMuted)
+                            }
+                        }
                     }
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .buttonStyle(.plain)
+                    .disabled(!canSubmitComment)
+                    .accessibilityLabel("Comment")
                 }
+
+                MentionAutocompletePanel(text: $commentText)
+                    .zIndex(1)
             }
         }
     }
-
     private var composerPlaceholder: String {
         if !auth.isAuthenticated { return "Sign in to comment" }
-        if let replyTarget { return "Reply to \(replyTarget.user?.name ?? "comment")…" }
+        if let replyTarget { return "Reply to \(replyTarget.displayName)…" }
         return "Add a comment…"
+    }
+
+    private var canSubmitComment: Bool {
+        auth.isAuthenticated &&
+        !isSubmitting &&
+        !commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     @ViewBuilder
@@ -215,7 +328,7 @@ struct CommentThreadView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, 18)
                 .transition(.opacity)
-        } else if comments.isEmpty {
+        } else if displayComments.isEmpty {
             Text("No comments yet. Be the first.")
                 .font(.system(size: 13))
                 .foregroundStyle(C.textMuted)
@@ -229,12 +342,16 @@ struct CommentThreadView: View {
                         comment: comment,
                         depth: 0,
                         usesExternalReplyComposer: inputPosition == .bottom,
+                        allowsManagement: supportsCommentManagement,
+                        allowsFlagging: supportsCommentFlags,
                         likedCommentIds: $likedCommentIds,
                         flaggedCommentIds: $flaggedCommentIds,
                         onBeginReply: { replyTarget = $0 },
                         onLike: toggleLike,
                         onFlag: flagComment,
-                        onReply: submitReply
+                        onReply: submitReply,
+                        onEdit: editComment,
+                        onDelete: deleteComment
                     )
                 }
                 if let previewLimit, commentCount > previewLimit {
@@ -253,9 +370,9 @@ struct CommentThreadView: View {
 
     private var visibleComments: [Comment] {
         if let previewLimit {
-            return Array(comments.prefix(previewLimit))
+            return Array(displayComments.prefix(previewLimit))
         }
-        return comments
+        return displayComments
     }
 
     private var commentIdentity: String {
@@ -281,9 +398,12 @@ struct CommentThreadView: View {
     }
 
     @ViewBuilder
-    private func avatar(user: CommentUser?, size: CGFloat) -> some View {
-        if let url = C.mediaURL(user?.image) {
-            AsyncImage(url: url) { image in
+    private func avatar(image: String?, name: String?, size: CGFloat) -> some View {
+        if let url = C.mediaURL(image) {
+            CachedRemoteImage(
+                url: url,
+                targetSize: CGSize(width: size, height: size)
+            ) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 Circle().fill(C.elevated)
@@ -295,7 +415,7 @@ struct CommentThreadView: View {
                 .fill(C.elevated)
                 .frame(width: size, height: size)
                 .overlay {
-                    Text(String((user?.name ?? "?").prefix(1)).uppercased())
+                    Text(String((name ?? "?").prefix(1)).uppercased())
                         .font(.system(size: max(9, size * 0.34), weight: .bold))
                         .foregroundStyle(C.textMuted)
                 }
@@ -311,6 +431,14 @@ struct CommentThreadView: View {
     }
 
     @MainActor
+    private func focusComposerAfterSheetPresentation() async {
+        guard inputPosition == .bottom, auth.isAuthenticated else { return }
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        guard inputPosition == .bottom, auth.isAuthenticated else { return }
+        isComposerFocused = true
+    }
+
+    @MainActor
     private func reload() async {
         withAnimation(.easeOut(duration: 0.16)) {
             isLoading = true
@@ -319,7 +447,7 @@ struct CommentThreadView: View {
         do {
             let fetchedComments = try await fetchTargetComments()
             withAnimation(contentAnimation) {
-                comments = fetchedComments
+                comments = fetchedComments.compactMap { $0.removingSoftDeleted() }
                 isLoading = false
             }
             onCountChange?(commentCount)
@@ -339,6 +467,9 @@ struct CommentThreadView: View {
             return try await APIClient.shared.fetchComments(episodeId: id)
         case .collection(let id):
             return try await APIClient.shared.fetchComments(collectionId: id)
+        case .post(let id):
+            let postComments = try await APIClient.shared.fetchPostComments(postId: id)
+            return postComments.map { $0.asSharedComment }
         }
     }
 
@@ -360,6 +491,7 @@ struct CommentThreadView: View {
                 }
             }
             commentText = ""
+            isComposerFocused = false
             onCountChange?(commentCount)
         } catch {}
         isSubmitting = false
@@ -376,6 +508,33 @@ struct CommentThreadView: View {
         } catch {}
     }
 
+    private func editComment(commentId: String, text: String) async throws {
+        guard auth.isAuthenticated else { return }
+        let updated = try await APIClient.shared.editComment(commentId: commentId, content: text)
+        withAnimation(contentAnimation) {
+            comments = comments.map {
+                $0.updatingContent(
+                    commentId: commentId,
+                    content: updated.content ?? text,
+                    contentHtml: updated.contentHtml
+                )
+            }
+        }
+    }
+
+    private func deleteComment(commentId: String) async throws {
+        guard auth.isAuthenticated else { return }
+        try await APIClient.shared.deleteComment(commentId: commentId)
+        withAnimation(contentAnimation) {
+            comments = comments.compactMap { $0.removing(commentId: commentId) }
+            if replyTarget?.id == commentId {
+                replyTarget = nil
+                commentText = ""
+            }
+        }
+        onCountChange?(commentCount)
+    }
+
     private func postTargetComment(content: String, parentId: String?) async throws -> Comment {
         switch target {
         case .video(let id):
@@ -384,6 +543,9 @@ struct CommentThreadView: View {
             return try await APIClient.shared.postComment(content: content, episodeId: id, parentId: parentId)
         case .collection(let id):
             return try await APIClient.shared.postComment(content: content, collectionId: id, parentId: parentId)
+        case .post(let id):
+            let comment = try await APIClient.shared.createPostComment(postId: id, content: content, parentId: parentId)
+            return comment.asSharedComment
         }
     }
 
@@ -395,15 +557,27 @@ struct CommentThreadView: View {
             comments = comments.map { $0.updatingLikes(commentId: commentId, likes: max(0, currentLikes + (wasLiked ? -1 : 1))) }
         }
         Task {
-            _ = try? await APIClient.shared.likeComment(commentId: commentId, liked: !wasLiked)
+            if case .post(let postId) = target {
+                _ = try? await APIClient.shared.likePostComment(postId: postId, commentId: commentId, liked: !wasLiked)
+            } else {
+                _ = try? await APIClient.shared.likeComment(commentId: commentId, liked: !wasLiked)
+            }
         }
     }
 
     private func flagComment(commentId: String) {
-        guard auth.isAuthenticated, !flaggedCommentIds.contains(commentId) else { return }
+        guard supportsCommentFlags, auth.isAuthenticated, !flaggedCommentIds.contains(commentId) else { return }
         flaggedCommentIds.insert(commentId)
         Task {
             _ = try? await APIClient.shared.flagComment(commentId: commentId)
+        }
+    }
+}
+
+extension Array where Element == Comment {
+    var totalCommentCount: Int {
+        reduce(0) { total, comment in
+            total + 1 + (comment.replies?.totalCommentCount ?? comment.replyCount ?? 0)
         }
     }
 }
@@ -412,17 +586,26 @@ private struct SharedCommentRow: View {
     let comment: Comment
     let depth: Int
     let usesExternalReplyComposer: Bool
+    let allowsManagement: Bool
+    let allowsFlagging: Bool
     @Binding var likedCommentIds: Set<String>
     @Binding var flaggedCommentIds: Set<String>
     let onBeginReply: (Comment) -> Void
     let onLike: (String, Int) -> Void
     let onFlag: (String) -> Void
     let onReply: (String, String) async -> Void
+    let onEdit: (String, String) async throws -> Void
+    let onDelete: (String) async throws -> Void
 
     @State private var isReplyOpen = false
     @State private var replyText = ""
     @State private var isSendingReply = false
     @State private var repliesExpanded = true
+    @State private var isEditing = false
+    @State private var editText = ""
+    @State private var isSavingEdit = false
+    @State private var isDeleting = false
+    @State private var editError: String? = nil
 
     @EnvironmentObject private var auth: AuthManager
 
@@ -431,7 +614,7 @@ private struct SharedCommentRow: View {
             avatar
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    Text(comment.user?.name ?? "Anonymous")
+                    Text(comment.displayName)
                         .font(.system(size: depth == 0 ? 12 : 11, weight: .semibold))
                         .foregroundStyle(C.text)
                     Text(commentTimeAgo(comment.createdAt))
@@ -439,19 +622,21 @@ private struct SharedCommentRow: View {
                         .foregroundStyle(C.textMuted.opacity(0.65))
                 }
 
-                if comment.isRemoved == true {
-                    Text("[Comment removed]")
-                        .font(.system(size: depth == 0 ? 13 : 12))
-                        .foregroundStyle(C.textMuted.opacity(0.55))
-                        .italic()
+                if comment.isSoftDeletedForDisplay {
+                    EmptyView()
+                } else if isEditing {
+                    editComposer
                 } else {
-                    Text(comment.content ?? "")
-                        .font(.system(size: depth == 0 ? 13 : 12))
-                        .foregroundStyle(C.text.opacity(0.82))
-                        .fixedSize(horizontal: false, vertical: true)
+                    MentionText(
+                        plain: comment.content,
+                        html: comment.contentHtml,
+                        font: .system(size: depth == 0 ? 13 : 12),
+                        color: C.text.opacity(0.82)
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
                 }
 
-                if comment.isRemoved != true {
+                if !comment.isSoftDeletedForDisplay, !isEditing {
                     actionRow
                 }
 
@@ -466,12 +651,16 @@ private struct SharedCommentRow: View {
                                 comment: reply,
                                 depth: depth + 1,
                                 usesExternalReplyComposer: usesExternalReplyComposer,
+                                allowsManagement: allowsManagement,
+                                allowsFlagging: allowsFlagging,
                                 likedCommentIds: $likedCommentIds,
                                 flaggedCommentIds: $flaggedCommentIds,
                                 onBeginReply: onBeginReply,
                                 onLike: onLike,
                                 onFlag: onFlag,
-                                onReply: onReply
+                                onReply: onReply,
+                                onEdit: onEdit,
+                                onDelete: onDelete
                             )
                         }
                     }
@@ -523,6 +712,29 @@ private struct SharedCommentRow: View {
                 .buttonStyle(.plain)
             }
 
+            if allowsManagement, isOwnComment {
+                Button {
+                    editText = comment.content ?? ""
+                    editError = nil
+                    withAnimation(.easeInOut(duration: 0.18)) { isEditing = true }
+                } label: {
+                    Text("Edit")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(C.textMuted.opacity(0.75))
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    Task { await deleteCurrentComment() }
+                } label: {
+                    Text(isDeleting ? "Deleting" : "Delete")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.red.opacity(0.78))
+                }
+                .buttonStyle(.plain)
+                .disabled(isDeleting)
+            }
+
             if depth == 0, visibleReplyCount > 0 {
                 Button {
                     withAnimation(.easeInOut(duration: 0.18)) { repliesExpanded.toggle() }
@@ -536,7 +748,7 @@ private struct SharedCommentRow: View {
 
             Spacer(minLength: 0)
 
-            if auth.isAuthenticated {
+            if allowsFlagging, auth.isAuthenticated {
                 if flaggedCommentIds.contains(comment.id) {
                     Text("Reported")
                         .font(.system(size: 10))
@@ -556,35 +768,87 @@ private struct SharedCommentRow: View {
         .padding(.top, 2)
     }
 
-    private var replyComposer: some View {
-        HStack(spacing: 8) {
-            TextField("Write a reply…", text: $replyText, axis: .vertical)
-                .font(.system(size: 12))
+    private var editComposer: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            TextField("Edit comment", text: $editText, axis: .vertical)
+                .font(.system(size: depth == 0 ? 13 : 12))
                 .foregroundStyle(C.text)
                 .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+                .padding(.vertical, 8)
                 .background(Color.white.opacity(0.06))
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .lineLimit(1...3)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay { RoundedRectangle(cornerRadius: 10).stroke(C.border, lineWidth: 1) }
+                .lineLimit(1...4)
+                .disabled(isSavingEdit)
 
-            Button {
-                Task { await sendReply() }
-            } label: {
-                if isSendingReply {
-                    ProgressView().tint(.black)
-                        .frame(width: 30, height: 30)
-                        .background(C.watch)
-                        .clipShape(Circle())
-                } else {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(C.bg)
-                        .frame(width: 30, height: 30)
-                        .background(C.watch)
-                        .clipShape(Circle())
-                }
+            MentionAutocompletePanel(text: $editText)
+
+            if let editError {
+                Text(editError)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.red.opacity(0.8))
             }
-            .disabled(replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSendingReply)
+
+            HStack(spacing: 8) {
+                Button("Cancel") {
+                    editText = ""
+                    editError = nil
+                    withAnimation(.easeInOut(duration: 0.18)) { isEditing = false }
+                }
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(C.textMuted)
+                .disabled(isSavingEdit)
+
+                Button {
+                    Task { await saveEdit() }
+                } label: {
+                    Text(isSavingEdit ? "Saving..." : "Save")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(C.bg)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(C.watch)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(isSavingEdit || editText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private var replyComposer: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                TextField("Write a reply…", text: $replyText, axis: .vertical)
+                    .font(.system(size: 12))
+                    .foregroundStyle(C.text)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(Color.white.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .lineLimit(1...3)
+
+                Button {
+                    Task { await sendReply() }
+                } label: {
+                    if isSendingReply {
+                        ProgressView().tint(.black)
+                            .frame(width: 30, height: 30)
+                            .background(C.watch)
+                            .clipShape(Circle())
+                    } else {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(C.bg)
+                            .frame(width: 30, height: 30)
+                            .background(C.watch)
+                            .clipShape(Circle())
+                    }
+                }
+                .disabled(replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSendingReply)
+            }
+
+            MentionAutocompletePanel(text: $replyText)
         }
         .padding(.top, 6)
     }
@@ -593,10 +857,17 @@ private struct SharedCommentRow: View {
         comment.replies?.count ?? comment.replyCount ?? 0
     }
 
+    private var isOwnComment: Bool {
+        auth.currentUser?.id == comment.user?.id
+    }
+
     private var avatar: some View {
         Group {
-            if let url = C.mediaURL(comment.user?.image) {
-                AsyncImage(url: url) { image in
+            if let url = C.mediaURL(comment.avatarImage) {
+                CachedRemoteImage(
+                    url: url,
+                    targetSize: CGSize(width: depth == 0 ? 34 : 28, height: depth == 0 ? 34 : 28)
+                ) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
                     Circle().fill(C.elevated)
@@ -605,7 +876,7 @@ private struct SharedCommentRow: View {
                 Circle()
                     .fill(C.elevated)
                     .overlay {
-                        Text(String((comment.user?.name ?? "?").prefix(1)).uppercased())
+                        Text(comment.initials)
                             .font(.system(size: depth == 0 ? 11 : 9, weight: .bold))
                             .foregroundStyle(C.textMuted)
                     }
@@ -613,6 +884,32 @@ private struct SharedCommentRow: View {
         }
         .frame(width: depth == 0 ? 32 : 26, height: depth == 0 ? 32 : 26)
         .clipShape(Circle())
+    }
+
+    private func saveEdit() async {
+        let text = editText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !isSavingEdit else { return }
+        isSavingEdit = true
+        editError = nil
+        do {
+            try await onEdit(comment.id, text)
+            editText = ""
+            withAnimation(.easeInOut(duration: 0.18)) { isEditing = false }
+        } catch {
+            editError = "Could not save edit."
+        }
+        isSavingEdit = false
+    }
+
+    private func deleteCurrentComment() async {
+        guard !isDeleting else { return }
+        isDeleting = true
+        do {
+            try await onDelete(comment.id)
+        } catch {
+            editError = "Could not delete comment."
+            isDeleting = false
+        }
     }
 
     private func sendReply() async {
@@ -627,17 +924,70 @@ private struct SharedCommentRow: View {
 }
 
 private extension Comment {
+    var displayName: String {
+        actorShow?.title ?? actorChannel?.name ?? user?.name ?? "Anonymous"
+    }
+
+    var avatarImage: String? {
+        actorShow?.coverUrl ?? actorChannel?.avatarUrl ?? user?.image
+    }
+
+    var initials: String {
+        String(displayName.trimmingCharacters(in: .whitespacesAndNewlines).first ?? "?").uppercased()
+    }
+
     func withRepliesIfNeeded() -> Comment {
         Comment(
             id: id,
             content: content,
+            contentHtml: contentHtml,
             isRemoved: isRemoved,
             likes: likes,
             createdAt: createdAt,
             parentId: parentId,
             user: user,
+            actorChannel: actorChannel,
+            actorShow: actorShow,
             replies: replies ?? [],
             replyCount: replyCount
+        )
+    }
+
+    var isSoftDeletedForDisplay: Bool {
+        if isRemoved == true { return true }
+        if deletedAt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false { return true }
+        if removedAt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false { return true }
+        let trimmedContent = content?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmedContent, !trimmedContent.isEmpty else { return true }
+        let normalized = trimmedContent
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[](){}"))
+            .lowercased()
+        return normalized == "removed"
+            || normalized == "deleted"
+            || normalized == "comment removed"
+            || normalized == "comment deleted"
+            || normalized == "this comment was removed"
+            || normalized == "this comment was deleted"
+            || normalized == "this comment has been removed"
+            || normalized == "this comment has been deleted"
+    }
+
+    func removingSoftDeleted() -> Comment? {
+        guard !isSoftDeletedForDisplay else { return nil }
+        let visibleReplies = replies?.compactMap { $0.removingSoftDeleted() }
+        return Comment(
+            id: id,
+            content: content,
+            contentHtml: contentHtml,
+            isRemoved: isRemoved,
+            likes: likes,
+            createdAt: createdAt,
+            parentId: parentId,
+            user: user,
+            actorChannel: actorChannel,
+            actorShow: actorShow,
+            replies: visibleReplies,
+            replyCount: visibleReplies?.count ?? replyCount
         )
     }
 
@@ -645,13 +995,52 @@ private extension Comment {
         Comment(
             id: id,
             content: content,
+            contentHtml: contentHtml,
             isRemoved: isRemoved,
             likes: id == commentId ? likes : self.likes,
             createdAt: createdAt,
             parentId: parentId,
             user: user,
+            actorChannel: actorChannel,
+            actorShow: actorShow,
             replies: replies?.map { $0.updatingLikes(commentId: commentId, likes: likes) },
             replyCount: replyCount
+        )
+    }
+
+    func updatingContent(commentId: String, content: String?, contentHtml: String?) -> Comment {
+        Comment(
+            id: id,
+            content: id == commentId ? content : self.content,
+            contentHtml: id == commentId ? contentHtml : self.contentHtml,
+            isRemoved: isRemoved,
+            likes: likes,
+            createdAt: createdAt,
+            parentId: parentId,
+            user: user,
+            actorChannel: actorChannel,
+            actorShow: actorShow,
+            replies: replies?.map { $0.updatingContent(commentId: commentId, content: content, contentHtml: contentHtml) },
+            replyCount: replyCount
+        )
+    }
+
+    func removing(commentId: String) -> Comment? {
+        guard id != commentId else { return nil }
+        let remainingReplies = replies?.compactMap { $0.removing(commentId: commentId) }
+        return Comment(
+            id: id,
+            content: content,
+            contentHtml: contentHtml,
+            isRemoved: isRemoved,
+            likes: likes,
+            createdAt: createdAt,
+            parentId: parentId,
+            user: user,
+            actorChannel: actorChannel,
+            actorShow: actorShow,
+            replies: remainingReplies,
+            replyCount: remainingReplies?.count ?? replyCount
         )
     }
 
@@ -660,11 +1049,14 @@ private extension Comment {
             return Comment(
                 id: id,
                 content: content,
+                contentHtml: contentHtml,
                 isRemoved: isRemoved,
                 likes: likes,
                 createdAt: createdAt,
                 parentId: self.parentId,
                 user: user,
+                actorChannel: actorChannel,
+                actorShow: actorShow,
                 replies: (replies ?? []) + [reply],
                 replyCount: (replyCount ?? replies?.count ?? 0) + 1
             )
@@ -672,13 +1064,35 @@ private extension Comment {
         return Comment(
             id: id,
             content: content,
+            contentHtml: contentHtml,
             isRemoved: isRemoved,
             likes: likes,
             createdAt: createdAt,
             parentId: self.parentId,
             user: user,
+            actorChannel: actorChannel,
+            actorShow: actorShow,
             replies: replies?.map { $0.addingReply(reply, to: parentId) },
             replyCount: replyCount
+        )
+    }
+}
+
+private extension PostComment {
+    var asSharedComment: Comment {
+        Comment(
+            id: id,
+            content: content,
+            contentHtml: contentHtml,
+            isRemoved: false,
+            likes: likes,
+            createdAt: createdAt,
+            parentId: parentId,
+            user: user.map { CommentUser(id: $0.id, name: $0.name, image: $0.image) },
+            actorChannel: nil,
+            actorShow: nil,
+            replies: replies?.map(\.asSharedComment),
+            replyCount: replies?.count
         )
     }
 }

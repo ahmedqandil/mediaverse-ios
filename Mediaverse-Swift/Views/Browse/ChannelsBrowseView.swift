@@ -4,9 +4,14 @@ import SwiftUI
 /// Mirrors the mobile web /channels route: search, inactive filtering, full channel cards.
 struct ChannelsBrowseView: View {
 
+    @EnvironmentObject private var platformConfig: PlatformConfigManager
+    @State private var selectedSectionID: String? = nil
+    @State private var curationSections = [PageSection]()
+    @State private var curationListings = [AssembledListing]()
     @State private var channels = [ChannelBrowseCard]()
     @State private var query = ""
     @State private var isLoading = true
+    private var pageConfig: PlatformBrowseItem { platformConfig.browseItem(id: "channels") }
 
     private var filteredChannels: [ChannelBrowseCard] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -22,21 +27,75 @@ struct ChannelsBrowseView: View {
     var body: some View {
         ZStack {
             C.bg.ignoresSafeArea()
-            VStack(spacing: 0) {
-                searchHeader
-
-                if isLoading {
-                    loadingGrid
-                } else if filteredChannels.isEmpty {
-                    emptyState
-                } else {
-                    channelGrid
-                }
+            if !pageConfig.enabled {
+                PlatformSectionUnavailableView(item: pageConfig)
+            } else {
+                channelContent
             }
         }
-        .navigationTitle("Channels")
-        .navigationBarTitleDisplayMode(.large)
-        .task { await load() }
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            guard pageConfig.enabled else {
+                isLoading = false
+                return
+            }
+            await load()
+        }
+    }
+
+    private var heroListings: [AssembledListing] {
+        curationListings.filter { $0.normalizedTemplateType == "hero" }
+    }
+
+    private var channelContent: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: C.sectionSpacing) {
+                ForEach(heroListings) { listing in
+                    NativeCurationListingView(listing: listing)
+                }
+
+                if !curationSections.isEmpty {
+                    sectionTabs
+                }
+
+                VStack(alignment: .leading, spacing: C.rowSpacing) {
+                    searchHeader
+
+                    if isLoading {
+                        loadingGrid
+                    } else if filteredChannels.isEmpty {
+                        emptyState
+                    } else {
+                        channelGrid
+                    }
+                }
+            }
+            .padding(.bottom, 28)
+        }
+        .refreshable {
+            C.lightHaptic()
+            await load()
+        }
+    }
+
+    private var sectionTabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(curationSections) { section in
+                    GenrePill(label: section.name, selected: selectedSectionID == section.id) {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            selectedSectionID = section.id
+                            query = ""
+                        }
+                        Task { await load() }
+                    }
+                }
+            }
+            .padding(.horizontal, C.pagePad)
+        }
+        .padding(.top, 12)
+        .background(C.bg)
     }
 
     private var searchHeader: some View {
@@ -68,42 +127,38 @@ struct ChannelsBrowseView: View {
         .clipShape(Capsule())
         .padding(.horizontal, C.pagePad)
         .padding(.vertical, 12)
-        .background(C.surface)
     }
 
+
     private var channelGrid: some View {
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.flexible())], spacing: 14) {
-                ForEach(filteredChannels) { channel in
-                    ChannelBrowseFullCard(channel: channel)
-                }
+        LazyVGrid(columns: [GridItem(.flexible())], spacing: C.gridSpacing) {
+            ForEach(filteredChannels) { channel in
+                ChannelBrowseFullCard(channel: channel)
             }
-            .padding(C.pagePad)
         }
+        .padding(.horizontal, C.pagePad)
     }
 
     private var loadingGrid: some View {
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.flexible())], spacing: 14) {
-                ForEach(0..<8, id: \.self) { _ in
-                    VStack(spacing: 0) {
-                        RoundedRectangle(cornerRadius: C.cardRadius - 2)
-                            .fill(Color.white.opacity(0.05))
-                            .frame(height: 96)
-                        RoundedRectangle(cornerRadius: C.cardRadius - 2)
-                            .fill(C.surface)
-                            .frame(height: 116)
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: C.cardRadius))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: C.cardRadius)
-                            .stroke(C.border, lineWidth: 1)
-                    }
-                    .shimmering()
+        LazyVGrid(columns: [GridItem(.flexible())], spacing: C.gridSpacing) {
+            ForEach(0..<8, id: \.self) { _ in
+                VStack(spacing: 0) {
+                    RoundedRectangle(cornerRadius: C.cardRadius - 2)
+                        .fill(Color.white.opacity(0.05))
+                        .frame(height: 96)
+                    RoundedRectangle(cornerRadius: C.cardRadius - 2)
+                        .fill(C.surface)
+                        .frame(height: 116)
                 }
+                .clipShape(RoundedRectangle(cornerRadius: C.cardRadius))
+                .overlay {
+                    RoundedRectangle(cornerRadius: C.cardRadius)
+                        .stroke(C.border, lineWidth: 1)
+                }
+                .shimmering()
             }
-            .padding(C.pagePad)
         }
+        .padding(.horizontal, C.pagePad)
     }
 
     private var emptyState: some View {
@@ -121,13 +176,56 @@ struct ChannelsBrowseView: View {
 
     @MainActor
     private func load() async {
-        isLoading = true
+        if let cachedPage = CurationManager.shared.cachedPage(key: "channels", section: selectedSectionID, allowExpired: true), cachedPage.hasCurationSurface {
+            applyCurationPage(cachedPage)
+            isLoading = false
+        } else {
+            isLoading = channels.isEmpty
+        }
+
         do {
-            channels = try await APIClient.shared.fetchChannels()
+            let page = try await CurationManager.shared.fetchPage(key: "channels", section: selectedSectionID)
+            applyCurationPage(page)
         } catch {
-            channels = []
+            if channels.isEmpty {
+                channels = []
+                curationSections = []
+                curationListings = []
+                selectedSectionID = nil
+            }
         }
         isLoading = false
+    }
+
+    @MainActor
+    private func applyCurationPage(_ page: AssembledPage) {
+        let sections = page.sortedSections
+        curationSections = sections
+        if let selectedSectionID,
+           !sections.contains(where: { $0.id == selectedSectionID }) {
+            self.selectedSectionID = sections.first?.id
+        } else if selectedSectionID == nil {
+            selectedSectionID = sections.first?.id
+        }
+        let activeListings = page.listings(forSectionID: selectedSectionID)
+        curationListings = activeListings
+        let channelListings = activeListings.filter { $0.normalizedTemplateType != "hero" }
+        let sourceItems = channelListings.isEmpty
+            ? (activeListings.isEmpty ? page.curationItems : activeListings.flatMap(\.items))
+            : channelListings.flatMap(\.items)
+        channels = sourceItems
+            .filter { $0.entityType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "channel" }
+            .map(\.asChannelBrowseCard)
+            .uniqueByID()
+    }
+}
+
+private extension Array where Element: Identifiable, Element.ID == String {
+    func uniqueByID() -> [Element] {
+        var seen = Set<String>()
+        return filter { item in
+            seen.insert(item.id).inserted
+        }
     }
 }
 
@@ -158,13 +256,12 @@ private struct ChannelBrowseFullCard: View {
             }
         }
         .buttonStyle(.plain)
-        .task { await loadFollowStatus() }
     }
 
     private var banner: some View {
         ZStack {
             if let bannerUrl = C.mediaURL(channel.bannerUrl) {
-                AsyncImage(url: bannerUrl) { image in
+                CachedRemoteImage(url: bannerUrl, targetSize: CGSize(width: UIScreen.main.bounds.width - C.pagePad * 2, height: 96)) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
                     fallbackBanner
@@ -242,7 +339,7 @@ private struct ChannelBrowseFullCard: View {
     private var avatar: some View {
         ZStack {
             if let avatarUrl = C.mediaURL(channel.avatarUrl) {
-                AsyncImage(url: avatarUrl) { image in
+                CachedRemoteImage(url: avatarUrl, targetSize: CGSize(width: 58, height: 58)) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
                     initialsCircle
@@ -280,14 +377,8 @@ private struct ChannelBrowseFullCard: View {
                 .clipShape(Capsule())
         }
         .buttonStyle(.plain)
-        .disabled(isTogglingFollow || followStatus == nil)
+        .disabled(isTogglingFollow)
         .opacity(isTogglingFollow ? 0.65 : 1)
-    }
-
-    @MainActor
-    private func loadFollowStatus() async {
-        guard auth.isAuthenticated, followStatus == nil else { return }
-        followStatus = try? await APIClient.shared.fetchChannelFollowStatus(handle: routeHandle)
     }
 
     @MainActor
@@ -295,7 +386,11 @@ private struct ChannelBrowseFullCard: View {
         guard !isTogglingFollow else { return }
         isTogglingFollow = true
         do {
+            if followStatus == nil {
+                followStatus = try? await APIClient.shared.fetchChannelFollowStatus(handle: routeHandle)
+            }
             followStatus = try await APIClient.shared.toggleChannelFollow(handle: routeHandle)
+            NotificationCenter.default.post(name: .userFollowChanged, object: nil)
         } catch {}
         isTogglingFollow = false
     }

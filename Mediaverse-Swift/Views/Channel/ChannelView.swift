@@ -1,14 +1,72 @@
 import SwiftUI
 
+@MainActor
+private enum ChannelPageRenderCache {
+    private struct Snapshot {
+        let channel: ChannelDetail
+        let followStatus: FollowStatus?
+        let shorts: [Short]?
+        let playlists: [ChannelPlaylist]?
+        let cachedAt: Date
+    }
+
+    private static let ttl: TimeInterval = 120
+    private static let maxEntries = 24
+    private static var snapshots: [String: Snapshot] = [:]
+
+    static func snapshot(for handle: String) -> (ChannelDetail, FollowStatus?, [Short]?, [ChannelPlaylist]?)? {
+        let key = cacheKey(for: handle)
+        guard let snapshot = snapshots[key] else { return nil }
+        guard Date().timeIntervalSince(snapshot.cachedAt) < ttl else {
+            snapshots[key] = nil
+            return nil
+        }
+        return (snapshot.channel, snapshot.followStatus, snapshot.shorts, snapshot.playlists)
+    }
+
+    static func store(
+        channel: ChannelDetail,
+        followStatus: FollowStatus?,
+        shorts: [Short]?,
+        playlists: [ChannelPlaylist]?,
+        handle: String
+    ) {
+        snapshots[cacheKey(for: handle)] = Snapshot(
+            channel: channel,
+            followStatus: followStatus,
+            shorts: shorts,
+            playlists: playlists,
+            cachedAt: Date()
+        )
+        pruneIfNeeded()
+    }
+
+    private static func pruneIfNeeded() {
+        guard snapshots.count > maxEntries else { return }
+        let overflow = snapshots.count - maxEntries
+        let keysToRemove = snapshots
+            .sorted { $0.value.cachedAt < $1.value.cachedAt }
+            .prefix(overflow)
+            .map(\.key)
+        keysToRemove.forEach { snapshots[$0] = nil }
+    }
+
+    private static func cacheKey(for handle: String) -> String {
+        handle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+}
+
 // MARK: - ChannelView
 
 struct ChannelView: View {
 
     let handle: String
 
+    @Environment(\.dismiss) private var dismiss
+
     @State private var channel:         ChannelDetail?
     @State private var followStatus:    FollowStatus?
-    @State private var shorts:          [ChannelDetail.VideoItem]? = nil
+    @State private var shorts:          [Short]? = nil
     @State private var playlists:       [ChannelPlaylist]?         = nil
     @State private var isLoading:       Bool  = true
     @State private var activeTab:       CTab  = .videos
@@ -16,6 +74,7 @@ struct ChannelView: View {
     @State private var followLoading:   Bool  = false
     @State private var notifyLoading:   Bool  = false
     @State private var loadError:       String?
+    @State private var imagePrefetchTask: Task<Void, Never>?
 
     enum CTab: String, CaseIterable, Identifiable {
         case videos, shorts, playlists, about
@@ -32,7 +91,7 @@ struct ChannelView: View {
 
     var isFollowing: Bool { followStatus?.subscribed ?? false }
     var notifyOn:    Bool { followStatus?.notifyOnPublish ?? true }
-    var followerCount: Int { channel?.followerCount ?? 0 }
+    var followerCount: Int { followStatus?.count ?? channel?.followerCount ?? 0 }
 
     var body: some View {
         ZStack {
@@ -47,7 +106,16 @@ struct ChannelView: View {
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
+        .enablesInteractiveSwipeBack()
         .task { await load() }
+        .onChange(of: activeTab) { _, _ in
+            if let channel { prefetchChannelImages(channel) }
+        }
+        .onDisappear {
+            imagePrefetchTask?.cancel()
+            imagePrefetchTask = nil
+        }
     }
 
     // MARK: - Main content
@@ -55,20 +123,49 @@ struct ChannelView: View {
     private func channelContent(_ ch: ChannelDetail) -> some View {
         GeometryReader { geo in
             let width = geo.size.width
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 0) {
-                    heroSection(ch, width: width)
-                    tabBar(ch, width: width)
-                    tabContent(ch)
-                        .frame(width: max(0, width - C.pagePad * 2), alignment: .topLeading)
-                        .padding(.top, 20)
-                        .padding(.bottom, 32)
+            let topInset = geo.safeAreaInsets.top
+
+            ZStack(alignment: .topLeading) {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 0) {
+                        heroSection(ch, width: width)
+                        tabBar(ch, width: width)
+                        tabContent(ch)
+                            .frame(width: max(0, width - C.pagePad * 2), alignment: .topLeading)
+                            .padding(.top, 20)
+                            .padding(.bottom, 32)
+                    }
+                    .frame(width: width, alignment: .top)
                 }
-                .frame(width: width, alignment: .top)
+                .frame(width: width)
+                .clipped()
+                .ignoresSafeArea(edges: .top)
+                .refreshable {
+                    C.lightHaptic()
+                    await load(showSpinner: false)
+                }
+
+                heroBackButton()
+                    .padding(.leading, 16)
+                    .padding(.top, max(12, topInset - 6))
             }
-            .frame(width: width)
-            .clipped()
         }
+    }
+
+    private func heroBackButton() -> some View {
+        Button {
+            dismiss()
+        } label: {
+            MediaverseIcon(name: "chevron-left", fallbackSystemName: "chevron.left")
+                .frame(width: 22, height: 22)
+                .foregroundStyle(.white)
+                .frame(width: 52, height: 52)
+                .background(.black.opacity(0.30))
+                .clipShape(Circle())
+                .overlay { Circle().stroke(.white.opacity(0.16), lineWidth: 1) }
+                .shadow(color: .black.opacity(0.35), radius: 12, y: 5)
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Hero
@@ -77,21 +174,25 @@ struct ChannelView: View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .bottomLeading) {
                 if let url = C.mediaURL(ch.bannerUrl) {
-                    AsyncImage(url: url) { img in img.resizable().scaledToFill() } placeholder: { C.surface }
-                        .frame(width: width, height: 200)
-                        .clipped()
-                        .overlay {
-                            ZStack {
-                                LinearGradient(
-                                    colors: [.black.opacity(0.92), .black.opacity(0.60), .black.opacity(0.10)],
-                                    startPoint: .leading, endPoint: .trailing
-                                )
-                                LinearGradient(
-                                    colors: [.black, .black.opacity(0.70), .black.opacity(0.20), .clear],
-                                    startPoint: .bottom, endPoint: .init(x: 0.5, y: 0.35)
-                                )
-                            }
+                    CachedRemoteImage(url: url, targetSize: CGSize(width: width, height: 200)) { img in
+                        img.resizable().scaledToFill()
+                    } placeholder: {
+                        C.surface
+                    }
+                    .frame(width: width, height: 200)
+                    .clipped()
+                    .overlay {
+                        ZStack {
+                            LinearGradient(
+                                colors: [.black.opacity(0.92), .black.opacity(0.60), .black.opacity(0.10)],
+                                startPoint: .leading, endPoint: .trailing
+                            )
+                            LinearGradient(
+                                colors: [.black, .black.opacity(0.70), .black.opacity(0.20), .clear],
+                                startPoint: .bottom, endPoint: .init(x: 0.5, y: 0.35)
+                            )
                         }
+                    }
                 } else {
                     LinearGradient(
                         colors: [C.surface, C.bg],
@@ -228,8 +329,12 @@ struct ChannelView: View {
 
     private func channelAvatar(_ ch: ChannelDetail) -> some View {
         Group {
-            if let url = ch.avatarUrl.flatMap(URL.init) {
-                AsyncImage(url: url) { img in img.resizable().scaledToFill() } placeholder: { C.surface }
+            if let url = C.mediaURL(ch.avatarUrl) {
+                CachedRemoteImage(url: url, targetSize: CGSize(width: 76, height: 76)) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: {
+                    C.surface
+                }
             } else {
                 Text(String((ch.name.first ?? "?").uppercased()))
                     .font(.system(size: 28, weight: .bold))
@@ -246,45 +351,42 @@ struct ChannelView: View {
     // MARK: - Tab bar
 
     private func tabBar(_ ch: ChannelDetail, width: CGFloat) -> some View {
-        let availableTabs: [CTab] = {
-            var tabs: [CTab] = []
-            if !ch.videos.isEmpty      { tabs.append(.videos) }
-            if shorts?.isEmpty == false || shorts == nil { tabs.append(.shorts) }
-            if playlists?.isEmpty == false || playlists == nil { tabs.append(.playlists) }
-            tabs.append(.about)
-            return tabs
-        }()
+        let availableTabs = availableTabs(for: ch)
+        let items = availableTabs.map { MediaverseTabItem(id: $0.id, label: $0.label) }
 
-        return HStack(spacing: 0) {
-            ForEach(availableTabs) { tab in
-                Button {
-                    activeTab = tab
-                } label: {
-                    Text(tab.label)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(activeTab == tab ? C.text : C.textMuted)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.82)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .overlay(alignment: .bottom) {
-                            if activeTab == tab {
-                                Rectangle()
-                                    .fill(C.watch)
-                                    .frame(height: 2)
-                                    .offset(y: 1)
-                            }
-                        }
-                }
-                .frame(maxWidth: .infinity)
+        return MediaverseUnderlineTabStrip(
+            items: items,
+            selectedID: activeTab.id,
+            fillsWidth: true,
+            verticalPadding: 10
+        ) { id in
+            guard let tab = availableTabs.first(where: { $0.id == id }) else { return }
+            withAnimation(.easeInOut(duration: 0.18)) {
+                activeTab = tab
             }
         }
-        .padding(.horizontal, C.pagePad)
         .frame(width: width)
-        .background(C.bg)
-        .overlay(alignment: .bottom) {
-            Divider().background(C.border)
-        }
+    }
+
+    private func availableTabs(for ch: ChannelDetail) -> [CTab] {
+        var tabs: [CTab] = []
+        if hasVideos(in: ch) { tabs.append(.videos) }
+        if hasShorts { tabs.append(.shorts) }
+        if hasPlaylists { tabs.append(.playlists) }
+        tabs.append(.about)
+        return tabs
+    }
+
+    private func hasVideos(in ch: ChannelDetail) -> Bool {
+        !ch.videos.isEmpty
+    }
+
+    private var hasShorts: Bool {
+        shorts?.isEmpty == false
+    }
+
+    private var hasPlaylists: Bool {
+        playlists?.contains { $0._count.items > 0 } == true
     }
 
     // MARK: - Tab content
@@ -329,12 +431,13 @@ struct ChannelView: View {
 
         case .playlists:
             if let pl = playlists {
-                if pl.isEmpty {
+                let populatedPlaylists = pl.filter { $0._count.items > 0 }
+                if populatedPlaylists.isEmpty {
                     emptyState(icon: "play.rectangle.on.rectangle", title: "No public playlists yet", sub: "")
                 } else {
                     let cols = [GridItem(.flexible(minimum: 0), spacing: 12), GridItem(.flexible(minimum: 0), spacing: 12)]
                     LazyVGrid(columns: cols, spacing: 16) {
-                        ForEach(pl) { playlist in
+                        ForEach(populatedPlaylists) { playlist in
                             NavigationLink(value: playlist.primaryRoute) {
                                 ChannelPlaylistCard(playlist: playlist)
                             }
@@ -348,6 +451,33 @@ struct ChannelView: View {
 
         case .about:
             channelAbout(ch)
+        }
+    }
+
+    private func channelTabSwipeGesture(for ch: ChannelDetail) -> some Gesture {
+        DragGesture(minimumDistance: 36, coordinateSpace: .local)
+            .onEnded { value in
+                switchChannelTab(for: value, channel: ch)
+            }
+    }
+
+    private func switchChannelTab(for value: DragGesture.Value, channel ch: ChannelDetail) {
+        let tabs = availableTabs(for: ch)
+        let horizontal = value.translation.width
+        let vertical = value.translation.height
+        let predictedHorizontal = value.predictedEndTranslation.width
+
+        guard !(value.startLocation.x <= 36 && (horizontal > 0 || predictedHorizontal > 0)),
+              abs(horizontal) > abs(vertical) * 1.4,
+              abs(horizontal) > 70 || abs(predictedHorizontal) > 120,
+              let currentIndex = tabs.firstIndex(of: activeTab)
+        else { return }
+
+        let nextIndex = horizontal < 0 ? currentIndex + 1 : currentIndex - 1
+        guard tabs.indices.contains(nextIndex) else { return }
+
+        withAnimation(.easeInOut(duration: 0.18)) {
+            activeTab = tabs[nextIndex]
         }
     }
 
@@ -407,41 +537,141 @@ struct ChannelView: View {
 
     // MARK: - Actions
 
-    private func load() async {
-        isLoading = true
+    @MainActor
+    private func load(showSpinner: Bool = true) async {
+        if showSpinner,
+           let snapshot = ChannelPageRenderCache.snapshot(for: handle) {
+            channel = snapshot.0
+            followStatus = snapshot.1
+            shorts = snapshot.2
+            playlists = snapshot.3
+            activeTab = preferredChannelTab(for: snapshot.0, preserving: activeTab)
+            isLoading = false
+        } else if showSpinner {
+            isLoading = true
+        }
         loadError = nil
 
         do {
             channel = try await APIClient.shared.fetchChannel(handle: handle)
         } catch {
-            channel = nil
-            loadError = error.localizedDescription
-            isLoading = false
+            if channel == nil {
+                loadError = error.localizedDescription
+                isLoading = false
+            }
             return
         }
 
-        // Choose initial tab based on what has content
         if let ch = channel {
-            if !ch.videos.isEmpty         { activeTab = .videos }
-            else { activeTab = .about }
+            activeTab = preferredChannelTab(for: ch, preserving: activeTab)
+            storeCurrentChannelSnapshot()
+            prefetchChannelImages(ch)
         }
         isLoading = false
         Task { await loadSecondaryChannelContent() }
     }
 
+    @MainActor
     private func loadSecondaryChannelContent() async {
+        guard let channel else { return }
+
         async let followTask = APIClient.shared.fetchChannelFollowStatus(handle: handle)
-        async let shortsTask = APIClient.shared.fetchChannelShorts(handle: handle)
+        async let shortsTask = APIClient.shared.fetchShorts(limit: 30, source: "channel", sourceId: channel.id)
         async let playlistTask = APIClient.shared.fetchChannelPlaylists(handle: handle)
 
         followStatus = try? await followTask
-        shorts = (try? await shortsTask) ?? []
+        let fetchedShorts = (try? await shortsTask)?.shorts ?? []
+        shorts = fetchedShorts.filter { short in
+            short.channelId == channel.id || short.channel?.id == channel.id
+        }
         playlists = (try? await playlistTask) ?? []
 
-        if channel?.videos.isEmpty != false {
-            if shorts?.isEmpty == false { activeTab = .shorts }
-            else if playlists?.isEmpty == false { activeTab = .playlists }
+        let nextTab = preferredChannelTab(for: channel, preserving: activeTab)
+        if nextTab != activeTab {
+            activeTab = nextTab
         }
+
+        storeCurrentChannelSnapshot()
+        prefetchChannelImages(channel)
+    }
+
+    @MainActor
+    private func storeCurrentChannelSnapshot() {
+        guard let channel else { return }
+        ChannelPageRenderCache.store(
+            channel: channel,
+            followStatus: followStatus,
+            shorts: shorts,
+            playlists: playlists,
+            handle: handle
+        )
+    }
+
+    private func prefetchChannelImages(_ channel: ChannelDetail) {
+        imagePrefetchTask?.cancel()
+
+        let heroURLs = [channel.bannerUrl, channel.avatarUrl]
+            .compactMap { C.mediaURL($0) }
+        let payload = channelImagePrefetchPayload(for: activeTab, channel: channel)
+
+        imagePrefetchTask = Task(priority: .utility) {
+            if Task.isCancelled { return }
+            await RemoteImageCache.shared.prefetch(
+                urls: heroURLs,
+                targetPixelSize: nil,
+                limit: 2,
+                concurrency: 2
+            )
+            if Task.isCancelled { return }
+            await RemoteImageCache.shared.prefetch(
+                urls: payload.urls,
+                targetPixelSize: payload.targetSize,
+                limit: payload.limit,
+                concurrency: 2
+            )
+        }
+    }
+
+    private func channelImagePrefetchPayload(for tab: CTab, channel: ChannelDetail) -> (urls: [URL], targetSize: CGSize?, limit: Int) {
+        switch tab {
+        case .videos:
+            return (
+                channel.videos.prefix(6).compactMap { C.mediaURL($0.thumbnailUrl) },
+                CGSize(width: 220, height: 124),
+                6
+            )
+        case .shorts:
+            return (
+                (shorts ?? []).prefix(6).compactMap { C.mediaURL($0.thumbnailUrl) },
+                CGSize(width: 180, height: 320),
+                6
+            )
+        case .playlists:
+            let urls = (playlists ?? [])
+                .filter { $0._count.items > 0 }
+                .prefix(4)
+                .flatMap { $0.items.prefix(2).compactMap { C.mediaURL($0.video?.thumbnailUrl) } }
+            return (Array(urls), CGSize(width: 120, height: 68), 8)
+        case .about:
+            return ([], nil, 0)
+        }
+    }
+
+    private func preferredChannelTab(for channel: ChannelDetail, preserving current: CTab? = nil) -> CTab {
+        let tabs = availableTabs(for: channel)
+        if let current, tabs.contains(current), current != .about {
+            return current
+        }
+        if tabs.contains(.videos) {
+            return .videos
+        }
+        if tabs.contains(.shorts) {
+            return .shorts
+        }
+        if tabs.contains(.playlists) {
+            return .playlists
+        }
+        return .about
     }
 
     private var loadFailureView: some View {
@@ -477,6 +707,8 @@ struct ChannelView: View {
         followLoading = true
         do {
             followStatus = try await APIClient.shared.toggleChannelFollow(handle: ch.handle)
+            storeCurrentChannelSnapshot()
+            NotificationCenter.default.post(name: .userFollowChanged, object: nil)
         } catch {}
         followLoading = false
     }
@@ -487,6 +719,7 @@ struct ChannelView: View {
         do {
             try await APIClient.shared.setChannelNotify(handle: ch.handle, on: !notifyOn)
             followStatus = FollowStatus(subscribed: isFollowing, count: followerCount, notifyOnPublish: !notifyOn)
+            storeCurrentChannelSnapshot()
         } catch {}
         notifyLoading = false
     }
@@ -515,17 +748,37 @@ struct ChannelView: View {
 
 private struct ChannelVideoCard: View {
     let video: ChannelDetail.VideoItem
+    var isLocked: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ZStack(alignment: .bottomTrailing) {
-                AsyncImage(url: C.mediaURL(video.thumbnailUrl)) { img in
+            ZStack {
+                CachedRemoteImage(url: C.mediaURL(video.thumbnailUrl), targetSize: CGSize(width: 220, height: 124)) { img in
                     img.resizable().scaledToFill()
                 } placeholder: { C.surface }
                 .frame(maxWidth: .infinity)
-                .aspectRatio(16/9, contentMode: .fit)
+                .aspectRatio(C.mediaAspectRatio(forContentType: "video"), contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .clipped()
+
+                if isLocked {
+                    Color.black.opacity(0.50)
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(.black.opacity(0.62))
+                        .clipShape(Circle())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                        .padding(6)
+                } else {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(.black.opacity(0.42))
+                        .clipShape(Circle())
+                }
 
                 if let dur = video.duration {
                     Text(fmtDuration(dur))
@@ -535,8 +788,10 @@ private struct ChannelVideoCard: View {
                         .background(.black.opacity(0.70))
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                         .padding(6)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 8))
 
             Text(video.title)
                 .font(.caption.weight(.semibold))
@@ -586,26 +841,62 @@ private struct ChannelVideoCard: View {
 // MARK: - ChannelShortCard
 
 private struct ChannelShortCard: View {
-    let video: ChannelDetail.VideoItem
+    let video: Short
+    var isLocked: Bool = false
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            AsyncImage(url: C.mediaURL(video.thumbnailUrl)) { img in
-                img.resizable().scaledToFill()
-            } placeholder: { C.surface }
-            .frame(maxWidth: .infinity)
-            .aspectRatio(16/9, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .clipped()
+        VStack(alignment: .leading, spacing: 6) {
+            ZStack {
+                CachedRemoteImage(url: C.mediaURL(video.thumbnailUrl), targetSize: CGSize(width: 180, height: 320)) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: { C.surface }
+                .frame(maxWidth: .infinity)
+                .aspectRatio(C.mediaAspectRatio(forContentType: "short"), contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .clipped()
 
-            if let dur = video.duration {
-                Text(fmtDuration(dur))
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 5).padding(.vertical, 2)
-                    .background(.black.opacity(0.70))
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
-                    .padding(5)
+                if isLocked {
+                    Color.black.opacity(0.50)
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(.black.opacity(0.62))
+                        .clipShape(Circle())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                        .padding(6)
+                } else {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(.black.opacity(0.42))
+                        .clipShape(Circle())
+                }
+
+                if let dur = video.duration {
+                    Text(fmtDuration(dur))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(.black.opacity(0.70))
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                        .padding(5)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            Text(video.title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(C.text)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+
+            if video.views > 0 {
+                Text("\(fmtCount(video.views)) views")
+                    .font(.caption2)
+                    .foregroundStyle(C.textMuted)
             }
         }
     }
@@ -613,6 +904,12 @@ private struct ChannelShortCard: View {
     private func fmtDuration(_ s: Double) -> String {
         let m = Int(s) / 60; let sec = Int(s) % 60
         return String(format: "%d:%02d", m, sec)
+    }
+
+    private func fmtCount(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
+        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) }
+        return "\(n)"
     }
 }
 
@@ -630,7 +927,7 @@ private struct ChannelPlaylistCard: View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .bottomTrailing) {
                 mosaicThumbnail
-                    .aspectRatio(16/9, contentMode: .fill)
+                    .aspectRatio(C.mediaAspectRatio(forContentType: playlist.type), contentMode: .fill)
                     .frame(maxWidth: .infinity)
                     .clipped()
 
@@ -643,7 +940,7 @@ private struct ChannelPlaylistCard: View {
                 playlistCountBadge
                     .padding(8)
             }
-            .aspectRatio(16/9, contentMode: .fit)
+            .aspectRatio(C.mediaAspectRatio(forContentType: playlist.type), contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay { RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.08), lineWidth: 1) }
 
@@ -722,7 +1019,7 @@ private struct ChannelPlaylistCard: View {
     }
 
     private func mosaicImage(_ url: String) -> some View {
-        AsyncImage(url: C.mediaURL(url)) { img in
+        CachedRemoteImage(url: C.mediaURL(url), targetSize: CGSize(width: 120, height: 68)) { img in
             img.resizable().scaledToFill()
         } placeholder: {
             C.surface

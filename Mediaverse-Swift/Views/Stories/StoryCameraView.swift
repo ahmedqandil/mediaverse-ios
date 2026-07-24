@@ -3,6 +3,9 @@ import CoreTransferable
 import PhotosUI
 import SwiftUI
 import UIKit
+#if canImport(MetalPetal)
+import MetalPetal
+#endif
 
 private struct PickedStoryCameraVideo: Transferable {
     let url: URL
@@ -48,6 +51,9 @@ struct StoryCameraView: View {
     @State private var isPickingLibrary = false
     @State private var librarySelection: PhotosPickerItem?
     @State private var showPermissionAlert = false
+    @State private var capturePreviewPlayer: AVQueuePlayer?
+    @State private var capturePreviewLooper: AVPlayerLooper?
+    @State private var capturePreviewAdjustments: ColorAdjust = .neutral
 
     private var remainingDuration: Double {
         max(0, maxDuration - controller.totalRecordedDuration)
@@ -62,33 +68,72 @@ struct StoryCameraView: View {
         controller.isRecording ? "Release to stop" : "Tap photo · hold video"
     }
 
+    private var windowBounds: CGRect {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first { $0.isKeyWindow }?
+            .bounds ?? UIScreen.main.bounds
+    }
+
+    private var windowSafeAreaInsets: UIEdgeInsets {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first { $0.isKeyWindow }?
+            .safeAreaInsets ?? .zero
+    }
+
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            cameraPreview
+        GeometryReader { proxy in
+            let viewport = windowBounds.size == .zero ? proxy.size : windowBounds.size
+            let safeInsets = windowSafeAreaInsets
+            let compact = viewport.height < 720
+            let horizontalPadding: CGFloat = viewport.width < 380 ? 12 : 18
+            let topPadding = max(safeInsets.top + 6, compact ? 10 : 12)
+            let bottomPadding = max(safeInsets.bottom + (compact ? 8 : 14), compact ? 14 : 22)
 
-            if controller.showGrid {
-                storyCameraGrid
-                    .allowsHitTesting(false)
-            }
-
-            VStack(spacing: 0) {
-                topBar
-                Spacer()
-                if let countdownValue {
-                    Text("\(countdownValue)")
-                        .font(.system(size: 72, weight: .bold))
-                        .foregroundStyle(.white)
-                        .shadow(radius: 8)
-                        .transition(.scale.combined(with: .opacity))
+            ZStack {
+                Color.black.ignoresSafeArea()
+                if let capturePreviewPlayer, !controller.isRecording {
+                    StoryCameraLoopingVideoLayer(player: capturePreviewPlayer)
+                        .storyCameraColorGrade(capturePreviewAdjustments)
+                        .ignoresSafeArea()
+                        .zIndex(0)
+                } else {
+                    cameraPreview
+                        .zIndex(0)
                 }
-                Spacer()
-                bottomControls
+
+                if controller.showGrid {
+                    storyCameraGrid
+                        .allowsHitTesting(false)
+                        .zIndex(1)
+                }
+
+                VStack(spacing: 0) {
+                    topBar(compact: compact)
+                    Spacer(minLength: compact ? 18 : 28)
+                    if let countdownValue {
+                        Text("\(countdownValue)")
+                            .font(.system(size: compact ? 60 : 72, weight: .bold))
+                            .foregroundStyle(.white)
+                            .shadow(radius: 8)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                    Spacer(minLength: compact ? 18 : 28)
+                    bottomControls(compact: compact)
+                }
+                .padding(.horizontal, horizontalPadding)
+                .padding(.top, topPadding)
+                .padding(.bottom, bottomPadding)
+                .frame(width: viewport.width, height: viewport.height)
+                .zIndex(2)
             }
-            .padding(.horizontal, 18)
-            .padding(.top, 12)
-            .padding(.bottom, 22)
+            .frame(width: viewport.width, height: viewport.height)
+            .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
         }
+        .ignoresSafeArea()
         .task {
             let granted = await controller.prepare()
             if !granted { showPermissionAlert = true }
@@ -96,7 +141,11 @@ struct StoryCameraView: View {
         .onDisappear {
             shutterPressTask?.cancel()
             countdownTask?.cancel()
+            clearCapturePreview()
             controller.stopSession()
+        }
+        .onChange(of: controller.lastCapturedPreviewSegment) { _, segment in
+            showCapturePreview(segment)
         }
         .alert("Camera access needed", isPresented: $showPermissionAlert) {
             Button("Settings") { controller.openSettings() }
@@ -118,8 +167,14 @@ struct StoryCameraView: View {
 
     private var cameraPreview: some View {
         GeometryReader { proxy in
-            CameraPreviewView(session: controller.session)
-                .contentShape(Rectangle())
+            ZStack {
+                CameraPreviewView(session: controller.session)
+                if controller.isLiveFilterActive {
+                    MetalPetalCameraPreviewView(controller: controller)
+                        .allowsHitTesting(false)
+                }
+            }
+            .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onEnded { value in
@@ -139,12 +194,15 @@ struct StoryCameraView: View {
         .ignoresSafeArea()
     }
 
-    private var topBar: some View {
-        HStack(spacing: 12) {
-            Button(action: onCancel) {
+    private func topBar(compact: Bool) -> some View {
+        let buttonSize: CGFloat = compact ? 36 : 38
+        let spacing: CGFloat = compact ? 10 : 12
+
+        return HStack(spacing: spacing) {
+            Button(action: closeCamera) {
                 Image(systemName: "xmark")
                     .font(.system(size: 15, weight: .bold))
-                    .frame(width: 38, height: 38)
+                    .frame(width: buttonSize, height: buttonSize)
                     .background(.black.opacity(0.42))
                     .clipShape(Circle())
             }
@@ -152,26 +210,28 @@ struct StoryCameraView: View {
 
             Spacer()
 
-            controlButton(icon: "photo.on.rectangle.angled") {
+            controlButton(icon: "photo.on.rectangle.angled", size: buttonSize) {
                 isPickingLibrary = true
             }
             .disabled(controller.isRecording)
             .opacity(controller.isRecording ? 0.35 : 1)
 
-            controlButton(icon: controller.showGrid ? "square.grid.3x3.fill" : "square.grid.3x3") {
+            controlButton(icon: controller.showGrid ? "square.grid.3x3.fill" : "square.grid.3x3", size: buttonSize) {
                 controller.showGrid.toggle()
             }
-            controlButton(icon: controller.torchMode == .off ? "bolt.slash" : "bolt.fill") {
+            controlButton(icon: controller.torchMode == .off ? "bolt.slash" : "bolt.fill", size: buttonSize) {
                 controller.toggleTorch()
             }
-            controlButton(icon: "arrow.triangle.2.circlepath.camera") {
+            controlButton(icon: "arrow.triangle.2.circlepath.camera", size: buttonSize) {
                 Task { await controller.flipCamera() }
             }
         }
     }
 
-    private var bottomControls: some View {
-        VStack(spacing: 16) {
+    private func bottomControls(compact: Bool) -> some View {
+        let buttonSize: CGFloat = compact ? 48 : 52
+
+        return VStack(spacing: compact ? 12 : 16) {
             if let errorText = controller.errorText {
                 Text(errorText)
                     .font(.system(size: 12, weight: .semibold))
@@ -183,6 +243,10 @@ struct StoryCameraView: View {
                     .clipShape(Capsule())
             }
 
+            cameraFilterPicker(compact: compact)
+                .disabled(controller.isRecording)
+                .opacity(controller.isRecording ? 0.45 : 1)
+
             HStack(alignment: .center) {
                 if controller.segments.isEmpty {
                     Button {
@@ -190,7 +254,7 @@ struct StoryCameraView: View {
                     } label: {
                         Image(systemName: "photo.on.rectangle.angled")
                             .font(.system(size: 17, weight: .bold))
-                            .frame(width: 52, height: 52)
+                            .frame(width: buttonSize, height: buttonSize)
                             .background(.black.opacity(0.42))
                             .clipShape(Circle())
                     }
@@ -200,10 +264,11 @@ struct StoryCameraView: View {
                 } else {
                     Button {
                         controller.deleteLastSegment()
+                        showCapturePreview(controller.lastCapturedPreviewSegment)
                     } label: {
                         Image(systemName: "arrow.uturn.backward")
                             .font(.system(size: 17, weight: .bold))
-                            .frame(width: 52, height: 52)
+                            .frame(width: buttonSize, height: buttonSize)
                             .background(.black.opacity(0.42))
                             .clipShape(Circle())
                     }
@@ -214,7 +279,7 @@ struct StoryCameraView: View {
 
                 Spacer()
 
-                shutterButton
+                shutterButton(compact: compact)
                     .disabled(countdownValue != nil || remainingDuration <= 0)
                     .opacity(remainingDuration <= 0 ? 0.5 : 1)
 
@@ -225,7 +290,7 @@ struct StoryCameraView: View {
                 } label: {
                     Image(systemName: "checkmark")
                         .font(.system(size: 18, weight: .bold))
-                        .frame(width: 52, height: 52)
+                        .frame(width: buttonSize, height: buttonSize)
                         .background(controller.segments.isEmpty ? Color.white.opacity(0.14) : C.watch)
                         .foregroundStyle(controller.segments.isEmpty ? .white.opacity(0.55) : .black)
                         .clipShape(Circle())
@@ -234,6 +299,32 @@ struct StoryCameraView: View {
             }
             .foregroundStyle(.white)
         }
+    }
+
+    private func cameraFilterPicker(compact: Bool) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: compact ? 7 : 9) {
+                ForEach(StoryEffectCatalog.presets) { preset in
+                    Button {
+                        controller.selectFilter(preset)
+                    } label: {
+                        Text(preset.name)
+                            .font(.system(size: compact ? 11 : 12, weight: .bold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .foregroundStyle(controller.selectedFilterId == preset.id ? .black : .white)
+                            .padding(.horizontal, compact ? 10 : 12)
+                            .frame(height: compact ? 30 : 34)
+                            .background(controller.selectedFilterId == preset.id ? C.watch : Color.black.opacity(0.42))
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Use \(preset.name) filter")
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+        .frame(height: compact ? 32 : 36)
     }
 
     private var storyCameraGrid: some View {
@@ -252,23 +343,31 @@ struct StoryCameraView: View {
         }
     }
 
-    private var shutterButton: some View {
-        VStack(spacing: 7) {
+    private func shutterButton(compact: Bool) -> some View {
+        let outerSize: CGFloat = compact ? 84 : 92
+        let ringSize: CGFloat = compact ? 70 : 78
+        let idleSize: CGFloat = compact ? 56 : 62
+        let recordingSize: CGFloat = compact ? 38 : 42
+
+        return VStack(spacing: compact ? 5 : 7) {
             ZStack {
                 Circle()
                     .stroke(.white.opacity(0.35), lineWidth: 5)
-                    .frame(width: 92, height: 92)
+                    .frame(width: outerSize, height: outerSize)
                 Circle()
                     .trim(from: 0, to: shutterProgress)
                     .stroke(C.watch, style: StrokeStyle(lineWidth: 5, lineCap: .round))
                     .rotationEffect(.degrees(-90))
-                    .frame(width: 92, height: 92)
+                    .frame(width: outerSize, height: outerSize)
                 Circle()
                     .stroke(.white, lineWidth: 3)
-                    .frame(width: 78, height: 78)
+                    .frame(width: ringSize, height: ringSize)
                 Circle()
                     .fill(controller.isRecording ? Color.red : Color.white)
-                    .frame(width: controller.isRecording ? 42 : 62, height: controller.isRecording ? 42 : 62)
+                    .frame(
+                        width: controller.isRecording ? recordingSize : idleSize,
+                        height: controller.isRecording ? recordingSize : idleSize
+                    )
                     .animation(.spring(response: 0.25, dampingFraction: 0.72), value: controller.isRecording)
             }
             .contentShape(Circle())
@@ -288,11 +387,11 @@ struct StoryCameraView: View {
         }
     }
 
-    private func controlButton(icon: String, action: @escaping () -> Void) -> some View {
+    private func controlButton(icon: String, size: CGFloat = 38, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 15, weight: .bold))
-                .frame(width: 38, height: 38)
+                .frame(width: size, height: size)
                 .background(.black.opacity(0.42))
                 .clipShape(Circle())
         }
@@ -335,11 +434,27 @@ struct StoryCameraView: View {
         controller.capturePhoto { result in
             switch result {
             case .success(let photo):
-                onPhoto(photo.data, photo.image)
+                let filteredImage = StoryFrameFilterRenderer.renderImage(
+                    photo.image,
+                    filterId: controller.selectedFilterId,
+                    adjustments: controller.selectedAdjustments
+                )
+                let filteredData = filteredImage.jpegData(compressionQuality: 0.92) ?? photo.data
+                onPhoto(filteredData, filteredImage)
             case .failure(let error):
                 controller.errorText = error.localizedDescription
             }
         }
+    }
+
+    private func closeCamera() {
+        shutterPressTask?.cancel()
+        countdownTask?.cancel()
+        shutterPressActive = false
+        shutterLongPressStarted = false
+        clearCapturePreview()
+        controller.stopSession()
+        onCancel()
     }
 
     private func handleLibrarySelection(_ item: PhotosPickerItem) async {
@@ -374,7 +489,41 @@ struct StoryCameraView: View {
 
     private func startRecordingFromShutter() {
         guard !controller.isRecording, remainingDuration > 0 else { return }
+        clearCapturePreview()
         controller.startRecording(maxDuration: remainingDuration, speed: 1)
+    }
+
+    private func showCapturePreview(_ segment: StoryCapturedSegment?) {
+        guard let segment else {
+            clearCapturePreview()
+            return
+        }
+        let asset = AVURLAsset(url: segment.url)
+        let item = AVPlayerItem(asset: asset)
+        if StoryFrameFilterRenderer.hasActiveFilter(filterId: segment.filterId, adjustments: segment.adjustments) {
+            item.videoComposition = AVVideoComposition(asset: asset) { request in
+                let output = StoryFrameFilterRenderer.filteredCIImage(
+                    request.sourceImage,
+                    filterId: segment.filterId,
+                    adjustments: segment.adjustments
+                ) ?? request.sourceImage
+                request.finish(with: output, context: nil)
+            }
+        }
+        let player = AVQueuePlayer()
+        player.actionAtItemEnd = .none
+        player.isMuted = true
+        capturePreviewAdjustments = .neutral
+        capturePreviewLooper = AVPlayerLooper(player: player, templateItem: item)
+        capturePreviewPlayer = player
+        player.play()
+    }
+
+    private func clearCapturePreview() {
+        capturePreviewPlayer?.pause()
+        capturePreviewLooper = nil
+        capturePreviewPlayer = nil
+        capturePreviewAdjustments = .neutral
     }
 
 }
@@ -412,37 +561,141 @@ private final class PreviewView: UIView {
     var videoPreviewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
 }
 
+private struct StoryCameraLoopingVideoLayer: UIViewRepresentable {
+    let player: AVPlayer
+
+    func makeUIView(context: Context) -> PlayerView {
+        let view = PlayerView()
+        view.playerLayer.player = player
+        view.playerLayer.videoGravity = .resizeAspectFill
+        return view
+    }
+
+    func updateUIView(_ uiView: PlayerView, context: Context) {
+        uiView.playerLayer.player = player
+    }
+
+    static func dismantleUIView(_ uiView: PlayerView, coordinator: ()) {
+        uiView.playerLayer.player = nil
+    }
+}
+
+private final class PlayerView: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+}
+
+private struct StoryCameraColorGradeModifier: ViewModifier {
+    let adjustments: ColorAdjust
+
+    func body(content: Content) -> some View {
+        content
+            .brightness(Double(adjustments.brightness))
+            .contrast(Double(adjustments.contrast))
+            .saturation(Double(adjustments.saturation))
+            .overlay {
+                if adjustments.warmth != 0 {
+                    let warmColor = adjustments.warmth > 0 ? Color.orange : Color.blue
+                    warmColor
+                        .opacity(min(abs(Double(adjustments.warmth)) * 0.18, 0.22))
+                        .blendMode(.softLight)
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay {
+                if adjustments.vignette > 0 {
+                    RadialGradient(
+                        colors: [.clear, .black.opacity(min(Double(adjustments.vignette) * 0.85, 0.5))],
+                        center: .center,
+                        startRadius: 120,
+                        endRadius: 520
+                    )
+                    .blendMode(.multiply)
+                    .allowsHitTesting(false)
+                }
+            }
+    }
+}
+
+private extension View {
+    func storyCameraColorGrade(_ adjustments: ColorAdjust) -> some View {
+        modifier(StoryCameraColorGradeModifier(adjustments: adjustments))
+    }
+}
+
+#if canImport(MetalPetal)
+private struct MetalPetalCameraPreviewView: UIViewRepresentable {
+    let controller: StoryCameraController
+
+    func makeUIView(context: Context) -> MTIThreadSafeImageView {
+        let view = MTIThreadSafeImageView(frame: .zero)
+        view.automaticallyCreatesContext = true
+        view.contentMode = .scaleAspectFill
+        view.isOpaque = true
+        controller.setFilteredPreviewView(view)
+        return view
+    }
+
+    func updateUIView(_ uiView: MTIThreadSafeImageView, context: Context) {
+        controller.setFilteredPreviewView(uiView)
+    }
+
+    static func dismantleUIView(_ uiView: MTIThreadSafeImageView, coordinator: ()) {
+        uiView.image = nil
+    }
+}
+#else
+private struct MetalPetalCameraPreviewView: View {
+    let controller: StoryCameraController
+    var body: some View { EmptyView() }
+}
+#endif
+
 final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendable {
     let session = AVCaptureSession()
     @Published private(set) var isRecording = false
     @Published private(set) var segments: [StoryCapturedSegment] = []
+    @Published private(set) var lastCapturedPreviewSegment: StoryCapturedSegment?
     @Published private(set) var exposureBias: Float = 0
+    @Published private(set) var selectedFilterId: String? = StoryEffectCatalog.presets.first?.id
+    @Published private(set) var selectedAdjustments: ColorAdjust = StoryEffectCatalog.presets.first?.adjustments ?? .neutral
     @Published var showGrid = false
     @Published var errorText: String?
     @Published private(set) var torchMode: AVCaptureDevice.TorchMode = .off
 
     private let sessionQueue = DispatchQueue(label: "com.westreem.story.camera.session")
-    private let writerQueue = DispatchQueue(label: "com.westreem.story.camera.writer")
+    private let videoOutputQueue = DispatchQueue(label: "com.westreem.story.camera.video-output", qos: .userInteractive)
     private let videoOutput = AVCaptureVideoDataOutput()
-    private let audioOutput = AVCaptureAudioDataOutput()
+    private let movieOutput = AVCaptureMovieFileOutput()
     private let photoOutput = AVCapturePhotoOutput()
     private var videoInput: AVCaptureDeviceInput?
     private var audioInput: AVCaptureDeviceInput?
+    #if canImport(MetalPetal)
+    private weak var filteredPreviewView: MTIThreadSafeImageView?
+    #endif
     private var currentPosition: AVCaptureDevice.Position = .back
     private var baseZoomFactor: CGFloat = 1
 
-    private var writer: AVAssetWriter?
-    private var writerVideoInput: AVAssetWriterInput?
-    private var writerAudioInput: AVAssetWriterInput?
     private var outputURL: URL?
-    private var startTime: CMTime?
+    private var pendingSegmentDuration: Double = 0
+    private var pendingSegmentSpeed: Double = 1
+    private var pendingSegmentFilterId: String?
+    private var pendingSegmentAdjustments: ColorAdjust = .neutral
     private var segmentTimer: Task<Void, Never>?
     private var currentSegmentMaxDuration: Double = 0
     private var currentSegmentSpeed: Double = 1
     private var pendingPhotoCompletion: ((Result<(data: Data, image: UIImage), Error>) -> Void)?
+    private var isSessionConfigured = false
+    private var isVideoOutputAttached = false
+    private var lastFilteredPreviewUpdateTime: TimeInterval = 0
+    private let preferredFilteredPreviewFrameRate: Double = 30
 
     var totalRecordedDuration: Double {
         segments.reduce(0) { $0 + $1.duration } + currentRecordingDuration
+    }
+
+    var isLiveFilterActive: Bool {
+        selectedFilterId != StoryEffectCatalog.presets.first?.id || selectedAdjustments != .neutral
     }
 
     private var currentRecordingDuration: Double = 0 {
@@ -453,7 +706,9 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
         let cameraGranted = await requestAccess(for: .video)
         let microphoneGranted = await requestAccess(for: .audio)
         guard cameraGranted, microphoneGranted else { return false }
-        await configureSession()
+        if !isSessionConfigured {
+            await configureSession()
+        }
         startSession()
         return true
     }
@@ -471,6 +726,23 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
         }
     }
 
+    #if canImport(MetalPetal)
+    func setFilteredPreviewView(_ view: MTIThreadSafeImageView) {
+        filteredPreviewView = view
+    }
+    #endif
+
+    func selectFilter(_ preset: StoryEffectPreset) {
+        guard !isRecording else { return }
+        selectedFilterId = preset.id
+        selectedAdjustments = preset.adjustments
+        let shouldEnableLivePreview = isLiveFilterActive
+        setFilteredPreviewOutputEnabled(shouldEnableLivePreview)
+        if !shouldEnableLivePreview {
+            clearFilteredPreview()
+        }
+    }
+
     func capturePhoto(
         completion: @escaping (Result<(data: Data, image: UIImage), Error>) -> Void
     ) {
@@ -478,6 +750,7 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
         errorText = nil
         pendingPhotoCompletion = completion
         let settings = AVCapturePhotoSettings()
+        settings.photoQualityPrioritization = .speed
         if let connection = photoOutput.connection(with: .video) {
             connection.setStoryPortraitOrientation()
             connection.isVideoMirrored = currentPosition == .front && connection.isVideoMirroringSupported
@@ -491,46 +764,28 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
         currentRecordingDuration = 0
         currentSegmentMaxDuration = maxDuration
         currentSegmentSpeed = min(max(speed, 0.5), 2)
-        startTime = nil
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("story-camera-\(UUID().uuidString)")
             .appendingPathExtension("mov")
         outputURL = url
 
-        writerQueue.async { [weak self] in
+        sessionQueue.async { [weak self] in
             guard let self else { return }
-            do {
-                if FileManager.default.fileExists(atPath: url.path) {
-                    try FileManager.default.removeItem(at: url)
-                }
-                let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
-                let videoSettings: [String: Any] = [
-                    AVVideoCodecKey: AVVideoCodecType.h264,
-                    AVVideoWidthKey: 1080,
-                    AVVideoHeightKey: 1920,
-                    AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 8_000_000]
-                ]
-                let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
-                videoInput.expectsMediaDataInRealTime = true
-
-                let audioSettings: [String: Any] = [
-                    AVFormatIDKey: kAudioFormatMPEG4AAC,
-                    AVNumberOfChannelsKey: 2,
-                    AVSampleRateKey: 44_100,
-                    AVEncoderBitRateKey: 128_000
-                ]
-                let audioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
-                audioInput.expectsMediaDataInRealTime = true
-
-                if writer.canAdd(videoInput) { writer.add(videoInput) }
-                if writer.canAdd(audioInput) { writer.add(audioInput) }
-                self.writer = writer
-                self.writerVideoInput = videoInput
-                self.writerAudioInput = audioInput
-                writer.startWriting()
-            } catch {
-                Task { @MainActor in self.isRecording = false }
+            if FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.removeItem(at: url)
             }
+            guard self.session.isRunning, !self.movieOutput.isRecording else {
+                Task { @MainActor in
+                    self.isRecording = false
+                    self.errorText = "Camera is not ready yet. Try again."
+                }
+                return
+            }
+            if let connection = self.movieOutput.connection(with: .video) {
+                connection.setStoryPortraitOrientation()
+                connection.isVideoMirrored = self.currentPosition == .front && connection.isVideoMirroringSupported
+            }
+            self.movieOutput.startRecording(to: url, recordingDelegate: self)
         }
 
         segmentTimer?.cancel()
@@ -556,32 +811,16 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
         isRecording = false
         segmentTimer?.cancel()
         segmentTimer = nil
-        let duration = min(max(currentRecordingDuration, 0.1), currentSegmentMaxDuration)
-        let speed = currentSegmentSpeed
+        pendingSegmentDuration = min(max(currentRecordingDuration, 0.1), currentSegmentMaxDuration)
+        pendingSegmentSpeed = currentSegmentSpeed
+        pendingSegmentFilterId = selectedFilterId
+        pendingSegmentAdjustments = selectedAdjustments
         currentRecordingDuration = 0
 
-        writerQueue.async { [weak self] in
+        sessionQueue.async { [weak self] in
             guard let self else { return }
-            let writer = self.writer
-            let outputURL = self.outputURL
-            self.writerVideoInput?.markAsFinished()
-            self.writerAudioInput?.markAsFinished()
-            self.writer = nil
-            self.writerVideoInput = nil
-            self.writerAudioInput = nil
-            self.outputURL = nil
-            self.startTime = nil
-            writer?.finishWriting {
-                guard writer?.status == .completed, let outputURL else { return }
-                Task { @MainActor in
-                    self.segments.append(StoryCapturedSegment(
-                        url: outputURL,
-                        duration: duration,
-                        speed: speed,
-                        filterId: nil,
-                        adjustments: .neutral
-                    ))
-                }
+            if self.movieOutput.isRecording {
+                self.movieOutput.stopRecording()
             }
         }
     }
@@ -589,12 +828,14 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
     func deleteLastSegment() {
         guard !isRecording, let segment = segments.popLast() else { return }
         try? FileManager.default.removeItem(at: segment.url)
+        lastCapturedPreviewSegment = segments.last
     }
 
     func flipCamera() async {
         guard !isRecording else { return }
         currentPosition = currentPosition == .back ? .front : .back
         exposureBias = 0
+        isSessionConfigured = false
         await configureSession()
     }
 
@@ -665,6 +906,39 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
         UIApplication.shared.open(url)
     }
 
+    private func clearFilteredPreview() {
+        #if canImport(MetalPetal)
+        filteredPreviewView?.image = nil
+        #endif
+    }
+
+    private func updateFilteredPreviewIfNeeded(sampleBuffer: CMSampleBuffer) {
+        guard isLiveFilterActive else {
+            clearFilteredPreview()
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        let minimumInterval = 1.0 / preferredFilteredPreviewFrameRate
+        guard now - lastFilteredPreviewUpdateTime >= minimumInterval else { return }
+        lastFilteredPreviewUpdateTime = now
+        updateFilteredPreview(sampleBuffer: sampleBuffer)
+    }
+
+    private func updateFilteredPreview(sampleBuffer: CMSampleBuffer) {
+        #if canImport(MetalPetal)
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
+              let image = MetalPetalStoryFilterProcessor.shared.livePreviewImage(
+                from: pixelBuffer,
+                filterId: selectedFilterId,
+                adjustments: selectedAdjustments
+              ) else {
+            clearFilteredPreview()
+            return
+        }
+        filteredPreviewView?.image = image
+        #endif
+    }
+
     private func requestAccess(for mediaType: AVMediaType) async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: mediaType) {
         case .authorized:
@@ -684,13 +958,18 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
                     return
                 }
                 self.session.beginConfiguration()
-                self.session.sessionPreset = .hd1920x1080
+                if self.session.canSetSessionPreset(.hd1280x720) {
+                    self.session.sessionPreset = .hd1280x720
+                } else {
+                    self.session.sessionPreset = .high
+                }
                 self.session.inputs.forEach { self.session.removeInput($0) }
                 self.session.outputs.forEach { self.session.removeOutput($0) }
 
                 if let videoDevice = Self.captureDevice(position: self.currentPosition),
                    let videoInput = try? AVCaptureDeviceInput(device: videoDevice),
                    self.session.canAddInput(videoInput) {
+                    Self.configurePreferredFrameRate(on: videoDevice, frameRate: 30)
                     self.session.addInput(videoInput)
                     self.videoInput = videoInput
                 }
@@ -703,31 +982,52 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
                 }
 
                 self.videoOutput.alwaysDiscardsLateVideoFrames = true
-                self.videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
-                self.videoOutput.setSampleBufferDelegate(self, queue: self.writerQueue)
-                if self.session.canAddOutput(self.videoOutput) {
-                    self.session.addOutput(self.videoOutput)
-                }
-                if let connection = self.videoOutput.connection(with: .video) {
-                    connection.setStoryPortraitOrientation()
-                    connection.isVideoMirrored = self.currentPosition == .front && connection.isVideoMirroringSupported
-                }
+                self.videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange]
+                self.videoOutput.setSampleBufferDelegate(self, queue: self.videoOutputQueue)
+                self.isVideoOutputAttached = false
 
-                self.audioOutput.setSampleBufferDelegate(self, queue: self.writerQueue)
-                if self.session.canAddOutput(self.audioOutput) {
-                    self.session.addOutput(self.audioOutput)
+                if self.session.canAddOutput(self.movieOutput) {
+                    self.session.addOutput(self.movieOutput)
+                    self.movieOutput.movieFragmentInterval = .invalid
+                    self.movieOutput.maxRecordedDuration = .invalid
                 }
 
                 if self.session.canAddOutput(self.photoOutput) {
                     self.session.addOutput(self.photoOutput)
+                    self.photoOutput.maxPhotoQualityPrioritization = .speed
                 }
                 if let connection = self.photoOutput.connection(with: .video) {
                     connection.setStoryPortraitOrientation()
                     connection.isVideoMirrored = self.currentPosition == .front && connection.isVideoMirroringSupported
                 }
                 self.session.commitConfiguration()
+                self.isSessionConfigured = true
                 continuation.resume()
             }
+        }
+    }
+
+    private func setFilteredPreviewOutputEnabled(_ enabled: Bool) {
+        sessionQueue.async { [weak self] in
+            guard let self, self.isSessionConfigured else { return }
+            guard enabled != self.isVideoOutputAttached else { return }
+            self.session.beginConfiguration()
+            if enabled {
+                if self.session.canAddOutput(self.videoOutput) {
+                    self.session.addOutput(self.videoOutput)
+                    self.isVideoOutputAttached = true
+                    if let connection = self.videoOutput.connection(with: .video) {
+                        connection.setStoryPortraitOrientation()
+                        connection.isVideoMirrored = self.currentPosition == .front && connection.isVideoMirroringSupported
+                    }
+                }
+            } else {
+                if self.isVideoOutputAttached {
+                    self.session.removeOutput(self.videoOutput)
+                    self.isVideoOutputAttached = false
+                }
+            }
+            self.session.commitConfiguration()
         }
     }
 
@@ -738,6 +1038,21 @@ final class StoryCameraController: NSObject, ObservableObject, @unchecked Sendab
             position: position
         )
         return discovery.devices.first ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
+    }
+
+    private static func configurePreferredFrameRate(on device: AVCaptureDevice, frameRate: Double) {
+        do {
+            try device.lockForConfiguration()
+            let targetDuration = CMTime(value: 1, timescale: CMTimeScale(frameRate))
+            let supportsTargetFrameRate = device.activeFormat.videoSupportedFrameRateRanges.contains { range in
+                range.minFrameRate <= frameRate && frameRate <= range.maxFrameRate
+            }
+            if supportsTargetFrameRate {
+                device.activeVideoMinFrameDuration = targetDuration
+                device.activeVideoMaxFrameDuration = targetDuration
+            }
+            device.unlockForConfiguration()
+        } catch {}
     }
 }
 
@@ -787,36 +1102,49 @@ private enum StoryCameraError: LocalizedError {
     }
 }
 
-extension StoryCameraController: AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
+extension StoryCameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        let mediaType: AVMediaType = output is AVCaptureAudioDataOutput ? .audio : .video
-        if mediaType == .video {
-            connection.setStoryPortraitOrientation()
-            connection.isVideoMirrored = currentPosition == .front && connection.isVideoMirroringSupported
-        }
-        append(sampleBuffer: sampleBuffer, mediaType: mediaType)
+        connection.setStoryPortraitOrientation()
+        connection.isVideoMirrored = currentPosition == .front && connection.isVideoMirroringSupported
+        updateFilteredPreviewIfNeeded(sampleBuffer: sampleBuffer)
     }
+}
 
-    private func append(sampleBuffer: CMSampleBuffer, mediaType: AVMediaType) {
-        guard isRecording,
-              let writer,
-              writer.status != .failed,
-              CMSampleBufferDataIsReady(sampleBuffer) else { return }
+extension StoryCameraController: AVCaptureFileOutputRecordingDelegate {
+    func fileOutput(
+        _ output: AVCaptureFileOutput,
+        didFinishRecordingTo outputFileURL: URL,
+        from connections: [AVCaptureConnection],
+        error: Error?
+    ) {
+        let duration = pendingSegmentDuration
+        let speed = pendingSegmentSpeed
+        let filterId = pendingSegmentFilterId
+        let adjustments = pendingSegmentAdjustments
+        outputURL = nil
+        pendingSegmentDuration = 0
+        pendingSegmentSpeed = 1
+        pendingSegmentFilterId = nil
+        pendingSegmentAdjustments = .neutral
 
-        let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        if startTime == nil {
-            startTime = presentationTime
-            writer.startSession(atSourceTime: presentationTime)
+        if let error {
+            try? FileManager.default.removeItem(at: outputFileURL)
+            Task { @MainActor in
+                self.errorText = error.localizedDescription
+            }
+            return
         }
 
-        if mediaType == .video,
-           let input = writerVideoInput,
-           input.isReadyForMoreMediaData {
-            input.append(sampleBuffer)
-        } else if mediaType == .audio,
-                  let input = writerAudioInput,
-                  input.isReadyForMoreMediaData {
-            input.append(sampleBuffer)
+        Task { @MainActor in
+            let segment = StoryCapturedSegment(
+                url: outputFileURL,
+                duration: duration,
+                speed: speed,
+                filterId: filterId,
+                adjustments: adjustments
+            )
+            self.segments.append(segment)
+            self.lastCapturedPreviewSegment = segment
         }
     }
 }

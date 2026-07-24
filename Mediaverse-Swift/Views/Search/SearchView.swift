@@ -1,7 +1,6 @@
 import SwiftUI
+import Network
 
-/// Full-screen search: typeahead suggestions → full results with 4 sections.
-/// Mirrors /src/app/search/page.tsx
 private struct SearchHistoryItem: Codable, Identifiable, Hashable {
     let id: String
     let title: String
@@ -34,37 +33,78 @@ private struct SearchHistoryItem: Codable, Identifiable, Hashable {
     }
 }
 
+private struct SuggestionSection: Identifiable {
+    let id: String
+    let title: String
+    let items: [SuggestItem]
+}
+
+private enum SearchFilter: String, CaseIterable, Identifiable {
+    case all
+    case shows
+    case videos
+    case channels
+    case episodes
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .all: return "All"
+        case .shows: return "Shows"
+        case .videos: return "Videos"
+        case .channels: return "Channels"
+        case .episodes: return "Episodes"
+        }
+    }
+}
+
 struct SearchView: View {
-
     @Environment(\.dismiss) private var dismiss
-    @State private var query      = ""
-    @State private var suggests   = [SuggestItem]()
-    @State private var results    = SearchResults(channels: nil, shows: nil, episodes: nil, videos: nil)
+    @State private var query = ""
+    @State private var committedQuery = ""
+    @State private var suggests = [SuggestItem]()
+    @State private var trending = [SuggestItem]()
+    @State private var results = SearchResults(channels: nil, shows: nil, episodes: nil, videos: nil)
     @State private var showResults = false
-    @State private var isLoading  = false
+    @State private var isLoadingSuggest = false
+    @State private var isLoadingResults = false
+    @State private var searchError: String?
+    @State private var isOffline = false
+    @State private var activeFilter: SearchFilter = .all
     @State private var suggestionRoute: AppRoute?
+    @State private var selectedSuggestionID: String?
+    @State private var debounceTask: Task<Void, Never>?
+    @State private var networkMonitor: NWPathMonitor?
     @AppStorage("searchHistory") private var searchHistoryData = "[]"
-
     @FocusState private var focused: Bool
 
-    // Debounce timer
-    @State private var debounceTask: Task<Void, Never>?
+    private var trimmedQuery: String {
+        query.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var visibleSuggestionItems: [SuggestItem] {
+        guard !showResults else { return [] }
+        let source = trimmedQuery.isEmpty ? trending : suggests
+        return suggestionSections(items: source).flatMap { Array($0.items.prefix(8)) }
+    }
 
     var body: some View {
         NavigationStack {
             ZStack {
                 C.bg.ignoresSafeArea()
-
                 VStack(spacing: 0) {
                     searchBar
+                    if isOffline { offlineBanner }
                     Divider().background(C.border)
 
-                    if query.trimmingCharacters(in: .whitespacesAndNewlines).count < 2 {
-                        emptyPrompt
-                    } else if showResults {
+                    if showResults {
                         resultsView
+                    } else if trimmedQuery.isEmpty {
+                        focusStateView
+                    } else if trimmedQuery.count == 1 {
+                        suggestionsContainer(showKeepTyping: false)
                     } else {
-                        suggestionsView
+                        suggestionsContainer(showKeepTyping: false)
                     }
                 }
             }
@@ -73,35 +113,53 @@ struct SearchView: View {
                 routeDestination(route)
             }
         }
-        .onAppear { focused = true }
+        .focusable()
+        .onKeyPress(.downArrow) {
+            moveSuggestionSelection(by: 1)
+            return .handled
+        }
+        .onKeyPress(.upArrow) {
+            moveSuggestionSelection(by: -1)
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            dismiss()
+            return .handled
+        }
+        .onAppear {
+            focused = true
+            startNetworkMonitor()
+            Task {
+                await loadRemoteSearchHistoryIfNeeded()
+                await loadTrendingIfNeeded()
+            }
+        }
+        .onDisappear {
+            debounceTask?.cancel()
+            stopNetworkMonitor()
+        }
     }
-
-    // MARK: - Search bar
 
     private var searchBar: some View {
         HStack(spacing: 10) {
             HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass")
+                Image(systemName: isLoadingSuggest ? "circle.dotted" : "magnifyingglass")
                     .foregroundStyle(C.textMuted)
                     .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 18)
 
-                TextField("Search videos, shows, channels...", text: $query)
+                TextField("Search shows, channels, videos…", text: $query)
                     .focused($focused)
                     .submitLabel(.search)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(C.text)
-                    .onSubmit { Task { await runFullSearch() } }
-                    .onChange(of: query) { _, newVal in
-                        debounceTask?.cancel()
-                        showResults = false
-                        if newVal.trimmingCharacters(in: .whitespacesAndNewlines).count < 2 { suggests = []; return }
-                        debounceTask = Task {
-                            try? await Task.sleep(nanoseconds: 300_000_000)
-                            guard !Task.isCancelled else { return }
-                            await runSuggest(q: newVal)
-                        }
+                    .disabled(isOffline)
+                    .accessibilityLabel("Search Westreem")
+                    .onSubmit { submitActiveSuggestionOrSearch() }
+                    .onChange(of: query) { oldValue, newValue in
+                        handleQueryChange(oldValue: oldValue, newValue: newValue)
                     }
 
                 if !query.isEmpty {
@@ -109,6 +167,7 @@ struct SearchView: View {
                         query = ""
                         suggests = []
                         showResults = false
+                        searchError = nil
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 16, weight: .semibold))
@@ -123,7 +182,10 @@ struct SearchView: View {
             .clipShape(Capsule())
             .overlay { Capsule().stroke(C.border.opacity(0.85), lineWidth: 1) }
             .contentShape(Rectangle())
-            .onTapGesture { focused = true }
+            .onTapGesture {
+                focused = true
+                Task { await loadTrendingIfNeeded() }
+            }
 
             Button("Cancel") { dismiss() }
                 .foregroundStyle(C.watch)
@@ -134,188 +196,358 @@ struct SearchView: View {
         .background(C.bg)
     }
 
-    // MARK: - Suggestions
-
-    private var suggestionsView: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(suggests) { item in
-                    Button {
-                        activateSuggestion(item)
-                    } label: {
-                        HStack(spacing: 12) {
-                            // Type icon
-                            Image(systemName: iconFor(item.type))
-                                .font(.system(size: 14))
-                                .foregroundStyle(C.textMuted)
-                                .frame(width: 20)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(item.title)
-                                    .font(.subheadline)
-                                    .foregroundStyle(C.text)
-                                    .lineLimit(1)
-                                if let meta = item.meta {
-                                    Text(meta)
-                                        .font(.caption2)
-                                        .foregroundStyle(C.textMuted)
-                                }
-                            }
-                            Spacer()
-                            Image(systemName: "arrow.up.left")
-                                .font(.caption2)
-                                .foregroundStyle(C.textMuted)
-                        }
-                        .padding(.horizontal, C.pagePad)
-                        .padding(.vertical, 12)
-                    }
-                    Divider()
-                        .background(C.border)
-                        .padding(.leading, C.pagePad + 32)
-                }
-            }
+    private var offlineBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "wifi.slash")
+            Text("You appear to be offline")
+                .font(.system(size: 12, weight: .semibold))
+            Spacer()
         }
+        .foregroundStyle(.black)
+        .padding(.horizontal, C.pagePad)
+        .frame(height: 34)
+        .background(Color(hex: "#FBBF24"))
     }
 
-    // MARK: - Full results
-
-    private var resultsView: some View {
+    private var focusStateView: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 28) {
-                if isLoading {
-                    ProgressView()
-                        .tint(C.watch)
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 40)
+            VStack(alignment: .leading, spacing: 24) {
+                if !searchHistory.isEmpty {
+                    historySection
                 }
-
-                // Channels — horizontal compact row
-                if let channels = results.channels, !channels.isEmpty {
-                    resultSection("Channels") {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 14) {
-                                ForEach(channels) { ch in
-                                    Button {
-                                        openSearchItem(
-                                            title: ch.name,
-                                            subtitle: ch.followerCount.map { "\($0) followers" },
-                                            type: "channel",
-                                            route: .channel(ch.handle ?? ch.id)
-                                        )
-                                    } label: {
-                                        VStack(spacing: 6) {
-                                            AsyncImage(url: C.mediaURL(ch.avatarUrl)) { img in
-                                                img.resizable().scaledToFill()
-                                            } placeholder: {
-                                                Color.white.opacity(0.08)
-                                            }
-                                            .frame(width: 56, height: 56)
-                                            .clipShape(Circle())
-
-                                            Text(ch.name)
-                                                .font(.caption2.weight(.semibold))
-                                                .foregroundStyle(C.text)
-                                                .lineLimit(1)
-                                                .frame(width: 64)
-                                        }
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                            .padding(.horizontal, C.pagePad)
-                        }
-                    }
-                }
-
-                // Shows — 2:3 portrait grid
-                if let shows = results.shows, !shows.isEmpty {
-                    resultSection("Shows") {
-                        LazyVGrid(
-                            columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())],
-                            spacing: 12
-                        ) {
-                            ForEach(shows) { show in
-                                Button {
-                                    openSearchItem(
-                                        title: show.title,
-                                        subtitle: show.genre,
-                                        type: "show",
-                                        route: .show(show.id)
-                                    )
-                                } label: {
-                                    ShowPortraitCard(show: show)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.horizontal, C.pagePad)
-                    }
-                }
-
-                // Episodes — list rows
-                if let episodes = results.episodes, !episodes.isEmpty {
-                    resultSection("Episodes") {
-                        LazyVStack(spacing: 0) {
-                            ForEach(episodes) { ep in
-                                Button {
-                                    openSearchItem(
-                                        title: ep.title,
-                                        subtitle: ep.season?.show?.title,
-                                        type: "episode",
-                                        route: .episode(ep.id)
-                                    )
-                                } label: {
-                                    EpisodeSearchRow(ep: ep)
-                                }
-                                .buttonStyle(.plain)
-                                Divider()
-                                    .background(C.border)
-                                    .padding(.leading, C.pagePad + 64)
-                            }
-                        }
-                    }
-                }
-
-                // Videos — horizontal cards
-                if let videos = results.videos, !videos.isEmpty {
-                    resultSection("Videos") {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 12) {
-                                ForEach(videos) { video in
-                                    let route = AppRoute.media(id: video.id, type: video.type, channelId: video.channel?.id)
-                                    Button {
-                                        openSearchItem(
-                                            title: video.title,
-                                            subtitle: video.channel?.name,
-                                            type: video.type?.lowercased() == "short" ? "short" : "video",
-                                            route: route
-                                        )
-                                    } label: {
-                                        VideoSearchCard(video: video)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                            .padding(.horizontal, C.pagePad)
-                        }
-                    }
-                }
-
-                let hasAny = !(results.channels?.isEmpty ?? true) ||
-                             !(results.shows?.isEmpty ?? true) ||
-                             !(results.episodes?.isEmpty ?? true) ||
-                             !(results.videos?.isEmpty ?? true)
-                if !isLoading && !hasAny {
-                    noResultsView
+                if !trending.isEmpty {
+                    suggestionListSection(
+                        title: "Trending",
+                        icon: "chart.line.uptrend.xyaxis",
+                        items: trending,
+                        queryForHighlight: nil
+                    )
+                } else {
+                    emptyPrompt
                 }
             }
             .padding(.top, 20)
+            .padding(.bottom, 28)
         }
     }
 
-    // MARK: - Section header helper
+    private func suggestionsContainer(showKeepTyping: Bool) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 22) {
+                if showKeepTyping {
+                    statusRow("Keep typing…")
+                } else if isLoadingSuggest && suggests.isEmpty {
+                    statusRow("Searching…", showsSpinner: true)
+                } else if suggests.isEmpty {
+                    noSuggestionResults
+                } else {
+                    ForEach(suggestionSections(items: suggests)) { section in
+                        suggestionListSection(
+                            title: section.title,
+                            icon: nil,
+                            items: section.items,
+                            queryForHighlight: trimmedQuery
+                        )
+                    }
+                }
+            }
+            .padding(.top, 16)
+            .padding(.bottom, 28)
+        }
+    }
+
+    private var historySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Recent Searches")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(C.text)
+                Spacer()
+                Button("Clear all") { clearSearchHistory() }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(C.watch)
+            }
+            .padding(.horizontal, C.pagePad)
+
+            LazyVStack(spacing: 0) {
+                ForEach(searchHistory) { item in
+                    HStack(spacing: 12) {
+                        Button { openHistoryItem(item) } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: item.iconName)
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(C.textMuted)
+                                    .frame(width: 22)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.title)
+                                        .font(.system(size: 15, weight: .medium))
+                                        .foregroundStyle(C.text)
+                                        .lineLimit(1)
+                                    if let subtitle = item.subtitle, !subtitle.isEmpty {
+                                        Text(subtitle)
+                                            .font(.system(size: 11, weight: .medium))
+                                            .foregroundStyle(C.textMuted)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                Spacer()
+                            }
+                        }
+                        .buttonStyle(.plain)
+
+                        Button { removeSearchHistory(item) } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(C.textMuted)
+                                .frame(width: 30, height: 30)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, C.pagePad)
+                    .frame(minHeight: 50)
+                }
+            }
+        }
+    }
+
+    private func suggestionListSection(title: String, icon: String?, items: [SuggestItem], queryForHighlight: String?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 7) {
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(C.watch)
+                }
+                Text(title)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(C.textMuted)
+            }
+            .padding(.horizontal, C.pagePad)
+
+            LazyVStack(spacing: 0) {
+                ForEach(Array(items.prefix(8))) { item in
+                    Button { activateSuggestion(item) } label: {
+                        suggestionRow(
+                            item,
+                            queryForHighlight: queryForHighlight,
+                            isSelected: selectedSuggestionID == item.id
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(item.title), \(badgeLabel(for: item.type))")
+                    .accessibilityHint("Double tap to open")
+
+                    Divider()
+                        .background(C.border)
+                        .padding(.leading, C.pagePad + 62)
+                }
+            }
+        }
+    }
+
+    private func suggestionRow(_ item: SuggestItem, queryForHighlight: String?, isSelected: Bool) -> some View {
+        HStack(spacing: 12) {
+            suggestionAvatar(item)
+            VStack(alignment: .leading, spacing: 4) {
+                highlightedTitle(item.title, query: queryForHighlight)
+                    .font(.system(size: 15, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(C.text)
+                    .lineLimit(1)
+                if let meta = item.meta, !meta.isEmpty {
+                    Text(meta)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(C.textMuted)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            typeBadge(item.type)
+        }
+        .padding(.horizontal, C.pagePad)
+        .padding(.vertical, 10)
+        .background(isSelected ? C.watch.opacity(0.14) : Color.clear)
+        .overlay(alignment: .leading) {
+            if isSelected {
+                Rectangle()
+                    .fill(C.watch)
+                    .frame(width: 3)
+            }
+        }
+        .contentShape(Rectangle())
+    }
 
     @ViewBuilder
+    private func suggestionAvatar(_ item: SuggestItem) -> some View {
+        let type = item.type.lowercased()
+        let size: CGFloat = type == "channel" ? 42 : 54
+        let aspect = suggestionAspectRatio(for: type)
+
+        if type == "channel" {
+            ZStack {
+                if let url = C.mediaURL(item.imageUrl) {
+                    CachedRemoteImage(
+                        url: url,
+                        targetSize: CGSize(width: size, height: size)
+                    ) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        placeholder(title: item.title, type: type)
+                    }
+                } else {
+                    placeholder(title: item.title, type: type)
+                }
+            }
+            .frame(width: size, height: size)
+            .clipShape(Circle())
+        } else {
+            ZStack {
+                if let url = C.mediaURL(item.imageUrl) {
+                    CachedRemoteImage(
+                        url: url,
+                        targetSize: CGSize(width: size * aspect, height: size)
+                    ) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        placeholder(title: item.title, type: type)
+                    }
+                } else {
+                    placeholder(title: item.title, type: type)
+                }
+            }
+            .frame(width: size * aspect, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipped()
+        }
+    }
+
+    private func placeholder(title: String, type: String) -> some View {
+        ZStack {
+            Color.white.opacity(0.07)
+            Text(String(title.prefix(1)).uppercased())
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(C.textMuted)
+        }
+    }
+
+    private func highlightedTitle(_ title: String, query: String?) -> Text {
+        guard let query,
+              !query.isEmpty,
+              let range = title.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) else {
+            return Text(title)
+        }
+        return Text(String(title[..<range.lowerBound]))
+            + Text(String(title[range])).bold()
+            + Text(String(title[range.upperBound...]))
+    }
+
+    private func typeBadge(_ type: String) -> some View {
+        Text(badgeLabel(for: type))
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(.black.opacity(0.82))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(badgeColor(for: type), in: Capsule())
+            .accessibilityHidden(true)
+    }
+
+    private var noSuggestionResults: some View {
+        VStack(spacing: 12) {
+            statusRow("No results for \"\(trimmedQuery)\"")
+            Button { submitSearchAnyway() } label: {
+                Label("Search anyway", systemImage: "arrow.right")
+                    .font(.system(size: 14, weight: .bold))
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(C.watch)
+            .disabled(trimmedQuery.count < 2)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 30)
+    }
+
+    private var emptyPrompt: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(C.textMuted.opacity(0.75))
+            Text("Search shows, channels, videos, and more")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(C.textMuted)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 44)
+    }
+
+    private func statusRow(_ text: String, showsSpinner: Bool = false) -> some View {
+        HStack(spacing: 10) {
+            if showsSpinner { ProgressView().tint(C.watch) }
+            Text(text)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(C.textMuted)
+            Spacer()
+        }
+        .padding(.horizontal, C.pagePad)
+        .padding(.vertical, 12)
+    }
+
+    private var resultsView: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 24) {
+                filterTabs
+
+                if isLoadingResults {
+                    skeletonResults
+                } else if let searchError {
+                    errorView(searchError)
+                } else if results.isEmpty {
+                    noResultsView
+                } else {
+                    if let channels = results.channels, !channels.isEmpty { channelsResults(channels) }
+                    if let shows = results.shows, !shows.isEmpty { showsResults(shows) }
+                    if let episodes = results.episodes, !episodes.isEmpty { episodesResults(episodes) }
+                    if let videos = results.videos, !videos.isEmpty { videosResults(videos) }
+                }
+            }
+            .padding(.top, 14)
+            .padding(.bottom, 32)
+        }
+    }
+
+    private var filterTabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(SearchFilter.allCases) { filter in
+                    Button {
+                        activeFilter = filter
+                        Task { await runFullSearch() }
+                    } label: {
+                        Text(filter.title)
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(activeFilter == filter ? .black : C.text)
+                            .padding(.horizontal, 14)
+                            .frame(height: 34)
+                            .background(activeFilter == filter ? C.watch : C.elevated, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, C.pagePad)
+        }
+    }
+
+    private var skeletonResults: some View {
+        VStack(spacing: 12) {
+            ForEach(0..<5, id: \.self) { _ in
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.white.opacity(0.07))
+                    .frame(height: 76)
+                    .padding(.horizontal, C.pagePad)
+            }
+        }
+        .redacted(reason: .placeholder)
+    }
+
     private func resultSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(title)
@@ -326,78 +558,93 @@ struct SearchView: View {
         }
     }
 
-    // MARK: - Empty / no results
-
-    private var emptyPrompt: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                VStack(spacing: 14) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 34, weight: .semibold))
-                        .foregroundStyle(C.textMuted.opacity(0.75))
-                    Text("Search videos, shows, channels, and more")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(C.textMuted)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 44)
-
-                if !searchHistory.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Text("Recent searches")
-                                .font(.system(size: 15, weight: .bold))
-                                .foregroundStyle(C.text)
-                            Spacer()
-                            Button("Clear") {
-                                clearSearchHistory()
-                            }
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(C.watch)
+    private func channelsResults(_ channels: [SearchResultChannel]) -> some View {
+        resultSection("Channels") {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(channels) { ch in
+                        Button {
+                            openSearchItem(title: ch.name, subtitle: ch.handle.map { "@\($0)" }, type: "channel", route: .channel(ch.handle ?? ch.id))
+                        } label: {
+                            SearchChannelCard(channel: ch)
                         }
-
-                        LazyVStack(spacing: 8) {
-                            ForEach(searchHistory) { item in
-                                Button {
-                                    openHistoryItem(item)
-                                } label: {
-                                    HStack(spacing: 12) {
-                                        Image(systemName: item.iconName)
-                                            .font(.system(size: 14, weight: .semibold))
-                                            .foregroundStyle(C.textMuted)
-                                            .frame(width: 20)
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(item.title)
-                                                .font(.system(size: 15, weight: .medium))
-                                                .foregroundStyle(C.text)
-                                                .lineLimit(1)
-                                            if let subtitle = item.subtitle, !subtitle.isEmpty {
-                                                Text(subtitle)
-                                                    .font(.system(size: 11, weight: .medium))
-                                                    .foregroundStyle(C.textMuted)
-                                                    .lineLimit(1)
-                                            }
-                                        }
-                                        Spacer()
-                                        Image(systemName: "chevron.right")
-                                            .font(.caption.weight(.semibold))
-                                            .foregroundStyle(C.textMuted.opacity(0.65))
-                                    }
-                                    .padding(.horizontal, 14)
-                                    .frame(minHeight: 48)
-                                    .background(C.surface.opacity(0.9))
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
+                        .buttonStyle(.plain)
                     }
-                    .padding(.horizontal, C.pagePad)
+                }
+                .padding(.horizontal, C.pagePad)
+            }
+        }
+    }
+
+    private func showsResults(_ shows: [SearchResultShow]) -> some View {
+        resultSection("Shows & Series") {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(shows) { show in
+                        Button {
+                            openSearchItem(title: show.title, subtitle: show.genre, type: "show", route: .show(show.id))
+                        } label: {
+                            ShowPortraitCard(show: show)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, C.pagePad)
+            }
+        }
+    }
+
+    private func episodesResults(_ episodes: [SearchResultEpisode]) -> some View {
+        resultSection("Episodes") {
+            LazyVStack(spacing: 0) {
+                ForEach(episodes) { ep in
+                    Button {
+                        openSearchItem(title: ep.title, subtitle: ep.season?.show?.title, type: "episode", route: .episode(ep.id))
+                    } label: {
+                        EpisodeSearchRow(ep: ep)
+                    }
+                    .buttonStyle(.plain)
+                    Divider().background(C.border).padding(.leading, C.pagePad + 112)
                 }
             }
-            .padding(.bottom, 28)
         }
+    }
+
+    private func videosResults(_ videos: [SearchResultVideo]) -> some View {
+        resultSection("Videos") {
+            LazyVStack(spacing: 0) {
+                ForEach(videos) { video in
+                    let isShort = video.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "short"
+                    let route: AppRoute = isShort
+                        ? .short(video.id, showId: nil, channelId: video.channel?.id)
+                        : .media(id: video.id, type: video.type, channelId: video.channel?.id)
+                    Button {
+                        if isShort { ShortNavigationCache.shared.seedIDs(searchVideoShortIDs(videos)) }
+                        openSearchItem(title: video.title, subtitle: video.channel?.name, type: isShort ? "short" : "video", route: route)
+                    } label: {
+                        VideoSearchRow(video: video)
+                    }
+                    .buttonStyle(.plain)
+                    Divider().background(C.border).padding(.leading, C.pagePad + 112)
+                }
+            }
+        }
+    }
+
+    private func errorView(_ message: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 32, weight: .semibold))
+                .foregroundStyle(C.textMuted)
+            Text(message)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(C.text)
+            Button("Retry") { Task { await runFullSearch() } }
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(C.watch)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 56)
     }
 
     private var noResultsView: some View {
@@ -405,18 +652,29 @@ struct SearchView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 40))
                 .foregroundStyle(C.textMuted)
-            Text("No results for \"\(query)\"")
+            Text("No results for \"\(committedQuery.isEmpty ? trimmedQuery : committedQuery)\"")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(C.text)
-            Text("Try different keywords")
+            Text("Try different keywords or browse the catalog.")
                 .font(.caption)
                 .foregroundStyle(C.textMuted)
+            HStack(spacing: 10) {
+                Button("Browse Shows") {
+                    NotificationCenter.default.post(name: .exploreSectionRequested, object: "shows")
+                    dismiss()
+                }
+                Button("Browse Channels") {
+                    NotificationCenter.default.post(name: .exploreSectionRequested, object: "channels")
+                    dismiss()
+                }
+            }
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(C.watch)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 60)
+        .padding(.horizontal, C.pagePad)
     }
-
-    // MARK: - Actions
 
     private var searchHistory: [SearchHistoryItem] {
         guard let data = searchHistoryData.data(using: .utf8),
@@ -427,44 +685,168 @@ struct SearchView: View {
     }
 
     private func addSearchHistory(_ item: SearchHistoryItem) {
-        var items = searchHistory.filter { $0.id != item.id }
+        var items = searchHistory.filter { $0.id != item.id && $0.title.caseInsensitiveCompare(item.title) != .orderedSame }
         items.insert(item, at: 0)
+        items = Array(items.prefix(10))
+        if let data = try? JSONEncoder().encode(items), let value = String(data: data, encoding: .utf8) {
+            searchHistoryData = value
+        }
+        Task { try? await APIClient.shared.saveSearchHistory(query: item.title) }
+    }
+
+    private func removeSearchHistory(_ item: SearchHistoryItem) {
+        let items = searchHistory.filter { $0.id != item.id }
+        if let data = try? JSONEncoder().encode(items), let value = String(data: data, encoding: .utf8) {
+            searchHistoryData = value
+        }
+        Task { try? await APIClient.shared.removeSearchHistory(query: item.title) }
+    }
+
+    private func clearSearchHistory() {
+        searchHistoryData = "[]"
+        Task { try? await APIClient.shared.clearSearchHistoryRemote() }
+    }
+
+    private func loadRemoteSearchHistoryIfNeeded() async {
+        guard SessionStorage.token != nil else { return }
+        guard let remote = try? await APIClient.shared.fetchSearchHistory(), !remote.isEmpty else { return }
+        let existing = searchHistory
+        var items = existing
+        for query in remote.reversed() where !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let item = queryHistoryItem(query)
+            items.removeAll { $0.title.caseInsensitiveCompare(query) == .orderedSame }
+            items.insert(item, at: 0)
+        }
         items = Array(items.prefix(10))
         if let data = try? JSONEncoder().encode(items), let value = String(data: data, encoding: .utf8) {
             searchHistoryData = value
         }
     }
 
-    private func clearSearchHistory() {
-        searchHistoryData = "[]"
+    private func handleQueryChange(oldValue: String, newValue: String) {
+        debounceTask?.cancel()
+        showResults = false
+        searchError = nil
+        let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            suggests = []
+            selectedSuggestionID = nil
+            isLoadingSuggest = false
+            Task { await loadTrendingIfNeeded() }
+            return
+        }
+        selectedSuggestionID = nil
+        isLoadingSuggest = true
+        debounceTask = Task {
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            guard !Task.isCancelled else { return }
+            await runSuggest(q: trimmed)
+        }
     }
 
     private func runSuggest(q: String) async {
-        let trimmed = q.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 2 else { return }
         do {
-            suggests = try await APIClient.shared.searchSuggest(q: trimmed)
-        } catch { suggests = [] }
+            suggests = try await APIClient.shared.searchSuggest(q: q)
+            selectedSuggestionID = visibleSuggestionItems.first?.id
+            isOffline = false
+        } catch {
+            suggests = []
+            selectedSuggestionID = nil
+            if (error as? URLError)?.code == .notConnectedToInternet { isOffline = true }
+        }
+        isLoadingSuggest = false
+    }
+
+    private func loadTrendingIfNeeded() async {
+        guard trending.isEmpty else { return }
+        do {
+            trending = try await APIClient.shared.searchTrendingSuggest()
+            if trimmedQuery.isEmpty, selectedSuggestionID == nil {
+                selectedSuggestionID = visibleSuggestionItems.first?.id
+            }
+            isOffline = false
+        } catch {
+            trending = []
+            selectedSuggestionID = nil
+            if (error as? URLError)?.code == .notConnectedToInternet { isOffline = true }
+        }
+    }
+
+    private func submitSearchAnyway() {
+        guard trimmedQuery.count >= 2 else { return }
+        Task { await runFullSearch() }
+    }
+
+    private func submitActiveSuggestionOrSearch() {
+        if !showResults,
+           let selectedSuggestionID,
+           let item = visibleSuggestionItems.first(where: { $0.id == selectedSuggestionID }) {
+            activateSuggestion(item)
+            return
+        }
+        submitSearchAnyway()
+    }
+
+    private func moveSuggestionSelection(by delta: Int) {
+        let items = visibleSuggestionItems
+        guard !items.isEmpty else {
+            selectedSuggestionID = nil
+            return
+        }
+        let currentIndex = selectedSuggestionID.flatMap { id in items.firstIndex(where: { $0.id == id }) }
+        let nextIndex: Int
+        if let currentIndex {
+            nextIndex = min(max(currentIndex + delta, 0), items.count - 1)
+        } else {
+            nextIndex = delta >= 0 ? 0 : items.count - 1
+        }
+        selectedSuggestionID = items[nextIndex].id
+    }
+
+    private func startNetworkMonitor() {
+        guard networkMonitor == nil else { return }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { path in
+            Task { @MainActor in
+                isOffline = path.status != .satisfied
+            }
+        }
+        monitor.start(queue: DispatchQueue(label: "westreem.search.network-monitor"))
+        networkMonitor = monitor
+    }
+
+    private func stopNetworkMonitor() {
+        networkMonitor?.cancel()
+        networkMonitor = nil
     }
 
     private func runFullSearch() async {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = trimmedQuery
         guard trimmed.count >= 2 else { return }
-        isLoading  = true
+        isLoadingResults = true
         showResults = true
-        suggests   = []
+        suggests = []
+        committedQuery = trimmed
+        searchError = nil
         do {
-            results = try await APIClient.shared.search(q: trimmed)
-        } catch {}
-        isLoading = false
+            results = try await APIClient.shared.search(q: trimmed, type: activeFilter.rawValue)
+            isOffline = false
+            UIAccessibility.post(notification: .announcement, argument: "\(results.totalCount) results for \(trimmed)")
+            addSearchHistory(queryHistoryItem(trimmed))
+        } catch {
+            results = SearchResults(channels: nil, shows: nil, episodes: nil, videos: nil)
+            searchError = "Something went wrong"
+            if (error as? URLError)?.code == .notConnectedToInternet { isOffline = true }
+        }
+        isLoadingResults = false
     }
 
     private func activateSuggestion(_ item: SuggestItem) {
-        if let route = route(for: item.href) {
+        query = item.title
+        if let route = AppRoute.route(link: item.href, notificationType: item.type) ?? route(for: item.href, type: item.type) {
             openSearchItem(title: item.title, subtitle: item.meta, type: item.type, route: route)
             return
         }
-        query = item.title
         Task { await runFullSearch() }
     }
 
@@ -475,9 +857,20 @@ struct SearchView: View {
     }
 
     private func openHistoryItem(_ item: SearchHistoryItem) {
-        guard let route = item.route else { return }
-        addSearchHistory(item)
-        suggestionRoute = route
+        query = item.title
+        if let route = item.route {
+            addSearchHistory(item)
+            suggestionRoute = route
+        } else {
+            Task { await runFullSearch() }
+        }
+    }
+
+    private func searchVideoShortIDs(_ videos: [SearchResultVideo]) -> [String] {
+        videos.compactMap { video in
+            guard video.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "short" else { return nil }
+            return video.id
+        }
     }
 
     private func historyItem(title: String, subtitle: String?, type: String, route: AppRoute) -> SearchHistoryItem {
@@ -488,35 +881,17 @@ struct SearchView: View {
 
         switch route {
         case .video(let id):
-            normalizedType = "video"
-            targetId = id
-            showId = nil
-            channelId = nil
+            normalizedType = "video"; targetId = id; showId = nil; channelId = nil
         case .short(let id, let routeShowId, let routeChannelId):
-            normalizedType = "short"
-            targetId = id
-            showId = routeShowId
-            channelId = routeChannelId
+            normalizedType = "short"; targetId = id; showId = routeShowId; channelId = routeChannelId
         case .episode(let id):
-            normalizedType = "episode"
-            targetId = id
-            showId = nil
-            channelId = nil
+            normalizedType = "episode"; targetId = id; showId = nil; channelId = nil
         case .channel(let id):
-            normalizedType = "channel"
-            targetId = id
-            showId = nil
-            channelId = nil
+            normalizedType = "channel"; targetId = id; showId = nil; channelId = nil
         case .show(let id):
-            normalizedType = "show"
-            targetId = id
-            showId = nil
-            channelId = nil
+            normalizedType = "show"; targetId = id; showId = nil; channelId = nil
         default:
-            normalizedType = type
-            targetId = route.id
-            showId = nil
-            channelId = nil
+            normalizedType = type; targetId = route.id; showId = nil; channelId = nil
         }
 
         return SearchHistoryItem(
@@ -530,7 +905,24 @@ struct SearchView: View {
         )
     }
 
-    private func route(for href: String) -> AppRoute? {
+    private func queryHistoryItem(_ query: String) -> SearchHistoryItem {
+        SearchHistoryItem(id: "query-\(query.lowercased())", title: query, subtitle: nil, type: "query", targetId: query, showId: nil, channelId: nil)
+    }
+
+    private func suggestionSections(items: [SuggestItem]) -> [SuggestionSection] {
+        let ordered: [(String, String, (SuggestItem) -> Bool)] = [
+            ("channels", "Channels", { $0.type.lowercased() == "channel" }),
+            ("shows", "Shows", { $0.type.lowercased() == "show" }),
+            ("videos", "Videos & Shorts", { ["video", "short"].contains($0.type.lowercased()) }),
+            ("episodes", "Episodes", { $0.type.lowercased() == "episode" })
+        ]
+        return ordered.compactMap { id, title, matches in
+            let sectionItems = items.filter(matches)
+            return sectionItems.isEmpty ? nil : SuggestionSection(id: id, title: title, items: sectionItems)
+        }
+    }
+
+    private func route(for href: String, type: String) -> AppRoute? {
         let path: String
         if let url = URL(string: href), let host = url.host, !host.isEmpty {
             path = url.path
@@ -539,34 +931,11 @@ struct SearchView: View {
         }
         let parts = path.split(separator: "/").map(String.init)
         guard !parts.isEmpty else { return nil }
-
-        if parts.count >= 3, parts[0] == "watch", parts[1] == "episode" {
-            return .episode(parts[2])
-        }
-        if parts.count >= 2, parts[0] == "watch" {
-            return .video(parts[1])
-        }
-        if parts.count >= 2, parts[0] == "shows" {
-            return .show(parts[1])
-        }
-        if parts.count >= 2, parts[0] == "channel" {
-            return .channel(parts[1])
-        }
-        if parts.count >= 2, parts[0] == "channels" {
-            return .channel(parts[1])
-        }
-        if parts.count >= 2, parts[0] == "playlist" {
-            return .playlist(parts[1])
-        }
-        if parts.count >= 2, parts[0] == "playlists" {
-            return .playlist(parts[1])
-        }
-        if parts.count >= 2, parts[0] == "collections" {
-            return .collection(parts[1])
-        }
-        if parts.count >= 2, parts[0] == "microdramas" {
-            return .microdramaShow(parts[1])
-        }
+        if parts.count >= 3, parts[0] == "watch", parts[1] == "episode" { return .episode(parts[2]) }
+        if parts.count >= 2, parts[0] == "watch" { return type == "short" ? .short(parts[1], showId: nil, channelId: nil) : .video(parts[1]) }
+        if parts.count >= 2, parts[0] == "shows" { return .show(parts[1]) }
+        if parts.count >= 2, parts[0] == "channel" { return .channel(parts[1]) }
+        if parts.count >= 2, parts[0] == "channels" { return .channel(parts[1]) }
         return nil
     }
 
@@ -574,10 +943,13 @@ struct SearchView: View {
     private func routeDestination(_ route: AppRoute) -> some View {
         switch route {
         case .video(let id): VideoWatchView(videoId: id)
-        case .short(let id, let showId, let channelId): ShortsView(initialShortId: id, contextShowId: showId, contextChannelId: channelId)
+        case .short(let id, let showId, let channelId): ShortsView(initialShortId: id, contextShowId: showId, contextChannelId: channelId, showsDismissControls: true)
         case .episode(let id): EpisodeWatchView(episodeId: id)
         case .channel(let id): ChannelView(handle: id)
         case .show(let id): ShowView(showId: id)
+        case .showAccess(let showId, let productId, let intent, let handoffId):
+            ShowView(showId: showId, handoffProductId: productId, handoffIntent: intent, handoffPublicId: handoffId)
+        case .handoff(let id): HandoffResolverView(publicId: id)
         case .playlist(let id): PlaylistDetailView(playlistId: id)
         case .collection(let id): CollectionDetailView(collectionId: id)
         case .microdramaShow(let id): MicrodramaShowView(showId: id)
@@ -586,29 +958,83 @@ struct SearchView: View {
         }
     }
 
-    private func iconFor(_ type: String) -> String {
-        switch type {
-        case "channel":  return "person.3"
-        case "show":     return "tv"
-        case "video":    return "play.rectangle"
-        case "episode":  return "film"
-        default:         return "magnifyingglass"
+    private func badgeLabel(for type: String) -> String {
+        switch type.lowercased() {
+        case "video": return "Video"
+        case "short": return "Short"
+        case "show": return "Show"
+        case "episode": return "Episode"
+        case "channel": return "Channel"
+        default: return "Result"
+        }
+    }
+
+    private func badgeColor(for type: String) -> Color {
+        switch type.lowercased() {
+        case "video": return Color(hex: "#60A5FA")
+        case "short": return Color(hex: "#F472B6")
+        case "show": return Color(hex: "#A78BFA")
+        case "episode": return Color(hex: "#34D399")
+        case "channel": return Color(hex: "#FBBF24")
+        default: return C.watch
         }
     }
 }
 
-// MARK: - Sub-components
+private struct SearchChannelCard: View {
+    let channel: SearchResultChannel
+
+    var body: some View {
+        VStack(spacing: 7) {
+            CachedRemoteImage(
+                url: C.mediaURL(channel.avatarUrl),
+                targetSize: CGSize(width: 62, height: 62)
+            ) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                Circle().fill(Color.white.opacity(0.07))
+            }
+            .frame(width: 62, height: 62, alignment: focusAlignment(channel.avatarFocus))
+            .clipShape(Circle())
+            .clipped()
+
+            HStack(spacing: 4) {
+                Text(channel.name)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(C.text)
+                    .lineLimit(1)
+                if channel.verified == true {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(C.watch)
+                }
+            }
+            .frame(width: 112)
+
+            Text(channel.handle.map { "@\($0)" } ?? formatFollowers(channel.followerCount))
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(C.textMuted)
+                .lineLimit(1)
+                .frame(width: 112)
+        }
+        .frame(width: 112)
+    }
+}
 
 private struct ShowPortraitCard: View {
     let show: SearchResultShow
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            AsyncImage(url: C.mediaURL(show.coverUrl)) { img in
-                img.resizable().scaledToFill()
+            CachedRemoteImage(
+                url: C.mediaURL(show.coverUrl),
+                targetSize: CGSize(width: 116, height: 174)
+            ) { image in
+                image.resizable().scaledToFill()
             } placeholder: {
                 Color.white.opacity(0.06)
             }
-            .aspectRatio(2/3, contentMode: .fit)
+            .frame(width: 116, height: 174, alignment: focusAlignment(show.coverFocus))
             .clipShape(RoundedRectangle(cornerRadius: C.cardRadius - 2))
             .clipped()
 
@@ -616,38 +1042,42 @@ private struct ShowPortraitCard: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(C.text)
                 .lineLimit(2)
+                .frame(width: 116, alignment: .leading)
+
+            Text(showSubtitle(show))
+                .font(.caption2)
+                .foregroundStyle(C.textMuted)
+                .lineLimit(1)
+                .frame(width: 116, alignment: .leading)
         }
+        .frame(width: 116)
     }
 }
 
 private struct EpisodeSearchRow: View {
     let ep: SearchResultEpisode
+
     var body: some View {
         HStack(spacing: 12) {
-            AsyncImage(url: C.mediaURL(ep.thumbnailUrl)) { img in
-                img.resizable().scaledToFill()
-            } placeholder: {
-                Color.white.opacity(0.06)
-            }
-            .frame(width: 96, height: 54)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .clipped()
+            SearchThumbnail(url: ep.thumbnailUrl, type: "episode", focus: ep.thumbnailFocus)
 
             VStack(alignment: .leading, spacing: 4) {
                 if let sNum = ep.season?.seasonNumber, let eNum = ep.episodeNumber {
-                    Text("S\(sNum) · E\(eNum)")
-                        .font(.caption2)
+                    Text("S\(sNum) E\(eNum)")
+                        .font(.caption2.weight(.bold))
                         .foregroundStyle(C.watch)
                 }
                 Text(ep.title)
-                    .font(.caption.weight(.medium))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(C.text)
                     .lineLimit(2)
                 if let showTitle = ep.season?.show?.title {
                     Text(showTitle)
-                        .font(.caption2)
+                        .font(.caption)
                         .foregroundStyle(C.textMuted)
+                        .lineLimit(1)
                 }
+                SearchMetaLine(duration: ep.duration, views: ep.views)
             }
             Spacer()
         }
@@ -656,31 +1086,128 @@ private struct EpisodeSearchRow: View {
     }
 }
 
-private struct VideoSearchCard: View {
+private struct VideoSearchRow: View {
     let video: SearchResultVideo
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            AsyncImage(url: C.mediaURL(video.thumbnailUrl)) { img in
-                img.resizable().scaledToFill()
-            } placeholder: {
-                Color.white.opacity(0.06)
+        HStack(spacing: 12) {
+            SearchThumbnail(url: video.thumbnailUrl, type: video.type, focus: video.thumbnailFocus)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(video.title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(C.text)
+                    .lineLimit(2)
+                if let channel = video.channel {
+                    Text(channel.name)
+                        .font(.caption)
+                        .foregroundStyle(C.textMuted)
+                        .lineLimit(1)
+                }
+                SearchMetaLine(duration: video.duration, views: video.views)
             }
-            .frame(width: 160, height: 90)
-            .clipShape(RoundedRectangle(cornerRadius: C.cardRadius - 2))
-            .clipped()
-
-            Text(video.title)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(C.text)
-                .lineLimit(2)
-                .frame(width: 160, alignment: .leading)
-
-            if let ch = video.channel {
-                Text(ch.name)
-                    .font(.caption2)
-                    .foregroundStyle(C.textMuted)
-            }
+            Spacer()
         }
-        .frame(width: 160)
+        .padding(.horizontal, C.pagePad)
+        .padding(.vertical, 10)
     }
+}
+
+private struct SearchThumbnail: View {
+    let url: String?
+    let type: String?
+    let focus: String?
+
+    var body: some View {
+        CachedRemoteImage(
+            url: C.mediaURL(url),
+            targetSize: CGSize(width: 104, height: 104 / C.mediaAspectRatio(forContentType: type))
+        ) { image in
+            image.resizable().scaledToFill()
+        } placeholder: {
+            Color.white.opacity(0.06)
+        }
+        .frame(width: 104, height: 104 / C.mediaAspectRatio(forContentType: type), alignment: focusAlignment(focus))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipped()
+    }
+}
+
+private struct SearchMetaLine: View {
+    let duration: Double?
+    let views: Int?
+
+    var body: some View {
+        let parts = [duration.map(formatDuration), views.map(formatViews)].compactMap { $0 }
+        if !parts.isEmpty {
+            Text(parts.joined(separator: " · "))
+                .font(.caption2)
+                .foregroundStyle(C.textTertiary)
+                .lineLimit(1)
+        }
+    }
+}
+
+private func suggestionAspectRatio(for type: String) -> CGFloat {
+    switch type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "show": return C.mediaAspectRatio(forContentType: "show")
+    case "channel": return 1
+    default: return 16 / 9
+    }
+}
+
+private func focusAlignment(_ focus: String?) -> Alignment {
+    guard let focus else { return .center }
+    let values = focus
+        .split(whereSeparator: { $0 == " " || $0 == "," })
+        .compactMap { Double($0) }
+    guard values.count >= 2 else { return .center }
+
+    let horizontal: HorizontalAlignment
+    switch values[0] {
+    case ..<0.33: horizontal = .leading
+    case 0.67...: horizontal = .trailing
+    default: horizontal = .center
+    }
+
+    let vertical: VerticalAlignment
+    switch values[1] {
+    case ..<0.33: vertical = .top
+    case 0.67...: vertical = .bottom
+    default: vertical = .center
+    }
+
+    return Alignment(horizontal: horizontal, vertical: vertical)
+}
+
+private func showSubtitle(_ show: SearchResultShow) -> String {
+    var parts = [String]()
+    if let year = show.productionYear, !year.isEmpty { parts.append(year) }
+    if let seasons = show.seasonCount {
+        parts.append("\(seasons) Season\(seasons == 1 ? "" : "s")")
+    } else if let genre = show.genre, !genre.isEmpty {
+        parts.append(genre)
+    }
+    return parts.joined(separator: " · ")
+}
+
+private func formatDuration(_ seconds: Double) -> String {
+    let total = max(0, Int(seconds.rounded()))
+    let hours = total / 3600
+    let minutes = (total % 3600) / 60
+    let secs = total % 60
+    if hours > 0 { return "\(hours):\(String(format: "%02d", minutes)):\(String(format: "%02d", secs))" }
+    return "\(minutes):\(String(format: "%02d", secs))"
+}
+
+private func formatViews(_ views: Int) -> String {
+    if views >= 1_000_000 { return String(format: "%.1fM views", Double(views) / 1_000_000) }
+    if views >= 1_000 { return String(format: "%.1fK views", Double(views) / 1_000) }
+    return "\(views) views"
+}
+
+private func formatFollowers(_ followers: Int?) -> String {
+    guard let followers else { return "Channel" }
+    if followers >= 1_000_000 { return String(format: "%.1fM followers", Double(followers) / 1_000_000) }
+    if followers >= 1_000 { return String(format: "%.1fK followers", Double(followers) / 1_000) }
+    return "\(followers) followers"
 }

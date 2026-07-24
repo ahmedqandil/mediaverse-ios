@@ -1,10 +1,9 @@
 import AVFoundation
 import CoreImage
-import CoreImage
-import CoreImage
 import CoreMedia
 import CoreTransferable
 import ImageIO
+import MapKit
 import PencilKit
 import PhotosUI
 import SwiftUI
@@ -31,11 +30,11 @@ private struct PickedStoryOverlayVideo: Transferable {
 }
 
 private enum StoryEditorTool: String, Identifiable, Equatable {
+    case clip
     case filters
+    case adjust
     case audio
     case stickers
-    case media
-    case effects
     case music
 
     var id: String { rawValue }
@@ -45,16 +44,11 @@ private enum StoryStickerTool: String, CaseIterable, Identifiable {
     case link
     case location
     case mention
-    case addYours
     case poll
     case quiz
     case questions
     case countdown
-    case music
-    case avatar
     case gif
-    case photo
-    case cutout
 
     var id: String { rawValue }
 
@@ -63,16 +57,11 @@ private enum StoryStickerTool: String, CaseIterable, Identifiable {
         case .link: return "Link"
         case .location: return "Location"
         case .mention: return "Mention"
-        case .addYours: return "Add Yours"
         case .poll: return "Poll"
         case .quiz: return "Quiz"
         case .questions: return "Questions"
         case .countdown: return "Countdown"
-        case .music: return "Music"
-        case .avatar: return "Avatar"
         case .gif: return "GIF"
-        case .photo: return "Photo"
-        case .cutout: return "Cutout"
         }
     }
 
@@ -81,16 +70,11 @@ private enum StoryStickerTool: String, CaseIterable, Identifiable {
         case .link: return "link"
         case .location: return "mappin.and.ellipse"
         case .mention: return "at"
-        case .addYours: return "plus.bubble"
         case .poll: return "chart.bar"
         case .quiz: return "checklist"
         case .questions: return "questionmark.bubble"
         case .countdown: return "timer"
-        case .music: return "music.note"
-        case .avatar: return "person.crop.circle"
         case .gif: return "sparkles"
-        case .photo: return "photo.on.rectangle.angled"
-        case .cutout: return "scissors"
         }
     }
 
@@ -98,13 +82,10 @@ private enum StoryStickerTool: String, CaseIterable, Identifiable {
         switch self {
         case .location: return "Add location"
         case .mention: return "@mention"
-        case .addYours: return "Add yours"
         case .poll: return "Poll"
         case .quiz: return "Quiz"
         case .questions: return "Ask me a question"
         case .countdown: return "Countdown"
-        case .avatar: return "Avatar"
-        case .cutout: return "Cutout"
         default: return title
         }
     }
@@ -113,10 +94,8 @@ private enum StoryStickerTool: String, CaseIterable, Identifiable {
         switch self {
         case .location: return "City or place"
         case .mention: return "Placeholder"
-        case .addYours: return "Start a prompt chain"
         case .questions: return "Viewer replies"
         case .countdown: return "Tomorrow"
-        case .avatar: return "Character sticker"
         default: return nil
         }
     }
@@ -131,15 +110,141 @@ private enum StoryStickerTool: String, CaseIterable, Identifiable {
 
     var interactiveKind: StoryInteractiveStickerKind? {
         switch self {
+        case .link: return .link
         case .location: return .location
         case .mention: return .mention
-        case .addYours: return .addYours
         case .poll: return .poll
         case .quiz: return .quiz
         case .questions: return .question
         case .countdown: return .countdown
-        case .avatar: return .avatar
         default: return nil
+        }
+    }
+}
+
+private enum StoryStickerComposerKind: Identifiable, Equatable {
+    case link
+    case location
+    case poll
+    case quiz
+    case question
+    case countdown
+
+    var id: String { title }
+
+    var title: String {
+        switch self {
+        case .link: return "Link"
+        case .location: return "Location"
+        case .poll: return "Poll"
+        case .quiz: return "Quiz"
+        case .question: return "Question"
+        case .countdown: return "Countdown"
+        }
+    }
+
+    var primaryPlaceholder: String {
+        switch self {
+        case .link: return "Link label"
+        case .location: return "City or place"
+        case .poll: return "Ask a question"
+        case .quiz: return "Quiz question"
+        case .question: return "Prompt"
+        case .countdown: return "Countdown name"
+        }
+    }
+
+    var guideText: String {
+        switch self {
+        case .link: return "Add a tappable link sticker to your story."
+        case .location: return "Add a place sticker that viewers can see on your story."
+        case .poll: return "Add a poll question with two to four choices."
+        case .quiz: return "Add a quiz question, choices, and the correct answer."
+        case .question: return "Ask viewers to send a reply to your story."
+        case .countdown: return "Add a countdown sticker with a future end time."
+        }
+    }
+}
+
+private struct StoryResolvedLocation: Equatable {
+    let name: String
+    let subtitle: String?
+    let latitude: Double
+    let longitude: Double
+}
+
+@MainActor
+private final class StoryLocationSearchModel: NSObject, ObservableObject, MKLocalSearchCompleterDelegate {
+    @Published private(set) var completions: [MKLocalSearchCompletion] = []
+    @Published private(set) var isResolving = false
+    @Published private(set) var errorMessage: String?
+
+    private let completer = MKLocalSearchCompleter()
+
+    override init() {
+        super.init()
+        completer.delegate = self
+        completer.resultTypes = [.address, .pointOfInterest]
+    }
+
+    func update(query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        errorMessage = nil
+        guard trimmed.count >= 2 else {
+            completions = []
+            completer.queryFragment = ""
+            return
+        }
+        completer.queryFragment = trimmed
+    }
+
+    func clear() {
+        completions = []
+        errorMessage = nil
+        completer.queryFragment = ""
+    }
+
+    nonisolated func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
+        let results = completer.results
+        Task { @MainActor in
+            self.completions = results
+            self.errorMessage = nil
+        }
+    }
+
+    nonisolated func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {
+        let queryFragment = completer.queryFragment
+        Task { @MainActor in
+            guard !queryFragment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            self.completions = []
+            self.errorMessage = error.localizedDescription
+        }
+    }
+
+    func resolve(_ completion: MKLocalSearchCompletion) async -> StoryResolvedLocation? {
+        isResolving = true
+        errorMessage = nil
+        defer { isResolving = false }
+
+        let request = MKLocalSearch.Request(completion: completion)
+        request.resultTypes = [.address, .pointOfInterest]
+        do {
+            let response = try await MKLocalSearch(request: request).start()
+            guard let item = response.mapItems.first else {
+                errorMessage = "No matching place found."
+                return nil
+            }
+            let coordinate = item.placemark.coordinate
+            let subtitle = item.placemark.title?.isEmpty == false ? item.placemark.title : completion.subtitle
+            return StoryResolvedLocation(
+                name: item.name ?? completion.title,
+                subtitle: subtitle,
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
         }
     }
 }
@@ -199,6 +304,7 @@ private enum StoryDrawingColor: String, CaseIterable, Identifiable {
 
 struct StoryEditorPreviewView: View {
     @StateObject private var editor: StoryTimelineEditor
+    @StateObject private var locationSearch = StoryLocationSearchModel()
     let onProjectChange: (Project) -> Void
     let onBack: () -> Void
     let onNext: () -> Void
@@ -207,8 +313,19 @@ struct StoryEditorPreviewView: View {
     @State private var currentTime: Double = 0
     @State private var isPlaying = false
     @State private var isRendering = false
+    @State private var previewRenderNeedsRefresh = false
     @State private var renderError: String?
-    @State private var playbackTask: Task<Void, Never>?
+    @State private var previewRenderTask: Task<Void, Never>?
+    @State private var filterHUDVisible = false
+    @State private var filterHUDTask: Task<Void, Never>?
+    @State private var previewPlayer: AVPlayer?
+    @State private var previewPlayerURL: URL?
+    @State private var previewPlayerSignature = ""
+    @State private var previewPlayerTimeObserver: Any?
+    @State private var previewPlayerEndObserver: NSObjectProtocol?
+    @State private var previewPlayerStatusObserver: NSKeyValueObservation?
+    @State private var previewPlaybackWatchdogTask: Task<Void, Never>?
+    @State private var shouldResumePlaybackAfterToolPreview = false
     @State private var newOverlayText = ""
     @State private var newLinkLabel = ""
     @State private var newLinkURL = ""
@@ -229,6 +346,16 @@ struct StoryEditorPreviewView: View {
     @State private var assetStore: AssetStore?
     @State private var basePreviewSignature = ""
     @State private var isTextComposerPresented = false
+    @State private var isMentionComposerPresented = false
+    @State private var stickerComposerKind: StoryStickerComposerKind?
+    @State private var mentionSearchText = "@"
+    @State private var stickerComposerTitle = ""
+    @State private var stickerComposerSubtitle = ""
+    @State private var stickerComposerOptions = ["", "", "", ""]
+    @State private var stickerComposerCorrectIndex = 0
+    @State private var stickerComposerDate = Date().addingTimeInterval(24 * 60 * 60)
+    @State private var stickerLocationLatitude: Double?
+    @State private var stickerLocationLongitude: Double?
     @State private var composerText = ""
     @State private var composerEditingOverlayID: UUID?
     @State private var composerStyle = TextOverlayStyle.default
@@ -236,8 +363,16 @@ struct StoryEditorPreviewView: View {
     @State private var composerFontIndex = 0
     @State private var keyboardHeight: CGFloat = 0
     @State private var isOverlayInteracting = false
+    @State private var measuredInteractiveStickerSizes: [UUID: CGSize] = [:]
     @State private var overlayAlignmentGuide = OverlayAlignmentGuide()
+    @State private var clipBaselineClip: VideoClip?
+    @State private var filterBaselineClip: VideoClip?
+    @State private var adjustmentBaselineClip: VideoClip?
+    @State private var audioBaselineClip: VideoClip?
+    @State private var toolSheetDismissShouldCancel = true
     @FocusState private var isTextComposerFocused: Bool
+    @FocusState private var isMentionComposerFocused: Bool
+    @FocusState private var isStickerComposerFocused: Bool
 
     private let compositor = StoryCompositor()
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
@@ -255,19 +390,72 @@ struct StoryEditorPreviewView: View {
         max(editor.project.totalDurationSeconds, 0.1)
     }
 
+    private var canShareStory: Bool {
+        editor.project.totalDurationSeconds <= storyMaxDurationSeconds + 0.05
+    }
+
     private var shouldShowAudioTool: Bool {
         editor.selectedClip?.assetRef.kind == .video || !editor.project.tracks.audioClips.isEmpty
     }
 
-    private var shouldAutoPlayPreview: Bool {
-        editor.project.tracks.videoClips.contains { $0.assetRef.kind == .video }
+    private var editorToolReservedHeight: CGFloat {
+        activeTool == nil || isTextComposerPresented || isDrawingPresented ? 0 : 292
+    }
+
+    private var usesRenderedToolPreview: Bool {
+        activeTool != nil && !isTextComposerPresented && !isDrawingPresented
+    }
+
+    private var previewRenderDebounceDelay: UInt64 {
+        usesRenderedToolPreview ? 70_000_000 : 0
+    }
+
+    private var videoPreviewClip: VideoClip? {
+        editor.project.tracks.videoClips.first { $0.assetRef.kind == .video }
+    }
+
+    private var hasVideoPreviewClip: Bool {
+        videoPreviewClip != nil
+    }
+
+    private var videoPreviewURL: URL? {
+        guard let assetStore, let videoPreviewClip else { return nil }
+        return assetStore.absoluteURL(for: videoPreviewClip.assetRef.relativePath)
+    }
+
+    private var videoPreviewUsesRenderComposition: Bool {
+        guard let videoPreviewClip else { return false }
+        return shouldUseVideoComposition(for: videoPreviewClip)
+    }
+
+    private var videoPreviewColorGrade: ColorAdjust {
+        videoPreviewUsesRenderComposition ? .neutral : (videoPreviewClip?.adjustments ?? .neutral)
+    }
+
+    private func shouldUseVideoComposition(for clip: VideoClip) -> Bool {
+        StoryEffectCatalog.preset(id: clip.filterId).renderEffect != .none
+    }
+
+    private func previewPlayerSignature(url: URL, clip: VideoClip) -> String {
+        let preset = StoryEffectCatalog.preset(id: clip.filterId)
+        return [
+            url.path,
+            clip.filterId ?? "neutral",
+            preset.renderEffect.rawValue,
+            "\(clip.adjustments.brightness)",
+            "\(clip.adjustments.contrast)",
+            "\(clip.adjustments.saturation)",
+            "\(clip.adjustments.warmth)",
+            "\(clip.adjustments.vignette)",
+            "\(clip.muted)",
+            "\(clip.volume)"
+        ].joined(separator: "|")
     }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            previewSurface
-                .ignoresSafeArea()
+            editablePreviewSurface
 
             if isDrawingPresented {
                 drawingTopOverlay
@@ -276,6 +464,7 @@ struct StoryEditorPreviewView: View {
                 storyTopOverlay
                 if !isOverlayInteracting {
                     storySideTools
+                    storyShareButtonOverlay
                     if editor.selectedOverlayID != nil, !isTextComposerPresented, activeTool == nil {
                         selectedOverlayCanvasMenu
                             .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -284,48 +473,85 @@ struct StoryEditorPreviewView: View {
                 }
             }
 
-            if !isDrawingPresented, let activeTool, !isTextComposerPresented {
-                toolDrawer(activeTool)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .zIndex(4)
-            }
-
             if isTextComposerPresented {
                 textComposerOverlay
                     .zIndex(5)
+            }
+
+            if isMentionComposerPresented {
+                mentionComposerOverlay
+                    .zIndex(6)
+            }
+
+            if stickerComposerKind != nil {
+                stickerComposerOverlay
+                    .zIndex(7)
             }
         }
         .animation(.spring(response: 0.25, dampingFraction: 0.86), value: activeTool?.id)
         .onAppear {
             Task {
+                await Task.yield()
+                try? await Task.sleep(nanoseconds: 90_000_000)
+                guard !Task.isCancelled else { return }
                 assetStore = await ProjectStore.shared.assetStore(for: project.id)
                 basePreviewSignature = basePreviewSignature(for: project)
-                await renderCurrentFrame()
-                if shouldAutoPlayPreview {
-                    startPlayback()
+                if hasVideoPreviewClip, !usesRenderedToolPreview {
+                    configureVideoPreviewPlayer()
+                } else {
+                    destroyPreviewPlayer()
+                    schedulePreviewRender(after: 90_000_000)
                 }
+                presentFilterHUD()
             }
         }
         .onDisappear {
-            stopPlayback()
+            previewRenderTask?.cancel()
+            filterHUDTask?.cancel()
+            filterHUDVisible = false
+            shouldResumePlaybackAfterToolPreview = false
+            destroyPreviewPlayer()
+            Task { await compositor.clearCaches() }
         }
         .onChange(of: currentTime) { _, _ in
             guard !isPlaying else { return }
-            Task { await renderCurrentFrame() }
+            schedulePreviewRender()
         }
         .onReceive(editor.$project) { project in
             onProjectChange(project)
             currentTime = min(currentTime, duration)
-            if shouldAutoPlayPreview {
-                startPlayback()
-            } else {
-                stopPlayback()
-                currentTime = 0
-            }
             let signature = basePreviewSignature(for: project)
-            guard signature != basePreviewSignature else { return }
+            guard signature != basePreviewSignature else {
+                if usesRenderedToolPreview {
+                    destroyPreviewPlayer()
+                    schedulePreviewRender()
+                } else if hasVideoPreviewClip {
+                    resumeVideoPreviewPlaybackIfNeeded()
+                }
+                return
+            }
             basePreviewSignature = signature
-            Task { await renderCurrentFrame() }
+            if hasVideoPreviewClip, !usesRenderedToolPreview {
+                configureVideoPreviewPlayer()
+            } else {
+                destroyPreviewPlayer()
+                schedulePreviewRender()
+            }
+        }
+        .onChange(of: activeTool?.id) { oldValue, newValue in
+            handleToolPreviewModeChange(from: oldValue, to: newValue)
+        }
+        .sheet(item: $activeTool, onDismiss: {
+            if toolSheetDismissShouldCancel {
+                cancelLiveToolPreview()
+            } else {
+                clearLiveToolBaselines()
+                toolSheetDismissShouldCancel = true
+            }
+        }) { tool in
+            toolSheet(tool)
+                .presentationDetents([.height(toolSheetHeight(for: tool)), .medium])
+                .presentationDragIndicator(.visible)
         }
         .fileImporter(isPresented: $isImportingMusic, allowedContentTypes: [.audio]) { result in
             switch result {
@@ -359,58 +585,131 @@ struct StoryEditorPreviewView: View {
         }
     }
 
-    private var storyTopOverlay: some View {
-        VStack {
-            HStack(spacing: 10) {
-                Button {
-                    stopPlayback()
-                    onBack()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .bold))
-                        .frame(width: 38, height: 38)
-                        .background(Color.black.opacity(0.44))
-                        .clipShape(Circle())
+    private var editablePreviewSurface: some View {
+        GeometryReader { proxy in
+            let reservedHeight = min(editorToolReservedHeight, proxy.size.height * 0.38)
+            VStack(spacing: 0) {
+                previewSurface
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                if reservedHeight > 0 {
+                    Color.black
+                        .frame(height: reservedHeight)
                 }
-                .foregroundStyle(.white)
-                .accessibilityLabel("Back")
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+        .ignoresSafeArea()
+    }
 
-                ProgressView(value: currentTime, total: duration)
-                    .tint(C.watch)
-                    .frame(width: 150)
+    private var storyTopOverlay: some View {
+        GeometryReader { proxy in
+            VStack {
+                HStack(spacing: 10) {
+                    Button {
+                        stopPlayback()
+                        onBack()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 15, weight: .bold))
+                            .frame(width: 40, height: 40)
+                            .background(Color.black.opacity(0.34))
+                            .clipShape(Circle())
+                    }
+                    .frame(width: 44, height: 44)
+                    .foregroundStyle(.white)
+                    .accessibilityLabel("Back")
+
+                    ProgressView(value: currentTime, total: duration)
+                        .tint(C.watch)
+                        .frame(maxWidth: proxy.size.width < 380 ? 96 : 150)
+
+                    Spacer(minLength: 8)
+
+                    if let preset = activeFilterPreset {
+                        Text(preset.name)
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .padding(.horizontal, 10)
+                            .frame(height: 30)
+                            .background(Color.black.opacity(0.42))
+                            .clipShape(Capsule())
+                    }
+
+                    editorTopIconButton("Undo", systemImage: "arrow.uturn.backward", disabled: !editor.canUndo) {
+                        await editor.undo()
+                    }
+
+                    editorTopIconButton("Redo", systemImage: "arrow.uturn.forward", disabled: !editor.canRedo) {
+                        await editor.redo()
+                    }
+                }
+                .padding(.horizontal, proxy.size.width < 380 ? 20 : 24)
+                .padding(.top, 58)
 
                 Spacer()
-
-                if let preset = activeFilterPreset {
-                    Text(preset.name)
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .frame(height: 30)
-                        .background(Color.black.opacity(0.42))
-                        .clipShape(Capsule())
-                }
-
-                Button {
-                    stopPlayback()
-                    onNext()
-                } label: {
-                    Label("Share", systemImage: "paperplane.fill")
-                        .font(.system(size: 13, weight: .bold))
-                        .labelStyle(.titleAndIcon)
-                        .foregroundStyle(.black)
-                        .padding(.horizontal, 14)
-                        .frame(height: 38)
-                        .background(C.watch)
-                        .clipShape(Capsule())
-                }
-                .accessibilityLabel("Share story")
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 10)
-
-            Spacer()
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
+    }
+
+    private func editorTopIconButton(
+        _ title: String,
+        systemImage: String,
+        disabled: Bool = false,
+        action: @escaping () async -> Void
+    ) -> some View {
+        Button {
+            stopPlayback()
+            Task { await action() }
+        } label: {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .bold))
+                .frame(width: 34, height: 34)
+                .background(Color.black.opacity(disabled ? 0.18 : 0.34))
+                .clipShape(Circle())
+        }
+        .foregroundStyle(.white.opacity(disabled ? 0.38 : 1))
+        .disabled(disabled)
+        .accessibilityLabel(title)
+    }
+
+    private var storyShareButtonOverlay: some View {
+        GeometryReader { proxy in
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    Button(action: shareStory) {
+                        Label("Share", systemImage: "paperplane.fill")
+                            .font(.system(size: 13, weight: .bold))
+                            .labelStyle(.titleAndIcon)
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 16)
+                            .frame(height: 42)
+                            .background(C.watch)
+                            .clipShape(Capsule())
+                            .shadow(color: .black.opacity(0.28), radius: 10, y: 4)
+                    }
+                    .accessibilityLabel("Share story")
+                    .padding(.trailing, max(proxy.safeAreaInsets.trailing + 18, 18))
+                    .padding(.bottom, max(proxy.safeAreaInsets.bottom + 104, 124))
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+        .allowsHitTesting(activeTool == nil && !isTextComposerPresented && !isMentionComposerPresented && stickerComposerKind == nil)
+        .opacity(activeTool == nil && !isTextComposerPresented && !isMentionComposerPresented && stickerComposerKind == nil ? 1 : 0)
+    }
+
+    private func shareStory() {
+        guard canShareStory else {
+            renderError = "Stories can be up to 10 seconds. Delete or adjust a clip before sharing."
+            return
+        }
+        stopPlayback()
+        onNext()
     }
 
     private var drawingTopOverlay: some View {
@@ -488,7 +787,7 @@ struct StoryEditorPreviewView: View {
                     .font(composerUIFont(size: composerStyle.fontSize * 0.72))
                     .multilineTextAlignment(composerTextAlignment)
                     .foregroundStyle(swiftUIColor(composerStyle.color))
-                    .lineLimit(1...3)
+                    .lineLimit(1...5)
                     .padding(.horizontal, 18)
                     .padding(.vertical, 12)
                     .background(composerStyle.backgroundColor.map(swiftUIColor) ?? Color.clear)
@@ -563,6 +862,359 @@ struct StoryEditorPreviewView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             keyboardHeight = 0
+        }
+    }
+
+    private var mentionComposerOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.48)
+                .ignoresSafeArea()
+                .onTapGesture { cancelMentionComposer() }
+
+            VStack(spacing: 14) {
+                HStack {
+                    Button {
+                        cancelMentionComposer()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 15, weight: .bold))
+                            .frame(width: 38, height: 38)
+                            .background(Color.black.opacity(0.52))
+                            .clipShape(Circle())
+                    }
+                    .foregroundStyle(.white)
+
+                    Spacer()
+
+                    Text("Mention")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+
+                    Spacer()
+
+                    Color.clear.frame(width: 38, height: 38)
+                }
+
+                TextField("Search people, channels, shows", text: $mentionSearchText)
+                    .focused($isMentionComposerFocused)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(C.text)
+                    .padding(.horizontal, 14)
+                    .frame(height: 46)
+                    .background(C.elevated)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .onChange(of: mentionSearchText) { _, value in
+                        if !value.hasPrefix("@") {
+                            mentionSearchText = "@\(value.replacingOccurrences(of: "@", with: ""))"
+                        }
+                    }
+
+                Text("Type @ plus a name or handle, then choose a result to place the mention sticker.")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                MentionAutocompletePanel(text: $mentionSearchText, limit: 8, minimumQueryLength: 1) { result in
+                    Task { await addMentionSticker(result) }
+                }
+
+                Spacer()
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 16)
+        }
+        .task { isMentionComposerFocused = true }
+    }
+
+    private var stickerComposerOverlay: some View {
+        VStack(spacing: 14) {
+                HStack {
+                    Button {
+                        cancelStickerComposer()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 15, weight: .bold))
+                            .frame(width: 38, height: 38)
+                            .background(Color.black.opacity(0.52))
+                            .clipShape(Circle())
+                    }
+                    .foregroundStyle(.white)
+
+                    Spacer()
+
+                    Text(stickerComposerKind?.title ?? "Sticker")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+
+                    Spacer()
+
+                    Button {
+                        Task { await addConfiguredSticker() }
+                    } label: {
+                        Text("Done")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(stickerComposerCanSave ? .black : .white.opacity(0.45))
+                            .frame(width: 58, height: 38)
+                            .background(stickerComposerCanSave ? C.watch : Color.white.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+                    .disabled(!stickerComposerCanSave)
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    if let kind = stickerComposerKind {
+                        Text(kind.guideText)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.72))
+
+                        if kind == .location {
+                            stickerComposerTextField(
+                                placeholder: kind.primaryPlaceholder,
+                                text: locationComposerTitleBinding,
+                                focused: true
+                            )
+                        } else {
+                            stickerComposerTextField(
+                                placeholder: kind.primaryPlaceholder,
+                                text: $stickerComposerTitle,
+                                focused: true
+                            )
+                        }
+
+                        switch kind {
+                        case .link:
+                            stickerComposerTextField(
+                                placeholder: "https://",
+                                text: $stickerComposerSubtitle,
+                                textInputAutocapitalization: .never,
+                                keyboardType: .URL,
+                                autocorrectionDisabled: true
+                            )
+                        case .location:
+                            locationSearchPanel
+                        case .poll:
+                            stickerOptionsEditor(title: "Choices", showCorrectAnswer: false)
+                        case .quiz:
+                            stickerOptionsEditor(title: "Answers", showCorrectAnswer: true)
+                        case .question:
+                            EmptyView()
+                        case .countdown:
+                            DatePicker(
+                                "Ends",
+                                selection: $stickerComposerDate,
+                                in: Date().addingTimeInterval(60)...,
+                                displayedComponents: [.date, .hourAndMinute]
+                            )
+                            .datePickerStyle(.compact)
+                            .tint(C.watch)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(C.text)
+                            .padding(12)
+                            .background(C.elevated)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
+                }
+                .padding(14)
+                .background(C.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(C.borderSubtle, lineWidth: 1))
+
+                Spacer()
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .task { isStickerComposerFocused = true }
+    }
+
+    private func stickerComposerTextField(
+        placeholder: String,
+        text: Binding<String>,
+        focused: Bool = false,
+        textInputAutocapitalization: TextInputAutocapitalization = .sentences,
+        keyboardType: UIKeyboardType = .default,
+        autocorrectionDisabled: Bool = false
+    ) -> some View {
+        TextField(placeholder, text: text)
+            .focused($isStickerComposerFocused, equals: focused)
+            .textInputAutocapitalization(textInputAutocapitalization)
+            .keyboardType(keyboardType)
+            .autocorrectionDisabled(autocorrectionDisabled)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(C.text)
+            .padding(.horizontal, 14)
+            .frame(height: 46)
+            .background(C.elevated)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var locationComposerTitleBinding: Binding<String> {
+        Binding(
+            get: { stickerComposerTitle },
+            set: { value in
+                stickerComposerTitle = value
+                stickerComposerSubtitle = ""
+                stickerLocationLatitude = nil
+                stickerLocationLongitude = nil
+                locationSearch.update(query: value)
+            }
+        )
+    }
+
+    private var locationSearchPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if locationSearch.isResolving {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .tint(C.watch)
+                    Text("Finding place...")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(C.textMuted)
+                }
+                .padding(.vertical, 4)
+            }
+
+            if !stickerComposerTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                locationComposerPillPreview
+            }
+
+            if stickerLocationLatitude == nil, let errorMessage = locationSearch.errorMessage {
+                Text(errorMessage)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.red.opacity(0.9))
+            }
+
+            ForEach(Array(locationSearch.completions.prefix(6).enumerated()), id: \.offset) { _, completion in
+                Button {
+                    Task { await selectLocationCompletion(completion) }
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "mappin.circle.fill")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(C.watch)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(completion.title)
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(C.text)
+                                .lineLimit(1)
+                            if !completion.subtitle.isEmpty {
+                                Text(completion.subtitle)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(C.textMuted)
+                                    .lineLimit(1)
+                            }
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(C.elevated)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var locationComposerPillPreview: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "location.fill")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(C.watch)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(stickerComposerTitle)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.62)
+
+                if !stickerComposerSubtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(stickerComposerSubtitle)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.68))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                } else {
+                    Text(stickerLocationLatitude == nil ? "Manual location" : "Selected place")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.68))
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            if stickerLocationLatitude != nil {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(C.watch)
+            }
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 14)
+        .frame(height: 62)
+        .background(editorStickerBacking)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .shadow(color: .black.opacity(0.18), radius: 8, y: 4)
+    }
+
+    private func stickerOptionsEditor(title: String, showCorrectAnswer: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(C.textMuted)
+
+            ForEach(0..<4, id: \.self) { index in
+                stickerComposerTextField(
+                    placeholder: index < 2 ? "Option \(index + 1)" : "Option \(index + 1) (optional)",
+                    text: Binding(
+                        get: { stickerComposerOptions[index] },
+                        set: { stickerComposerOptions[index] = $0 }
+                    )
+                )
+            }
+
+            if showCorrectAnswer {
+                Picker("Correct answer", selection: $stickerComposerCorrectIndex) {
+                    ForEach(Array(configuredStickerOptions.enumerated()), id: \.offset) { index, option in
+                        Text(option).tag(index)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(C.watch)
+                .font(.system(size: 13, weight: .semibold))
+                .padding(.horizontal, 12)
+                .frame(height: 44)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(C.elevated)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+        }
+    }
+
+    private var configuredStickerOptions: [String] {
+        stickerComposerOptions
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private var stickerComposerCanSave: Bool {
+        guard let kind = stickerComposerKind else { return false }
+        let title = stickerComposerTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch kind {
+        case .link:
+            return !title.isEmpty && normalizedStoryLinkURL(from: stickerComposerSubtitle) != nil
+        case .location, .question:
+            return !title.isEmpty
+        case .poll:
+            return !title.isEmpty && configuredStickerOptions.count >= 2
+        case .quiz:
+            return !title.isEmpty && configuredStickerOptions.count >= 2 && stickerComposerCorrectIndex < configuredStickerOptions.count
+        case .countdown:
+            return !title.isEmpty && stickerComposerDate > Date()
         }
     }
 
@@ -738,71 +1390,94 @@ struct StoryEditorPreviewView: View {
         PKInkingTool(drawingStyle.inkType, color: drawingColor.uiColor, width: CGFloat(drawingWidth))
     }
 
+    private var currentFilterPreset: StoryEffectPreset {
+        StoryEffectCatalog.preset(id: editor.selectedClip?.filterId)
+    }
+
     private var activeFilterPreset: StoryEffectPreset? {
-        guard activeTool == .filters, let clip = editor.selectedClip else { return nil }
-        return StoryEffectCatalog.preset(id: clip.filterId)
+        let preset = currentFilterPreset
+        return preset.id == "neutral" ? nil : preset
+    }
+
+    private func presentFilterHUD() {
+        filterHUDTask?.cancel()
+        withAnimation(.easeOut(duration: 0.16)) {
+            filterHUDVisible = true
+        }
+        filterHUDTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            withAnimation(.easeIn(duration: 0.22)) {
+                filterHUDVisible = false
+            }
+        }
     }
 
     private var storySideTools: some View {
         GeometryReader { proxy in
-            let buttonCount = shouldShowAudioTool ? 8.0 : 7.0
-            let contentHeight = buttonCount * 42 + (buttonCount - 1) * 10
-            let availableHeight = max(220, proxy.size.height - 250)
-            let railScale = min(1, max(0.66, availableHeight / contentHeight))
+            let topInset = max(proxy.safeAreaInsets.top + 84, 96)
+            let bottomInset = max(proxy.safeAreaInsets.bottom + 112, 142)
+            let trailingInset = max(proxy.safeAreaInsets.trailing + 14, 14)
+            let railWidth: CGFloat = 54
+            let availableHeight = max(180, proxy.size.height - topInset - bottomInset)
 
             VStack(spacing: 0) {
-                Spacer(minLength: 96)
+                Spacer(minLength: topInset)
                 HStack {
                     Spacer()
-                    VStack(spacing: 10) {
-                        storyToolButton(.filters, icon: "camera.filters")
-                        if shouldShowAudioTool {
-                            storyToolButton(.audio, icon: editor.selectedClip?.muted == true ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(spacing: 10) {
+                            if editor.selectedClip != nil {
+                                storyToolButton(.clip, icon: "slider.horizontal.3")
+                                storyToolButton(.filters, icon: "camera.filters")
+                                storyToolButton(.adjust, icon: "dial.medium")
+                            }
+                            if shouldShowAudioTool {
+                                storyToolButton(.audio, icon: editor.selectedClip?.muted == true ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            }
+                            Button {
+                                beginTextComposer()
+                            } label: {
+                                Text("Aa")
+                                    .font(.system(size: 17, weight: .bold))
+                                    .frame(width: 44, height: 44)
+                                    .background(Color.black.opacity(0.30))
+                                    .clipShape(Circle())
+                            }
+                            .foregroundStyle(.white)
+                            .accessibilityLabel("Add text")
+                            storyToolButton(.stickers, icon: "face.smiling")
+                            Button {
+                                stopPlayback()
+                                activeTool = nil
+                                isImportingMediaOverlay = true
+                            } label: {
+                                Image(systemName: "photo.on.rectangle.angled")
+                                    .font(.system(size: 16, weight: .bold))
+                                    .frame(width: 44, height: 44)
+                                    .background(Color.black.opacity(0.30))
+                                    .foregroundStyle(.white)
+                                    .clipShape(Circle())
+                            }
+                            .accessibilityLabel("Add photo or video")
+                            storyToolButton(.music, icon: "music.note")
+                            Button {
+                                beginDrawing()
+                            } label: {
+                                Image(systemName: "pencil.tip")
+                                    .font(.system(size: 16, weight: .bold))
+                                    .frame(width: 44, height: 44)
+                                    .background(Color.black.opacity(0.30))
+                                    .clipShape(Circle())
+                            }
+                            .foregroundStyle(.white)
+                            .accessibilityLabel("Draw")
                         }
-                        Button {
-                            beginTextComposer()
-                        } label: {
-                            Text("Aa")
-                                .font(.system(size: 17, weight: .bold))
-                                .frame(width: 42, height: 42)
-                                .background(Color.black.opacity(0.44))
-                                .clipShape(Circle())
-                        }
-                        .foregroundStyle(.white)
-                        .accessibilityLabel("Add text")
-                        storyToolButton(.stickers, icon: "square.grid.3x3")
-                        Button {
-                            stopPlayback()
-                            activeTool = nil
-                            isShowingGiphyPicker = true
-                        } label: {
-                            Image(systemName: "sparkles")
-                                .font(.system(size: 16, weight: .bold))
-                                .frame(width: 42, height: 42)
-                                .background(Color.black.opacity(0.44))
-                                .clipShape(Circle())
-                        }
-                        .foregroundStyle(.white)
-                        .accessibilityLabel("Add GIPHY sticker")
-                        storyToolButton(.media, icon: "photo.on.rectangle.angled")
-                        storyToolButton(.effects, icon: "wand.and.stars")
-                        storyToolButton(.music, icon: "music.note")
-                        Button {
-                            beginDrawing()
-                        } label: {
-                            Image(systemName: "pencil.tip")
-                                .font(.system(size: 16, weight: .bold))
-                                .frame(width: 42, height: 42)
-                                .background(Color.black.opacity(0.44))
-                                .clipShape(Circle())
-                        }
-                        .foregroundStyle(.white)
-                        .accessibilityLabel("Draw")
                     }
-                    .scaleEffect(railScale, anchor: .trailing)
-                    .padding(.trailing, 12)
+                    .scrollClipDisabled()
+                    .frame(width: railWidth, height: availableHeight, alignment: .top)
+                    .padding(.trailing, trailingInset)
                 }
-                Spacer(minLength: 142)
+                Spacer(minLength: bottomInset)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
@@ -854,14 +1529,34 @@ struct StoryEditorPreviewView: View {
         .accessibilityLabel(title)
     }
 
+    private func cancelLiveToolPreview() {
+        if let baseline = clipBaselineClip ?? filterBaselineClip ?? adjustmentBaselineClip ?? audioBaselineClip {
+            editor.previewSelectedClip(baseline)
+        }
+        clearLiveToolBaselines()
+    }
+
+    private func clearLiveToolBaselines() {
+        clipBaselineClip = nil
+        filterBaselineClip = nil
+        adjustmentBaselineClip = nil
+        audioBaselineClip = nil
+    }
+
     private func storyToolButton(_ tool: StoryEditorTool, icon: String) -> some View {
         Button {
-            activeTool = activeTool == tool ? nil : tool
+            if activeTool == tool {
+                cancelLiveToolPreview()
+                activeTool = nil
+            } else {
+                cancelLiveToolPreview()
+                activeTool = tool
+            }
         } label: {
             Image(systemName: icon)
                 .font(.system(size: 16, weight: .bold))
-                .frame(width: 42, height: 42)
-                .background(activeTool == tool ? C.watch : Color.black.opacity(0.44))
+                .frame(width: 44, height: 44)
+                .background(activeTool == tool ? C.watch : Color.black.opacity(0.30))
                 .foregroundStyle(activeTool == tool ? .black : .white)
                 .clipShape(Circle())
         }
@@ -869,71 +1564,128 @@ struct StoryEditorPreviewView: View {
     }
 
     @ViewBuilder
-    private func toolDrawer(_ tool: StoryEditorTool) -> some View {
-        GeometryReader { proxy in
-            VStack {
+    private func toolSheet(_ tool: StoryEditorTool) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(toolDrawerTitle(tool))
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
                 Spacer()
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text(toolDrawerTitle(tool))
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(.white)
-                        Spacer()
-                        Button {
-                            activeTool = nil
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 12, weight: .bold))
-                                .frame(width: 30, height: 30)
-                        }
-                        .foregroundStyle(.white.opacity(0.8))
-                        .accessibilityLabel("Close tool")
-                    }
-
-                    switch tool {
-                    case .filters:
-                        if let clip = editor.selectedClip {
-                            filterControls(for: clip)
-                            adjustmentControls(for: clip)
-                        }
-                    case .audio:
-                        if let clip = editor.selectedClip, clip.assetRef.kind == .video {
-                            audioControls(for: clip)
-                        } else {
-                            musicControls
-                        }
-                    case .stickers:
-                        stickerTrayControls
-                    case .media:
-                        mediaAndLayoutControls
-                    case .effects:
-                        effectsControls
-                    case .music:
-                        musicControls
-                    }
+                Button {
+                    cancelLiveToolPreview()
+                    activeTool = nil
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .frame(width: 32, height: 32)
+                        .background(Color.white.opacity(0.10))
+                        .clipShape(Circle())
                 }
-                .padding(14)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(maxHeight: max(180, proxy.size.height - 150), alignment: .bottom)
-                .clipped()
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 18))
-                .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.10), lineWidth: 1))
-                .padding(.horizontal, 12)
-                .padding(.bottom, 92)
+                .foregroundStyle(.white.opacity(0.86))
+                .accessibilityLabel("Close tool")
+
+                Button {
+                    applyToolSheetAndDismiss()
+                } label: {
+                    Text("Done")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 14)
+                        .frame(height: 32)
+                        .background(C.watch)
+                        .clipShape(Capsule())
+                }
+                .accessibilityLabel("Apply tool")
             }
+
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 12) {
+                    toolSheetControls(for: tool)
+                }
+                .padding(.bottom, 14)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color.black.ignoresSafeArea())
+    }
+
+    @ViewBuilder
+    private func toolSheetControls(for tool: StoryEditorTool) -> some View {
+        switch tool {
+        case .clip:
+            if let clip = editor.selectedClip {
+                clipInspectorControls(for: clip)
+            }
+        case .filters:
+            if let clip = editor.selectedClip {
+                filterControls(for: clip)
+            }
+        case .adjust:
+            if let clip = editor.selectedClip {
+                adjustmentControls(for: clip)
+            }
+        case .audio:
+            if let clip = editor.selectedClip, clip.assetRef.kind == .video {
+                audioControls(for: clip)
+            } else {
+                musicControls
+            }
+        case .stickers:
+            stickerTrayControls
+        case .music:
+            musicControls
+        }
+    }
+
+    private func toolSheetHeight(for tool: StoryEditorTool) -> CGFloat {
+        switch tool {
+        case .clip:
+            return 360
+        case .filters:
+            return 300
+        case .adjust:
+            return 340
+        case .audio, .music:
+            return 260
+        case .stickers:
+            return 320
         }
     }
 
     private func toolDrawerTitle(_ tool: StoryEditorTool) -> String {
         switch tool {
+        case .clip: return "Clip"
         case .filters: return "Filters"
+        case .adjust: return "Adjust"
         case .audio: return "Audio"
         case .stickers: return "Stickers"
-        case .media: return "Media"
-        case .effects: return "Effects"
         case .music: return "Music"
+        }
+    }
+
+    private func applyToolSheetAndDismiss() {
+        Task {
+            await commitLiveToolPreview()
+            toolSheetDismissShouldCancel = false
+            clearLiveToolBaselines()
+            activeTool = nil
+        }
+    }
+
+    private func commitLiveToolPreview() async {
+        if let baseline = filterBaselineClip {
+            await editor.commitEffectPreset(currentFilterPreset, baselineClip: baseline)
+        }
+        if let baseline = adjustmentBaselineClip, let clip = editor.selectedClip {
+            await editor.commitSelectedClipAdjustments(clip.adjustments, baselineClip: baseline)
+        }
+        if let baseline = audioBaselineClip, let clip = editor.selectedClip {
+            await editor.commitSelectedClipAudio(volume: clip.volume, muted: clip.muted, baselineClip: baseline)
+        }
+        if let baseline = clipBaselineClip {
+            await editor.commitSelectedClipPreview(baselineClip: baseline)
         }
     }
 
@@ -942,12 +1694,6 @@ struct StoryEditorPreviewView: View {
             clipStrip
 
             HStack(spacing: 8) {
-                editorButton("Undo", systemImage: "arrow.uturn.backward", disabled: !editor.canUndo) {
-                    await editor.undo()
-                }
-                editorButton("Redo", systemImage: "arrow.uturn.forward", disabled: !editor.canRedo) {
-                    await editor.redo()
-                }
                 editorButton("Split", systemImage: "scissors") {
                     await editor.split(at: currentTime)
                 }
@@ -980,110 +1726,236 @@ struct StoryEditorPreviewView: View {
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
     }
 
-    private func speedControls(for clip: VideoClip) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text("Playback")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(C.textMuted)
-            HStack(spacing: 8) {
-                ForEach([0.5, 1.0, 2.0], id: \.self) { speed in
-                    Button {
-                        Task { await editor.updateSelectedClipSpeed(speed) }
-                    } label: {
-                        Text(speed == 1 ? "1x" : String(format: "%.1fx", speed))
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(abs(clip.speed - speed) < 0.001 ? .black : C.text)
-                            .frame(width: 54, height: 30)
-                            .background(abs(clip.speed - speed) < 0.001 ? C.watch : C.elevated)
-                            .clipShape(RoundedRectangle(cornerRadius: 7))
-                    }
-                    .buttonStyle(.plain)
-                }
+    private func clipInspectorControls(for clip: VideoClip) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            clipStrip
 
-                Button {
-                    Task { await editor.toggleSelectedClipReverse() }
-                } label: {
-                    Label("Reverse", systemImage: "backward.end.fill")
-                        .font(.system(size: 11, weight: .bold))
-                        .labelStyle(.iconOnly)
-                        .foregroundStyle(clip.reversed ? .black : C.text)
-                        .frame(width: 42, height: 30)
-                        .background(clip.reversed ? C.watch : C.elevated)
-                        .clipShape(RoundedRectangle(cornerRadius: 7))
+            HStack(spacing: 8) {
+                editorButton("Split", systemImage: "scissors") {
+                    await editor.split(at: currentTime)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Reverse clip")
+                editorButton("Duplicate", systemImage: "plus.square.on.square") {
+                    await editor.duplicateSelectedClip()
+                }
+                editorButton("Left", systemImage: "arrow.left") {
+                    await editor.moveSelectedClip(by: -1)
+                }
+                editorButton("Right", systemImage: "arrow.right") {
+                    await editor.moveSelectedClip(by: 1)
+                }
+                editorButton("Delete", systemImage: "trash", role: .destructive, disabled: editor.project.tracks.videoClips.count <= 1) {
+                    await editor.deleteSelectedClip()
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 7) {
+                HStack {
+                    Text("Speed")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(C.textMuted)
+                    Spacer()
+                    Text("\(String(format: "%.2gx", clip.speed))")
+                        .font(.system(size: 11, weight: .bold))
+                        .fontDesign(.monospaced)
+                        .foregroundStyle(C.textTertiary)
+                }
+                Slider(
+                    value: Binding(
+                        get: { clip.speed },
+                        set: { speed in
+                            clipBaselineClip = clipBaselineClip ?? clip
+                            editor.previewSelectedClipSpeed(speed)
+                        }
+                    ),
+                    in: 0.25...2,
+                    step: 0.25,
+                    onEditingChanged: { editing in
+                        guard !editing else { return }
+                        Task {
+                            await editor.commitSelectedClipSpeed(editor.selectedClip?.speed ?? clip.speed, baselineClip: clipBaselineClip)
+                            clipBaselineClip = nil
+                        }
+                    }
+                )
+                .tint(C.watch)
+            }
+
+            Toggle("Reverse", isOn: Binding(
+                get: { clip.reversed },
+                set: { reversed in
+                    clipBaselineClip = clipBaselineClip ?? clip
+                    editor.previewSelectedClipReverse(reversed)
+                    Task {
+                        await editor.commitSelectedClipReverse(reversed, baselineClip: clipBaselineClip)
+                        clipBaselineClip = nil
+                    }
+                }
+            ))
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(C.text)
+            .tint(C.watch)
+
+            if clip.assetRef.kind == .video {
+                audioControls(for: clip)
+            }
+
+            if let message = editor.errorMessage {
+                Text(message)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.red)
             }
         }
+        .padding(12)
+        .background(C.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
     }
 
     private func filterControls(for clip: VideoClip) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text("Filters")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(C.textMuted)
+        VStack(alignment: .leading, spacing: 12) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(StoryEffectCatalog.presets) { preset in
                         Button {
-                            Task { await editor.applyEffectPreset(preset) }
+                            stopPlayback()
+                            filterBaselineClip = filterBaselineClip ?? clip
+                            editor.previewEffectPreset(preset)
+                            presentFilterHUD()
                         } label: {
-                            Text(preset.name)
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle((clip.filterId ?? "neutral") == preset.id ? .black : C.text)
-                                .frame(width: 72, height: 32)
-                                .background((clip.filterId ?? "neutral") == preset.id ? C.watch : C.elevated)
-                                .clipShape(RoundedRectangle(cornerRadius: 7))
+                            VStack(spacing: 6) {
+                                RoundedRectangle(cornerRadius: 7)
+                                    .fill(filterSwatchGradient(for: preset))
+                                    .frame(width: 54, height: 68)
+                                    .overlay {
+                                        if currentFilterPreset.id == preset.id {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .font(.system(size: 18, weight: .bold))
+                                                .foregroundStyle(C.watch)
+                                        }
+                                    }
+                                Text(preset.name)
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(C.text)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
+                            }
+                            .frame(width: 64)
                         }
                         .buttonStyle(.plain)
                     }
                 }
+                .padding(.vertical, 2)
+            }
+
+            HStack(spacing: 8) {
+                editorButton("Apply Filter", systemImage: "checkmark") {
+                    await editor.commitEffectPreset(currentFilterPreset, baselineClip: filterBaselineClip)
+                    filterBaselineClip = nil
+                }
+                editorButton("Neutral", systemImage: "circle.slash") {
+                    let neutral = StoryEffectCatalog.preset(id: "neutral")
+                    filterBaselineClip = filterBaselineClip ?? clip
+                    editor.previewEffectPreset(neutral)
+                    presentFilterHUD()
+                }
             }
         }
+        .padding(12)
+        .background(C.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
     }
 
     private func adjustmentControls(for clip: VideoClip) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Adjust")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(C.textMuted)
-            adjustmentSlider("Brightness", value: clip.adjustments.brightness, range: -0.2...0.2) { value in
-                var next = clip.adjustments
-                next.brightness = value
-                await editor.updateSelectedClipAdjustments(next)
+        VStack(alignment: .leading, spacing: 10) {
+            adjustmentSlider("Brightness", value: clip.adjustments.brightness, range: -0.35...0.35) { value in
+                previewAdjustment(clip) { $0.brightness = value }
             }
-            adjustmentSlider("Contrast", value: clip.adjustments.contrast, range: 0.6...1.6) { value in
-                var next = clip.adjustments
-                next.contrast = value
-                await editor.updateSelectedClipAdjustments(next)
+            adjustmentSlider("Contrast", value: clip.adjustments.contrast, range: 0.65...1.45) { value in
+                previewAdjustment(clip) { $0.contrast = value }
             }
             adjustmentSlider("Saturation", value: clip.adjustments.saturation, range: 0...1.8) { value in
-                var next = clip.adjustments
-                next.saturation = value
-                await editor.updateSelectedClipAdjustments(next)
+                previewAdjustment(clip) { $0.saturation = value }
+            }
+            adjustmentSlider("Warmth", value: clip.adjustments.warmth, range: -1...1) { value in
+                previewAdjustment(clip) { $0.warmth = value }
+            }
+            adjustmentSlider("Vignette", value: clip.adjustments.vignette, range: 0...0.65) { value in
+                previewAdjustment(clip) { $0.vignette = value }
+            }
+
+            HStack(spacing: 8) {
+                editorButton("Apply Adjustments", systemImage: "checkmark") {
+                    await editor.commitSelectedClipAdjustments(clip.adjustments, baselineClip: adjustmentBaselineClip)
+                    adjustmentBaselineClip = nil
+                }
+                editorButton("Reset", systemImage: "arrow.counterclockwise") {
+                    adjustmentBaselineClip = adjustmentBaselineClip ?? clip
+                    editor.previewSelectedClipAdjustments(.neutral)
+                }
             }
         }
+        .padding(12)
+        .background(C.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
     }
 
     private func adjustmentSlider(
         _ title: String,
         value: Float,
         range: ClosedRange<Float>,
-        update: @escaping (Float) async -> Void
+        onChange: @escaping (Float) -> Void
     ) -> some View {
-        HStack(spacing: 8) {
-            Text(title)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(C.textTertiary)
-                .frame(width: 72, alignment: .leading)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(C.textMuted)
+                Spacer()
+                Text(String(format: "%.2f", value))
+                    .font(.system(size: 10, weight: .bold))
+                    .fontDesign(.monospaced)
+                    .foregroundStyle(C.textTertiary)
+            }
             Slider(
                 value: Binding(
                     get: { value },
-                    set: { newValue in Task { await update(newValue) } }
+                    set: onChange
                 ),
                 in: range
             )
             .tint(C.watch)
+        }
+    }
+
+    private func previewAdjustment(_ clip: VideoClip, mutate: (inout ColorAdjust) -> Void) {
+        adjustmentBaselineClip = adjustmentBaselineClip ?? clip
+        var adjustments = clip.adjustments
+        mutate(&adjustments)
+        editor.previewSelectedClipAdjustments(adjustments)
+    }
+
+    private func filterSwatchGradient(for preset: StoryEffectPreset) -> LinearGradient {
+        switch preset.id {
+        case "smooth":
+            return LinearGradient(colors: [.white.opacity(0.88), .pink.opacity(0.45), .orange.opacity(0.34)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        case "warm", "vintage", "film", "golden", "sunset":
+            return LinearGradient(colors: [.orange.opacity(0.85), .pink.opacity(0.58), .black.opacity(0.55)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        case "rose":
+            return LinearGradient(colors: [.pink.opacity(0.82), .purple.opacity(0.45), .black.opacity(0.48)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        case "cool", "aqua", "teal":
+            return LinearGradient(colors: [.cyan.opacity(0.8), .blue.opacity(0.72), .black.opacity(0.55)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        case "bw", "noir":
+            return LinearGradient(colors: [.white.opacity(0.85), .gray.opacity(0.7), .black.opacity(0.82)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        case "vivid", "bright", "pop", "crisp":
+            return LinearGradient(colors: [C.watch.opacity(0.85), .yellow.opacity(0.7), .blue.opacity(0.55)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        case "fade", "matte", "dream":
+            return LinearGradient(colors: [.white.opacity(0.72), .mint.opacity(0.38), .gray.opacity(0.45)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        case "moody", "cinema":
+            return LinearGradient(colors: [.purple.opacity(0.72), .black.opacity(0.85)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        default:
+            return LinearGradient(colors: [.white.opacity(0.68), .gray.opacity(0.42)], startPoint: .topLeading, endPoint: .bottomTrailing)
         }
     }
 
@@ -1094,7 +1966,14 @@ struct StoryEditorPreviewView: View {
                 .foregroundStyle(C.textMuted)
             Toggle("Mute", isOn: Binding(
                 get: { clip.muted },
-                set: { muted in Task { await editor.updateSelectedClipAudio(volume: clip.volume, muted: muted) } }
+                set: { muted in
+                    audioBaselineClip = audioBaselineClip ?? clip
+                    editor.previewSelectedClipAudio(volume: clip.volume, muted: muted)
+                    Task {
+                        await editor.commitSelectedClipAudio(volume: clip.volume, muted: muted, baselineClip: audioBaselineClip)
+                        audioBaselineClip = nil
+                    }
+                }
             ))
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(C.text)
@@ -1102,9 +1981,20 @@ struct StoryEditorPreviewView: View {
             Slider(
                 value: Binding(
                     get: { clip.volume },
-                    set: { volume in Task { await editor.updateSelectedClipAudio(volume: volume, muted: clip.muted) } }
+                    set: { volume in
+                        audioBaselineClip = audioBaselineClip ?? clip
+                        editor.previewSelectedClipAudio(volume: volume, muted: clip.muted)
+                    }
                 ),
-                in: 0...1
+                in: 0...1,
+                onEditingChanged: { editing in
+                    guard !editing else { return }
+                    Task {
+                        let currentClip = editor.selectedClip ?? clip
+                        await editor.commitSelectedClipAudio(volume: currentClip.volume, muted: currentClip.muted, baselineClip: audioBaselineClip)
+                        audioBaselineClip = nil
+                    }
+                }
             )
             .disabled(clip.muted)
             .opacity(clip.muted ? 0.45 : 1)
@@ -1117,6 +2007,7 @@ struct StoryEditorPreviewView: View {
             HStack(spacing: 8) {
                 ForEach(Array(editor.project.tracks.videoClips.enumerated()), id: \.element.id) { index, clip in
                     Button {
+                        cancelLiveToolPreview()
                         editor.selectClip(clip.id)
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
@@ -1198,8 +2089,6 @@ struct StoryEditorPreviewView: View {
 
     private var stickerTrayControls: some View {
         VStack(alignment: .leading, spacing: 12) {
-            linkCreatorControls
-
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
                 ForEach(StoryStickerTool.allCases) { tool in
                     Button {
@@ -1238,19 +2127,23 @@ struct StoryEditorPreviewView: View {
         stopPlayback()
         switch tool {
         case .link:
-            activeTool = .stickers
+            beginStickerComposer(.link)
         case .gif:
             activeTool = nil
             isShowingGiphyPicker = true
-        case .photo:
+        case .mention:
             activeTool = nil
-            isImportingMediaOverlay = true
-        case .music:
-            activeTool = .music
-        case .location, .mention, .addYours, .poll, .quiz, .questions, .countdown, .avatar:
-            Task { await addInteractiveStorySticker(tool) }
-        case .cutout:
-            renderError = "Cutouts need subject segmentation before they can become stickers."
+            beginMentionComposer()
+        case .location:
+            beginStickerComposer(.location)
+        case .poll:
+            beginStickerComposer(.poll)
+        case .quiz:
+            beginStickerComposer(.quiz)
+        case .questions:
+            beginStickerComposer(.question)
+        case .countdown:
+            beginStickerComposer(.countdown)
         }
     }
 
@@ -1265,94 +2158,172 @@ struct StoryEditorPreviewView: View {
             at: currentTime
         )
         activeTool = nil
+        resumeVideoPreviewPlaybackIfNeeded()
     }
 
-    private var mediaAndLayoutControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Button {
-                    stopPlayback()
-                    activeTool = nil
-                    isImportingMediaOverlay = true
-                } label: {
-                    Label("Photo/Video", systemImage: "photo.on.rectangle.angled")
-                        .font(.system(size: 12, weight: .bold))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(C.watch)
-
-                Button {
-                    renderError = "Layout grid needs multi-select media import next."
-                } label: {
-                    Label("Layout", systemImage: "rectangle.split.2x2")
-                        .font(.system(size: 12, weight: .bold))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .tint(C.watch)
-            }
-
-            if let clip = editor.selectedClip {
-                speedControls(for: clip)
-                trimControls(for: clip)
-            }
-        }
-        .padding(12)
-        .background(C.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
+    private func beginStickerComposer(_ kind: StoryStickerComposerKind) {
+        stopPlayback()
+        activeTool = nil
+        stickerComposerKind = kind
+        stickerComposerTitle = defaultStickerComposerTitle(for: kind)
+        stickerComposerSubtitle = ""
+        stickerComposerOptions = defaultStickerComposerOptions(for: kind)
+        stickerComposerCorrectIndex = 0
+        stickerComposerDate = Date().addingTimeInterval(24 * 60 * 60)
+        stickerLocationLatitude = nil
+        stickerLocationLongitude = nil
+        locationSearch.clear()
+        isStickerComposerFocused = true
     }
 
-    private var effectsControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            effectAction("AI Restyle", icon: "wand.and.stars") {
-                renderError = "AI restyle needs a prompt service before export can match preview."
-            }
-            effectAction("Background", icon: "person.crop.rectangle") {
-                renderError = "Background replacement needs segmentation or an AI background service."
-            }
-            effectAction("Cutout", icon: "scissors") {
-                renderError = "Cutouts need subject segmentation before they can become stickers."
-            }
-            effectAction("Color Fill", icon: "paintbucket") {
-                renderError = "Color fill needs a canvas background layer model."
-            }
-        }
-        .padding(12)
-        .background(C.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
+    private func cancelStickerComposer() {
+        stickerComposerKind = nil
+        stickerComposerTitle = ""
+        stickerComposerSubtitle = ""
+        stickerComposerOptions = ["", "", "", ""]
+        stickerComposerCorrectIndex = 0
+        stickerComposerDate = Date().addingTimeInterval(24 * 60 * 60)
+        stickerLocationLatitude = nil
+        stickerLocationLongitude = nil
+        locationSearch.clear()
+        isStickerComposerFocused = false
+        resumeVideoPreviewPlaybackIfNeeded()
     }
 
-    private func effectAction(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: icon)
-                .font(.system(size: 12, weight: .bold))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(height: 38)
-        }
-        .buttonStyle(.bordered)
-        .tint(C.watch)
-    }
+    private func addConfiguredSticker() async {
+        guard let kind = stickerComposerKind, stickerComposerCanSave else { return }
+        let title = stickerComposerTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let options = configuredStickerOptions
 
-    private func trimControls(for clip: VideoClip) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text("Trim")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(C.textMuted)
-            Slider(
-                value: Binding(
-                    get: { clip.sourceDurationSeconds },
-                    set: { value in Task { await editor.trimSelectedClip(to: value) } }
-                ),
-                in: 0.5...max(0.5, clip.assetRef.durationSeconds)
+        switch kind {
+        case .link:
+            guard let url = normalizedStoryLinkURL(from: stickerComposerSubtitle) else { return }
+            await editor.addInteractiveOverlay(kind: .link, title: title, subtitle: nil, options: ["url=\(url)"], targetDate: nil, at: currentTime)
+        case .location:
+            var metadata: [String] = []
+            if let stickerLocationLatitude, let stickerLocationLongitude {
+                metadata.append("lat=\(stickerLocationLatitude)")
+                metadata.append("lng=\(stickerLocationLongitude)")
+            }
+            let subtitle = stickerComposerSubtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            await editor.addInteractiveOverlay(
+                kind: .location,
+                title: title,
+                subtitle: subtitle.isEmpty ? nil : subtitle,
+                options: metadata,
+                targetDate: nil,
+                at: currentTime
             )
-            .tint(C.watch)
-            Text(formatTime(clip.timelineDuration.seconds))
-                .font(.system(size: 10, weight: .medium))
-                .fontDesign(.monospaced)
-                .foregroundStyle(C.textTertiary)
+        case .poll:
+            await editor.addInteractiveOverlay(kind: .poll, title: title, subtitle: nil, options: options, targetDate: nil, at: currentTime)
+        case .quiz:
+            let correctIndex = min(stickerComposerCorrectIndex, max(options.count - 1, 0))
+            await editor.addInteractiveOverlay(
+                kind: .quiz,
+                title: title,
+                subtitle: nil,
+                options: options + ["correctIndex=\(correctIndex)"],
+                targetDate: nil,
+                at: currentTime
+            )
+        case .question:
+            await editor.addInteractiveOverlay(kind: .question, title: title, subtitle: "Viewer replies", options: [], targetDate: nil, at: currentTime)
+        case .countdown:
+            await editor.addInteractiveOverlay(
+                kind: .countdown,
+                title: title,
+                subtitle: countdownSubtitle(for: stickerComposerDate),
+                options: [],
+                targetDate: stickerComposerDate,
+                at: currentTime
+            )
+        }
+
+        await MainActor.run {
+            cancelStickerComposer()
+            activeTool = nil
+            resumeVideoPreviewPlaybackIfNeeded()
+        }
+    }
+
+    private func selectLocationCompletion(_ completion: MKLocalSearchCompletion) async {
+        guard let location = await locationSearch.resolve(completion) else { return }
+        stickerComposerTitle = location.name
+        stickerComposerSubtitle = location.subtitle ?? ""
+        stickerLocationLatitude = location.latitude
+        stickerLocationLongitude = location.longitude
+        locationSearch.clear()
+    }
+
+    private func defaultStickerComposerTitle(for kind: StoryStickerComposerKind) -> String {
+        switch kind {
+        case .link: return ""
+        case .location: return ""
+        case .poll: return ""
+        case .quiz: return ""
+        case .question: return "Ask me a question"
+        case .countdown: return "Countdown"
+        }
+    }
+
+    private func defaultStickerComposerOptions(for kind: StoryStickerComposerKind) -> [String] {
+        switch kind {
+        case .poll:
+            return ["Yes", "No", "", ""]
+        case .quiz:
+            return ["A", "B", "C", ""]
+        case .link, .location, .question, .countdown:
+            return ["", "", "", ""]
+        }
+    }
+
+    private func normalizedStoryLinkURL(from value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let candidate = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
+        guard let url = URL(string: candidate),
+              let scheme = url.scheme?.lowercased(),
+              (scheme == "https" || scheme == "westreem"),
+              url.host?.isEmpty == false || scheme == "westreem" else {
+            return nil
+        }
+        return candidate
+    }
+
+    private func countdownSubtitle(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
+    private func beginMentionComposer() {
+        stopPlayback()
+        mentionSearchText = "@"
+        isMentionComposerPresented = true
+        isMentionComposerFocused = true
+    }
+
+    private func cancelMentionComposer() {
+        isMentionComposerPresented = false
+        isMentionComposerFocused = false
+        mentionSearchText = "@"
+        resumeVideoPreviewPlaybackIfNeeded()
+    }
+
+    private func addMentionSticker(_ result: MentionSearchResult) async {
+        await editor.addInteractiveOverlay(
+            kind: .mention,
+            title: result.displayName,
+            subtitle: "@\(result.handle)",
+            options: ["type=\(result.type)", "entityId=\(result.id)", "handle=\(result.handle)"],
+            targetDate: nil,
+            at: currentTime
+        )
+        await MainActor.run {
+            cancelMentionComposer()
+            activeTool = nil
+            resumeVideoPreviewPlaybackIfNeeded()
         }
     }
 
@@ -1495,11 +2466,11 @@ struct StoryEditorPreviewView: View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Edit text", text: Binding(
                 get: { editingOverlayText.isEmpty ? overlay.text : editingOverlayText },
-                set: { editingOverlayText = $0 }
+                set: { editingOverlayText = String($0.prefix(80)) }
             ))
             .storyEditorFieldStyle()
             .onSubmit {
-                let text = editingOverlayText
+                let text = editingOverlayText.isEmpty ? overlay.text : editingOverlayText
                 Task { await editor.updateSelectedText(text) }
             }
 
@@ -1585,26 +2556,53 @@ struct StoryEditorPreviewView: View {
 
     private var interactiveOverlayLayer: some View {
         GeometryReader { proxy in
-            let previewScale = max(
-                proxy.size.width / CGFloat(project.canvas.width),
-                proxy.size.height / CGFloat(project.canvas.height)
+            let canvasSize = CGSize(
+                width: max(1, CGFloat(project.canvas.width)),
+                height: max(1, CGFloat(project.canvas.height))
             )
-            let visibleOverlays = Array(editor.project.tracks.overlays.filter(overlayIsVisible).enumerated())
+            let previewScale = min(
+                proxy.size.width / canvasSize.width,
+                proxy.size.height / canvasSize.height
+            )
+            let fittedSize = CGSize(
+                width: canvasSize.width * previewScale,
+                height: canvasSize.height * previewScale
+            )
+            let previewFrame = CGRect(
+                x: (proxy.size.width - fittedSize.width) / 2,
+                y: (proxy.size.height - fittedSize.height) / 2,
+                width: fittedSize.width,
+                height: fittedSize.height
+            )
+            let interactiveScale = StoryOverlayLayout.viewportScale(for: project.canvas, in: proxy.size)
+            let interactiveStickerScale = StoryOverlayLayout.stickerPresentationScale(for: project.canvas, in: proxy.size)
+            let visibleOverlays = Array(editor.project.tracks.overlays.enumerated())
             let targets = overlayGestureTargets(
                 from: visibleOverlays,
                 previewScale: previewScale,
-                in: proxy.size
+                interactiveScale: interactiveScale,
+                interactiveStickerScale: interactiveStickerScale,
+                measuredInteractiveStickerSizes: measuredInteractiveStickerSizes,
+                viewportSize: proxy.size,
+                in: previewFrame
             )
 
             ZStack {
                 ForEach(visibleOverlays, id: \.element.id) { index, overlay in
-                    liveOverlayView(overlay, previewScale: previewScale)
-                        .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                    let isInteractive = {
+                        if case .interactive = overlay { return true }
+                        return false
+                    }()
+                    liveOverlayView(overlay, previewScale: previewScale, interactiveScale: interactiveScale, interactiveStickerScale: interactiveStickerScale)
+                        .position(
+                            x: isInteractive ? StoryOverlayLayout.position(for: interactionState(for: overlay).transform, canvas: project.canvas, in: proxy.size).x : previewFrame.midX,
+                            y: isInteractive ? StoryOverlayLayout.position(for: interactionState(for: overlay).transform, canvas: project.canvas, in: proxy.size).y : previewFrame.midY
+                        )
                         .zIndex(editor.selectedOverlayID == overlay.id ? 10_000 : Double(index))
                 }
 
                 if isOverlayInteracting, overlayAlignmentGuide.hasVisibleGuide {
-                    overlayAlignmentGuideView(overlayAlignmentGuide)
+                    overlayAlignmentGuideView(overlayAlignmentGuide, in: previewFrame)
                         .allowsHitTesting(false)
                         .zIndex(19_000)
                 }
@@ -1638,6 +2636,9 @@ struct StoryEditorPreviewView: View {
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .zIndex(20_000)
             }
+            .onPreferenceChange(InteractiveStickerSizePreferenceKey.self) { sizes in
+                measuredInteractiveStickerSizes.merge(sizes) { _, new in new }
+            }
         }
     }
 
@@ -1660,63 +2661,131 @@ struct StoryEditorPreviewView: View {
         return (updated, OverlayAlignmentGuide(showVerticalCenter: snapX, showHorizontalCenter: snapY))
     }
 
-    private func overlayAlignmentGuideView(_ guide: OverlayAlignmentGuide) -> some View {
-        GeometryReader { proxy in
-            ZStack {
-                if guide.showVerticalCenter {
-                    Rectangle()
-                        .fill(C.watch.opacity(0.9))
-                        .frame(width: 1.5)
-                        .frame(maxHeight: .infinity)
-                        .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
-                }
+    private func overlayAlignmentGuideView(_ guide: OverlayAlignmentGuide, in previewFrame: CGRect) -> some View {
+        ZStack {
+            if guide.showVerticalCenter {
+                Rectangle()
+                    .fill(C.watch.opacity(0.9))
+                    .frame(width: 1.5, height: previewFrame.height)
+                    .position(x: previewFrame.midX, y: previewFrame.midY)
+            }
 
-                if guide.showHorizontalCenter {
-                    Rectangle()
-                        .fill(C.watch.opacity(0.9))
-                        .frame(height: 1.5)
-                        .frame(maxWidth: .infinity)
-                        .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
-                }
+            if guide.showHorizontalCenter {
+                Rectangle()
+                    .fill(C.watch.opacity(0.9))
+                    .frame(width: previewFrame.width, height: 1.5)
+                    .position(x: previewFrame.midX, y: previewFrame.midY)
             }
         }
     }
 
-    private func liveOverlayView(_ overlay: Overlay, previewScale: CGFloat) -> some View {
+    private func liveOverlayView(_ overlay: Overlay, previewScale: CGFloat, interactiveScale: CGSize, interactiveStickerScale: CGFloat) -> AnyView {
         let state = interactionState(for: overlay)
         let selected = editor.selectedOverlayID == overlay.id
-        return overlayVisual(for: overlay, state: state, previewScale: previewScale)
-            .overlay(
-                RoundedRectangle(cornerRadius: state.cornerRadius)
-                    .stroke(selected ? C.watch : Color.clear, lineWidth: 1.5)
+
+        if case .interactive(let interactive) = overlay {
+            let previewOverlay = StoryOverlay.editorPreview(from: interactive, canvas: project.canvas)
+            return AnyView(
+                StoryOverlayStickerView(overlay: previewOverlay, isInteractive: false)
+                    .fixedSize(horizontal: true, vertical: true)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(selected ? C.watch : Color.clear, lineWidth: 1.5)
+                    )
+                    .padding(16)
+                    .background(
+                        GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: InteractiveStickerSizePreferenceKey.self,
+                                value: [overlay.id: geometry.size]
+                            )
+                        }
+                    )
+                    .scaleEffect(state.transform.scale * interactiveStickerScale)
+                    .rotationEffect(.radians(state.transform.rotation))
+                    .allowsHitTesting(false)
+                    .accessibilityLabel("Story overlay")
             )
-            .padding(16)
-            .rotationEffect(.radians(state.transform.rotation))
-            .offset(x: CGFloat(state.transform.tx) * previewScale, y: -CGFloat(state.transform.ty) * previewScale)
-            .allowsHitTesting(false)
-            .accessibilityLabel("Story overlay")
+        }
+
+        return AnyView(
+            overlayVisual(for: overlay, state: state, previewScale: previewScale)
+                .overlay(
+                    RoundedRectangle(cornerRadius: state.cornerRadius)
+                        .stroke(selected ? C.watch : Color.clear, lineWidth: 1.5)
+                )
+                .padding(16)
+                .rotationEffect(.radians(state.transform.rotation))
+                .offset(x: CGFloat(state.transform.tx) * previewScale, y: -CGFloat(state.transform.ty) * previewScale)
+                .allowsHitTesting(false)
+                .accessibilityLabel("Story overlay")
+        )
     }
 
     private func overlayGestureTargets(
         from overlays: [(offset: Int, element: Overlay)],
         previewScale: CGFloat,
-        in size: CGSize
+        interactiveScale: CGSize,
+        interactiveStickerScale: CGFloat,
+        measuredInteractiveStickerSizes: [UUID: CGSize],
+        viewportSize: CGSize,
+        in previewFrame: CGRect
     ) -> [OverlayGestureTarget] {
         overlays.map { index, overlay in
             let state = interactionState(for: overlay)
-            let scaledWidth = max(44, state.canvasSize.width * previewScale * state.transform.scale)
-            let scaledHeight = max(44, state.canvasSize.height * previewScale * state.transform.scale)
+            let scaledWidth: CGFloat
+            let scaledHeight: CGFloat
+            let center: CGPoint
+            let translationScale: CGSize
+            if case .interactive = overlay {
+                let hitSize = measuredInteractiveStickerSizes[overlay.id] ?? interactiveViewerStickerHitSize(for: overlay)
+                scaledWidth = max(44, hitSize.width * state.transform.scale * interactiveStickerScale)
+                scaledHeight = max(44, hitSize.height * state.transform.scale * interactiveStickerScale)
+                center = StoryOverlayLayout.position(for: state.transform, canvas: project.canvas, in: viewportSize)
+                translationScale = interactiveScale
+            } else {
+                scaledWidth = max(44, state.canvasSize.width * previewScale * state.transform.scale)
+                scaledHeight = max(44, state.canvasSize.height * previewScale * state.transform.scale)
+                center = CGPoint(
+                    x: previewFrame.midX + CGFloat(state.transform.tx) * previewScale,
+                    y: previewFrame.midY - CGFloat(state.transform.ty) * previewScale
+                )
+                translationScale = CGSize(width: previewScale, height: previewScale)
+            }
             return OverlayGestureTarget(
                 id: overlay.id,
                 overlay: overlay,
-                center: CGPoint(
-                    x: size.width / 2 + CGFloat(state.transform.tx) * previewScale,
-                    y: size.height / 2 - CGFloat(state.transform.ty) * previewScale
-                ),
+                center: center,
                 size: CGSize(width: scaledWidth + 44, height: scaledHeight + 44),
                 transform: state.transform,
+                translationScale: translationScale,
                 zIndex: editor.selectedOverlayID == overlay.id ? 10_000 + index : index
             )
+        }
+    }
+
+    private func interactiveViewerStickerHitSize(for overlay: Overlay) -> CGSize {
+        guard case .interactive(let interactive) = overlay else { return .zero }
+
+        switch interactive.kind {
+        case .link:
+            let metadata = editorInteractiveMetadata(interactive.options)
+            let labelWidth = CGFloat(interactive.title.count) * 8 + 58
+            let urlWidth = CGFloat(shortenedHost(from: metadata["url"] ?? interactive.subtitle)?.count ?? 0) * 6 + 58
+            return CGSize(width: max(118, min(260, max(labelWidth, urlWidth))), height: 46)
+        case .mention:
+            return CGSize(width: max(118, min(240, CGFloat(interactive.title.count) * 8 + 76)), height: 46)
+        case .location:
+            return CGSize(width: max(96, min(260, CGFloat(interactive.title.count) * 8 + 44)), height: 34)
+        case .countdown:
+            return CGSize(width: 132, height: 64)
+        case .poll, .quiz:
+            let options = visibleInteractiveOptions(interactive.options)
+            return CGSize(width: 260, height: CGFloat(56 + max(options.count, 2) * 46))
+        case .question:
+            return CGSize(width: 240, height: 110)
+        case .addYours, .avatar:
+            return CGSize(width: 220, height: 92)
         }
     }
 
@@ -1731,7 +2800,7 @@ struct StoryEditorPreviewView: View {
                     .font(storyFont(for: text.style, size: max(10, text.style.fontSize * previewScale * state.transform.scale)))
                     .foregroundStyle(swiftUIColor(text.style.color))
                     .multilineTextAlignment(text.style.alignment == "left" ? .leading : (text.style.alignment == "right" ? .trailing : .center))
-                    .lineLimit(3)
+                    .lineLimit(5)
                     .minimumScaleFactor(0.65)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
@@ -1746,7 +2815,7 @@ struct StoryEditorPreviewView: View {
                     StoryAssetOverlayImageView(
                         url: assetStore.absoluteURL(for: assetRef.relativePath),
                         kind: assetRef.kind,
-                        time: currentTime - sticker.timeRange.start.time.seconds
+                        time: 0
                     )
                     .frame(width: width, height: height)
                     .clipShape(RoundedRectangle(cornerRadius: state.cornerRadius))
@@ -1797,8 +2866,7 @@ struct StoryEditorPreviewView: View {
     private func interactionState(for overlay: Overlay) -> OverlayInteractionState {
         switch overlay {
         case .text(let text):
-            let characterWidth = max(180, min(860, Double(text.text.count) * 28 + 68))
-            return OverlayInteractionState(transform: text.transform, canvasSize: CGSize(width: characterWidth, height: 104), cornerRadius: 18)
+            return OverlayInteractionState(transform: text.transform, canvasSize: textOverlayCanvasSize(text), cornerRadius: 18)
         case .sticker(let sticker):
             if let assetRef = sticker.assetRef {
                 return OverlayInteractionState(
@@ -1818,53 +2886,504 @@ struct StoryEditorPreviewView: View {
             let width = max(280, min(760, Double(link.label.count) * 34 + 180))
             return OverlayInteractionState(transform: link.transform, canvasSize: CGSize(width: width, height: 104), cornerRadius: 52)
         case .interactive(let interactive):
-            let width: Double = interactive.kind == .mention || interactive.kind == .location ? 520 : 700
-            let optionHeight = interactive.options.isEmpty ? 0.0 : Double(interactive.options.count) * 58.0 + 18.0
-            let subtitleHeight = interactive.subtitle == nil ? 0.0 : 44.0
+            if interactive.kind == .link {
+                let metadata = editorInteractiveMetadata(interactive.options)
+                let labelWidth = Double(interactive.title.count) * 26
+                let urlWidth = Double((metadata["url"] ?? interactive.subtitle ?? "").count) * 10
+                let width = max(240, min(620, max(labelWidth, urlWidth) + 120))
+                return OverlayInteractionState(
+                    transform: interactive.transform,
+                    canvasSize: CGSize(width: width, height: 72),
+                    cornerRadius: 36
+                )
+            }
+            if interactive.kind == .mention {
+                let titleWidth = Double(interactive.title.count) * 26
+                let handleWidth = Double((interactive.subtitle ?? "").count) * 18
+                let width = max(320, min(680, max(titleWidth, handleWidth) + 150))
+                return OverlayInteractionState(
+                    transform: interactive.transform,
+                    canvasSize: CGSize(width: width, height: 124),
+                    cornerRadius: 62
+                )
+            }
+            if interactive.kind == .location {
+                let width = max(220, min(520, Double(interactive.title.count) * 22 + 120))
+                let height = 72.0
+                return OverlayInteractionState(
+                    transform: interactive.transform,
+                    canvasSize: CGSize(width: width, height: height),
+                    cornerRadius: height / 2
+                )
+            }
+            if interactive.kind == .countdown {
+                return OverlayInteractionState(
+                    transform: interactive.transform,
+                    canvasSize: CGSize(width: 260, height: 130),
+                    cornerRadius: 22
+                )
+            }
+            let width: Double = 560
+            let visibleOptions = visibleInteractiveOptions(interactive.options)
+            let optionHeight = visibleOptions.isEmpty ? 0.0 : Double(visibleOptions.count) * 52.0 + 12.0
+            let subtitleHeight = interactive.subtitle == nil ? 0.0 : 28.0
             return OverlayInteractionState(
                 transform: interactive.transform,
-                canvasSize: CGSize(width: width, height: max(112.0, 116.0 + subtitleHeight + optionHeight)),
-                cornerRadius: 28
+                canvasSize: CGSize(width: width, height: max(116.0, 92.0 + subtitleHeight + optionHeight)),
+                cornerRadius: 24
             )
         }
     }
 
-    private func interactiveStickerVisual(_ overlay: StoryInteractiveOverlay, width: CGFloat, height: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: overlay.kind.iconName)
-                    .font(.system(size: max(12, 20 * width / 700), weight: .bold))
-                    .foregroundStyle(C.watch)
+    private func textOverlayCanvasSize(_ overlay: TextOverlay) -> CGSize {
+        let maxWidth: CGFloat = 760
+        let minWidth: CGFloat = 180
+        let padding = CGSize(width: 68, height: 44)
+        let font = overlay.style.fontName.flatMap { UIFont(name: $0, size: overlay.style.fontSize) }
+            ?? UIFont.systemFont(ofSize: overlay.style.fontSize, weight: .bold)
+        let paragraph = NSMutableParagraphStyle()
+        switch overlay.style.alignment.lowercased() {
+        case "left":
+            paragraph.alignment = .left
+        case "right":
+            paragraph.alignment = .right
+        default:
+            paragraph.alignment = .center
+        }
+        paragraph.lineBreakMode = .byWordWrapping
+        let attributed = NSAttributedString(
+            string: overlay.text,
+            attributes: [.font: font, .paragraphStyle: paragraph]
+        )
+        let rect = attributed.boundingRect(
+            with: CGSize(width: maxWidth - padding.width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            context: nil
+        ).integral
+        return CGSize(
+            width: max(minWidth, min(maxWidth, rect.width + padding.width)),
+            height: max(92, min(360, rect.height + padding.height))
+        )
+    }
+
+    @ViewBuilder
+    private func editorViewerStyleInteractiveSticker(_ overlay: StoryInteractiveOverlay) -> some View {
+        switch overlay.kind {
+        case .link:
+            editorViewerLinkSticker(overlay)
+        case .mention:
+            editorViewerMentionSticker(overlay)
+        case .location:
+            editorViewerLocationSticker(overlay)
+        case .poll:
+            editorViewerPollSticker(overlay)
+        case .quiz:
+            editorViewerQuizSticker(overlay)
+        case .question:
+            editorViewerQuestionSticker(overlay)
+        case .countdown:
+            editorViewerCountdownSticker(overlay)
+        case .addYours, .avatar:
+            editorViewerGenericSticker(overlay)
+        }
+    }
+
+    private func editorViewerLinkSticker(_ overlay: StoryInteractiveOverlay) -> some View {
+        let metadata = editorInteractiveMetadata(overlay.options)
+        let urlText = shortenedHost(from: metadata["url"] ?? overlay.subtitle)
+        return HStack(spacing: 6) {
+            Image(systemName: "link")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(C.watch)
+            VStack(alignment: .leading, spacing: 1) {
                 Text(overlay.title)
-                    .font(.system(size: max(13, 28 * width / 700), weight: .heavy))
-                    .foregroundStyle(.black)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.62)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                if let urlText {
+                    Text(urlText)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.58))
+                        .lineLimit(1)
+                }
             }
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
+        .background(editorViewerStickerBacking)
+    }
+
+    private func editorViewerMentionSticker(_ overlay: StoryInteractiveOverlay) -> some View {
+        let metadata = editorInteractiveMetadata(overlay.options)
+        let handle = metadata["handle"] ?? overlay.subtitle?.replacingOccurrences(of: "@", with: "") ?? overlay.title
+        return HStack(spacing: 6) {
+            Circle()
+                .fill(C.watch)
+                .frame(width: 22, height: 22)
+                .overlay {
+                    Text(String(overlay.title.prefix(1)).uppercased())
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.black)
+                }
+            Text("@\(handle)")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
+        .background(editorViewerStickerBacking)
+    }
+
+    private func editorViewerLocationSticker(_ overlay: StoryInteractiveOverlay) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "location.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(C.watch)
+            Text(overlay.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
+        .background(editorViewerStickerBacking)
+    }
+
+    private func editorViewerPollSticker(_ overlay: StoryInteractiveOverlay) -> some View {
+        let options = visibleInteractiveOptions(overlay.options)
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(overlay.title)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white)
+                .lineLimit(3)
+
+            ForEach(Array(options.prefix(4).enumerated()), id: \.offset) { _, option in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(C.watch.opacity(0.18))
+                    Text(option)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                }
+                .frame(height: 38)
+            }
+        }
+        .padding(12)
+        .frame(minWidth: 200, maxWidth: 260)
+        .background(editorViewerStickerBacking)
+    }
+
+    private func editorViewerQuizSticker(_ overlay: StoryInteractiveOverlay) -> some View {
+        let options = visibleInteractiveOptions(overlay.options)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 5) {
+                Image(systemName: "questionmark.circle.fill")
+                    .foregroundStyle(C.watch)
+                    .font(.system(size: 12))
+                Text("QUIZ")
+                    .font(.system(size: 10, weight: .black))
+                    .foregroundStyle(C.watch)
+            }
+
+            Text(overlay.title)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white)
+                .lineLimit(3)
+
+            ForEach(Array(options.prefix(4).enumerated()), id: \.offset) { _, option in
+                HStack {
+                    Text(option)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Spacer()
+                }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(C.watch.opacity(0.18))
+                )
+            }
+        }
+        .padding(12)
+        .frame(minWidth: 200, maxWidth: 260)
+        .background(editorViewerStickerBacking)
+    }
+
+    private func editorViewerQuestionSticker(_ overlay: StoryInteractiveOverlay) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 5) {
+                Image(systemName: "bubble.left.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(C.watch)
+                Text("ASK ME")
+                    .font(.system(size: 10, weight: .black))
+                    .foregroundStyle(C.watch)
+            }
+
+            Text(overlay.title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(12)
+        .frame(minWidth: 180, maxWidth: 240)
+        .background(editorViewerStickerBacking)
+    }
+
+    private func editorViewerCountdownSticker(_ overlay: StoryInteractiveOverlay) -> some View {
+        VStack(spacing: 2) {
+            Text(overlay.title)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(Color.white.opacity(0.75))
+                .lineLimit(1)
+
+            Text(countdownPreviewText(for: overlay.targetDate))
+                .font(.system(size: 22, weight: .black).monospacedDigit())
+                .foregroundStyle(.white)
+                .lineLimit(1)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .background(editorViewerStickerBacking)
+    }
+
+    private func editorViewerGenericSticker(_ overlay: StoryInteractiveOverlay) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 5) {
+                Image(systemName: overlay.kind.iconName)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(C.watch)
+                Text(editorInteractiveLabel(for: overlay.kind))
+                    .font(.system(size: 10, weight: .black))
+                    .foregroundStyle(C.watch)
+            }
+            Text(overlay.title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(3)
+        }
+        .padding(12)
+        .frame(minWidth: 180, maxWidth: 240)
+        .background(editorViewerStickerBacking)
+    }
+
+    private var editorViewerStickerBacking: some View {
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .fill(Color.black.opacity(0.86))
+            .shadow(color: C.watch.opacity(0.16), radius: 12, y: 4)
+    }
+
+    private func editorInteractiveMetadata(_ options: [String]) -> [String: String] {
+        options.reduce(into: [:]) { result, option in
+            guard let separator = option.firstIndex(of: "=") else { return }
+            let key = String(option[..<separator])
+            let value = String(option[option.index(after: separator)...])
+            result[key] = value
+        }
+    }
+
+    private func shortenedHost(from value: String?) -> String? {
+        guard let value, let host = URL(string: value)?.host else { return nil }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+
+    @ViewBuilder
+    private func interactiveStickerVisual(_ overlay: StoryInteractiveOverlay, width: CGFloat, height: CGFloat) -> some View {
+        if overlay.kind == .link {
+            linkStickerVisual(overlay, width: width, height: height)
+        } else if overlay.kind == .mention {
+            mentionStickerVisual(overlay, width: width, height: height)
+        } else if overlay.kind == .location {
+            locationStickerVisual(overlay, width: width, height: height)
+        } else if overlay.kind == .countdown {
+            countdownStickerVisual(overlay, width: width, height: height)
+        } else {
+            genericInteractiveStickerVisual(overlay, width: width, height: height)
+        }
+    }
+
+    private func linkStickerVisual(_ overlay: StoryInteractiveOverlay, width: CGFloat, height: CGFloat) -> some View {
+        let metadata = editorInteractiveMetadata(overlay.options)
+        return HStack(spacing: max(6, width * 0.025)) {
+            Image(systemName: "link")
+                .font(.system(size: max(10, height * 0.22), weight: .bold))
+                .foregroundStyle(C.watch)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(overlay.title)
+                    .font(.system(size: max(12, height * 0.23), weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                if let host = shortenedHost(from: metadata["url"] ?? overlay.subtitle) {
+                    Text(host)
+                        .font(.system(size: max(9, height * 0.16), weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.58))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
+            }
+        }
+        .padding(.horizontal, max(10, width * 0.04))
+        .frame(width: width, height: height)
+        .background(editorStickerBacking)
+        .clipShape(Capsule())
+    }
+
+    private func locationStickerVisual(_ overlay: StoryInteractiveOverlay, width: CGFloat, height: CGFloat) -> some View {
+        HStack(spacing: max(6, width * 0.025)) {
+            Image(systemName: "location.fill")
+                .font(.system(size: max(10, height * 0.22), weight: .bold))
+                .foregroundStyle(C.watch)
+            Text(overlay.title)
+                .font(.system(size: max(12, height * 0.23), weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.64)
+        }
+        .padding(.horizontal, max(10, width * 0.04))
+        .frame(width: width, height: height)
+        .background(editorStickerBacking)
+        .clipShape(Capsule())
+    }
+
+    private func countdownStickerVisual(_ overlay: StoryInteractiveOverlay, width: CGFloat, height: CGFloat) -> some View {
+        VStack(spacing: 2) {
+            Text(overlay.title)
+                .font(.system(size: max(10, height * 0.11), weight: .bold))
+                .foregroundStyle(Color.white.opacity(0.75))
+                .lineLimit(1)
+
+            Text(countdownPreviewText(for: overlay.targetDate))
+                .font(.system(size: max(20, height * 0.25), weight: .black).monospacedDigit())
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .padding(.horizontal, 14)
+        .frame(width: width, height: height)
+        .background(editorStickerBacking)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private func genericInteractiveStickerVisual(_ overlay: StoryInteractiveOverlay, width: CGFloat, height: CGFloat) -> some View {
+        let options = visibleInteractiveOptions(overlay.options)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 5) {
+                Image(systemName: overlay.kind.iconName)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(editorInteractiveAccent(for: overlay.kind))
+                Text(editorInteractiveLabel(for: overlay.kind))
+                    .font(.system(size: 10, weight: .black))
+                    .foregroundStyle(editorInteractiveAccent(for: overlay.kind))
+            }
+
+            Text(overlay.title)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white)
+                .lineLimit(3)
 
             if let subtitle = overlay.subtitle, !subtitle.isEmpty {
                 Text(subtitle)
-                    .font(.system(size: max(11, 18 * width / 700), weight: .bold))
-                    .foregroundStyle(.black.opacity(0.62))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.72))
                     .lineLimit(1)
             }
 
-            ForEach(Array(overlay.options.prefix(4).enumerated()), id: \.offset) { _, option in
+            ForEach(Array(options.prefix(4).enumerated()), id: \.offset) { _, option in
                 Text(option)
-                    .font(.system(size: max(11, 18 * width / 700), weight: .bold))
-                    .foregroundStyle(.black)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: max(28, 44 * width / 700))
-                    .background(Color.black.opacity(0.08))
-                    .clipShape(Capsule())
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .frame(height: 38)
+                    .background(C.watch.opacity(0.18))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
         }
-        .padding(.horizontal, max(14, 28 * width / 700))
-        .padding(.vertical, max(10, 20 * width / 700))
+        .padding(12)
         .frame(width: width, height: height, alignment: .leading)
-        .background(Color.white.opacity(0.94))
-        .clipShape(RoundedRectangle(cornerRadius: 28))
-        .shadow(color: .black.opacity(0.22), radius: 10, y: 5)
+        .background(editorStickerBacking)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private var editorStickerBacking: some ShapeStyle {
+        LinearGradient(
+            colors: [Color.black.opacity(0.90), Color.black.opacity(0.78), C.watch.opacity(0.30)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private func editorInteractiveLabel(for kind: StoryInteractiveStickerKind) -> String {
+        switch kind {
+        case .link: return "LINK"
+        case .question: return "ASK ME"
+        case .quiz: return "QUIZ"
+        case .poll: return "POLL"
+        case .addYours: return "ADD YOURS"
+        case .avatar: return "AVATAR"
+        case .location, .mention, .countdown: return kind.title.uppercased()
+        }
+    }
+
+    private func editorInteractiveAccent(for kind: StoryInteractiveStickerKind) -> Color {
+        C.watch
+    }
+
+    private func countdownPreviewText(for targetDate: Date?) -> String {
+        guard let targetDate else { return "00:00" }
+        let remaining = max(targetDate.timeIntervalSince(Date()), 0)
+        let hours = Int(remaining) / 3600
+        let minutes = (Int(remaining) % 3600) / 60
+        let seconds = Int(remaining) % 60
+        if hours > 0 {
+            return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+        }
+        return String(format: "%02d:%02d", minutes, seconds)
+    }
+
+    private func visibleInteractiveOptions(_ options: [String]) -> [String] {
+        options.filter { option in
+            !option.contains("=")
+        }
+    }
+
+    private func mentionStickerVisual(_ overlay: StoryInteractiveOverlay, width: CGFloat, height: CGFloat) -> some View {
+        HStack(spacing: max(8, width * 0.03)) {
+            Image(systemName: "at")
+                .font(.system(size: max(15, width * 0.08), weight: .black))
+                .foregroundStyle(.black)
+                .frame(width: max(34, height * 0.56), height: max(34, height * 0.56))
+                .background(C.watch)
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(overlay.title)
+                    .font(.system(size: max(14, width * 0.075), weight: .heavy))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.64)
+                if let subtitle = overlay.subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.system(size: max(11, width * 0.045), weight: .bold))
+                        .foregroundStyle(.white.opacity(0.74))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, max(14, width * 0.055))
+        .frame(width: width, height: height, alignment: .leading)
+        .background(Color.black.opacity(0.76))
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 1))
+        .shadow(color: .black.opacity(0.34), radius: 10, y: 5)
     }
 
     private func storyFont(for style: TextOverlayStyle, size: Double) -> Font {
@@ -1878,19 +3397,6 @@ struct StoryEditorPreviewView: View {
         Color(red: color.r, green: color.g, blue: color.b, opacity: color.a)
     }
 
-    private func overlayIsVisible(_ overlay: Overlay) -> Bool {
-        let range: TimelineRange
-        switch overlay {
-        case .text(let text): range = text.timeRange
-        case .sticker(let sticker): range = sticker.timeRange
-        case .drawing(let drawing): range = drawing.timeRange
-        case .link(let link): range = link.timeRange
-        case .interactive(let interactive): range = interactive.timeRange
-        }
-        let start = range.start.time.seconds
-        let end = start + range.duration.time.seconds
-        return currentTime >= start && currentTime <= end
-    }
 
     private func selectOverlayForEditing(_ overlay: Overlay) {
         editor.selectOverlay(overlay.id)
@@ -1960,14 +3466,51 @@ struct StoryEditorPreviewView: View {
         .accessibilityLabel(title)
     }
 
+    private var filterStatusHUD: some View {
+        VStack(spacing: 6) {
+            Text(currentFilterPreset.name)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(currentFilterPreset.id == "neutral" ? .white : .black)
+                .lineLimit(1)
+                .padding(.horizontal, 14)
+                .frame(height: 34)
+                .background(currentFilterPreset.id == "neutral" ? Color.black.opacity(0.48) : C.watch)
+                .clipShape(Capsule())
+
+            Text("Selected before capture")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.86))
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+                .frame(height: 28)
+                .background(Color.black.opacity(0.36))
+                .clipShape(Capsule())
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .padding(.bottom, 108)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
     private var previewSurface: some View {
         ZStack {
             Color.black
 
-            if let renderedImage {
+            if usesRenderedToolPreview, let renderedImage {
                 Image(uiImage: renderedImage)
                     .resizable()
-                    .scaledToFill()
+                    .scaledToFit()
+            } else if let previewPlayer {
+                StoryEditorPlayerView(player: previewPlayer)
+                    .onAppear {
+                        previewPlayer.play()
+                        isPlaying = true
+                    }
+                    .storyPreviewColorGrade(videoPreviewColorGrade)
+            } else if let renderedImage {
+                Image(uiImage: renderedImage)
+                    .resizable()
+                    .scaledToFit()
             } else if isRendering {
                 ProgressView()
                     .tint(C.watch)
@@ -2005,6 +3548,11 @@ struct StoryEditorPreviewView: View {
                 interactiveOverlayLayer
             }
 
+            if filterHUDVisible, !isDrawingPresented, !isTextComposerPresented, activeTool == nil {
+                filterStatusHUD
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+
             if let renderError {
                 Text(renderError)
                     .font(.system(size: 12, weight: .medium))
@@ -2021,6 +3569,32 @@ struct StoryEditorPreviewView: View {
         .accessibilityLabel("Story editor preview")
     }
 
+    private func previewRenderProject(from project: Project) -> Project {
+        var previewProject = project
+        let originalWidth = max(project.canvas.width, 1)
+        let originalHeight = max(project.canvas.height, 1)
+        let previewWidth = min(originalWidth, 360)
+        let previewHeight = max(1, Int((Double(previewWidth) / Double(originalWidth) * Double(originalHeight)).rounded()))
+        let scale = Double(previewWidth) / Double(originalWidth)
+        previewProject.canvas = CanvasSpec(
+            width: previewWidth,
+            height: previewHeight,
+            fps: project.canvas.fps,
+            backgroundColor: project.canvas.backgroundColor
+        )
+        previewProject.tracks.videoClips = previewProject.tracks.videoClips.map { clip in
+            var scaledClip = clip
+            scaledClip.transform = Transform2D(
+                scale: clip.transform.scale,
+                rotation: clip.transform.rotation,
+                tx: clip.transform.tx * scale,
+                ty: clip.transform.ty * scale
+            )
+            return scaledClip
+        }
+        return previewProject
+    }
+
     private func basePreviewSignature(for project: Project) -> String {
         project.tracks.videoClips.map { clip in
             [
@@ -2031,39 +3605,71 @@ struct StoryEditorPreviewView: View {
                 "\(clip.sourceDuration.value)",
                 "\(clip.speed)",
                 "\(clip.reversed)",
-                "\(clip.transform.scale)",
-                "\(clip.transform.rotation)",
-                "\(clip.transform.tx)",
-                "\(clip.transform.ty)",
-                clip.filterId ?? "",
-                "\(clip.filterIntensity)",
+                clip.filterId ?? "neutral",
                 "\(clip.adjustments.brightness)",
                 "\(clip.adjustments.contrast)",
                 "\(clip.adjustments.saturation)",
                 "\(clip.adjustments.warmth)",
-                "\(clip.adjustments.vignette)"
+                "\(clip.adjustments.vignette)",
+                "\(clip.transform.scale)",
+                "\(clip.transform.rotation)",
+                "\(clip.transform.tx)",
+                "\(clip.transform.ty)"
             ].joined(separator: ":")
         }.joined(separator: "|")
     }
 
     @MainActor
+    private func schedulePreviewRender(after delay: UInt64? = nil) {
+        let effectiveDelay = delay ?? previewRenderDebounceDelay
+        previewRenderTask?.cancel()
+        previewRenderTask = Task { @MainActor in
+            if effectiveDelay > 0 {
+                try? await Task.sleep(nanoseconds: effectiveDelay)
+            }
+            guard !Task.isCancelled else { return }
+            await renderCurrentFrame()
+        }
+    }
+
+    @MainActor
     private func renderCurrentFrame() async {
-        guard !isRendering else { return }
+        guard !isRendering else {
+            previewRenderNeedsRefresh = true
+            return
+        }
         isRendering = true
-        defer { isRendering = false }
+        defer {
+            isRendering = false
+            if previewRenderNeedsRefresh {
+                previewRenderNeedsRefresh = false
+                schedulePreviewRender()
+            }
+        }
 
         do {
-            let store = await ProjectStore.shared.assetStore(for: project.id)
-            var baseProject = project
-            baseProject.tracks.overlays = []
+            let store: AssetStore
+            if let assetStore {
+                store = assetStore
+            } else {
+                store = await ProjectStore.shared.assetStore(for: project.id)
+                self.assetStore = store
+            }
+            guard !Task.isCancelled else { return }
+            let baseProject = previewRenderProject(from: project)
             let buffer = try await compositor.render(
                 project: baseProject,
                 assetStore: store,
-                at: CMTime(seconds: min(currentTime, duration), preferredTimescale: projectTimeScale)
+                at: CMTime(seconds: min(currentTime, duration), preferredTimescale: projectTimeScale),
+                quality: .interactivePreview
             )
-            renderedImage = try makeUIImage(from: buffer)
+            guard !Task.isCancelled else { return }
+            let image = try makeUIImage(from: buffer)
+            guard !Task.isCancelled else { return }
+            renderedImage = image
             renderError = nil
         } catch {
+            guard !Task.isCancelled else { return }
             renderError = error.localizedDescription
         }
     }
@@ -2119,24 +3725,211 @@ struct StoryEditorPreviewView: View {
         }
     }
 
-    private func startPlayback() {
-        guard shouldAutoPlayPreview, !isPlaying else { return }
+    @MainActor
+    private func handleToolPreviewModeChange(from oldToolID: String?, to newToolID: String?) {
+        switch (oldToolID, newToolID) {
+        case (nil, .some):
+            beginRenderedToolPreviewMode()
+        case (.some, nil):
+            endRenderedToolPreviewMode()
+        case (.some, .some):
+            schedulePreviewRender()
+        default:
+            break
+        }
+    }
+
+    @MainActor
+    private func beginRenderedToolPreviewMode() {
+        shouldResumePlaybackAfterToolPreview = isPlaying || (previewPlayer?.rate ?? 0) != 0
+        stopPlayback()
+        destroyPreviewPlayer()
+        schedulePreviewRender()
+    }
+
+    @MainActor
+    private func endRenderedToolPreviewMode() {
+        let shouldAutoplay = shouldResumePlaybackAfterToolPreview
+        shouldResumePlaybackAfterToolPreview = false
+        guard shouldRestorePlayerAfterToolPreview else { return }
+        if hasVideoPreviewClip {
+            configureVideoPreviewPlayer(autoplay: shouldAutoplay)
+        } else {
+            schedulePreviewRender()
+        }
+    }
+
+    private var shouldRestorePlayerAfterToolPreview: Bool {
+        !isTextComposerPresented
+            && !isDrawingPresented
+            && !isMentionComposerPresented
+            && stickerComposerKind == nil
+            && !isShowingGiphyPicker
+            && !isImportingMediaOverlay
+    }
+
+    @MainActor
+    private func resumeVideoPreviewPlaybackIfNeeded() {
+        guard hasVideoPreviewClip else { return }
+        guard let previewPlayer else {
+            configureVideoPreviewPlayer(autoplay: true)
+            return
+        }
+        previewPlayer.play()
         isPlaying = true
-        playbackTask = Task { @MainActor in
-            let frameInterval = 1.0 / Double(max(project.canvas.fps, 1))
+    }
+
+    @MainActor
+    private func configureVideoPreviewPlayer(autoplay: Bool = true) {
+        guard let url = videoPreviewURL, let clip = videoPreviewClip else {
+            destroyPreviewPlayer()
+            return
+        }
+
+        let signature = previewPlayerSignature(url: url, clip: clip)
+        if previewPlayerURL == url, previewPlayerSignature == signature, let previewPlayer {
+            previewPlayer.isMuted = clip.muted
+            previewPlayer.volume = clip.volume
+            if autoplay {
+                previewPlayer.play()
+                isPlaying = true
+            } else {
+                previewPlayer.pause()
+                isPlaying = false
+            }
+            return
+        }
+
+        destroyPreviewPlayer()
+
+        let asset = AVURLAsset(url: url)
+        let item = AVPlayerItem(
+            asset: asset,
+            automaticallyLoadedAssetKeys: ["tracks", "duration", "playable"]
+        )
+        if shouldUseVideoComposition(for: clip) {
+            item.videoComposition = AVVideoComposition(asset: asset) { request in
+                guard let output = StoryFrameFilterRenderer.realtimePreviewCIImage(
+                    request.sourceImage,
+                    filterId: clip.filterId,
+                    adjustments: clip.adjustments
+                ) else {
+                    request.finish(with: request.sourceImage, context: nil)
+                    return
+                }
+                request.finish(with: output, context: nil)
+            }
+        }
+        item.preferredForwardBufferDuration = 0
+        let player = AVPlayer(playerItem: item)
+        player.actionAtItemEnd = .none
+        player.automaticallyWaitsToMinimizeStalling = false
+        player.isMuted = clip.muted
+        player.volume = clip.volume
+        previewPlayer = player
+        previewPlayerURL = url
+        previewPlayerSignature = signature
+        renderedImage = nil
+        isPlaying = autoplay
+
+        previewPlayerTimeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.15, preferredTimescale: 600),
+            queue: .main
+        ) { time in
+            guard duration > 0 else {
+                currentTime = 0
+                return
+            }
+            let boundedTime = min(max(time.seconds, 0), duration)
+            let nearLoopBoundary = boundedTime < 0.05 || boundedTime >= max(duration - 0.08, 0)
+            guard nearLoopBoundary || abs(boundedTime - currentTime) >= 0.12 else { return }
+            currentTime = boundedTime
+        }
+
+        previewPlayerEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            currentTime = 0
+            player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                guard finished, isPlaying else { return }
+                player.play()
+            }
+        }
+
+        previewPlayerStatusObserver = item.observe(\.status, options: [.initial, .new]) { item, _ in
+            Task { @MainActor in
+                guard previewPlayerURL == url else { return }
+                if item.status == .readyToPlay {
+                    if autoplay {
+                        player.play()
+                        isPlaying = true
+                    } else {
+                        player.pause()
+                        isPlaying = false
+                    }
+                } else if item.status == .failed {
+                    renderError = item.error?.localizedDescription ?? "Could not play captured video."
+                    isPlaying = false
+                }
+            }
+        }
+
+        startPreviewPlaybackWatchdog(for: player, url: url, signature: signature)
+        if autoplay {
+            player.play()
+        } else {
+            player.pause()
+        }
+    }
+
+    @MainActor
+    private func startPreviewPlaybackWatchdog(for player: AVPlayer, url: URL, signature: String) {
+        previewPlaybackWatchdogTask?.cancel()
+        previewPlaybackWatchdogTask = Task { @MainActor in
             while !Task.isCancelled {
-                let next = currentTime + frameInterval
-                currentTime = next >= duration ? 0 : next
-                await renderCurrentFrame()
-                try? await Task.sleep(nanoseconds: UInt64(frameInterval * 1_000_000_000))
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                guard previewPlayer === player,
+                      previewPlayerURL == url,
+                      previewPlayerSignature == signature,
+                      isPlaying,
+                      player.currentItem?.status == .readyToPlay else { continue }
+
+                let currentSeconds = player.currentTime().seconds
+                let nearEnd = currentSeconds >= max(duration - 0.08, 0)
+                if !nearEnd && (player.timeControlStatus != .playing || player.rate == 0) {
+                    player.play()
+                }
             }
         }
     }
 
     private func stopPlayback() {
+        previewPlayer?.pause()
         isPlaying = false
-        playbackTask?.cancel()
-        playbackTask = nil
+    }
+
+    private func destroyPreviewPlayer() {
+        if let previewPlayerTimeObserver, let previewPlayer {
+            previewPlayer.removeTimeObserver(previewPlayerTimeObserver)
+        }
+        previewPlayerTimeObserver = nil
+
+        if let previewPlayerEndObserver {
+            NotificationCenter.default.removeObserver(previewPlayerEndObserver)
+        }
+        previewPlayerEndObserver = nil
+        previewPlayerStatusObserver?.invalidate()
+        previewPlayerStatusObserver = nil
+        previewPlaybackWatchdogTask?.cancel()
+        previewPlaybackWatchdogTask = nil
+
+        previewPlayer?.pause()
+        previewPlayer = nil
+        previewPlayerURL = nil
+        previewPlayerSignature = ""
+        isPlaying = false
     }
 
     private func beginTextComposer() {
@@ -2156,6 +3949,7 @@ struct StoryEditorPreviewView: View {
         composerEditingOverlayID = nil
         isTextComposerPresented = false
         isTextComposerFocused = false
+        resumeVideoPreviewPlaybackIfNeeded()
     }
 
     private func saveTextComposer() {
@@ -2246,6 +4040,7 @@ private struct StoryTextFont {
 private extension StoryInteractiveStickerKind {
     var title: String {
         switch self {
+        case .link: return "Link"
         case .location: return "Location"
         case .mention: return "Mention"
         case .addYours: return "Add Yours"
@@ -2259,6 +4054,7 @@ private extension StoryInteractiveStickerKind {
 
     var iconName: String {
         switch self {
+        case .link: return "link"
         case .location: return "mappin.and.ellipse"
         case .mention: return "at"
         case .addYours: return "plus.bubble"
@@ -2292,7 +4088,16 @@ private struct OverlayGestureTarget {
     let center: CGPoint
     let size: CGSize
     let transform: Transform2D
+    let translationScale: CGSize
     let zIndex: Int
+}
+
+private struct InteractiveStickerSizePreferenceKey: PreferenceKey {
+    static var defaultValue: [UUID: CGSize] = [:]
+
+    static func reduce(value: inout [UUID: CGSize], nextValue: () -> [UUID: CGSize]) {
+        value.merge(nextValue()) { _, new in new }
+    }
 }
 
 private struct OverlayCanvasGestureLayer: UIViewRepresentable {
@@ -2395,15 +4200,16 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
             }
 
             guard let activeTarget, let startTransform else { return }
-            let safePreviewScale = max(previewScale, 0.0001)
+            let safeScaleX = max(activeTarget.translationScale.width, 0.0001)
+            let safeScaleY = max(activeTarget.translationScale.height, 0.0001)
             let translation = pan?.translation(in: recognizer.view) ?? .zero
             let magnification = resolvedMagnification
             let rotationDelta = resolvedRotation
             let updated = Transform2D(
                 scale: startTransform.scale * magnification,
                 rotation: startTransform.rotation + rotationDelta,
-                tx: startTransform.tx + Double(translation.x / safePreviewScale),
-                ty: startTransform.ty - Double(translation.y / safePreviewScale)
+                tx: startTransform.tx + Double(translation.x / safeScaleX),
+                ty: startTransform.ty - Double(translation.y / safeScaleY)
             )
             onChange(activeTarget.id, updated)
 
@@ -2545,9 +4351,9 @@ private struct StoryAssetOverlayImageView: View {
             let asset = AVAsset(url: url)
             let generator = AVAssetImageGenerator(asset: asset)
             generator.appliesPreferredTrackTransform = true
-            generator.requestedTimeToleranceBefore = .zero
-            generator.requestedTimeToleranceAfter = .zero
-            let requested = CMTime(seconds: max(time, 0), preferredTimescale: projectTimeScale)
+            generator.requestedTimeToleranceBefore = CMTime(seconds: 0.05, preferredTimescale: 600)
+            generator.requestedTimeToleranceAfter = CMTime(seconds: 0.2, preferredTimescale: 600)
+            let requested = CMTime(seconds: max(time, 0.05), preferredTimescale: projectTimeScale)
             guard let cgImage = try? generator.copyCGImage(at: requested, actualTime: nil) else {
                 return nil
             }
@@ -2660,22 +4466,16 @@ private struct GiphyStickerCell: View {
     let sticker: GiphySticker
 
     var body: some View {
-        AsyncImage(url: URL(string: sticker.preview.url)) { phase in
-            switch phase {
-            case .success(let image):
-                image
-                    .resizable()
-                    .scaledToFit()
-            case .failure:
-                Image(systemName: "sparkles")
-                    .font(.system(size: 24, weight: .bold))
-                    .foregroundStyle(C.textMuted)
-            case .empty:
-                ProgressView()
-                    .tint(C.watch)
-            @unknown default:
-                EmptyView()
-            }
+        CachedRemoteImage(
+            url: URL(string: sticker.preview.url),
+            targetSize: CGSize(width: 120, height: 120)
+        ) { image in
+            image
+                .resizable()
+                .scaledToFit()
+        } placeholder: {
+            ProgressView()
+                .tint(C.watch)
         }
         .frame(maxWidth: .infinity)
         .aspectRatio(1, contentMode: .fit)
@@ -2769,6 +4569,30 @@ private struct GiphyStickerAsset: Decodable {
     }
 }
 
+private struct StoryEditorPlayerView: UIViewRepresentable {
+    let player: AVPlayer
+
+    func makeUIView(context: Context) -> StoryEditorPlayerLayerView {
+        let view = StoryEditorPlayerLayerView()
+        view.playerLayer.videoGravity = .resizeAspect
+        view.playerLayer.player = player
+        return view
+    }
+
+    func updateUIView(_ view: StoryEditorPlayerLayerView, context: Context) {
+        view.playerLayer.videoGravity = .resizeAspect
+        view.playerLayer.player = player
+    }
+}
+
+private final class StoryEditorPlayerLayerView: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+
+    var playerLayer: AVPlayerLayer {
+        layer as! AVPlayerLayer
+    }
+}
+
 private struct StoryDrawingCanvas: UIViewRepresentable {
     @Binding var drawing: PKDrawing
     let canvasSize: CGSize
@@ -2811,6 +4635,37 @@ private struct StoryDrawingCanvas: UIViewRepresentable {
     }
 }
 
+private struct StoryPreviewColorGradeModifier: ViewModifier {
+    let adjustments: ColorAdjust
+
+    func body(content: Content) -> some View {
+        content
+            .brightness(Double(adjustments.brightness))
+            .contrast(Double(adjustments.contrast))
+            .saturation(Double(adjustments.saturation))
+            .overlay {
+                warmthTint
+                    .blendMode(.overlay)
+                    .opacity(min(Double(abs(adjustments.warmth)) * 0.20, 0.18))
+            }
+            .overlay {
+                if adjustments.vignette > 0 {
+                    RadialGradient(
+                        colors: [.clear, .black.opacity(min(Double(adjustments.vignette) * 0.85, 0.45))],
+                        center: .center,
+                        startRadius: 80,
+                        endRadius: 420
+                    )
+                    .blendMode(.multiply)
+                }
+            }
+    }
+
+    private var warmthTint: Color {
+        adjustments.warmth >= 0 ? Color.orange : Color.blue
+    }
+}
+
 private extension View {
     func storyEditorFieldStyle() -> some View {
         self
@@ -2820,6 +4675,10 @@ private extension View {
             .background(C.elevated)
             .overlay(RoundedRectangle(cornerRadius: 7).stroke(C.borderSubtle, lineWidth: 1))
             .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+
+    func storyPreviewColorGrade(_ adjustments: ColorAdjust) -> some View {
+        modifier(StoryPreviewColorGradeModifier(adjustments: adjustments))
     }
 }
 

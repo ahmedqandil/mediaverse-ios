@@ -1,5 +1,13 @@
 import SwiftUI
 import AVKit
+import UIKit
+
+struct ClipPlaybackRange: Equatable {
+    let markIn: Double
+    let markOut: Double
+}
+
+typealias ClipRequestHandler = (Int, Int, String, Bool, Data?) async throws -> Void
 
 struct PlayerRelatedItem: Identifiable {
     let id: String
@@ -15,7 +23,8 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
     let isAuthenticated: Bool
     let onLikeMoment: ((Int) -> Void)?
     let showSpoilerToggle: Bool
-    let onClipRequest: ((Int, Int, String, Bool) async throws -> Void)?
+    let onClipRequest: ClipRequestHandler?
+    @Binding private var activeClipRange: ClipPlaybackRange?
     var markers: MarkerOverlay
     var onPrevious: (() -> Void)?
     var onNext: (() -> Void)?
@@ -24,23 +33,40 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
     let isFullscreenPresentation: Bool
     let relatedItems: [PlayerRelatedItem]
     let onSelectRelated: ((PlayerRelatedItem) -> Void)?
-
+    let adBreaks: [AdBreak]
+    let watchedAdBreakIds: Set<String>
+    let onAdBreakRequested: ((AdBreak, Double?) -> Void)?
+    let knownDuration: Double?
+    let controlsInitiallyVisible: Bool
+    let onScrubbingChanged: ((Bool) -> Void)?
     @AppStorage("playerMuted") private var storedPlayerMuted = false
     @State private var isPlaying = false
     @State private var isMuted = false
     @State private var currentTime: Double = 0
     @State private var duration: Double = 0
+    @State private var loadedAssetDuration: Double = 0
     @State private var buffered: Double = 0
+    @State private var isScrubbing = false
     @State private var showControls = true
     @State private var showSpeedMenu = false
     @State private var playbackRate: Float = 1
     @State private var timeObserver: Any?
+    @State private var timeObserverPlayer: AVPlayer?
+    @State private var seekGeneration = 0
+    @State private var playbackStatusObserver: NSKeyValueObservation?
+    @State private var currentItemObserver: NSKeyValueObservation?
     @State private var hideTask: Task<Void, Never>?
-    @State private var heartBursts: [MomentHeartBurst] = []
+    @State private var momentGraphLikeSecond: Int?
+    @State private var momentGraphLikeBoost: CGFloat = 0
+    @State private var displayedLikedSeconds: Set<Int>
+    @State private var displayedHeatmapValues: [CGFloat]
+    @State private var displayedHeatmapMaxValue: CGFloat
     @State private var clipMode = false
+    @State private var showClipFinalizeSheet = false
     @State private var clipMarkIn: Double = 0
     @State private var clipMarkOut: Double = 0
     @State private var activeClipHandle: ClipHandle?
+    @State private var isClipPreviewing = false
     @State private var clipCaption = ""
     @State private var clipIsSpoiler = false
     @State private var clipSaving = false
@@ -48,8 +74,32 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
 
     private let speeds: [Float] = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
 
-    private var uniqueLikedSeconds: [Int] {
-        Array(Set(likedSeconds)).sorted()
+    private var timelineChromeHeight: CGFloat {
+        clipMode ? 60 : 34
+    }
+
+    private var showsFullscreenRelatedStrip: Bool {
+        isFullscreenPresentation && showControls && !relatedItems.isEmpty
+    }
+
+    private var controlsBottomPadding: CGFloat {
+        if clipMode {
+            return timelineChromeHeight + 8
+        }
+        return showsFullscreenRelatedStrip ? 124 : 18
+    }
+
+    private var adBreakCountdownText: String? {
+        let nextBreak = adBreaks
+            .filter { !watchedAdBreakIds.contains($0.id) }
+            .filter { $0.timeOffsetSec > currentTime }
+            .sorted { $0.timeOffsetSec < $1.timeOffsetSec }
+            .first
+        guard let nextBreak else { return nil }
+        let remaining = nextBreak.timeOffsetSec - currentTime
+        guard remaining > 0, remaining <= 5 else { return nil }
+        let seconds = max(1, Int(ceil(remaining)))
+        return "Ads start in \(seconds) \(seconds == 1 ? "second" : "seconds")"
     }
 
     init(
@@ -59,7 +109,8 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
         isAuthenticated: Bool = false,
         onLikeMoment: ((Int) -> Void)? = nil,
         showSpoilerToggle: Bool = false,
-        onClipRequest: ((Int, Int, String, Bool) async throws -> Void)? = nil,
+        onClipRequest: ClipRequestHandler? = nil,
+        activeClipRange: Binding<ClipPlaybackRange?> = .constant(nil),
         onPrevious: (() -> Void)? = nil,
         onNext: (() -> Void)? = nil,
         onBack: (() -> Void)? = nil,
@@ -67,15 +118,25 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
         isFullscreenPresentation: Bool = false,
         relatedItems: [PlayerRelatedItem] = [],
         onSelectRelated: ((PlayerRelatedItem) -> Void)? = nil,
+        adBreaks: [AdBreak] = [],
+        watchedAdBreakIds: Set<String> = [],
+        onAdBreakRequested: ((AdBreak, Double?) -> Void)? = nil,
+        knownDuration: Double? = nil,
+        controlsInitiallyVisible: Bool = true,
+        onScrubbingChanged: ((Bool) -> Void)? = nil,
         @ViewBuilder markers: () -> MarkerOverlay
     ) {
         self.player = player
         self.heatmapBuckets = heatmapBuckets
         self.likedSeconds = likedSeconds
+        self._displayedLikedSeconds = State(initialValue: Set(likedSeconds))
+        self._displayedHeatmapValues = State(initialValue: heatmapBuckets.map { CGFloat($0) })
+        self._displayedHeatmapMaxValue = State(initialValue: max(1, CGFloat(heatmapBuckets.max() ?? 0)))
         self.isAuthenticated = isAuthenticated
         self.onLikeMoment = onLikeMoment
         self.showSpoilerToggle = showSpoilerToggle
         self.onClipRequest = onClipRequest
+        self._activeClipRange = activeClipRange
         self.onPrevious = onPrevious
         self.onNext = onNext
         self.onBack = onBack
@@ -83,6 +144,13 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
         self.isFullscreenPresentation = isFullscreenPresentation
         self.relatedItems = relatedItems
         self.onSelectRelated = onSelectRelated
+        self.adBreaks = adBreaks
+        self.watchedAdBreakIds = watchedAdBreakIds
+        self.onAdBreakRequested = onAdBreakRequested
+        self.knownDuration = knownDuration
+        self.controlsInitiallyVisible = controlsInitiallyVisible
+        self.onScrubbingChanged = onScrubbingChanged
+        self._showControls = State(initialValue: controlsInitiallyVisible)
         self.markers = markers()
     }
 
@@ -91,19 +159,40 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
             WatchPlayerSurface(player: player)
                 .background(Color.black)
                 .contentShape(Rectangle())
-
-            Rectangle()
-                .fill(.white.opacity(0.001))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
                 .onTapGesture { toggleControlsOrPlayback() }
-                .zIndex(1)
 
             if showControls {
                 controlsLayer
                     .transition(.opacity)
                     .zIndex(2)
             }
+
+            if let adBreakCountdownText {
+                Text(adBreakCountdownText)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(.white)
+                    .monospacedDigit()
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.black.opacity(0.75), in: Capsule())
+                    .overlay { Capsule().stroke(.white.opacity(0.15), lineWidth: 1) }
+                    .padding(.top, 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .allowsHitTesting(false)
+                    .zIndex(2.5)
+            }
+
+            if let activeClipRange, !clipMode {
+                activeClipPlaybackBadge(activeClipRange)
+                    .padding(.top, 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .allowsHitTesting(false)
+                    .zIndex(2.6)
+            }
+
+            bottomEdgeTimeline
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .zIndex(30)
 
             markers
                 .padding(10)
@@ -112,15 +201,41 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
         }
         .aspectRatio(16 / 9, contentMode: .fit)
         .background(Color.black)
-        .clipped()
         .onAppear { attachObservers() }
         .onDisappear { detachObservers() }
+        .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
+            guard timeObserver == nil else { return }
+            updateTimelineState()
+        }
         .onChange(of: isMuted) { _, muted in
             player.isMuted = muted
             storedPlayerMuted = muted
         }
         .onChange(of: playbackRate) { _, rate in
             if isPlaying { player.rate = rate }
+        }
+        .onChange(of: likedSeconds) { _, newValue in
+            replaceDisplayedLikedSeconds(newValue)
+        }
+        .onChange(of: heatmapBuckets) { _, newValue in
+            replaceDisplayedHeatmap(newValue)
+        }
+        .sheet(isPresented: $showClipFinalizeSheet, onDismiss: closeClipSheet) {
+            ClipToolSheet(
+                markIn: clipMarkIn,
+                markOut: clipMarkOut,
+                caption: $clipCaption,
+                isSpoiler: $clipIsSpoiler,
+                isSaving: clipSaving,
+                errorMessage: clipError,
+                showSpoilerToggle: showSpoilerToggle,
+                onPreview: previewSelectedClip,
+                onSave: { Task { await saveClip() } },
+                onCancel: cancelClipMode
+            )
+            .presentationDetents([.height(330), .medium])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color(hex: "#101014"))
         }
     }
 
@@ -138,14 +253,17 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
                     togglePlayback()
                 } label: {
                     MediaverseIcon(name: "play", fallbackSystemName: "play")
-                        .frame(width: 24, height: 24)
+                        .frame(width: 26, height: 26)
                         .foregroundStyle(.white)
-                        .frame(width: 58, height: 58)
+                        .frame(width: 72, height: 72)
                         .background(.black.opacity(0.42))
                         .clipShape(Circle())
                         .overlay { Circle().stroke(.white.opacity(0.12), lineWidth: 1) }
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Play")
+                .accessibilityHint("Plays the video")
             }
 
             VStack(spacing: 0) {
@@ -202,6 +320,7 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
                     ) {
                         onFullscreen()
                     }
+
                 }
                 .padding(.top, 10)
                 .padding(.horizontal, onBack == nil ? 10 : 16)
@@ -209,53 +328,101 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
                 Spacer()
 
                 VStack(spacing: hasHeatmap ? 6 : 8) {
-                    heatmapProgressBar
-
-                    if isFullscreenPresentation && !relatedItems.isEmpty {
-                        relatedStrip
+                    if hasMomentGraph {
+                        topMomentsGraph
                     }
 
                     if clipMode {
-                        clipEditor
+                        clipSelectionActions
                     }
 
-                    HStack(spacing: 10) {
-                        Button {
-                            togglePlayback()
-                        } label: {
-                            MediaverseIcon(name: isPlaying ? "pause" : "play", fallbackSystemName: isPlaying ? "pause" : "play")
-                                .frame(width: 16, height: 16)
-                                .foregroundStyle(.white)
-                                .frame(width: 36, height: 32)
-                        }
-                        .buttonStyle(.plain)
-
-                        Text("\(formatTime(currentTime)) / \(formatTime(duration))")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.82))
-                            .monospacedDigit()
-
-                        momentButton
-                        clipButton
-
-                        Spacer()
-
-                        if playbackRate != 1 {
-                            Text(speedLabel(playbackRate))
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(C.watch)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 4)
-                                .background(.black.opacity(0.42))
-                                .clipShape(Capsule())
-                        }
-                    }
+                    transportActionRow
                 }
                 .padding(.horizontal, 12)
-                .padding(.bottom, 10)
+                .padding(.bottom, controlsBottomPadding)
             }
         }
         .onAppear { scheduleHide() }
+    }
+
+    private var bottomEdgeTimeline: some View {
+        VStack(spacing: showsFullscreenRelatedStrip ? 8 : 0) {
+            heatmapProgressBar
+                .frame(height: timelineChromeHeight, alignment: .bottom)
+
+            if showsFullscreenRelatedStrip {
+                relatedStrip
+                    .padding(.horizontal, 12)
+                    .transition(.opacity)
+            }
+        }
+        .padding(.bottom, isFullscreenPresentation ? 14 : 0)
+    }
+
+    private var topMomentsGraph: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                MediaverseIcon(name: "star", fallbackSystemName: "star")
+                    .frame(width: 7, height: 7)
+                Text("Top Moments")
+                    .font(.system(size: 9, weight: .bold))
+                    .textCase(.uppercase)
+            }
+            .foregroundStyle(C.watch.opacity(0.70))
+
+            Canvas { ctx, size in
+                drawHeatmapWave(ctx: ctx, size: size)
+            }
+            .frame(height: 22)
+            .allowsHitTesting(false)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var transportActionRow: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Button {
+                    togglePlayback()
+                } label: {
+                    MediaverseIcon(name: isPlaying ? "pause" : "play", fallbackSystemName: isPlaying ? "pause" : "play")
+                        .frame(width: 17, height: 17)
+                        .foregroundStyle(.white)
+                        .frame(width: 38, height: 34)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isPlaying ? "Pause" : "Play")
+                .accessibilityHint(isPlaying ? "Pauses the video" : "Plays the video")
+
+                Text("\(formatTime(currentTime)) / \(formatTime(resolvedDuration()))")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.82))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(.black.opacity(0.42), in: Capsule())
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 7) {
+                momentButton
+                clipButton
+
+                if playbackRate != 1 {
+                    Text(speedLabel(playbackRate))
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(C.watch)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
+                        .background(.black.opacity(0.42))
+                        .clipShape(Capsule())
+                }
+            }
+        }
     }
 
     private var relatedStrip: some View {
@@ -266,7 +433,7 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
                 .textCase(.uppercase)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+                LazyHStack(spacing: 8) {
                     ForEach(relatedItems.prefix(8)) { item in
                         Button {
                             onSelectRelated?(item)
@@ -285,13 +452,14 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
 
     private func relatedCard(_ item: PlayerRelatedItem) -> some View {
         HStack(spacing: 8) {
-            AsyncImage(url: C.mediaURL(item.thumbnailUrl)) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().scaledToFill()
-                default:
-                    Color.white.opacity(0.08)
-                }
+            CachedRemoteImage(
+                url: C.mediaURL(item.thumbnailUrl),
+                targetSize: CGSize(width: 86, height: 48),
+                loadDelayNanoseconds: 40_000_000
+            ) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                Color.white.opacity(0.08)
             }
             .frame(width: 86, height: 48)
             .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -331,133 +499,204 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
     private var heatmapProgressBar: some View {
         GeometryReader { geo in
             let width = max(1, geo.size.width)
-            let progress = min(max(duration > 0 ? currentTime / duration : 0, 0), 1)
-            let bufferProgress = min(max(duration > 0 ? buffered / duration : 0, 0), 1)
+            let timelineDuration = resolvedDuration()
+            let progress = min(max(timelineDuration > 0 ? currentTime / timelineDuration : 0, 0), 1)
+            let bufferProgress = min(max(timelineDuration > 0 ? buffered / timelineDuration : 0, 0), 1)
             let playedWidth = width * CGFloat(progress)
             let bufferedWidth = width * CGFloat(bufferProgress)
+            let trackHeight: CGFloat = clipMode || isScrubbing ? 5 : 4
+            let showsThumb = showControls || isScrubbing
+            let thumbSize: CGFloat = 16
+            let thumbX = min(max(playedWidth - (thumbSize / 2), 0), max(width - thumbSize, 0))
 
             ZStack(alignment: .bottomLeading) {
-                if hasHeatmap {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 4) {
-                            MediaverseIcon(name: "star", fallbackSystemName: "star")
-                                .frame(width: 7, height: 7)
-                            Text("Top Moments")
-                                .font(.system(size: 9, weight: .bold))
-                                .textCase(.uppercase)
-                        }
-                        .foregroundStyle(C.watch.opacity(0.70))
-
-                        Canvas { ctx, size in
-                            drawHeatmapWave(ctx: ctx, size: size)
-                        }
-                        .frame(height: 22)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
                 ZStack(alignment: .leading) {
-                    Capsule().fill(.white.opacity(0.18))
-                        .frame(height: 2)
-                    Capsule().fill(.white.opacity(0.30))
-                        .frame(width: bufferedWidth, height: 2)
-                    Capsule().fill(C.watch)
-                        .frame(width: playedWidth, height: 2)
+                    Rectangle().fill(.white.opacity(0.18))
+                        .frame(height: trackHeight)
+                    Rectangle().fill(.white.opacity(0.30))
+                        .frame(width: bufferedWidth, height: trackHeight)
+                    Rectangle().fill(C.watch)
+                        .frame(width: playedWidth, height: trackHeight)
 
-                    if duration > 0 {
-                        ForEach(uniqueLikedSeconds, id: \.self) { sec in
-                            let markerX = width * CGFloat(min(max(Double(sec) / duration, 0), 1))
-                            transparentHeartMarker(isCurrent: sec == Int(currentTime.rounded(.down)))
-                                .offset(x: min(width - 10, max(0, markerX - 5)), y: -8)
+                    if timelineDuration > 0 {
+                        ForEach(adBreaks) { adBreak in
+                            let markerX = width * CGFloat(min(max(adBreak.timeOffsetSec / timelineDuration, 0), 1))
+                            adBreakMarker(isWatched: watchedAdBreakIds.contains(adBreak.id))
+                                .offset(x: min(width - 6, max(0, markerX - 3)), y: -9)
                         }
                     }
 
-                    Circle()
-                        .fill(C.watch)
-                        .frame(width: 8, height: 8)
-                        .offset(x: max(0, playedWidth - 4))
+                    if showsThumb {
+                        Circle()
+                            .fill(C.watch)
+                            .frame(width: thumbSize, height: thumbSize)
+                            .overlay {
+                                Circle()
+                                    .stroke(.black.opacity(0.28), lineWidth: 1)
+                            }
+                            .shadow(color: .black.opacity(0.35), radius: 5, y: 2)
+                            .offset(x: thumbX)
+                    }
 
-                    if clipMode, duration > 0 {
-                        let start = min(clipMarkIn, clipMarkOut)
-                        let end = max(clipMarkIn, clipMarkOut)
-                        let startX = width * CGFloat(start / duration)
-                        let endX = width * CGFloat(end / duration)
-                        RoundedRectangle(cornerRadius: 1)
-                            .fill(C.watch.opacity(0.18))
-                            .frame(width: max(2, endX - startX), height: 8)
-                            .offset(x: startX, y: -3)
-                        clipHandleView(label: "In")
-                            .offset(x: max(0, startX - 11), y: -13)
-                        clipHandleView(label: "Out")
-                            .offset(x: min(width - 22, max(0, endX - 11)), y: -13)
+                    if let range = displayedClipRange, timelineDuration > 0 {
+                        let start = min(range.markIn, range.markOut)
+                        let end = max(range.markIn, range.markOut)
+                        let startX = width * CGFloat(start / timelineDuration)
+                        let endX = width * CGFloat(end / timelineDuration)
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill((clipMode ? C.watch : Color.white).opacity(clipMode ? 0.28 : 0.22))
+                            .frame(width: max(2, endX - startX), height: clipMode ? 12 : 9)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 2)
+                                    .stroke(C.watch.opacity(clipMode ? 0.70 : 0.90), lineWidth: 1)
+                            }
+                            .offset(x: startX, y: -5)
+                        if clipMode {
+                            clipHandleView(label: "In")
+                                .offset(x: max(0, startX - 18), y: -26)
+                            clipHandleView(label: "Out")
+                                .offset(x: min(width - 36, max(0, endX - 18)), y: -26)
+                        } else {
+                            clipPlaybackMarker(label: "In")
+                                .offset(x: max(0, startX - 11), y: -17)
+                            clipPlaybackMarker(label: "Out")
+                                .offset(x: min(width - 22, max(0, endX - 11)), y: -17)
+                        }
                     }
                 }
-                .frame(height: 2)
-
-                ForEach(heartBursts) { burst in
-                    MomentHeartBurstView()
-                        .position(x: width * CGFloat(burst.progress), y: hasHeatmap ? 18 : -6)
-                        .allowsHitTesting(false)
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: trackHeight)
             }
+            .frame(width: width, height: geo.size.height, alignment: .bottomLeading)
             .contentShape(Rectangle())
-            .gesture(
+            .highPriorityGesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        guard duration > 0 else { return }
+                        guard timelineDuration > 0 else { return }
                         hideTask?.cancel()
+                        if !isScrubbing {
+                            onScrubbingChanged?(true)
+                        }
+                        isScrubbing = true
                         let pct = min(max(0, value.location.x / width), 1)
                         if clipMode {
-                            updateClipHandle(to: duration * pct, phaseStarted: false)
+                            updateClipHandle(to: timelineDuration * pct, phaseStarted: activeClipHandle == nil)
                         } else {
-                            currentTime = duration * pct
+                            let targetSeconds = timelineDuration * pct
+                            clearActiveClipRangeIfNeeded(for: targetSeconds)
+                            currentTime = targetSeconds
                         }
                     }
                     .onEnded { value in
-                        guard duration > 0 else { return }
+                        guard timelineDuration > 0 else {
+                            isScrubbing = false
+                            onScrubbingChanged?(false)
+                            return
+                        }
                         let pct = min(max(0, value.location.x / width), 1)
                         if clipMode {
-                            updateClipHandle(to: duration * pct, phaseStarted: false)
+                            updateClipHandle(to: timelineDuration * pct, phaseStarted: false)
                             activeClipHandle = nil
                         } else {
-                            let target = CMTime(seconds: duration * pct, preferredTimescale: 600)
-                            player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+                            seek(to: timelineDuration * pct)
                         }
+                        isScrubbing = false
+                        onScrubbingChanged?(false)
                         scheduleHide()
                     }
             )
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(clipMode ? "Clip range scrubber" : "Playback position")
+            .accessibilityValue("\(formatTime(currentTime)) of \(formatTime(timelineDuration))")
+            .accessibilityAdjustableAction { direction in
+                guard timelineDuration > 0, !clipMode else { return }
+                switch direction {
+                case .increment:
+                    seek(to: min(timelineDuration, currentTime + 10))
+                case .decrement:
+                    seek(to: max(0, currentTime - 10))
+                default:
+                    break
+                }
+                scheduleHide()
+            }
         }
-        .frame(height: hasHeatmap ? 42 : 18)
+        .frame(height: timelineChromeHeight)
     }
 
-    private func transparentHeartMarker(isCurrent: Bool) -> some View {
-        Image(systemName: "heart.fill")
-            .font(.system(size: isCurrent ? 10 : 9, weight: .bold))
-            .foregroundStyle(C.watch.opacity(isCurrent ? 0.38 : 0.22))
-            .frame(width: 10, height: 10)
-            .allowsHitTesting(false)
-            .accessibilityLabel("Liked moment")
+    private func adBreakMarker(isWatched: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 1.5)
+            .fill(isWatched ? Color.white.opacity(0.32) : Color(hex: "#FBBF24"))
+            .frame(width: 6, height: 14)
+            .overlay {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .stroke(.black.opacity(0.45), lineWidth: 1)
+            }
+            .accessibilityLabel(isWatched ? "Watched ad break" : "Ad break")
+    }
+
+    private func unwatchedAdBreakCrossed(from start: Double, to target: Double) -> AdBreak? {
+        guard target > start else { return nil }
+        return adBreaks
+            .filter { !watchedAdBreakIds.contains($0.id) }
+            .filter { $0.timeOffsetSec > start + 0.25 && $0.timeOffsetSec <= target + 0.25 }
+            .sorted { $0.timeOffsetSec < $1.timeOffsetSec }
+            .first
     }
 
     private func clipHandleView(label: String) -> some View {
-        VStack(spacing: 1) {
+        VStack(spacing: 2) {
             Text(label)
-                .font(.system(size: 7, weight: .bold))
+                .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(.black)
-                .frame(width: 22, height: 11)
+                .frame(width: 36, height: 16)
                 .background(C.watch)
                 .clipShape(Capsule())
+                .shadow(color: .black.opacity(0.45), radius: 4, y: 2)
             Rectangle()
                 .fill(C.watch)
-                .frame(width: 2, height: 10)
+                .frame(width: 4, height: 14)
+            Circle()
+                .fill(C.watch)
+                .frame(width: 18, height: 18)
+                .overlay {
+                    Circle()
+                        .stroke(.black.opacity(0.45), lineWidth: 1)
+                }
         }
+        .frame(width: 48, height: 58)
+        .contentShape(Rectangle())
+    }
+
+    private func clipPlaybackMarker(label: String) -> some View {
+        Text(label)
+            .font(.system(size: 7, weight: .black))
+            .foregroundStyle(.black)
+            .frame(width: 22, height: 12)
+            .background(C.watch, in: Capsule())
+            .shadow(color: .black.opacity(0.45), radius: 4, y: 2)
+    }
+
+    private func activeClipPlaybackBadge(_ range: ClipPlaybackRange) -> some View {
+        HStack(spacing: 5) {
+            MediaverseIcon(name: "cut", fallbackSystemName: "scissors")
+                .frame(width: 10, height: 10)
+            Text("Clip \(formatTime(range.markIn)) - \(formatTime(range.markOut))")
+                .monospacedDigit()
+        }
+        .font(.system(size: 11, weight: .bold))
+        .foregroundStyle(.black)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(C.watch, in: Capsule())
+        .shadow(color: .black.opacity(0.28), radius: 10, y: 4)
     }
 
     @ViewBuilder
     private var momentButton: some View {
         if isAuthenticated, onLikeMoment != nil {
             let sec = max(0, Int(currentTime.rounded(.down)))
-            let isLiked = likedSeconds.contains(sec)
+            let isLiked = displayedLikedSeconds.contains(sec)
             Button {
                 likeCurrentMoment()
             } label: {
@@ -479,6 +718,50 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    private var clipSelectionActions: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Select clip range")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                Text("\(formatTime(clipMarkIn)) - \(formatTime(clipMarkOut))")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(C.watch)
+                    .monospacedDigit()
+            }
+
+            Spacer(minLength: 8)
+
+            Button(action: cancelClipMode) {
+                Text("Cancel")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.70))
+                    .frame(height: 28)
+                    .padding(.horizontal, 10)
+                    .background(.white.opacity(0.08))
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+
+            Button(action: confirmClipSelection) {
+                Text("Continue")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.black)
+                    .frame(height: 28)
+                    .padding(.horizontal, 12)
+                    .background(Int(clipMarkOut) > Int(clipMarkIn) ? C.watch : C.watch.opacity(0.38))
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(Int(clipMarkOut) <= Int(clipMarkIn))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.black.opacity(0.68))
+        .clipShape(RoundedRectangle(cornerRadius: 11))
+        .overlay { RoundedRectangle(cornerRadius: 11).stroke(.white.opacity(0.12), lineWidth: 1) }
     }
 
     @ViewBuilder
@@ -647,47 +930,189 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
     private func chromeButton(iconName: String, fallbackSystemName: String, active: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             MediaverseIcon(name: iconName, fallbackSystemName: fallbackSystemName)
-                .frame(width: 14, height: 14)
+                .frame(width: 16, height: 16)
                 .foregroundStyle(active ? C.watch : .white.opacity(0.88))
-                .frame(width: 34, height: 34)
+                .frame(width: 44, height: 44)
                 .background(.black.opacity(0.38))
-                .clipShape(RoundedRectangle(cornerRadius: 9))
-                .overlay { RoundedRectangle(cornerRadius: 9).stroke(.white.opacity(0.10), lineWidth: 1) }
+                .clipShape(RoundedRectangle(cornerRadius: 11))
+                .overlay { RoundedRectangle(cornerRadius: 11).stroke(.white.opacity(0.10), lineWidth: 1) }
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(chromeButtonAccessibilityLabel(iconName: iconName, fallbackSystemName: fallbackSystemName))
+    }
+
+    private func chromeButtonAccessibilityLabel(iconName: String, fallbackSystemName: String) -> String {
+        switch iconName {
+        case "skip-back": return "Previous"
+        case "skip-forward": return "Next"
+        case "mute": return "Unmute"
+        case "volume": return "Mute"
+        case "settings": return "Playback speed"
+        case "fullscreen": return "Enter fullscreen"
+        case "fullscreen-exit": return "Exit fullscreen"
+        default: return fallbackSystemName
+        }
     }
 
     private var hasHeatmap: Bool {
-        duration > 0 && !heatmapBuckets.isEmpty && (heatmapBuckets.max() ?? 0) > 0
+        duration > 0 && displayedHeatmapValues.count >= 2 && displayedHeatmapMaxValue > 0
+    }
+
+    private var hasMomentGraph: Bool {
+        duration > 0 && (hasHeatmap || !displayedLikedSeconds.isEmpty)
+    }
+
+    private var playerHasActivePlaybackIntent: Bool {
+        player.timeControlStatus != .paused || player.rate > 0
+    }
+
+    private var displayedClipRange: ClipPlaybackRange? {
+        if clipMode {
+            return ClipPlaybackRange(markIn: clipMarkIn, markOut: clipMarkOut)
+        }
+        return activeClipRange
+    }
+
+    private func setCurrentTimeIfNeeded(_ value: Double, tolerance: Double = 0.04) {
+        guard abs(currentTime - value) > tolerance else { return }
+        currentTime = value
+    }
+
+    private func setDurationIfNeeded(_ value: Double, tolerance: Double = 0.05) {
+        guard abs(duration - value) > tolerance else { return }
+        duration = value
+    }
+
+    private func setBufferedIfNeeded(_ value: Double, tolerance: Double = 0.15) {
+        guard abs(buffered - value) > tolerance else { return }
+        buffered = value
+    }
+
+    private func updateTimelineState() {
+        if !isScrubbing, let playerTime = player.currentTime().seconds.validTime {
+            setCurrentTimeIfNeeded(playerTime)
+        }
+        setDurationIfNeeded(resolvedDuration())
+        setBufferedIfNeeded(bufferedEnd(from: player.currentItem))
+        syncPlaybackState()
+    }
+
+    private func resolvedDuration() -> Double {
+        guard let item = player.currentItem else { return 0 }
+
+        let directDuration = item.duration.seconds.validTime
+        let serverDuration = knownDuration?.validTime
+        let assetDuration = loadedAssetDuration.validTime
+        let seekableEnd = item.seekableTimeRanges
+            .map { CMTimeGetSeconds(CMTimeRangeGetEnd($0.timeRangeValue)) }
+            .compactMap(\.validTime)
+            .max()
+        let loadedEnd = item.loadedTimeRanges
+            .map { CMTimeGetSeconds(CMTimeRangeGetEnd($0.timeRangeValue)) }
+            .compactMap(\.validTime)
+            .max()
+
+        return [directDuration, serverDuration, assetDuration, seekableEnd, loadedEnd, duration]
+            .compactMap { $0 }
+            .filter { $0 > 0 }
+            .max() ?? 0
+    }
+
+    private func loadAssetDurationIfNeeded() async {
+        guard knownDuration?.validTime == nil,
+              loadedAssetDuration.validTime == nil,
+              let item = player.currentItem else { return }
+
+        let assetDuration = try? await item.asset.load(.duration).seconds
+        guard let assetDuration = assetDuration?.validTime else { return }
+
+        await MainActor.run {
+            guard player.currentItem === item else { return }
+            if abs(loadedAssetDuration - assetDuration) > 0.05 {
+                loadedAssetDuration = assetDuration
+            }
+            setDurationIfNeeded(resolvedDuration())
+        }
     }
 
     private func attachObservers() {
         detachObservers()
         player.isMuted = storedPlayerMuted
         isMuted = storedPlayerMuted
-        isPlaying = player.rate > 0
-        duration = player.currentItem?.duration.seconds.validTime ?? 0
-        buffered = bufferedEnd(from: player.currentItem)
+        updateTimelineState()
+        Task { await loadAssetDurationIfNeeded() }
 
+        playbackStatusObserver = player.observe(\.timeControlStatus, options: [.initial, .new]) { _, _ in
+            Task { @MainActor in
+                syncPlaybackState()
+            }
+        }
+
+        currentItemObserver = player.observe(\.currentItem, options: [.initial, .new]) { _, _ in
+            Task { @MainActor in
+                loadedAssetDuration = 0
+                updateTimelineState()
+                Task { await loadAssetDurationIfNeeded() }
+            }
+        }
+
+        timeObserverPlayer = player
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main) { _ in
-            currentTime = player.currentTime().seconds.validTime ?? 0
-            duration = player.currentItem?.duration.seconds.validTime ?? duration
-            buffered = bufferedEnd(from: player.currentItem)
-            isPlaying = player.rate > 0
+            updateTimelineState()
         }
     }
 
     private func detachObservers() {
         hideTask?.cancel()
+        playbackStatusObserver?.invalidate()
+        playbackStatusObserver = nil
+        currentItemObserver?.invalidate()
+        currentItemObserver = nil
         if let timeObserver {
-            player.removeTimeObserver(timeObserver)
+            timeObserverPlayer?.removeTimeObserver(timeObserver)
             self.timeObserver = nil
+            timeObserverPlayer = nil
+        }
+    }
+
+    private func syncPlaybackState() {
+        if clipMode, isClipPreviewing, currentTime >= clipMarkOut - 0.05 {
+            player.pause()
+            player.seek(to: CMTime(seconds: clipMarkOut, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+            isClipPreviewing = false
+        }
+
+        if let activeClipRange, !isScrubbing, playerHasActivePlaybackIntent, currentTime >= activeClipRange.markOut - 0.05 {
+            player.pause()
+            player.seek(to: CMTime(seconds: activeClipRange.markOut, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+            self.activeClipRange = nil
+        }
+
+        let hasPlaybackIntent = playerHasActivePlaybackIntent
+        if isPlaying != hasPlaybackIntent {
+            isPlaying = hasPlaybackIntent
+        }
+        if !hasPlaybackIntent {
+            if hideTask != nil {
+                hideTask?.cancel()
+                hideTask = nil
+            }
+            if !showControls {
+                withAnimation(.easeOut(duration: 0.16)) { showControls = true }
+            }
         }
     }
 
     private func toggleControlsOrPlayback() {
         hideTask?.cancel()
-        isPlaying = player.rate > 0
+        syncPlaybackState()
+
+        if showControls, !clipMode, !isScrubbing, !showSpeedMenu {
+            withAnimation(.easeOut(duration: 0.16)) { showControls = false }
+            return
+        }
+
         withAnimation(.easeOut(duration: 0.18)) { showControls = true }
         if isPlaying {
             scheduleHide()
@@ -695,15 +1120,58 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
     }
 
     private func togglePlayback() {
-        if player.rate > 0 {
+        if playerHasActivePlaybackIntent {
             player.pause()
             isPlaying = false
+            isClipPreviewing = false
             withAnimation(.easeOut(duration: 0.18)) { showControls = true }
             hideTask?.cancel()
         } else {
-            player.rate = playbackRate
+            if let activeClipRange,
+               currentTime < activeClipRange.markIn || currentTime >= activeClipRange.markOut {
+                self.activeClipRange = nil
+            }
+            if playbackRate == 1 {
+                player.play()
+            } else {
+                player.rate = playbackRate
+            }
             isPlaying = true
             scheduleHide()
+        }
+    }
+
+    private func clearActiveClipRangeIfNeeded(for seconds: Double) {
+        guard let activeClipRange else { return }
+        if seconds < activeClipRange.markIn || seconds >= activeClipRange.markOut {
+            self.activeClipRange = nil
+        }
+    }
+
+    private func seek(to seconds: Double, exact: Bool = false) {
+        let timelineDuration = resolvedDuration()
+        setDurationIfNeeded(timelineDuration)
+        let clampedSeconds = min(max(seconds, 0), max(timelineDuration, 0))
+        let target = CMTime(seconds: clampedSeconds, preferredTimescale: 600)
+        let tolerance = exact ? CMTime.zero : CMTime(seconds: 0.25, preferredTimescale: 600)
+
+        clearActiveClipRangeIfNeeded(for: clampedSeconds)
+
+        currentTime = clampedSeconds
+        seekGeneration += 1
+        let generation = seekGeneration
+        player.currentItem?.cancelPendingSeeks()
+        player.seek(to: target, toleranceBefore: tolerance, toleranceAfter: tolerance) { finished in
+            Task { @MainActor in
+                guard finished, generation == seekGeneration else { return }
+                if playbackRate == 1 {
+                    player.playImmediately(atRate: 1)
+                } else {
+                    player.rate = playbackRate
+                }
+                isPlaying = true
+                scheduleHide()
+            }
         }
     }
 
@@ -724,15 +1192,19 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
 
     private func toggleClipMode() {
         if clipMode {
-            withAnimation(.easeOut(duration: 0.18)) { clipMode = false }
-            clipError = nil
-            scheduleHide()
+            cancelClipMode()
             return
         }
 
+        startClipSelection()
+    }
+
+    private func startClipSelection() {
         hideTask?.cancel()
+        activeClipRange = nil
         player.pause()
         isPlaying = false
+        isClipPreviewing = false
         let start = max(0, currentTime - 5)
         let end = min(max(duration, currentTime + 1), currentTime + 10)
         clipMarkIn = floor(start)
@@ -745,12 +1217,58 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
         }
     }
 
+    private func confirmClipSelection() {
+        guard Int(clipMarkOut) > Int(clipMarkIn) else {
+            clipError = "Clip out must be after clip in."
+            return
+        }
+        player.pause()
+        isPlaying = false
+        isClipPreviewing = false
+        clipError = nil
+        showControls = true
+        showClipFinalizeSheet = true
+    }
+
+    private func cancelClipMode() {
+        showClipFinalizeSheet = false
+        withAnimation(.easeOut(duration: 0.18)) { clipMode = false }
+        isClipPreviewing = false
+        clipError = nil
+        scheduleHide()
+    }
+
+    private func closeClipSheet() {
+        showClipFinalizeSheet = false
+        activeClipHandle = nil
+        isClipPreviewing = false
+        scheduleHide()
+    }
+
     private func setClipInToCurrentTime() {
         clipMarkIn = min(floor(currentTime), max(0, clipMarkOut - 1))
     }
 
     private func setClipOutToCurrentTime() {
         clipMarkOut = max(floor(currentTime), clipMarkIn + 1)
+    }
+
+    private func previewSelectedClip() {
+        guard duration > 0, clipMarkOut > clipMarkIn else { return }
+        hideTask?.cancel()
+        isClipPreviewing = true
+        let target = CMTime(seconds: clipMarkIn, preferredTimescale: 600)
+        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+            Task { @MainActor in
+                if playbackRate == 1 {
+                    player.play()
+                } else {
+                    player.rate = playbackRate
+                }
+                isPlaying = true
+                showControls = true
+            }
+        }
     }
 
     private func updateClipHandle(to value: Double, phaseStarted: Bool) {
@@ -783,10 +1301,13 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
         clipSaving = true
         clipError = nil
         do {
-            try await onClipRequest(markIn, markOut, clipCaption.trimmingCharacters(in: .whitespacesAndNewlines), clipIsSpoiler)
+            let thumbnailData = await makeClipThumbnailData(at: markIn)
+            try await onClipRequest(markIn, markOut, clipCaption.trimmingCharacters(in: .whitespacesAndNewlines), clipIsSpoiler, thumbnailData)
             await MainActor.run {
                 clipSaving = false
+                showClipFinalizeSheet = false
                 clipMode = false
+                isClipPreviewing = false
                 clipCaption = ""
                 clipIsSpoiler = false
                 scheduleHide()
@@ -799,36 +1320,107 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
         }
     }
 
+    private func makeClipThumbnailData(at seconds: Int) async -> Data? {
+        guard let asset = player.currentItem?.asset else { return nil }
+        return await Task.detached(priority: .utility) {
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 960, height: 540)
+            let time = CMTime(seconds: Double(seconds), preferredTimescale: 600)
+            guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else {
+                return nil
+            }
+            return UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.82)
+        }.value
+    }
+
     private func likeCurrentMoment() {
         guard let onLikeMoment else { return }
         let sec = max(0, Int(currentTime.rounded(.down)))
+        if displayedLikedSeconds.contains(sec) {
+            displayedLikedSeconds.remove(sec)
+        } else {
+            displayedLikedSeconds.insert(sec)
+        }
         onLikeMoment(sec)
 
-        let progress = duration > 0 ? min(max(currentTime / duration, 0), 1) : 0
-        let burst = MomentHeartBurst(progress: progress)
-        heartBursts.append(burst)
-
+        momentGraphLikeSecond = sec
+        momentGraphLikeBoost = 0
+        withAnimation(.linear(duration: 0.18)) {
+            momentGraphLikeBoost = 1
+        }
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_100_000_000)
-            heartBursts.removeAll { $0.id == burst.id }
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            withAnimation(.linear(duration: 0.16)) {
+                momentGraphLikeBoost = 0
+            }
+            momentGraphLikeSecond = nil
         }
         scheduleHide()
     }
 
-    private func drawHeatmapWave(ctx: GraphicsContext, size: CGSize) {
-        guard hasHeatmap else { return }
+    private func replaceDisplayedLikedSeconds(_ seconds: [Int]) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            displayedLikedSeconds = Set(seconds)
+        }
+    }
 
+    private func replaceDisplayedHeatmap(_ buckets: [Int]) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            displayedHeatmapValues = buckets.map { CGFloat($0) }
+            displayedHeatmapMaxValue = max(1, CGFloat(buckets.max() ?? 0))
+        }
+    }
+
+    private func momentGraphValues() -> [CGFloat] {
         let bucketSize = 5.0
-        let maxBuckets = max(2, min(Int(ceil(duration / bucketSize)) + 1, heatmapBuckets.count))
-        let trimmed = Array(heatmapBuckets.prefix(maxBuckets)).map { CGFloat($0) }
-        guard trimmed.count >= 2 else { return }
+        let targetCount = max(2, Int(ceil(duration / bucketSize)) + 1)
+        let count = hasHeatmap ? max(2, min(targetCount, displayedHeatmapValues.count)) : targetCount
+        guard count >= 2 else { return [] }
 
-        let maxVal = max(1, trimmed.max() ?? 1)
+        var values = Array(repeating: CGFloat(0.08), count: count)
+        if hasHeatmap {
+            for idx in 0..<count {
+                values[idx] = max(0.08, displayedHeatmapValues[idx])
+            }
+        }
+
+        let likedBoost = max(1.5, displayedHeatmapMaxValue * 0.32)
+        for second in displayedLikedSeconds {
+            let idx = min(count - 1, max(0, Int(round(Double(second) / bucketSize))))
+            values[idx] += likedBoost
+            if idx > 0 { values[idx - 1] += likedBoost * 0.45 }
+            if idx < count - 1 { values[idx + 1] += likedBoost * 0.45 }
+        }
+
+        if let momentGraphLikeSecond, momentGraphLikeBoost > 0 {
+            let idx = min(count - 1, max(0, Int(round(Double(momentGraphLikeSecond) / bucketSize))))
+            let animatedBoost = likedBoost * (0.5 + momentGraphLikeBoost)
+            values[idx] += animatedBoost
+            if idx > 0 { values[idx - 1] += animatedBoost * 0.35 }
+            if idx < count - 1 { values[idx + 1] += animatedBoost * 0.35 }
+        }
+
+        return values
+    }
+
+    private func drawHeatmapWave(ctx: GraphicsContext, size: CGSize) {
+        guard hasMomentGraph else { return }
+
         let width = size.width
         let height = size.height
-        let points: [CGPoint] = trimmed.enumerated().map { idx, value in
-            let x = CGFloat(idx) / CGFloat(max(1, trimmed.count - 1)) * width
-            let y = height - max(2, (value / maxVal) * height * 0.90)
+        let values = momentGraphValues()
+        guard values.count >= 2 else { return }
+        let maxValue = max(1, values.max() ?? 1)
+
+        let points: [CGPoint] = values.indices.map { idx in
+            let value = values[idx]
+            let x = CGFloat(idx) / CGFloat(max(1, values.count - 1)) * width
+            let y = height - max(2, (value / maxValue) * height * 0.90)
             return CGPoint(x: x, y: y)
         }
 
@@ -860,15 +1452,9 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
         )
         ctx.stroke(
             stroke,
-            with: .color(C.watch.opacity(0.38)),
-            style: StrokeStyle(lineWidth: 1.4, lineCap: .round)
+            with: .color(C.watch.opacity(0.38 + (0.18 * momentGraphLikeBoost))),
+            style: StrokeStyle(lineWidth: 1.4 + (0.4 * momentGraphLikeBoost), lineCap: .round)
         )
-
-        let x = CGFloat(min(max(currentTime / duration, 0), 1)) * width
-        var needle = Path()
-        needle.move(to: CGPoint(x: x, y: 0))
-        needle.addLine(to: CGPoint(x: x, y: height))
-        ctx.stroke(needle, with: .color(.white.opacity(0.48)), style: StrokeStyle(lineWidth: 1.2))
     }
 
     private func bufferedEnd(from item: AVPlayerItem?) -> Double {
@@ -892,36 +1478,156 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
     }
 }
 
-private struct MomentHeartBurst: Identifiable {
-    let id = UUID()
-    let progress: Double
+private struct ClipToolSheet: View {
+    let markIn: Double
+    let markOut: Double
+    @Binding var caption: String
+    @Binding var isSpoiler: Bool
+
+    let isSaving: Bool
+    let errorMessage: String?
+    let showSpoilerToggle: Bool
+    let onPreview: () -> Void
+    let onSave: () -> Void
+    let onCancel: () -> Void
+
+    private var clipDuration: Double { max(0, markOut - markIn) }
+    private var canSave: Bool { !isSaving && Int(markOut) > Int(markIn) }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Review the range you selected on the player timeline.")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.62))
+
+                    HStack(spacing: 10) {
+                        markBadge(title: "In", value: markIn)
+                        markBadge(title: "Out", value: markOut)
+                        markBadge(title: "Length", value: clipDuration)
+                    }
+                }
+
+                sheetButton(title: "Preview selected range", icon: "play", action: onPreview)
+
+                TextField("What are you reacting to?", text: $caption, axis: .vertical)
+                    .font(.system(size: 15))
+                    .foregroundStyle(.white)
+                    .lineLimit(2...4)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(.white.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .textInputAutocapitalization(.sentences)
+
+                if showSpoilerToggle {
+                    Toggle(isOn: $isSpoiler) {
+                        HStack(spacing: 8) {
+                            MediaverseIcon(name: isSpoiler ? "eye-off" : "eye", fallbackSystemName: isSpoiler ? "eye.slash" : "eye")
+                                .frame(width: 16, height: 16)
+                            Text("Mark as spoiler")
+                                .font(.system(size: 14, weight: .semibold))
+                        }
+                        .foregroundStyle(isSpoiler ? C.watch : .white.opacity(0.78))
+                    }
+                    .toggleStyle(.switch)
+                    .tint(C.watch)
+                }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.red.opacity(0.95))
+                }
+
+                Spacer(minLength: 0)
+
+                HStack(spacing: 10) {
+                    Button(action: onCancel) {
+                        Text("Cancel")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.78))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 46)
+                            .background(.white.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: onSave) {
+                        Text(isSaving ? "Posting..." : "Post clip")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.black)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 46)
+                            .background(canSave ? C.watch : C.watch.opacity(0.38))
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSave)
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 10)
+            .padding(.bottom, 12)
+            .background(Color(hex: "#101014"))
+            .navigationTitle("Create clip")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private func markBadge(title: String, value: Double) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white.opacity(0.46))
+                .textCase(.uppercase)
+            Text(formatTime(value))
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(title == "Length" ? .white : C.watch)
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(.white.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay { RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.08), lineWidth: 1) }
+    }
+
+    private func sheetButton(title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .bold))
+                Text(title)
+                    .font(.system(size: 12, weight: .bold))
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 38)
+            .background(.white.opacity(0.10))
+            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .overlay { RoundedRectangle(cornerRadius: 9).stroke(.white.opacity(0.10), lineWidth: 1) }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func formatTime(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let value = Int(seconds)
+        let h = value / 3600
+        let m = (value % 3600) / 60
+        let s = value % 60
+        if h > 0 { return String(format: "%d:%02d:%02d", h, m, s) }
+        return String(format: "%d:%02d", m, s)
+    }
 }
 
 private enum ClipHandle {
     case markIn
     case markOut
-}
-
-private struct MomentHeartBurstView: View {
-    @State private var y: CGFloat = 0
-    @State private var opacity = 1.0
-    @State private var scale = 0.8
-
-    var body: some View {
-        MediaverseIcon(name: "heart-filled", fallbackSystemName: "heart")
-            .frame(width: 20, height: 20)
-            .foregroundStyle(C.watch)
-            .scaleEffect(scale)
-            .offset(y: y)
-            .opacity(opacity)
-            .onAppear {
-                withAnimation(.easeOut(duration: 1.0)) {
-                    y = -44
-                    opacity = 0
-                    scale = 1.25
-                }
-            }
-    }
 }
 
 struct WatchPlayerSurface: UIViewRepresentable {
@@ -934,6 +1640,7 @@ struct WatchPlayerSurface: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: PlayerView, context: Context) {
+        guard uiView.player !== player else { return }
         uiView.player = player
     }
 
@@ -945,6 +1652,7 @@ struct WatchPlayerSurface: UIViewRepresentable {
         var player: AVPlayer? {
             get { playerLayer?.player }
             set {
+                guard playerLayer?.player !== newValue else { return }
                 playerLayer?.player = newValue
                 playerLayer?.videoGravity = .resizeAspect
             }
@@ -957,83 +1665,65 @@ struct MiniWatchPlayer: View {
     let title: String
     let onExpand: () -> Void
     let onClose: () -> Void
+    let onPlaybackEnded: (() -> Void)?
 
     @State private var isPlaying = false
+    @State private var playbackStatusObserver: NSKeyValueObservation?
+    @State private var playbackEndObserver: NSObjectProtocol?
+
+    private var playerHasActivePlaybackIntent: Bool {
+        player.timeControlStatus != .paused || player.rate > 0
+    }
 
     var body: some View {
-        HStack(spacing: 10) {
+        ZStack {
             WatchPlayerSurface(player: player)
-                .frame(width: 148, height: 84)
                 .background(Color.black)
-                .clipShape(RoundedRectangle(cornerRadius: 11))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 11)
-                        .stroke(.white.opacity(0.12), lineWidth: 1)
-                }
-                .onTapGesture(perform: onExpand)
-
-            VStack(alignment: .leading, spacing: 8) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Now playing")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(C.watch)
-                        .textCase(.uppercase)
-
-                    Text(title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
                 .contentShape(Rectangle())
                 .onTapGesture(perform: onExpand)
 
-                HStack(spacing: 10) {
-                    Button(action: togglePlayback) {
-                        HStack(spacing: 7) {
-                            MediaverseIcon(name: isPlaying ? "pause" : "play", fallbackSystemName: isPlaying ? "pause" : "play")
-                                .frame(width: 17, height: 17)
-                            Text(isPlaying ? "Pause" : "Play")
-                                .font(.system(size: 12, weight: .bold))
-                        }
-                        .foregroundStyle(.black)
-                        .frame(height: 36)
-                        .padding(.horizontal, 13)
-                        .background(C.watch)
-                        .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-
-                    Button(action: onClose) {
-                        MediaverseIcon(name: "close", fallbackSystemName: "xmark")
-                            .frame(width: 18, height: 18)
-                            .foregroundStyle(.white.opacity(0.88))
-                            .frame(width: 38, height: 36)
-                            .background(.white.opacity(0.12))
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.trailing, 4)
-        }
-        .padding(8)
-        .background(
             LinearGradient(
-                colors: [Color.black.opacity(0.96), Color(red: 0.08, green: 0.08, blue: 0.11).opacity(0.96)],
-                startPoint: .leading,
-                endPoint: .trailing
+                colors: [.black.opacity(0.18), .clear, .black.opacity(0.24)],
+                startPoint: .top,
+                endPoint: .bottom
             )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay { RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.16), lineWidth: 1) }
-        .shadow(color: .black.opacity(0.50), radius: 24, y: 10)
-        .onAppear { isPlaying = player.rate > 0 }
+            .allowsHitTesting(false)
+
+            Button(action: togglePlayback) {
+                MediaverseIcon(name: isPlaying ? "pause" : "play", fallbackSystemName: isPlaying ? "pause" : "play")
+                    .frame(width: 14, height: 14)
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(.black.opacity(0.50))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isPlaying ? "Pause" : "Play")
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            .padding(6)
+
+            Button(action: onClose) {
+                MediaverseIcon(name: "close", fallbackSystemName: "xmark")
+                    .frame(width: 12, height: 12)
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 28)
+                    .background(.black.opacity(0.55))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close mini player")
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .padding(6)
+        }
+        .background(Color.black)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .shadow(color: .black.opacity(0.42), radius: 12, y: 4)
+        .onAppear { attachPlaybackObservers() }
+        .onDisappear { detachPlaybackObservers() }
     }
 
     private func togglePlayback() {
-        if player.rate > 0 {
+        if playerHasActivePlaybackIntent {
             player.pause()
             isPlaying = false
         } else {
@@ -1041,9 +1731,45 @@ struct MiniWatchPlayer: View {
             isPlaying = true
         }
     }
+
+    private func attachPlaybackObservers() {
+        detachPlaybackObservers()
+        syncPlaybackState()
+        playbackStatusObserver = player.observe(\.timeControlStatus, options: [.initial, .new]) { _, _ in
+            Task { @MainActor in
+                syncPlaybackState()
+            }
+        }
+        if let onPlaybackEnded, let item = player.currentItem {
+            playbackEndObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { _ in
+                Task { @MainActor in
+                    onPlaybackEnded()
+                }
+            }
+        }
+    }
+
+    private func detachPlaybackObservers() {
+        playbackStatusObserver?.invalidate()
+        playbackStatusObserver = nil
+        if let playbackEndObserver {
+            NotificationCenter.default.removeObserver(playbackEndObserver)
+            self.playbackEndObserver = nil
+        }
+    }
+
+    private func syncPlaybackState() {
+        let hasPlaybackIntent = playerHasActivePlaybackIntent
+        guard isPlaying != hasPlaybackIntent else { return }
+        isPlaying = hasPlaybackIntent
+    }
 }
 
-private extension Double {
+extension Double {
     var validTime: Double? {
         isFinite && !isNaN && self >= 0 ? self : nil
     }

@@ -14,7 +14,34 @@ actor StoriesAPIClient {
     ) {
         self.session = session
         self.baseURL = baseURL
-        self.decoder = JSONDecoder()
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { @Sendable decoder in
+            try Self.decodeDate(from: decoder)
+        }
+        self.decoder = decoder
+    }
+
+    private static func decodeDate(from decoder: Decoder) throws -> Date {
+        let container = try decoder.singleValueContainer()
+
+        if let timestamp = try? container.decode(Double.self) {
+            return Date(timeIntervalSince1970: timestamp)
+        }
+
+        let string = try container.decode(String.self)
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractionalFormatter.date(from: string) {
+            return date
+        }
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        if let date = formatter.date(from: string) {
+            return date
+        }
+
+        throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid ISO 8601 date.")
     }
 
     private static func makeSession() -> URLSession {
@@ -24,13 +51,23 @@ actor StoriesAPIClient {
         return URLSession(configuration: configuration)
     }
 
-    func fetchGroups() async throws -> [StoryGroup] {
-        try await send("/api/stories", method: "GET", body: Optional<Data>.none, authenticated: false)
+    func fetchGroups(myChannelId: String? = nil) async throws -> [StoryGroup] {
+        var path = "/api/stories"
+        if let myChannelId,
+           !myChannelId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let encoded = myChannelId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+            path += "?myChannelId=\(encoded)"
+        }
+        return try await send(path, method: "GET", body: Optional<Data>.none, authenticated: true)
     }
 
     func markViewed(storyId: String) async throws {
         struct Response: Decodable { let ok: Bool? }
-        let _: Response = try await send("/api/stories/\(storyId)/view", method: "POST", body: Data(), authenticated: true)
+        let _: Response = try await send("/api/stories/\(C.pathSegment(storyId))/view", method: "POST", body: Data(), authenticated: true)
+    }
+
+    func toggleLike(storyId: String) async throws -> StoryLikeResponse {
+        try await send("/api/stories/\(C.pathSegment(storyId))/like", method: "POST", body: Data(), authenticated: true)
     }
 
     func getUploadUrl(mimeType: String) async throws -> UploadUrlResponse {
@@ -38,58 +75,38 @@ actor StoriesAPIClient {
         return try await send("/api/stories/upload-url", method: "POST", body: data, authenticated: true)
     }
 
-    func uploadMedia(to url: URL, data: Data, mimeType: String, onProgress: @escaping @Sendable (Double) -> Void) async throws -> String? {
+    func uploadMedia(to url: URL, data: Data, mimeType: String, onProgress: @escaping @Sendable (Double) -> Void) async throws {
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("story-upload-\(UUID().uuidString)")
         try data.write(to: fileURL, options: [.atomic])
+        try FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            ofItemAtPath: fileURL.path
+        )
         defer { try? FileManager.default.removeItem(at: fileURL) }
-        return try await uploadMedia(to: url, fileURL: fileURL, mimeType: mimeType, onProgress: onProgress)
+        try await uploadMedia(to: url, fileURL: fileURL, mimeType: mimeType, onProgress: onProgress)
     }
 
-    /// Uploads the media file and returns the server-assigned mediaUrl if the response body
-    /// contains one (Vercel Blob direct-upload mode), or nil when using a presigned PUT to R2/CF.
-    func uploadMedia(to url: URL, fileURL: URL, mimeType: String, onProgress: @escaping @Sendable (Double) -> Void) async throws -> String? {
-        // Resolve relative URLs against the base URL (used by the Blob fallback path)
-        let resolvedURL = url.scheme == nil || url.scheme!.isEmpty
-            ? URL(string: url.absoluteString, relativeTo: baseURL)!
-            : url
-
+    /// Uploads raw media bytes to a presigned R2 URL. R2 returns an empty 2xx response on success.
+    func uploadMedia(to url: URL, fileURL: URL, mimeType: String, onProgress: @escaping @Sendable (Double) -> Void) async throws {
+        let resolvedURL = resolvedUploadURL(from: url)
         var request = URLRequest(url: resolvedURL)
-        let isVideo = mimeType.lowercased().hasPrefix("video/")
-        request.httpMethod = isVideo ? "POST" : "PUT"
-
-        let uploadFileURL: URL
-        if isVideo {
-            let boundary = "Boundary-\(UUID().uuidString)"
-            request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-            uploadFileURL = try multipartBodyFile(fileURL: fileURL, mimeType: mimeType, boundary: boundary)
-        } else {
-            request.setValue(mimeType, forHTTPHeaderField: "Content-Type")
-            uploadFileURL = fileURL
-        }
-        defer {
-            if isVideo { try? FileManager.default.removeItem(at: uploadFileURL) }
-        }
-
-        // Attach auth headers when uploading to our own API (relative URL or westreem.com host)
-        let isOwnAPI = resolvedURL.host == baseURL.host || resolvedURL.host == nil
-        if isOwnAPI, let token = SessionStorage.token {
-            request.setValue("next-auth.session-token=\(token); __Secure-next-auth.session-token=\(token)", forHTTPHeaderField: "Cookie")
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        request.httpMethod = "PUT"
+        request.setValue(mimeType, forHTTPHeaderField: "Content-Type")
 
         await MainActor.run { onProgress(0) }
         let progressDelegate = StoriesUploadProgressDelegate(onProgress: onProgress)
-        let (responseData, response) = try await session.upload(for: request, fromFile: uploadFileURL, delegate: progressDelegate)
+        let (responseData, response) = try await session.upload(for: request, fromFile: fileURL, delegate: progressDelegate)
         try validate(response, data: responseData)
         await MainActor.run { onProgress(1) }
+    }
 
-        // If the server returned { "mediaUrl": "..." } (Vercel Blob fallback), use it
-        if let mediaResponse = try? JSONDecoder().decode(UploadMediaResponse.self, from: responseData),
-           !mediaResponse.mediaUrl.isEmpty {
-            return mediaResponse.mediaUrl
-        }
-        return nil
+    func transcodeStoryMedia(objectKey: String) async throws -> String {
+        let data = try encoder.encode(TranscodeStoryMediaRequest(objectKey: objectKey))
+        let response: TranscodeStoryMediaResponse = try await send("/api/stories/transcode", method: "POST", body: data, authenticated: true)
+        let mediaUrl = response.mediaUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !mediaUrl.isEmpty else { throw StoriesError.missingMediaUrl }
+        return mediaUrl
     }
 
     func createStory(_ request: CreateStoryRequest) async throws -> StoryItem {
@@ -99,7 +116,45 @@ actor StoriesAPIClient {
 
     func deleteStory(id: String) async throws {
         struct Response: Decodable { let success: Bool }
-        let _: Response = try await send("/api/stories/\(id)", method: "DELETE", body: Optional<Data>.none, authenticated: true)
+        let _: Response = try await send("/api/stories/\(C.pathSegment(id))", method: "DELETE", body: Optional<Data>.none, authenticated: true)
+    }
+
+    func fetchViewers(storyId: String, cursor: String? = nil, limit: Int = 30) async throws -> StoryViewersResponse {
+        var components = URLComponents()
+        components.path = "/api/stories/\(C.pathSegment(storyId))/viewers"
+        var queryItems = [URLQueryItem(name: "limit", value: "\(min(max(limit, 1), 100))")]
+        if let cursor, !cursor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            queryItems.append(URLQueryItem(name: "cursor", value: cursor))
+        }
+        components.queryItems = queryItems
+        return try await send(components.string ?? "/api/stories/\(C.pathSegment(storyId))/viewers", method: "GET", body: Optional<Data>.none, authenticated: true)
+    }
+
+    func pollVote(storyId: String, overlayIndex: Int, optionIndex: Int) async throws -> PollVoteResponse {
+        struct Body: Encodable {
+            let overlayIndex: Int
+            let optionIndex: Int
+        }
+        let data = try encoder.encode(Body(overlayIndex: overlayIndex, optionIndex: optionIndex))
+        return try await send("/api/stories/\(C.pathSegment(storyId))/poll", method: "POST", body: data, authenticated: true)
+    }
+
+    func quizAnswer(storyId: String, overlayIndex: Int, selectedIndex: Int) async throws -> QuizAnswerResponse {
+        struct Body: Encodable {
+            let overlayIndex: Int
+            let selectedIndex: Int
+        }
+        let data = try encoder.encode(Body(overlayIndex: overlayIndex, selectedIndex: selectedIndex))
+        return try await send("/api/stories/\(C.pathSegment(storyId))/quiz", method: "POST", body: data, authenticated: true)
+    }
+
+    func questionReply(storyId: String, overlayIndex: Int, text: String) async throws -> QuestionReplyResponse {
+        struct Body: Encodable {
+            let overlayIndex: Int
+            let text: String
+        }
+        let data = try encoder.encode(Body(overlayIndex: overlayIndex, text: text))
+        return try await send("/api/stories/\(C.pathSegment(storyId))/question", method: "POST", body: data, authenticated: true)
     }
 
     private func send<T: Decodable>(_ path: String, method: String, body: Data?, authenticated: Bool) async throws -> T {
@@ -127,9 +182,8 @@ actor StoriesAPIClient {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = body
         }
-        if authenticated, let token = SessionStorage.token {
-            request.setValue("next-auth.session-token=\(token); __Secure-next-auth.session-token=\(token)", forHTTPHeaderField: "Cookie")
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if authenticated {
+            attachAuth(&request)
         }
 
         let (responseData, response) = try await session.data(for: request)
@@ -140,6 +194,42 @@ actor StoriesAPIClient {
             try await Task.sleep(nanoseconds: 350_000_000)
             return try await data(path, method: method, body: body, authenticated: authenticated, retrying: false)
         }
+    }
+
+    private func resolvedUploadURL(from url: URL) -> URL {
+        if let scheme = url.scheme, !scheme.isEmpty {
+            return url
+        }
+        return URL(string: url.absoluteString, relativeTo: baseURL)?.absoluteURL ?? url
+    }
+
+    private func attachAuth(_ request: inout URLRequest) {
+        guard let url = request.url, C.isTrustedBackendURL(url) else {
+            return
+        }
+        if let token = SessionStorage.token {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        if let cookieHeader {
+            request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+        }
+    }
+
+    private var cookieHeader: String? {
+        var cookies = [String]()
+        if let token = SessionStorage.token {
+            let cookieNames = [
+                "next-auth.session-token",
+                "__Secure-next-auth.session-token",
+                "authjs.session-token",
+                "__Secure-authjs.session-token"
+            ]
+            cookies.append(contentsOf: cookieNames.map { "\($0)=\(token)" })
+        }
+        if let activeContext = SessionStorage.activeContextCookieValue {
+            cookies.append("mv_active_ctx=\(activeContext)")
+        }
+        return cookies.isEmpty ? nil : cookies.joined(separator: "; ")
     }
 
     private func validate(_ response: URLResponse, data: Data) throws {
@@ -153,6 +243,8 @@ actor StoriesAPIClient {
             throw serverMessage.map { StoriesError.serverMessage($0) } ?? StoriesError.notAllowed
         case 404:
             throw serverMessage.map { StoriesError.serverMessage($0) } ?? StoriesError.notFound
+        case 413:
+            throw StoriesError.videoTooLong
         case 500..<600:
             throw serverMessage.map { StoriesError.serverMessage($0) } ?? StoriesError.serverUnavailable(statusCode: http.statusCode)
         default:
@@ -177,30 +269,50 @@ actor StoriesAPIClient {
         }
         return nil
     }
+}
 
-    private func multipartBodyFile(fileURL: URL, mimeType: String, boundary: String) throws -> URL {
-        let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("story-upload-body-\(UUID().uuidString)")
-        FileManager.default.createFile(atPath: outputURL.path, contents: nil)
+struct StoryLikeResponse: Decodable {
+    let liked: Bool?
+    let likeCount: Int?
 
-        let writer = try FileHandle(forWritingTo: outputURL)
-        defer { try? writer.close() }
-
-        try writer.write(contentsOf: Data("--\(boundary)\r\n".utf8))
-        try writer.write(contentsOf: Data("Content-Disposition: form-data; name=\"file\"; filename=\"story.mp4\"\r\n".utf8))
-        try writer.write(contentsOf: Data("Content-Type: \(mimeType)\r\n\r\n".utf8))
-
-        let reader = try FileHandle(forReadingFrom: fileURL)
-        defer { try? reader.close() }
-        while true {
-            let chunk = try reader.read(upToCount: 1024 * 1024) ?? Data()
-            if chunk.isEmpty { break }
-            try writer.write(contentsOf: chunk)
-        }
-
-        try writer.write(contentsOf: Data("\r\n--\(boundary)--\r\n".utf8))
-        return outputURL
+    private enum CodingKeys: String, CodingKey {
+        case liked, userLiked, myLike, likeCount, likes, count, story, data
     }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let nested = (try? c.nestedContainer(keyedBy: CodingKeys.self, forKey: .story))
+            ?? (try? c.nestedContainer(keyedBy: CodingKeys.self, forKey: .data))
+        let source = nested ?? c
+
+        liked = try source.decodeIfPresent(Bool.self, forKey: .liked)
+            ?? source.decodeIfPresent(Bool.self, forKey: .userLiked)
+            ?? source.decodeIfPresent(Bool.self, forKey: .myLike)
+        likeCount = try source.decodeIfPresent(Int.self, forKey: .likeCount)
+            ?? source.decodeIfPresent(Int.self, forKey: .likes)
+            ?? source.decodeIfPresent(Int.self, forKey: .count)
+    }
+}
+
+struct PollVoteResponse: Decodable {
+    let overlayIndex: Int
+    let votes: [Int]
+    let totalVotes: Int
+    let userVote: Int
+}
+
+struct QuizAnswerResponse: Decodable {
+    let overlayIndex: Int
+    let selectedIndex: Int
+    let correctIndex: Int
+    let isCorrect: Bool
+    let alreadyAnswered: Bool
+}
+
+struct QuestionReplyResponse: Decodable {
+    let id: String
+    let text: String
+    let createdAt: String
 }
 
 private final class StoriesUploadProgressDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
@@ -232,6 +344,8 @@ enum StoriesError: LocalizedError {
     case notFound
     case serverUnavailable(statusCode: Int? = nil)
     case decodingFailed
+    case missingMediaUrl
+    case videoTooLong
     case http(Int)
     case serverMessage(String)
 
@@ -252,6 +366,10 @@ enum StoriesError: LocalizedError {
             return "Stories are temporarily unavailable."
         case .decodingFailed:
             return "Stories returned an unexpected response."
+        case .missingMediaUrl:
+            return "Upload succeeded but no media URL was returned."
+        case .videoTooLong:
+            return "Video is too long or too large. Stories can be up to 10 seconds."
         case .http(let code):
             return "Stories request failed with HTTP \(code)."
         case .serverMessage(let message):

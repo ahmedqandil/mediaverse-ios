@@ -21,7 +21,9 @@ struct WatchHistoryView: View {
 
     // Thumbnail dimensions matching EpisodeHistoryCard on web (w-36 × aspect-video)
     private let thumbW: CGFloat = 144
-    private var thumbH: CGFloat { (thumbW * 9 / 16).rounded() }
+    private func thumbH(forContentType type: String?) -> CGFloat {
+        (thumbW / C.mediaAspectRatio(forContentType: type)).rounded()
+    }
 
     var body: some View {
         ZStack {
@@ -86,9 +88,14 @@ struct WatchHistoryView: View {
     @ViewBuilder
     private func historyRow(_ item: HistoryItem) -> some View {
         if let v = item.video {
-            NavigationLink(value: AppRoute.media(id: v.id, type: v.type, channelId: v.channel?.id)) {
+            NavigationLink(value: historyVideoRoute(v)) {
                 videoCard(v, watchedAt: item.watchedAt)
             }
+            .simultaneousGesture(TapGesture().onEnded {
+                if isShort(v.type) {
+                    ShortNavigationCache.shared.seedIDs(historyShortIDs())
+                }
+            })
             .buttonStyle(.plain)
         } else if let ep = item.episode {
             NavigationLink(value: AppRoute.episode(ep.id)) {
@@ -98,22 +105,40 @@ struct WatchHistoryView: View {
         }
     }
 
+    private func historyVideoRoute(_ video: HistoryVideoStub) -> AppRoute {
+        isShort(video.type)
+            ? .short(video.id, showId: nil, channelId: nil)
+            : .media(id: video.id, type: video.type, channelId: video.channel?.id)
+    }
+
+    private func historyShortIDs() -> [String] {
+        items.compactMap { item in
+            guard let video = item.video, isShort(video.type) else { return nil }
+            return video.id
+        }
+    }
+
+    private func isShort(_ type: String?) -> Bool {
+        type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "short"
+    }
+
     // MARK: - Video card (horizontal)
 
     private func videoCard(_ v: HistoryVideoStub, watchedAt: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+        let thumbnailHeight = thumbH(forContentType: v.type)
+        return HStack(alignment: .top, spacing: 12) {
 
             // Thumbnail
             ZStack(alignment: .bottomTrailing) {
-                AsyncImage(url: C.mediaURL(v.thumbnailUrl)) { phase in
-                    switch phase {
-                    case .success(let img):
-                        img.resizable().scaledToFill()
-                    default:
-                        Rectangle().fill(Color.white.opacity(0.08))
-                    }
+                CachedRemoteImage(
+                    url: C.mediaURL(v.thumbnailUrl),
+                    targetSize: CGSize(width: thumbW, height: thumbnailHeight)
+                ) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: {
+                    Rectangle().fill(Color.white.opacity(0.08))
                 }
-                .frame(width: thumbW, height: thumbH)
+                .frame(width: thumbW, height: thumbnailHeight)
                 .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
@@ -121,7 +146,7 @@ struct WatchHistoryView: View {
                     durationBadge(dur)
                 }
             }
-            .frame(width: thumbW, height: thumbH)
+            .frame(width: thumbW, height: thumbnailHeight)
 
             // Info
             VStack(alignment: .leading, spacing: 4) {
@@ -151,21 +176,22 @@ struct WatchHistoryView: View {
     // MARK: - Episode card (horizontal)
 
     private func episodeCard(_ ep: HistoryEpisodeStub, watchedAt: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+        let thumbnailHeight = thumbH(forContentType: "episode")
+        return HStack(alignment: .top, spacing: 12) {
 
             // Thumbnail — episode thumbnail or show cover as fallback
             let thumbURL = ep.thumbnailUrl ?? ep.season?.show?.coverUrl
 
             ZStack(alignment: .bottomTrailing) {
-                AsyncImage(url: C.mediaURL(thumbURL)) { phase in
-                    switch phase {
-                    case .success(let img):
-                        img.resizable().scaledToFill()
-                    default:
-                        Rectangle().fill(Color.white.opacity(0.08))
-                    }
+                CachedRemoteImage(
+                    url: C.mediaURL(thumbURL),
+                    targetSize: CGSize(width: thumbW, height: thumbnailHeight)
+                ) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: {
+                    Rectangle().fill(Color.white.opacity(0.08))
                 }
-                .frame(width: thumbW, height: thumbH)
+                .frame(width: thumbW, height: thumbnailHeight)
                 .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(alignment: .topLeading) {
@@ -183,7 +209,7 @@ struct WatchHistoryView: View {
                     durationBadge(dur)
                 }
             }
-            .frame(width: thumbW, height: thumbH)
+            .frame(width: thumbW, height: thumbnailHeight)
 
             // Info
             VStack(alignment: .leading, spacing: 4) {
@@ -247,7 +273,7 @@ struct WatchHistoryView: View {
             HStack(alignment: .top, spacing: 12) {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.white.opacity(0.08))
-                    .frame(width: thumbW, height: thumbH)
+                    .frame(width: thumbW, height: thumbH(forContentType: "video"))
 
                 VStack(alignment: .leading, spacing: 6) {
                     RoundedRectangle(cornerRadius: 4)

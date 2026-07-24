@@ -1,0 +1,1344 @@
+import AVKit
+import Foundation
+import SwiftUI
+import UIKit
+
+struct AdDecision: Decodable {
+    let decisionId: String?
+    let filled: Bool
+    let ads: [AdCreative]
+    let noFillReason: String?
+    let adRemoval: AdRemovalOffer?
+    let policy: AdDecisionPolicy?
+    let adPolicy: AdDecisionPolicy?
+}
+
+struct AdDecisionPolicy: Decodable {
+    let skippable: Bool?
+    let skipAfterSec: Double?
+}
+
+struct AdRemovalOffer: Codable {
+    let scope: String?
+    let entityId: String?
+    let entityName: String?
+    let productIds: [String]?
+    let salesUrl: String?
+    let networkName: String?
+}
+
+struct AdCreative: Decodable, Identifiable {
+    var id: String { impressionId }
+
+    let impressionId: String
+    let lineItemId: String?
+    let campaignId: String?
+    let creativeId: String?
+    let advertiserId: String?
+    let demandOwner: String?
+    let name: String?
+    let durationSec: Double?
+    let mediaUrl: String?
+    let mediaType: String?
+    let width: Int?
+    let height: Int?
+    let skippable: Bool?
+    let skipOffsetSec: Double?
+    let clickThroughUrl: String?
+    let brandLogoUrl: String?
+    let brandLabel: String?
+    let brandTitle: String?
+    let brandDescription: String?
+    let ctaText: String?
+}
+
+struct AdRequestContext {
+    let contentId: String
+    let contentType: String
+    let placement: String?
+    let durationSec: Double?
+    let maxAds: Int?
+    let maxDurationSec: Int?
+    let skippable: Bool?
+    let skipAfterSec: Int?
+    let orientation: String
+    let breakId: String?
+    let userId: String?
+
+    init(
+        contentId: String,
+        contentType: String,
+        placement: String? = nil,
+        durationSec: Double? = nil,
+        maxAds: Int? = nil,
+        maxDurationSec: Int? = nil,
+        skippable: Bool? = nil,
+        skipAfterSec: Int? = nil,
+        orientation: String,
+        breakId: String? = nil,
+        userId: String? = nil
+    ) {
+        self.contentId = contentId
+        self.contentType = contentType
+        self.placement = placement
+        self.durationSec = durationSec
+        self.maxAds = maxAds
+        self.maxDurationSec = maxDurationSec
+        self.skippable = skippable
+        self.skipAfterSec = skipAfterSec
+        self.orientation = orientation
+        self.breakId = breakId
+        self.userId = userId
+    }
+}
+
+struct NativeAdCompanionCard: View {
+    let ad: AdCreative
+
+    @Environment(\.openURL) private var openURL
+
+    private var clickThroughURL: URL? {
+        guard let value = ad.clickThroughUrl, !value.isEmpty else { return nil }
+        return URL(string: value)
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            brandLogo
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text("AD")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(red: 0.98, green: 0.80, blue: 0.08), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+
+                    if let label = ad.brandLabel, !label.isEmpty {
+                        Text(label.uppercased())
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.50))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.72)
+                    }
+                }
+
+                if let title = ad.brandTitle ?? ad.name, !title.isEmpty {
+                    Text(title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                }
+
+                if let description = ad.brandDescription, !description.isEmpty {
+                    Text(description)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.70))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
+
+            if let url = clickThroughURL, let cta = ctaLabel {
+                Button {
+                    openURL(url)
+                } label: {
+                    Text(cta)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.black)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(C.watch, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color(red: 0.071, green: 0.071, blue: 0.102), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(.white.opacity(0.08), lineWidth: 1)
+        }
+    }
+
+    private var brandLogo: some View {
+        Group {
+            if let url = C.mediaURL(ad.brandLogoUrl) {
+                CachedRemoteImage(
+                    url: url,
+                    targetSize: CGSize(width: 48, height: 48)
+                ) { image in
+                    image
+                        .resizable()
+                        .scaledToFill()
+                } placeholder: {
+                    brandLogoFallback
+                }
+            } else {
+                brandLogoFallback
+            }
+        }
+        .frame(width: 48, height: 48)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(.white.opacity(0.14), lineWidth: 1)
+        }
+    }
+
+    private var brandLogoFallback: some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(.white.opacity(0.14))
+            .overlay {
+                Text("Ad")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.88))
+            }
+    }
+
+    private var ctaLabel: String? {
+        let raw = ad.ctaText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let raw, !raw.isEmpty else { return nil }
+        return raw.hasSuffix("→") ? raw : "\(raw) →"
+    }
+}
+
+struct AdBreak: Identifiable, Equatable {
+    let id: String
+    let breakId: String
+    let timeOffsetSec: Double
+    let placement: String
+}
+
+struct ActiveAdPresentation {
+    let decision: AdDecision
+    let contentId: String
+    let placement: String?
+    let breakId: String?
+    let currentAdIndex: Int
+    let onSkip: (() -> Void)?
+    let onFinish: (() -> Void)?
+}
+
+enum NativeAdBrandCardPlacement {
+    case hidden
+    case belowPlayer
+    case playerOverlay
+}
+
+enum ActiveAdFullscreenHandoff {
+    private static var protectedPlayers = Set<ObjectIdentifier>()
+
+    static func protect(_ player: AVPlayer) {
+        protectedPlayers.insert(ObjectIdentifier(player))
+    }
+
+    static func release(_ player: AVPlayer) {
+        protectedPlayers.remove(ObjectIdentifier(player))
+    }
+
+    static func isProtected(_ player: AVPlayer?) -> Bool {
+        guard let player else { return false }
+        return protectedPlayers.contains(ObjectIdentifier(player))
+    }
+}
+
+actor AdServerClient {
+    static let shared = AdServerClient()
+
+    private let session = URLSession(configuration: .ephemeral)
+    private let trackingSession = URLSession(configuration: .default)
+    private let decoder = JSONDecoder()
+
+    private var sessionId: String {
+        let idKey = "westreem.adSessionId"
+        let lastSeenKey = "westreem.adSessionLastSeenAt"
+        let ttl: TimeInterval = 30 * 60
+        let now = Date().timeIntervalSince1970
+
+        if let existing = UserDefaults.standard.string(forKey: idKey) {
+            let lastSeen = UserDefaults.standard.double(forKey: lastSeenKey)
+            if lastSeen > 0, now - lastSeen < ttl {
+                UserDefaults.standard.set(now, forKey: lastSeenKey)
+                return existing
+            }
+        }
+
+        let created = UUID().uuidString
+        UserDefaults.standard.set(created, forKey: idKey)
+        UserDefaults.standard.set(now, forKey: lastSeenKey)
+        return created
+    }
+
+    private var deviceId: String {
+        let key = "westreem.adDeviceId"
+        if let existing = UserDefaults.standard.string(forKey: key) {
+            return existing
+        }
+        let created = UUID().uuidString
+        UserDefaults.standard.set(created, forKey: key)
+        return created
+    }
+
+    func requestAd(_ context: AdRequestContext) async throws -> AdDecision {
+        let deviceKind = await MainActor.run {
+            UIDevice.current.userInterfaceIdiom == .pad ? "tablet" : "mobile"
+        }
+        var components = URLComponents(string: C.adServerURL + "/ad.json")
+        var items: [URLQueryItem] = [
+            URLQueryItem(name: "contentId", value: context.contentId),
+            URLQueryItem(name: "contentType", value: context.contentType),
+            URLQueryItem(name: "platform", value: "ios"),
+            URLQueryItem(name: "device", value: deviceKind),
+            URLQueryItem(name: "os", value: "iOS"),
+            URLQueryItem(name: "deviceId", value: deviceId),
+            URLQueryItem(name: "sessionId", value: sessionId),
+            URLQueryItem(name: "orientation", value: context.orientation),
+        ]
+
+        if let placement = context.placement {
+            items.append(URLQueryItem(name: "placement", value: placement))
+        }
+        if let durationSec = context.durationSec {
+            items.append(URLQueryItem(name: "durationSec", value: String(Int(durationSec))))
+        }
+        if let maxAds = context.maxAds {
+            items.append(URLQueryItem(name: "maxAds", value: String(maxAds)))
+        }
+        if let maxDurationSec = context.maxDurationSec {
+            items.append(URLQueryItem(name: "maxDurationSec", value: String(maxDurationSec)))
+        }
+        if let skippable = context.skippable {
+            items.append(URLQueryItem(name: "skippable", value: skippable ? "1" : "0"))
+        }
+        if let skipAfterSec = context.skipAfterSec {
+            items.append(URLQueryItem(name: "skipAfterSec", value: String(skipAfterSec)))
+        }
+        if let breakId = context.breakId {
+            items.append(URLQueryItem(name: "breakId", value: breakId))
+        }
+        if let userId = context.userId {
+            items.append(URLQueryItem(name: "userId", value: userId))
+        }
+        components?.queryItems = items
+        guard let url = components?.url else {
+            throw APIError.badURL(C.adServerURL + "/ad.json")
+        }
+        guard C.isTrustedAdURL(url) else {
+            throw APIError.badURL(url.absoluteString)
+        }
+
+        Self.debugLog("request \(url.absoluteString)")
+        let (data, response) = try await session.data(from: url)
+        try validate(response)
+        let decision = try decoder.decode(AdDecision.self, from: data)
+        Self.debugLog(
+            "decision contentId=\(context.contentId) placement=\(context.placement ?? "linear") filled=\(decision.filled) ads=\(decision.ads.count) noFill=\(decision.noFillReason ?? "none")"
+        )
+        return decision
+    }
+
+    func requestVMAP(_ context: AdRequestContext) async throws -> [AdBreak] {
+        let deviceKind = await MainActor.run {
+            UIDevice.current.userInterfaceIdiom == .pad ? "tablet" : "mobile"
+        }
+        var components = URLComponents(string: C.adServerURL + "/vmap")
+        var items: [URLQueryItem] = [
+            URLQueryItem(name: "contentId", value: context.contentId),
+            URLQueryItem(name: "contentType", value: context.contentType),
+            URLQueryItem(name: "platform", value: "ios"),
+            URLQueryItem(name: "device", value: deviceKind),
+            URLQueryItem(name: "os", value: "iOS"),
+            URLQueryItem(name: "deviceId", value: deviceId),
+            URLQueryItem(name: "sessionId", value: sessionId),
+            URLQueryItem(name: "orientation", value: context.orientation),
+        ]
+
+        if let placement = context.placement {
+            items.append(URLQueryItem(name: "placement", value: placement))
+        }
+        if let durationSec = context.durationSec {
+            items.append(URLQueryItem(name: "durationSec", value: String(Int(durationSec))))
+        }
+        if let maxAds = context.maxAds {
+            items.append(URLQueryItem(name: "maxAds", value: String(maxAds)))
+        }
+        if let maxDurationSec = context.maxDurationSec {
+            items.append(URLQueryItem(name: "maxDurationSec", value: String(maxDurationSec)))
+        }
+        if let skippable = context.skippable {
+            items.append(URLQueryItem(name: "skippable", value: skippable ? "1" : "0"))
+        }
+        if let skipAfterSec = context.skipAfterSec {
+            items.append(URLQueryItem(name: "skipAfterSec", value: String(skipAfterSec)))
+        }
+        if let breakId = context.breakId {
+            items.append(URLQueryItem(name: "breakId", value: breakId))
+        }
+        components?.queryItems = items
+        guard let url = components?.url else {
+            throw APIError.badURL(C.adServerURL + "/vmap")
+        }
+        guard C.isTrustedAdURL(url) else {
+            throw APIError.badURL(url.absoluteString)
+        }
+
+        let (data, response) = try await session.data(from: url)
+        try validate(response)
+        return VMAPBreakParser.parse(data)
+    }
+
+    func track(event: String, ad: AdCreative, decisionId: String?, contentId: String, placement: String?, breakId: String? = nil, userId: String? = nil) async {
+        var components = URLComponents(string: C.adServerURL + "/track")
+        components?.queryItems = [
+            URLQueryItem(name: "e", value: event),
+            URLQueryItem(name: "iid", value: ad.impressionId),
+            URLQueryItem(name: "did", value: decisionId),
+            URLQueryItem(name: "pl", value: placement),
+            URLQueryItem(name: "li", value: ad.lineItemId),
+            URLQueryItem(name: "camp", value: ad.campaignId),
+            URLQueryItem(name: "cr", value: ad.creativeId),
+            URLQueryItem(name: "c", value: contentId),
+            URLQueryItem(name: "b", value: breakId),
+            URLQueryItem(name: "s", value: sessionId),
+            URLQueryItem(name: "p", value: "ios"),
+            URLQueryItem(name: "u", value: userId),
+            URLQueryItem(name: "dev", value: deviceId),
+            URLQueryItem(name: "do", value: ad.demandOwner),
+            URLQueryItem(name: "ts", value: String(Int(Date().timeIntervalSince1970 * 1000))),
+        ].compactMap { item in
+            guard item.value != nil else { return nil }
+            return item
+        }
+
+        guard let url = components?.url, C.isTrustedAdURL(url) else { return }
+        let attempts = event == "impression" ? 3 : 1
+        for attempt in 1...attempts {
+            do {
+                let (_, response) = try await trackingSession.data(from: url)
+                try validate(response)
+                return
+            } catch {
+                guard attempt < attempts else {
+                    Self.debugLog("track failed event=\(event) impression=\(ad.impressionId): \(error.localizedDescription)")
+                    return
+                }
+                try? await Task.sleep(nanoseconds: UInt64(attempt) * 500_000_000)
+            }
+        }
+    }
+
+    private func validate(_ response: URLResponse) throws {
+        guard let http = response as? HTTPURLResponse else { return }
+        guard (200..<300).contains(http.statusCode) else {
+            Self.debugLog("http \(http.statusCode)")
+            throw APIError.http(http.statusCode)
+        }
+    }
+
+    private static func debugLog(_ message: String) {
+        #if DEBUG
+        print("[Ads] \(message)")
+        #endif
+    }
+}
+
+private final class VMAPBreakParser: NSObject, XMLParserDelegate {
+    private var breaks = [AdBreak]()
+
+    static func parse(_ data: Data) -> [AdBreak] {
+        let parser = XMLParser(data: data)
+        let delegate = VMAPBreakParser()
+        parser.delegate = delegate
+        parser.parse()
+        return delegate.breaks
+            .filter { $0.timeOffsetSec > 0 }
+            .sorted { $0.timeOffsetSec < $1.timeOffsetSec }
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String] = [:]
+    ) {
+        let normalized = elementName.lowercased()
+        guard normalized == "adbreak" || normalized.hasSuffix(":adbreak") else { return }
+
+        guard let offset = attributeDict["timeOffset"].flatMap(Self.parseOffset) else { return }
+        let breakId = attributeDict["breakId"]
+            ?? attributeDict["breakID"]
+            ?? attributeDict["id"]
+            ?? attributeDict["breakType"]
+            ?? "break-\(Int(offset))"
+        let placement = Self.placementKey(breakId: breakId, offset: offset)
+        breaks.append(
+            AdBreak(
+                id: "\(breakId)-\(Int(offset))",
+                breakId: breakId,
+                timeOffsetSec: offset,
+                placement: placement
+            )
+        )
+    }
+
+    private static func placementKey(breakId: String, offset: Double) -> String {
+        let normalizedBreakId = breakId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedBreakId.contains("preroll") || normalizedBreakId.contains("pre-roll") {
+            return "preroll"
+        }
+        if normalizedBreakId.contains("midroll") || normalizedBreakId.contains("mid-roll") {
+            return "midroll"
+        }
+        return offset <= 0 ? "preroll" : "midroll"
+    }
+
+    private static func parseOffset(_ value: String) -> Double? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed == "start" { return 0 }
+        if trimmed == "end" { return nil }
+        if trimmed.hasSuffix("%") { return nil }
+        if let seconds = Double(trimmed) { return seconds }
+
+        let parts = trimmed.split(separator: ":").map(String.init)
+        guard parts.count == 3,
+              let hours = Double(parts[0]),
+              let minutes = Double(parts[1]),
+              let seconds = Double(parts[2]) else {
+            return nil
+        }
+        return hours * 3600 + minutes * 60 + seconds
+    }
+}
+
+struct NativeAdPlayerView: View {
+    let decision: AdDecision
+    let contentId: String
+    let placement: String?
+    var userId: String? = nil
+    var breakId: String?
+    var aspectRatio: CGFloat = 16 / 9
+    var bottomContentInset: CGFloat = 0
+    var progressHorizontalInset: CGFloat = 0
+    var fillVerticalContainer: Bool = false
+    var onFullscreen: (() -> Void)? = nil
+    var preservePlaybackOnDisappear = false
+    var externalPlayer: AVPlayer? = nil
+    var initialAdIndex = 0
+    var isPresentationOnly = false
+    var brandCardPlacement: NativeAdBrandCardPlacement? = nil
+    var adPolicy: EffectiveAdPolicy? = nil
+    var adRemoval: AdRemovalOffer? = nil
+    var overrideSkippable: Bool? = nil
+    var overrideSkipAfterSec: Int? = nil
+    var onCanSkipChanged: ((Bool) -> Void)? = nil
+    var onActivePlayerChanged: ((AVPlayer?) -> Void)? = nil
+    var onActiveAdPresentationChanged: ((ActiveAdPresentation?) -> Void)? = nil
+    var onSkip: (() -> Void)? = nil
+    var onFinish: (() -> Void)? = nil
+    let onFinished: () -> Void
+
+    @Environment(\.openURL) private var openURL
+    @AppStorage("playerMuted") private var isMuted = false
+    @State private var player: AVPlayer?
+    @State private var currentAdIndex = 0
+    @State private var elapsed: Double = 0
+    @State private var observer: Any?
+    @State private var endObserver: NSObjectProtocol?
+    @State private var failureObserver: NSObjectProtocol?
+    @State private var playbackStartTask: Task<Void, Never>?
+    @State private var firedEvents: Set<String> = []
+    @State private var isPaused = false
+
+    private var currentAd: AdCreative? {
+        decision.ads.indices.contains(currentAdIndex) ? decision.ads[currentAdIndex] : nil
+    }
+
+    private var adDuration: Double {
+        guard let duration = currentAd?.durationSec, duration > 0 else { return 0 }
+        return duration
+    }
+
+    private var adProgress: Double {
+        guard adDuration > 0 else { return 0 }
+        return min(max(elapsed / adDuration, 0), 1)
+    }
+
+    private var remainingSeconds: Int? {
+        guard adDuration > 0 else { return nil }
+        return max(0, Int(ceil(adDuration - elapsed)))
+    }
+
+    private var resolvedDecisionPolicy: AdDecisionPolicy? {
+        decision.policy ?? decision.adPolicy
+    }
+
+    private var isCurrentAdSkippable: Bool {
+        overrideSkippable ?? currentAd?.skippable ?? adPolicy?.skippable ?? resolvedDecisionPolicy?.skippable ?? false
+    }
+
+    private var skipOffset: Double {
+        let raw = overrideSkipAfterSec.map(Double.init)
+            ?? currentAd?.skipOffsetSec
+            ?? adPolicy?.skipAfterSec.map(Double.init)
+            ?? resolvedDecisionPolicy?.skipAfterSec
+            ?? 0
+        if aspectRatio < 1, raw <= 0 {
+            return 5
+        }
+        return max(0, raw)
+    }
+
+    private var skipCountdown: Int {
+        max(0, Int(ceil(skipOffset - elapsed)))
+    }
+
+    private var canSkip: Bool {
+        guard currentAd != nil, isCurrentAdSkippable else { return false }
+        return elapsed >= skipOffset
+    }
+
+    private var hasSponsorCard: Bool {
+        guard let ad = currentAd else { return false }
+        if aspectRatio < 1 {
+            return !(ad.brandLabel ?? "").isEmpty
+                || !(ad.brandTitle ?? "").isEmpty
+                || !(ad.ctaText ?? "").isEmpty
+        }
+        return clickThroughURL != nil
+            || !(ad.brandLogoUrl ?? "").isEmpty
+            || !(ad.brandLabel ?? "").isEmpty
+            || !(ad.brandTitle ?? "").isEmpty
+            || !(ad.brandDescription ?? "").isEmpty
+            || !(ad.ctaText ?? "").isEmpty
+    }
+
+    private var resolvedBrandCardPlacement: NativeAdBrandCardPlacement {
+        if let brandCardPlacement {
+            return brandCardPlacement
+        }
+        return aspectRatio < 1 ? .playerOverlay : .belowPlayer
+    }
+
+    private var adRemovalURL: URL? {
+        guard let salesUrl = (adRemoval ?? adPolicy?.adRemoval ?? decision.adRemoval)?.salesUrl else { return nil }
+        return URL(string: salesUrl)
+    }
+
+    var body: some View {
+        Group {
+            if aspectRatio < 1 {
+                verticalAdPlayer
+            } else {
+                horizontalAdPlayer
+            }
+        }
+        .clipped()
+        .task(id: currentAdIndex) {
+            if isPresentationOnly {
+                attachExternalPlayerIfNeeded()
+            } else {
+                setupCurrentAd()
+            }
+        }
+        .onAppear {
+            if isPresentationOnly {
+                currentAdIndex = min(max(initialAdIndex, 0), max(decision.ads.count - 1, 0))
+                attachExternalPlayerIfNeeded()
+            }
+        }
+        .onChange(of: isMuted) { _, muted in
+            player?.isMuted = muted
+        }
+        .onChange(of: canSkip) { _, canSkip in
+            onCanSkipChanged?(canSkip)
+        }
+        .onDisappear {
+            if preservePlaybackOnDisappear || ActiveAdFullscreenHandoff.isProtected(player) {
+                publishActiveAdState(player)
+                detachPlaybackObservers()
+            } else if isPresentationOnly {
+                cleanup()
+            } else {
+                cleanup()
+            }
+        }
+    }
+
+    private var horizontalAdPlayer: some View {
+        VStack(spacing: 0) {
+            adMediaSurface(showSponsorOverlay: hasSponsorCard && resolvedBrandCardPlacement == .playerOverlay)
+                .frame(maxWidth: .infinity)
+                .aspectRatio(aspectRatio, contentMode: .fit)
+
+            if hasSponsorCard && resolvedBrandCardPlacement == .belowPlayer {
+                bottomPanel
+                    .padding(.horizontal, 12)
+                    .padding(.top, 24)
+                    .padding(.bottom, 12)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+    }
+
+    private var verticalAdPlayer: some View {
+        Group {
+            if fillVerticalContainer {
+                adMediaSurface(showSponsorOverlay: hasSponsorCard)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                adMediaSurface(showSponsorOverlay: hasSponsorCard)
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(aspectRatio, contentMode: .fit)
+            }
+        }
+    }
+
+    private func adMediaSurface(showSponsorOverlay: Bool) -> some View {
+        ZStack(alignment: .top) {
+            Color.black
+
+            if let player {
+                WatchPlayerSurface(player: player)
+            }
+
+            clickThroughLayer
+
+            LinearGradient(
+                colors: [.black.opacity(0.50), .clear, .black.opacity(showSponsorOverlay ? 0.70 : 0.36)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .allowsHitTesting(false)
+
+            if isPaused {
+                Button {
+                    togglePause()
+                } label: {
+                    MediaverseIcon(name: "play", fallbackSystemName: "play.fill")
+                        .frame(width: aspectRatio < 1 ? 26 : 30, height: aspectRatio < 1 ? 26 : 30)
+                        .foregroundStyle(.white)
+                        .frame(width: 64, height: 64)
+                        .background(.black.opacity(0.50), in: Circle())
+                        .overlay { Circle().stroke(.white.opacity(0.25), lineWidth: 1) }
+                }
+                .buttonStyle(.plain)
+                .allowsHitTesting(aspectRatio >= 1)
+            }
+
+            VStack(spacing: 0) {
+                topBar
+                resumeCountdownChip
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 8)
+                    .padding(.top, -8)
+                Spacer(minLength: 0)
+                HStack {
+                    Spacer()
+                    skipControl
+                }
+                .padding(.trailing, 12)
+                .padding(.bottom, showSponsorOverlay ? 10 : 14)
+
+                if showSponsorOverlay {
+                    bottomPanel
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 10)
+                }
+
+                progressBar
+                    .frame(height: 3)
+                    .padding(.horizontal, progressHorizontalInset)
+            }
+            .padding(.bottom, aspectRatio < 1 ? bottomContentInset : 0)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if aspectRatio < 1 {
+                togglePause()
+            }
+        }
+        .clipped()
+    }
+
+    @ViewBuilder
+    private var clickThroughLayer: some View {
+        if aspectRatio >= 1, let url = clickThroughURL {
+            Button {
+                openAdURL(url)
+            } label: {
+                Color.white.opacity(0.001)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder
+    private var resumeCountdownChip: some View {
+        if let remainingSeconds,
+           remainingSeconds <= 10,
+           currentAdIndex == max(decision.ads.count - 1, 0) {
+            Text("Video resumes in \(remainingSeconds) \(remainingSeconds == 1 ? "second" : "seconds")")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(.white)
+                .monospacedDigit()
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(.black.opacity(0.70), in: Capsule())
+                .overlay { Capsule().stroke(.white.opacity(0.15), lineWidth: 1) }
+        }
+    }
+
+    private var topBar: some View {
+        GeometryReader { proxy in
+            let compact = proxy.size.width < 520
+            topBarContent(compact: compact)
+                .frame(width: proxy.size.width, height: 44)
+        }
+        .frame(height: 44)
+    }
+
+    private func topBarContent(compact: Bool) -> some View {
+        HStack(spacing: compact ? 7 : 12) {
+            HStack(spacing: 8) {
+                Text("AD")
+                    .font(.system(size: 11, weight: aspectRatio < 1 ? .black : .bold))
+                    .tracking(aspectRatio < 1 ? 0.44 : 0)
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color(red: 0.98, green: 0.80, blue: 0.08), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+
+                Text(compact ? compactAdStatusText : adStatusText)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .monospacedDigit()
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: compact ? 4 : 8)
+
+            if aspectRatio >= 1, let url = adRemovalURL {
+                Button {
+                    openURL(url)
+                } label: {
+                    Text("Remove ads →")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.black)
+                        .lineLimit(1)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .frame(maxWidth: 240)
+                        .background(C.watch, in: Capsule())
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 8)
+            }
+
+            HStack(spacing: compact ? 6 : 8) {
+                if aspectRatio >= 1 {
+                    mediaControlButton(iconName: isPaused ? "play" : "pause", fallbackSystemName: isPaused ? "play.fill" : "pause.fill", size: 32, iconSize: 16) {
+                        togglePause()
+                    }
+                }
+
+                mediaControlButton(iconName: isMuted ? "mute" : "volume", fallbackSystemName: isMuted ? "speaker.slash" : "speaker.wave.2", size: aspectRatio < 1 ? 34 : 32, iconSize: 16) {
+                    toggleMute()
+                }
+
+                if aspectRatio >= 1 {
+                    mediaControlButton(
+                        iconName: isPresentationOnly ? "fullscreen-exit" : "fullscreen",
+                        fallbackSystemName: isPresentationOnly ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                        size: 32,
+                        iconSize: 16
+                    ) {
+                        if let onFullscreen {
+                            onFullscreen()
+                        } else {
+                            presentAdFullscreen()
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, aspectRatio < 1 ? 12 : 8)
+    }
+
+    private var progressBar: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Rectangle()
+                    .fill(.white.opacity(0.20))
+                Rectangle()
+                    .fill(Color(red: 1, green: 0.83, blue: 0.12))
+                    .frame(width: proxy.size.width * adProgress)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var skipControl: some View {
+        if canSkip {
+            Button {
+                if isPresentationOnly {
+                    playNextOrFinish()
+                } else {
+                    trackEvent("skip")
+                    onSkip?()
+                    playNextOrFinish()
+                }
+            } label: {
+                Text("Skip ad ▸")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(aspectRatio < 1 ? .white : .black)
+                    .padding(.horizontal, aspectRatio < 1 ? 14 : 12)
+                    .padding(.vertical, 6)
+                    .background(aspectRatio < 1 ? .black.opacity(0.70) : .white.opacity(0.90), in: RoundedRectangle(cornerRadius: aspectRatio < 1 ? 6 : 4, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: aspectRatio < 1 ? 6 : 4, style: .continuous)
+                            .stroke(.white.opacity(aspectRatio < 1 ? 0.20 : 1), lineWidth: 1)
+                    }
+            }
+            .buttonStyle(.plain)
+        } else if isCurrentAdSkippable {
+            Text("Skip in \(skipCountdown)s")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(aspectRatio < 1 ? 0.70 : 0.60))
+                .monospacedDigit()
+                .padding(.horizontal, aspectRatio < 1 ? 14 : 12)
+                .padding(.vertical, 6)
+                .background(.black.opacity(aspectRatio < 1 ? 0.50 : 0.40), in: RoundedRectangle(cornerRadius: aspectRatio < 1 ? 6 : 4, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: aspectRatio < 1 ? 6 : 4, style: .continuous)
+                        .stroke(.white.opacity(0.20), lineWidth: 1)
+                }
+        }
+    }
+
+    @ViewBuilder
+    private var bottomPanel: some View {
+        if let ad = currentAd {
+            let isShorts = aspectRatio < 1
+            let cornerRadius: CGFloat = isShorts ? 14 : 12
+
+            HStack(alignment: .center, spacing: 12) {
+                if isShorts || !(ad.brandLogoUrl ?? "").isEmpty {
+                    brandLogo(for: ad)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        if !isShorts {
+                            Text("AD")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.black)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color(red: 0.98, green: 0.80, blue: 0.08), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        }
+
+                        if let label = ad.brandLabel, !label.isEmpty {
+                            Text(isShorts ? label : label.uppercased())
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.white.opacity(isShorts ? 0.60 : 0.50))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.72)
+                        }
+                    }
+
+                    if let title = ad.brandTitle ?? ad.name, !title.isEmpty {
+                        Text(title)
+                            .font(.system(size: isShorts ? 14 : 15, weight: isShorts ? .bold : .semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.72)
+                    }
+
+                    if let description = ad.brandDescription, !description.isEmpty {
+                        Text(description)
+                            .font(.system(size: isShorts ? 12 : 13, weight: .regular))
+                            .foregroundStyle(.white.opacity(0.70))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.72)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
+
+                if let url = clickThroughURL, let cta = ctaLabel(for: ad, isShorts: isShorts) {
+                    Button {
+                        openAdURL(url)
+                    } label: {
+                        Text(cta)
+                            .font(.system(size: 13, weight: isShorts ? .bold : .semibold))
+                            .foregroundStyle(.black)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
+                            .padding(.horizontal, isShorts ? 14 : 16)
+                            .padding(.vertical, 8)
+                            .background(isShorts ? Color(red: 0.98, green: 0.80, blue: 0.08) : C.watch, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(isShorts ? 12 : 0)
+            .padding(.horizontal, isShorts ? 0 : 16)
+            .padding(.vertical, isShorts ? 0 : 12)
+            .background(isShorts ? Color.black.opacity(0.55) : Color(red: 0.071, green: 0.071, blue: 0.102), in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(.white.opacity(isShorts ? 0.15 : 0.08), lineWidth: 1)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func brandLogo(for ad: AdCreative) -> some View {
+        let isShorts = aspectRatio < 1
+        let size: CGFloat = isShorts ? 40 : 48
+        let radius: CGFloat = isShorts ? 10 : 8
+
+        if let url = C.mediaURL(ad.brandLogoUrl) {
+            CachedRemoteImage(
+                url: url,
+                targetSize: CGSize(width: size, height: size)
+            ) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+            } placeholder: {
+                brandLogoFallback(cornerRadius: radius)
+            }
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .stroke(.white.opacity(0.14), lineWidth: 1)
+            }
+        } else {
+            brandLogoFallback(cornerRadius: radius)
+                .frame(width: size, height: size)
+        }
+    }
+
+    private func brandLogoFallback(cornerRadius: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(.white.opacity(0.14))
+            .overlay {
+                Text("Ad")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.88))
+            }
+    }
+
+    private var clickThroughURL: URL? {
+        guard let click = currentAd?.clickThroughUrl else { return nil }
+        return URL(string: click)
+    }
+
+    private var adStatusText: String {
+        let totalAds = max(decision.ads.count, 1)
+        let countText = totalAds == 1 ? "Ad" : "Ad \(currentAdIndex + 1) of \(totalAds)"
+        guard let remainingSeconds else { return countText }
+        if aspectRatio < 1, placement == "shorts_first_view" {
+            return "Featured · \(formatTime(Double(remainingSeconds)))"
+        }
+        return "\(countText) · \(formatTime(Double(remainingSeconds)))"
+    }
+
+    private var compactAdStatusText: String {
+        adStatusText
+    }
+
+    private func ctaLabel(for ad: AdCreative, isShorts: Bool) -> String? {
+        let text = ad.ctaText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isShorts {
+            return text?.isEmpty == false ? text : nil
+        }
+        guard let text, !text.isEmpty else { return "Learn more →" }
+        return "\(text) →"
+    }
+
+    private func mediaControlButton(iconName: String, fallbackSystemName: String, size: CGFloat = 58, iconSize: CGFloat = 24, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            MediaverseIcon(name: iconName, fallbackSystemName: fallbackSystemName)
+                .frame(width: iconSize, height: iconSize)
+                .foregroundStyle(.white)
+                .frame(width: size, height: size)
+                .background(.black.opacity(0.42), in: Circle())
+                .overlay { Circle().stroke(.white.opacity(0.24), lineWidth: 1.5) }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func setupCurrentAd() {
+        cleanup()
+        guard let ad = currentAd, let url = C.mediaURL(ad.mediaUrl) else {
+            if currentAd != nil {
+                trackEvent("error")
+            }
+            playNextOrFinish()
+            return
+        }
+
+        firedEvents = []
+        elapsed = 0
+        isPaused = false
+        let item = AVPlayerItem(url: url)
+        let nextPlayer = AVPlayer(playerItem: item)
+        nextPlayer.isMuted = isMuted
+        player = nextPlayer
+        publishActiveAdState(nextPlayer)
+
+        observer = nextPlayer.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+            queue: .main
+        ) { time in
+            elapsed = max(0, time.seconds)
+            fireQuartileEventsIfNeeded()
+        }
+
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            guard !ActiveAdFullscreenHandoff.isProtected(nextPlayer) else { return }
+            trackEvent("complete")
+            playNextOrFinish()
+        }
+        failureObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            guard !ActiveAdFullscreenHandoff.isProtected(nextPlayer) else { return }
+            trackEvent("error")
+            playNextOrFinish()
+        }
+
+        trackEvent("impression")
+        nextPlayer.play()
+        schedulePlaybackStartTracking(for: nextPlayer)
+        onCanSkipChanged?(canSkip)
+    }
+
+    private func detachPlaybackObservers() {
+        playbackStartTask?.cancel()
+        playbackStartTask = nil
+        if let observer {
+            player?.removeTimeObserver(observer)
+            self.observer = nil
+        }
+        if let endObserver {
+            NotificationCenter.default.removeObserver(endObserver)
+            self.endObserver = nil
+        }
+        if let failureObserver {
+            NotificationCenter.default.removeObserver(failureObserver)
+            self.failureObserver = nil
+        }
+    }
+
+    private func cleanup() {
+        detachPlaybackObservers()
+        player?.pause()
+        player = nil
+        onActivePlayerChanged?(nil)
+        onActiveAdPresentationChanged?(nil)
+    }
+
+    private func detachPresentationObserver() {
+        if let observer {
+            player?.removeTimeObserver(observer)
+            self.observer = nil
+        }
+        player = nil
+    }
+
+    private func publishActiveAdState(_ activePlayer: AVPlayer?) {
+        onActivePlayerChanged?(activePlayer)
+        guard activePlayer != nil else {
+            onActiveAdPresentationChanged?(nil)
+            return
+        }
+        onActiveAdPresentationChanged?(
+            ActiveAdPresentation(
+                decision: decision,
+                contentId: contentId,
+                placement: placement,
+                breakId: breakId,
+                currentAdIndex: currentAdIndex,
+                onSkip: {
+                    trackEvent("skip")
+                    playNextOrFinish()
+                },
+                onFinish: {
+                    playNextOrFinish()
+                }
+            )
+        )
+    }
+
+    private func attachExternalPlayerIfNeeded() {
+        guard let externalPlayer else { return }
+        if player !== externalPlayer {
+            detachPresentationObserver()
+            player = externalPlayer
+            externalPlayer.isMuted = isMuted
+            observer = externalPlayer.addPeriodicTimeObserver(
+                forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+                queue: .main
+            ) { time in
+                elapsed = max(0, time.seconds)
+            }
+            if let item = externalPlayer.currentItem {
+                endObserver = NotificationCenter.default.addObserver(
+                    forName: .AVPlayerItemDidPlayToEndTime,
+                    object: item,
+                    queue: .main
+                ) { _ in
+                    trackEvent("complete")
+                    cleanup()
+                    onFinished()
+                }
+                failureObserver = NotificationCenter.default.addObserver(
+                    forName: .AVPlayerItemFailedToPlayToEndTime,
+                    object: item,
+                    queue: .main
+                ) { _ in
+                    trackEvent("error")
+                    cleanup()
+                    onFinished()
+                }
+            }
+        }
+        isPaused = externalPlayer.timeControlStatus == .paused
+        externalPlayer.play()
+    }
+
+    private func schedulePlaybackStartTracking(for player: AVPlayer) {
+        playbackStartTask?.cancel()
+        playbackStartTask = Task { @MainActor in
+            while !Task.isCancelled {
+                if player.timeControlStatus == .playing || player.currentTime().seconds > 0.05 {
+                    trackEvent("start")
+                    playbackStartTask = nil
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+    }
+
+    private func playNextOrFinish() {
+        if isPresentationOnly {
+            cleanup()
+            onFinished()
+            return
+        }
+
+        cleanup()
+        if currentAdIndex + 1 < decision.ads.count {
+            currentAdIndex += 1
+        } else {
+            onFinished()
+        }
+    }
+
+    private func toggleMute() {
+        isMuted.toggle()
+        player?.isMuted = isMuted
+        if isMuted {
+            trackEvent("mute")
+        }
+    }
+
+    private func togglePause() {
+        guard let player else { return }
+        if isPaused {
+            player.play()
+            trackEvent("resume")
+        } else {
+            player.pause()
+            trackEvent("pause")
+        }
+        isPaused.toggle()
+    }
+
+    private func openAdURL(_ url: URL) {
+        trackEvent("click")
+        trackEvent("ctaClick")
+        openURL(url)
+    }
+
+    private func presentAdFullscreen() {
+        player?.play()
+    }
+
+    private func fireQuartileEventsIfNeeded() {
+        guard adDuration > 0 else { return }
+        let ratio = elapsed / adDuration
+        let events: [(String, Double)] = [
+            ("firstQuartile", 0.25),
+            ("midpoint", 0.5),
+            ("thirdQuartile", 0.75),
+        ]
+
+        for (event, threshold) in events where ratio >= threshold && !firedEvents.contains(event) {
+            trackEvent(event)
+        }
+    }
+
+    private func formatTime(_ seconds: Double) -> String {
+        guard seconds.isFinite else { return "0:00" }
+        let total = max(0, Int(seconds.rounded()))
+        return "\(total / 60):\(String(format: "%02d", total % 60))"
+    }
+
+    private func trackEvent(_ event: String) {
+        guard let ad = currentAd else { return }
+        let dedupedEvents: Set<String> = [
+            "impression",
+            "start",
+            "firstQuartile",
+            "midpoint",
+            "thirdQuartile",
+            "complete"
+        ]
+        if dedupedEvents.contains(event) {
+            guard !firedEvents.contains(event) else { return }
+            firedEvents.insert(event)
+        }
+        let decisionId = decision.decisionId
+        let contentId = contentId
+        let placement = placement
+        let breakId = breakId
+        let userId = userId
+
+        Task {
+            await AdServerClient.shared.track(
+                event: event,
+                ad: ad,
+                decisionId: decisionId,
+                contentId: contentId,
+                placement: placement,
+                breakId: breakId,
+                userId: userId
+            )
+        }
+    }
+}

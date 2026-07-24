@@ -5,6 +5,7 @@ struct NotificationsView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @EnvironmentObject private var inAppBrowser: InAppBrowserManager
 
     let onUnreadCountChange: ((Int) -> Void)?
 
@@ -12,6 +13,7 @@ struct NotificationsView: View {
     @State private var isLoading = true
     @State private var isMarkingRead = false
     @State private var route: AppRoute?
+    @State private var notificationMutationGeneration = 0
 
     init(onUnreadCountChange: ((Int) -> Void)? = nil) {
         self.onUnreadCountChange = onUnreadCountChange
@@ -78,12 +80,11 @@ struct NotificationsView: View {
                 LazyVStack(spacing: 10) {
                     ForEach(notifs) { notif in
                         Button {
-                            open(notif)
+                            Task { await open(notif) }
                         } label: {
                             NotifRow(notif: notif)
                         }
                         .buttonStyle(.plain)
-                        .disabled(notif.linkUrl == nil)
                     }
                 }
             }
@@ -145,14 +146,21 @@ struct NotificationsView: View {
     }
 
     private func load() async {
+        let generation = notificationMutationGeneration
         isLoading = true
-        notifs = (try? await APIClient.shared.fetchNotifications()) ?? []
-        onUnreadCountChange?(unreadCount)
+        let refreshed = (try? await APIClient.shared.fetchNotifications()) ?? []
+        guard generation == notificationMutationGeneration, !Task.isCancelled else {
+            if generation != notificationMutationGeneration { isLoading = false }
+            return
+        }
+        notifs = refreshed
+        publishUnreadCount(unreadCount)
         isLoading = false
     }
 
     private func markAllAsRead() async {
         guard hasUnreadNotifications, !isMarkingRead else { return }
+        notificationMutationGeneration &+= 1
         isMarkingRead = true
         do {
             try await APIClient.shared.markNotificationsRead()
@@ -167,13 +175,24 @@ struct NotificationsView: View {
                     read: true,
                     createdAt: notif.createdAt,
                     contextType: notif.contextType,
-                    contextId: notif.contextId
+                    contextId: notif.contextId,
+                    contentType: notif.contentType,
+                    videoId: notif.videoId,
+                    shortId: notif.shortId,
+                    episodeId: notif.episodeId,
+                    episodeNumber: notif.episodeNumber,
+                    showId: notif.showId,
+                    microdramaId: notif.microdramaId,
+                    channelId: notif.channelId,
+                    channelHandle: notif.channelHandle,
+                    playlistId: notif.playlistId,
+                    collectionId: notif.collectionId
                 )
             }
-            onUnreadCountChange?(0)
+            publishUnreadCount(0)
             if let refreshed = try? await APIClient.shared.fetchNotifications() {
                 notifs = refreshed
-                onUnreadCountChange?(refreshed.filter { !$0.read }.count)
+                publishUnreadCount(refreshed.filter { !$0.read }.count)
             }
         } catch {
             // Keep unread state visible if the server update fails.
@@ -181,62 +200,108 @@ struct NotificationsView: View {
         isMarkingRead = false
     }
 
-    private func open(_ notif: AppNotification) {
-        guard let link = notif.linkUrl, !link.isEmpty else { return }
+    private func open(_ notif: AppNotification) async {
+        await markAsReadIfNeeded(notif)
         if let parsed = route(for: notif) {
-            route = parsed
+            open(parsed)
+            return
+        }
+        guard let link = notif.linkUrl, !link.isEmpty else { return }
+        if let parsed = AppRoute.route(link: link, notificationType: notif.contentType ?? notif.type) {
+            open(parsed)
             return
         }
         if let url = URL(string: link) {
+            openTrustedURL(url)
+        }
+    }
+
+    private func openTrustedURL(_ url: URL) {
+        if InAppBrowserManager.canDisplayInApp(url) {
+            inAppBrowser.open(url)
+        } else {
             openURL(url)
         }
     }
 
-    private func route(for notif: AppNotification) -> AppRoute? {
-        guard let link = notif.linkUrl else { return nil }
-        let path: String
-        var queryType: String?
-        if let url = URL(string: link), let host = url.host, !host.isEmpty {
-            path = url.path
-            queryType = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                .queryItems?
-                .first { $0.name == "type" || $0.name == "contentType" }?
-                .value
+    private func open(_ parsed: AppRoute) {
+        if case .short = parsed {
+            dismiss()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                NotificationCenter.default.post(name: .pushRouteRequested, object: parsed)
+            }
         } else {
-            let components = URLComponents(string: link)
-            path = components?.path ?? link
-            queryType = components?
-                .queryItems?
-                .first { $0.name == "type" || $0.name == "contentType" }?
-                .value
+            route = parsed
         }
-        let parts = path.split(separator: "/").map(String.init)
-        guard !parts.isEmpty else { return nil }
-        let notificationLooksLikeShort = notif.type.lowercased().contains("short") || queryType?.lowercased() == "short"
-        if parts.count >= 3, parts[0] == "watch", parts[1] == "episode" { return .episode(parts[2]) }
-        if parts.count >= 2, parts[0] == "watch" {
-            return notificationLooksLikeShort ? .short(parts[1], showId: nil, channelId: nil) : .video(parts[1])
+    }
+
+    private func markAsReadIfNeeded(_ notif: AppNotification) async {
+        guard !notif.read else { return }
+        notificationMutationGeneration &+= 1
+        setNotification(notif.id, read: true)
+        publishUnreadCount(unreadCount)
+
+        do {
+            try await APIClient.shared.markNotificationRead(id: notif.id)
+        } catch {
+            setNotification(notif.id, read: false)
+            publishUnreadCount(unreadCount)
         }
-        if parts.count >= 2, parts[0] == "shorts" { return .short(parts[1], showId: nil, channelId: nil) }
-        if parts.count >= 2, parts[0] == "short" { return .short(parts[1], showId: nil, channelId: nil) }
-        if parts.count >= 2, parts[0] == "shows" { return .show(parts[1]) }
-        if parts.count >= 2, parts[0] == "channel" { return .channel(parts[1]) }
-        if parts.count >= 2, parts[0] == "channels" { return .channel(parts[1]) }
-        if parts.count >= 2, parts[0] == "playlist" { return .playlist(parts[1]) }
-        if parts.count >= 2, parts[0] == "playlists" { return .playlist(parts[1]) }
-        if parts.count >= 2, parts[0] == "collections" { return .collection(parts[1]) }
-        if parts.count >= 2, parts[0] == "microdramas" { return .microdramaShow(parts[1]) }
-        return nil
+    }
+
+    private func publishUnreadCount(_ count: Int) {
+        onUnreadCountChange?(count)
+        NotificationCenter.default.post(name: .notificationCountsDidChange, object: count)
+    }
+
+    private func setNotification(_ id: String, read: Bool) {
+        notifs = notifs.map { notif in
+            guard notif.id == id else { return notif }
+            return notification(notif, read: read)
+        }
+    }
+
+    private func notification(_ notif: AppNotification, read: Bool) -> AppNotification {
+        AppNotification(
+            id: notif.id,
+            type: notif.type,
+            title: notif.title,
+            message: notif.message,
+            linkUrl: notif.linkUrl,
+            imageUrl: notif.imageUrl,
+            read: read,
+            createdAt: notif.createdAt,
+            contextType: notif.contextType,
+            contextId: notif.contextId,
+            contentType: notif.contentType,
+            videoId: notif.videoId,
+            shortId: notif.shortId,
+            episodeId: notif.episodeId,
+            episodeNumber: notif.episodeNumber,
+            showId: notif.showId,
+            microdramaId: notif.microdramaId,
+            channelId: notif.channelId,
+            channelHandle: notif.channelHandle,
+            playlistId: notif.playlistId,
+            collectionId: notif.collectionId
+        )
+    }
+
+    private func route(for notif: AppNotification) -> AppRoute? {
+        notif.appRoute
     }
 
     @ViewBuilder
     private func routeDestination(_ route: AppRoute) -> some View {
         switch route {
         case .video(let id): VideoWatchView(videoId: id)
-        case .short(let id, let showId, let channelId): ShortsView(initialShortId: id, contextShowId: showId, contextChannelId: channelId)
+        case .short(let id, let showId, let channelId): ShortsView(initialShortId: id, contextShowId: showId, contextChannelId: channelId, showsDismissControls: true)
         case .episode(let id): EpisodeWatchView(episodeId: id)
         case .channel(let id): ChannelView(handle: id)
         case .show(let id): ShowView(showId: id)
+        case .showAccess(let showId, let productId, let intent, let handoffId):
+            ShowView(showId: showId, handoffProductId: productId, handoffIntent: intent, handoffPublicId: handoffId)
+        case .handoff(let id): HandoffResolverView(publicId: id)
         case .playlist(let id): PlaylistDetailView(playlistId: id)
         case .collection(let id): CollectionDetailView(collectionId: id)
         case .microdramaShow(let id): MicrodramaShowView(showId: id)
@@ -283,7 +348,7 @@ private struct NotifRow: View {
                         .background((notif.read ? Color.white.opacity(0.06) : C.watch.opacity(0.12)))
                         .clipShape(Capsule())
 
-                    if notif.linkUrl != nil {
+                    if notif.appRoute != nil || notif.linkUrl != nil {
                         MediaverseIcon(name: "chevron-right", fallbackSystemName: "chevron.right")
                             .frame(width: 8, height: 8)
                             .foregroundStyle(C.textMuted.opacity(0.7))
@@ -310,30 +375,95 @@ private struct NotifRow: View {
 
     private var iconView: some View {
         ZStack {
+            if let url = C.mediaURL(notif.imageUrl) {
+                CachedRemoteImage(
+                    url: url,
+                    targetSize: CGSize(width: 42, height: 42)
+                ) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    iconFallback
+                }
+            } else {
+                iconFallback
+            }
+        }
+        .frame(width: 42, height: 42)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(notif.read ? C.border.opacity(0.45) : C.watch.opacity(0.24), lineWidth: 1)
+        }
+    }
+
+    private var iconFallback: some View {
+        ZStack {
             RoundedRectangle(cornerRadius: 12)
                 .fill(notif.read ? Color.white.opacity(0.07) : C.watch.opacity(0.14))
             Image(systemName: iconFor(notif.type))
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(notif.read ? C.textMuted : C.watch)
         }
-        .frame(width: 42, height: 42)
     }
 
     private func iconFor(_ type: String) -> String {
+        // Keys are the ACTUAL server notification types. (Previously these were short
+        // aliases like "comment"/"like" that never matched, so everything showed a bell.)
         switch type.lowercased() {
-        case "follow": return "person.badge.plus"
-        case "comment": return "bubble.left"
-        case "upload": return "arrow.up.circle"
-        case "partner": return "star"
-        case "like": return "heart"
-        default: return "bell"
+        case "new_comment", "comment_reply", "comment_removed",
+             "post_comment", "post_comment_reply", "comment":
+            return "bubble.left.fill"
+        case "comment_like", "post_comment_liked", "post_liked", "story_like", "like":
+            return "heart.fill"
+        case "mention", "story_mention":
+            return "at"
+        case "new_follower", "following", "follow":
+            return "person.badge.plus"
+        case "new_episode", "new_video":
+            return "play.rectangle.fill"
+        case "upload_complete", "upload":
+            return "arrow.up.circle.fill"
+        case "partner_approved":
+            return "checkmark.seal.fill"
+        case "partner_rejected":
+            return "xmark.seal.fill"
+        case "partner_request", "partner":
+            return "star.fill"
+        case "network_invite":
+            return "envelope.fill"
+        case "device_handoff":
+            return "tv.fill"
+        case "info":
+            return "info.circle.fill"
+        default:
+            return "bell.fill"
         }
     }
 
     private func typeLabel(_ type: String) -> String {
-        let trimmed = type.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "Update" }
-        return trimmed.replacingOccurrences(of: "_", with: " ").capitalized
+        switch type.lowercased() {
+        case "new_comment", "post_comment":            return "Comment"
+        case "comment_reply", "post_comment_reply":    return "Reply"
+        case "comment_like", "post_comment_liked":     return "Like"
+        case "post_liked":                             return "Post Like"
+        case "story_like":                             return "Story Like"
+        case "mention", "story_mention":               return "Mention"
+        case "comment_removed":                        return "Moderation"
+        case "new_follower", "following":              return "Follower"
+        case "new_episode":                            return "New Episode"
+        case "new_video":                              return "New Video"
+        case "upload_complete":                        return "Upload Ready"
+        case "partner_request":                        return "Partner Request"
+        case "partner_approved":                       return "Partner Approved"
+        case "partner_rejected":                       return "Partner Rejected"
+        case "network_invite":                         return "Network Invite"
+        case "device_handoff":                         return "Device"
+        case "info":                                   return "Info"
+        default:
+            let trimmed = type.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return "Update" }
+            return trimmed.replacingOccurrences(of: "_", with: " ").capitalized
+        }
     }
 
     private func relativeTime(_ iso: String) -> String {

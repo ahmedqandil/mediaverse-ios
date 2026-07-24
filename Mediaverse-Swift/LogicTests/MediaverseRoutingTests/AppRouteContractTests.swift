@@ -1,0 +1,64 @@
+import XCTest
+@testable import MediaverseRouting
+
+final class AppRouteContractTests: XCTestCase {
+    func testWebAndCustomSchemeVideoLinksResolveIdentically() {
+        XCTAssertEqual(AppRoute.route(link: "https://westreem.com/watch/video-123"), .video("video-123"))
+        XCTAssertEqual(AppRoute.route(link: "westreem://watch/video-123"), .video("video-123"))
+    }
+
+    func testShortRoutePreservesContextFromQuery() {
+        XCTAssertEqual(
+            AppRoute.route(link: "https://westreem.com/watch/short-1?type=short"),
+            .short("short-1", showId: nil, channelId: nil)
+        )
+        XCTAssertEqual(
+            AppRoute.route(link: "westreem://open?shortId=short-1&showId=show-2&channelId=channel-3"),
+            .short("short-1", showId: "show-2", channelId: "channel-3")
+        )
+    }
+
+    func testEpisodeAndMicrodramaPathsResolve() {
+        XCTAssertEqual(AppRoute.route(link: "/watch/episode/episode-7"), .episode("episode-7"))
+        XCTAssertEqual(
+            AppRoute.route(link: "/microdramas/drama-4/episodes/9"),
+            .microdramaWatchEp("drama-4", 9)
+        )
+    }
+
+    func testNotificationPayloadPrecedence() {
+        let payload: [AnyHashable: Any] = [
+            "type": "short",
+            "short_id": "short-8",
+            "video_id": "video-that-must-not-win",
+            "show_id": "show-5"
+        ]
+        XCTAssertEqual(
+            AppRoute.notificationRoute(userInfo: payload),
+            .short("short-8", showId: "show-5", channelId: nil)
+        )
+    }
+
+    func testNotificationStringifiesNumericEpisodeNumber() {
+        let payload: [AnyHashable: Any] = [
+            "microdrama_id": "drama-1",
+            "episode_number": 6
+        ]
+        XCTAssertEqual(
+            AppRoute.notificationRoute(userInfo: payload),
+            .microdramaWatchEp("drama-1", 6)
+        )
+    }
+
+    func testDistinctContextualShortsHaveDistinctIdentity() {
+        XCTAssertNotEqual(
+            AppRoute.short("same", showId: "show-a", channelId: nil).id,
+            AppRoute.short("same", showId: "show-b", channelId: nil).id
+        )
+    }
+
+    func testUnknownAndEmptyLinksDoNotInventDestinations() {
+        XCTAssertNil(AppRoute.route(link: ""))
+        XCTAssertNil(AppRoute.route(link: "https://westreem.com/settings/account"))
+    }
+}

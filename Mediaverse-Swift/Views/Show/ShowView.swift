@@ -9,7 +9,11 @@ private let NON_SERIES_TYPES: Set<String> = ["movie", "film", "special", "event"
 struct ShowView: View {
 
     let showId: String
+    var handoffProductId: String? = nil
+    var handoffIntent: String? = nil
+    var handoffPublicId: String? = nil
     @EnvironmentObject private var auth: AuthManager
+    @EnvironmentObject private var inAppBrowser: InAppBrowserManager
     @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
 
@@ -18,6 +22,7 @@ struct ShowView: View {
     @State private var followStatus: FollowStatus?
     @State private var clips:        [ShowClip]?
     @State private var playlists:    [ChannelPlaylist]?
+    @State private var showRentals:  [UserRental] = []
     @State private var isLoading:    Bool = true
     @State private var loadError:    String?
 
@@ -30,6 +35,8 @@ struct ShowView: View {
     @State private var checkoutMode: ShowCheckoutMode = .svod
     @State private var checkoutMessage: String?
     @State private var showSaveSheet: Bool = false
+    @State private var didPresentHandoffCheckout = false
+    @State private var imagePrefetchTask: Task<Void, Never>?
 
     enum STab: String, CaseIterable, Identifiable {
         case episodes, videos, shorts, allVideos, playlists, related, info
@@ -52,25 +59,45 @@ struct ShowView: View {
     private var show: ShowData? { showResp?.show }
     private var relatedShows: [RelatedShow] { showResp?.relatedShows ?? [] }
     private var isNonSerialized: Bool { NON_SERIES_TYPES.contains(show?.showType ?? "") }
+    private var isMovie: Bool { show?.isMovie ?? false }
     private var allEpisodes: [(season: ShowSeasonData, ep: ShowEpisodeItem)] {
         (show?.seasons ?? []).flatMap { s in s.episodes.map { (s, $0) } }
     }
     private var videosList: [ShowClip] { (clips ?? []).filter { !isShortClip($0) } }
     private var shortsList: [ShowClip] { (clips ?? []).filter { isShortClip($0) } }
+    private var playableVideosList: [ShowClip] { videosList.filter { C.mediaURL($0.videoUrl) != nil } }
+    private var playableShortsList: [ShowClip] { shortsList.filter { C.mediaURL($0.videoUrl) != nil } }
     private var firstPlayableEpisodeId: String? {
-        allEpisodes.first { $0.ep.isPlayable }?.ep.id
+        allEpisodes.first { $0.ep.isPlayableForShowAccess }?.ep.id
+    }
+    private var firstUnavailableSeason: ShowSeasonData? {
+        show?.seasons.first { season in
+            season.episodes.contains { !$0.isComingSoonForSchedule && !$0.isPlayableForShowAccess }
+        }
     }
     private var isFollowing: Bool { followStatus?.subscribed ?? (show?.isFollowing ?? false) }
     private var notifyOn:    Bool { followStatus?.notifyOnPublish ?? true }
     private var followerCount: Int { followStatus?.count ?? (show?.followerCount ?? 0) }
+    private var activeShowRentals: [UserRental] {
+        guard let show else { return [] }
+        let seasonIds = Set(show.seasons.map(\.id))
+        let episodeIds = Set(show.seasons.flatMap { $0.episodes.map(\.id) })
+        return showRentals.filter { rental in
+            guard !isInactiveRental(rental) else { return false }
+            if rental.resolvedShowId == show.id { return true }
+            if let seasonId = rental.season?.id, seasonIds.contains(seasonId) { return true }
+            if let episodeId = rental.episode?.id, episodeIds.contains(episodeId) { return true }
+            return false
+        }
+    }
 
     private var availableTabs: [STab] {
         guard show != nil else { return [] }
         var tabs: [STab] = []
         if !isNonSerialized && !allEpisodes.isEmpty    { tabs.append(.episodes) }
-        if !videosList.isEmpty                         { tabs.append(.videos) }
-        if !shortsList.isEmpty                         { tabs.append(.shorts) }
-        if !videosList.isEmpty && !shortsList.isEmpty  { tabs.append(.allVideos) }
+        if !playableVideosList.isEmpty                         { tabs.append(.videos) }
+        if !playableShortsList.isEmpty                         { tabs.append(.shorts) }
+        if !playableVideosList.isEmpty && !playableShortsList.isEmpty  { tabs.append(.allVideos) }
         if playlists?.isEmpty == false                 { tabs.append(.playlists) }
         if !relatedShows.isEmpty                       { tabs.append(.related) }
         tabs.append(.info)
@@ -79,6 +106,10 @@ struct ShowView: View {
 
     private func isShortClip(_ clip: ShowClip) -> Bool {
         clip.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "short"
+    }
+
+    private func tabLabel(_ tab: STab) -> String {
+        tab == .episodes && isMovie ? "Movie" : tab.label
     }
 
     private func seasonAnchorId(_ seasonId: String) -> String {
@@ -101,7 +132,13 @@ struct ShowView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
+        .enablesInteractiveSwipeBack()
         .task { await load() }
+        .onChange(of: activeTab) { _, _ in prefetchVisibleShowImages() }
+        .onDisappear {
+            imagePrefetchTask?.cancel()
+            imagePrefetchTask = nil
+        }
         .sheet(item: $checkoutProduct) { product in
             ShowCheckoutSheet(
                 product: product,
@@ -149,6 +186,10 @@ struct ShowView: View {
                     }
                     .scrollClipDisabled(false)
                     .ignoresSafeArea(edges: .top)
+                    .refreshable {
+                        C.lightHaptic()
+                        await load(showSpinner: false)
+                    }
                 }
 
                 heroBackButton()
@@ -204,7 +245,10 @@ struct ShowView: View {
         ZStack {
             // Banner image
             if let url = C.mediaURL(sh.bannerUrl ?? sh.coverUrl) {
-                AsyncImage(url: url) { img in img.resizable().scaledToFill() }
+                CachedRemoteImage(
+                    url: url,
+                    targetSize: CGSize(width: width, height: height)
+                ) { img in img.resizable().scaledToFill() }
                     placeholder: { C.surface }
                     .frame(width: width)
                     .frame(height: height)
@@ -249,6 +293,10 @@ struct ShowView: View {
 
             // CTA buttons
             heroCTAs(sh)
+
+            ForEach(activeShowRentals) { rental in
+                RentalInfoBar(info: RentalInfo(userRental: rental))
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -418,21 +466,16 @@ struct ShowView: View {
 
     @ViewBuilder
     private func primaryCTA(_ sh: ShowData) -> some View {
-        let entType = sh.entitlementType ?? "AVOD"
-        let hasAccess = entType == "AVOD"
-            || sh.userSubscribed
-            || !sh.userSeasonRentals.isEmpty
+        let entType = normalizedEntitlementType(sh.entitlementType)
 
-        if hasAccess {
+        if let firstEpId = firstPlayableEpisodeId {
             // Watch Now CTA
-            if let firstEpId = firstPlayableEpisodeId {
-                NavigationLink(value: AppRoute.episode(firstEpId)) {
-                    watchNowLabel
-                }
-            } else if let firstClip = videosList.first {
-                NavigationLink(value: AppRoute.video(firstClip.id)) {
-                    watchNowLabel
-                }
+            NavigationLink(value: AppRoute.episode(firstEpId)) {
+                watchNowLabel
+            }
+        } else if entType == "AVOD", let firstClip = playableVideosList.first {
+            NavigationLink(value: AppRoute.video(firstClip.id)) {
+                watchNowLabel
             }
         } else if entType == "SVOD", let prod = sh.svodProducts.first {
             Button {
@@ -453,13 +496,14 @@ struct ShowView: View {
                 .background(C.watch)
                 .clipShape(Capsule())
             }
-        } else if entType == "PPV" || entType == "TRANSACTIONAL",
-                  let prod = sh.ppvProducts.first {
+        } else if entType == "PPV",
+                  let season = firstUnavailableSeason ?? sh.seasons.first,
+                  let prod = ppvProduct(for: season, in: sh) {
             Button {
-                presentCheckout(product: prod, mode: .ppv, season: sh.seasons.first)
+                presentCheckout(product: prod, mode: .ppv, season: season)
             } label: {
                 HStack(spacing: 6) {
-                    Text("🎬")
+                    Image(systemName: "ticket")
                     Text("Rent")
                     if let price = prod.price {
                         Text("· \(fmtPrice(price, currency: prod.currency ?? "USD"))")
@@ -513,7 +557,7 @@ struct ShowView: View {
                                 reader.scrollTo(tab.id, anchor: .center)
                             }
                         } label: {
-                            Text(tab.label)
+                            Text(tabLabel(tab))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(activeTab == tab ? C.text : C.textMuted)
                                 .lineLimit(1)
@@ -559,10 +603,11 @@ struct ShowView: View {
         case .videos:
             let cols = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
             LazyVGrid(columns: cols, spacing: 16) {
-                ForEach(videosList) { v in
+                ForEach(playableVideosList) { v in
                     NavigationLink(value: AppRoute.video(v.id)) {
                         ShowClipCard(clip: v, style: .video)
                     }
+                    .buttonStyle(.plain)
                 }
             }
             .frame(width: width - (C.pagePad * 2), alignment: .leading)
@@ -572,10 +617,11 @@ struct ShowView: View {
         case .shorts:
             let cols = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
             LazyVGrid(columns: cols, spacing: 16) {
-                ForEach(shortsList) { v in
+                ForEach(playableShortsList) { v in
                     NavigationLink(value: AppRoute.short(v.id, showId: sh.id, channelId: nil)) {
                         ShowClipCard(clip: v, style: .short)
                     }
+                    .buttonStyle(.plain)
                 }
             }
             .frame(width: width - (C.pagePad * 2), alignment: .leading)
@@ -602,6 +648,32 @@ struct ShowView: View {
         }
     }
 
+    private var showTabSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 36, coordinateSpace: .local)
+            .onEnded { value in
+                switchShowTab(for: value)
+            }
+    }
+
+    private func switchShowTab(for value: DragGesture.Value) {
+        let horizontal = value.translation.width
+        let vertical = value.translation.height
+        let predictedHorizontal = value.predictedEndTranslation.width
+
+        guard !(value.startLocation.x <= 36 && (horizontal > 0 || predictedHorizontal > 0)),
+              abs(horizontal) > abs(vertical) * 1.4,
+              abs(horizontal) > 70 || abs(predictedHorizontal) > 120,
+              let currentIndex = availableTabs.firstIndex(of: activeTab)
+        else { return }
+
+        let nextIndex = horizontal < 0 ? currentIndex + 1 : currentIndex - 1
+        guard availableTabs.indices.contains(nextIndex) else { return }
+
+        withAnimation(.easeInOut(duration: 0.18)) {
+            activeTab = availableTabs[nextIndex]
+        }
+    }
+
     // MARK: - Episodes tab
 
     @ViewBuilder
@@ -609,11 +681,11 @@ struct ShowView: View {
         let seasons = sh.seasons.filter { !$0.episodes.isEmpty }
         if allEpisodes.isEmpty {
             emptyState(icon: "play.rectangle.fill", title: "No episodes yet",
-                       sub: "Episodes will appear here once uploaded.")
+                       sub: isMovie ? "The movie will appear here once uploaded." : "Episodes will appear here once uploaded.")
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 // Season jump pills — only when > 1 season with content
-                if seasons.count > 1 {
+                if !isMovie && seasons.count > 1 {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
                             ForEach(seasons) { s in
@@ -642,19 +714,22 @@ struct ShowView: View {
                 if seasons.count > 1 {
                     ForEach(seasons) { season in
                         VStack(alignment: .leading, spacing: 0) {
-                            Text("Season \(season.seasonNumber)\(season.title != nil ? " — \(season.title!)" : "")")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(C.textMuted)
-                                .tracking(1.2)
-                                .padding(.bottom, 12)
-                                .padding(.top, 8)
-                                .id(seasonAnchorId(season.id))
+                            if !isMovie {
+                                Text("Season \(season.seasonNumber)\(season.title != nil ? " — \(season.title!)" : "")")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(C.textMuted)
+                                    .tracking(1.2)
+                                    .padding(.bottom, 12)
+                                    .padding(.top, 8)
+                                    .id(seasonAnchorId(season.id))
+                            }
 
                             ForEach(season.episodes) { ep in
                                 EpisodeRowView(
                                     ep: ep,
                                     seasonNumber: season.seasonNumber,
                                     entitlementType: sh.entitlementType,
+                                    seasonOfferedTypes: season.offeredTypes,
                                     onGateCta: { presentEpisodeGateCheckout(show: sh, season: season) }
                                 )
                                 Divider().background(C.border.opacity(0.6))
@@ -668,6 +743,7 @@ struct ShowView: View {
                                 ep: ep,
                                 seasonNumber: onlySeason.seasonNumber,
                                 entitlementType: sh.entitlementType,
+                                seasonOfferedTypes: onlySeason.offeredTypes,
                                 onGateCta: { presentEpisodeGateCheckout(show: sh, season: onlySeason) }
                             )
                             Divider().background(C.border.opacity(0.6))
@@ -688,7 +764,7 @@ struct ShowView: View {
                     emptyState(icon: "video.fill", title: "No videos yet", sub: "")
                         .padding(.horizontal, C.pagePad)
                 } else {
-                    if !videosList.isEmpty {
+                    if !playableVideosList.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("Videos")
                                 .font(.system(size: 11, weight: .bold))
@@ -698,16 +774,17 @@ struct ShowView: View {
 
                             let cols = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
                             LazyVGrid(columns: cols, spacing: 16) {
-                                ForEach(videosList) { v in
+                                ForEach(playableVideosList) { v in
                                     NavigationLink(value: AppRoute.video(v.id)) {
                                         ShowClipCard(clip: v, style: .video)
                                     }
+                                    .buttonStyle(.plain)
                                 }
                             }
                             .padding(.horizontal, C.pagePad)
                         }
                     }
-                    if !shortsList.isEmpty {
+                    if !playableShortsList.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("Shorts")
                                 .font(.system(size: 11, weight: .bold))
@@ -717,10 +794,11 @@ struct ShowView: View {
 
                             let cols = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
                             LazyVGrid(columns: cols, spacing: 16) {
-                                ForEach(shortsList) { v in
+                                ForEach(playableShortsList) { v in
                                     NavigationLink(value: AppRoute.short(v.id, showId: sh.id, channelId: nil)) {
                                         ShowClipCard(clip: v, style: .short)
                                     }
+                                    .buttonStyle(.plain)
                                 }
                             }
                             .padding(.horizontal, C.pagePad)
@@ -824,8 +902,10 @@ struct ShowView: View {
 
     // MARK: - Load
 
-    private func load() async {
-        isLoading = true
+    private func load(showSpinner: Bool = true) async {
+        if showSpinner {
+            isLoading = true
+        }
         loadError = nil
 
         do {
@@ -839,13 +919,11 @@ struct ShowView: View {
 
         // Set initial tab
         if show != nil {
-            if !isNonSerialized && !allEpisodes.isEmpty {
-                activeTab = .episodes
-            } else if !videosList.isEmpty {
-                activeTab = .videos
-            } else {
-                activeTab = .info
-            }
+            activeTab = preferredShowTab()
+        }
+        if let show {
+            presentHandoffCheckoutIfNeeded(show)
+            prefetchVisibleShowImages(for: show)
         }
         isLoading = false
         Task { await loadSecondaryShowContent() }
@@ -859,10 +937,106 @@ struct ShowView: View {
         followStatus = try? await followTask
         clips = (try? await clipsTask) ?? []
         playlists = (try? await plsTask) ?? []
-
-        if show != nil, activeTab == .info, videosList.isEmpty, clips?.isEmpty == false {
-            activeTab = .shorts
+        if auth.isAuthenticated, let rentalsResponse = try? await APIClient.shared.fetchUserRentals() {
+            showRentals = rentalsResponse.rentals
+        } else {
+            showRentals = []
         }
+
+        guard show != nil else { return }
+        let nextTab = preferredShowTab(preserving: activeTab)
+        if nextTab != activeTab {
+            activeTab = nextTab
+        } else {
+            prefetchVisibleShowImages()
+        }
+    }
+
+    private func prefetchVisibleShowImages(for show: ShowData? = nil) {
+        let show = show ?? self.show
+        guard let show else { return }
+
+        imagePrefetchTask?.cancel()
+        let heroURLs = [show.bannerUrl, show.coverUrl].compactMap { C.mediaURL($0) }
+        let heroTargetSize = CGSize(width: 390, height: isNonSerialized ? 400 : 320)
+        let payload = showImagePrefetchPayload(for: activeTab)
+
+        imagePrefetchTask = Task(priority: .utility) {
+            if Task.isCancelled { return }
+            await RemoteImageCache.shared.prefetch(
+                urls: heroURLs,
+                targetPixelSize: heroTargetSize,
+                limit: 2,
+                concurrency: 2
+            )
+            if Task.isCancelled { return }
+            await RemoteImageCache.shared.prefetch(
+                urls: payload.urls,
+                targetPixelSize: payload.targetSize,
+                limit: payload.limit,
+                concurrency: 2
+            )
+        }
+    }
+
+    private func showImagePrefetchPayload(for tab: STab) -> (urls: [URL], targetSize: CGSize?, limit: Int) {
+        switch tab {
+        case .episodes:
+            return (
+                allEpisodes.prefix(6).compactMap { C.mediaURL($0.ep.thumbnailUrl) },
+                CGSize(width: 140, height: 78),
+                6
+            )
+        case .videos:
+            return (
+                playableVideosList.prefix(6).compactMap { C.mediaURL($0.thumbnailUrl) },
+                CGSize(width: 220, height: 124),
+                6
+            )
+        case .shorts:
+            return (
+                playableShortsList.prefix(6).compactMap { C.mediaURL($0.thumbnailUrl) },
+                CGSize(width: 180, height: 320),
+                6
+            )
+        case .allVideos:
+            let urls = playableVideosList.prefix(4).compactMap { C.mediaURL($0.thumbnailUrl) }
+                + playableShortsList.prefix(4).compactMap { C.mediaURL($0.thumbnailUrl) }
+            return (urls, nil, 8)
+        case .playlists:
+            let urls = (playlists ?? [])
+                .prefix(4)
+                .flatMap { $0.items.prefix(2).compactMap { C.mediaURL($0.video?.thumbnailUrl) } }
+            return (Array(urls), CGSize(width: 120, height: 68), 8)
+        case .related:
+            return (
+                relatedShows.prefix(6).compactMap { C.mediaURL($0.coverUrl) },
+                CGSize(width: 150, height: 225),
+                6
+            )
+        case .info:
+            return ([], nil, 0)
+        }
+    }
+
+    private func preferredShowTab(preserving current: STab? = nil) -> STab {
+        let tabs = availableTabs
+        if let current, tabs.contains(current), current != .info {
+            return current
+        }
+        if !isNonSerialized && !allEpisodes.isEmpty, tabs.contains(.episodes) {
+            return .episodes
+        }
+        if !playableVideosList.isEmpty, tabs.contains(.videos) {
+            return .videos
+        }
+        if !playableShortsList.isEmpty, tabs.contains(.shorts) {
+            return .shorts
+        }
+        if playlists?.isEmpty == false, tabs.contains(.playlists) {
+            return .playlists
+        }
+        return tabs.first ?? .info
     }
 
     private var loadFailureView: some View {
@@ -898,6 +1072,7 @@ struct ShowView: View {
         followLoading = true
         do {
             followStatus = try await APIClient.shared.toggleShowFollow(id: sh.id)
+            NotificationCenter.default.post(name: .userFollowChanged, object: nil)
         } catch {}
         followLoading = false
     }
@@ -913,17 +1088,22 @@ struct ShowView: View {
     }
 
     private func presentEpisodeGateCheckout(show sh: ShowData, season: ShowSeasonData) {
-        let entType = sh.entitlementType ?? "AVOD"
+        let entType = normalizedEntitlementType(sh.entitlementType)
         if entType == "SVOD", let product = sh.svodProducts.first {
             presentCheckout(product: product, mode: .svod, season: nil)
-        } else if (entType == "PPV" || entType == "TRANSACTIONAL"), let product = sh.ppvProducts.first {
+        } else if entType == "PPV", let product = ppvProduct(for: season, in: sh) {
             presentCheckout(product: product, mode: .ppv, season: season)
         } else if let url = URL(string: "\(C.baseURL)/shows/\(sh.id)") {
-            openURL(url)
+            openTrustedURL(url)
         }
     }
 
-    private func presentCheckout(product: ShowProductInfo, mode: ShowCheckoutMode, season: ShowSeasonData?) {
+    private func presentCheckout(
+        product: ShowProductInfo,
+        mode: ShowCheckoutMode,
+        season: ShowSeasonData?,
+        handoffPublicId: String? = nil
+    ) {
         guard auth.isAuthenticated else {
             checkoutMessage = "Sign in to continue checkout."
             return
@@ -940,8 +1120,47 @@ struct ShowView: View {
             cycleFrequency: product.cycleFrequency,
             cycleUnit: product.cycleUnit,
             seasonId: season?.id,
-            scopeLabel: season.map { "Season \($0.seasonNumber)" }
+            handoffPublicId: handoffPublicId,
+            scopeLabel: season.map { isMovie ? "Movie" : "Season \($0.seasonNumber)" }
         )
+    }
+
+    private func presentHandoffCheckoutIfNeeded(_ show: ShowData) {
+        guard !didPresentHandoffCheckout,
+              handoffPublicId != nil || handoffProductId != nil || handoffIntent != nil else { return }
+        didPresentHandoffCheckout = true
+
+        let intent = handoffIntent?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let productId = handoffProductId?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if intent == "rent" {
+            let season = firstUnavailableSeason ?? show.seasons.first
+            let product = productId.flatMap { id in show.ppvProducts.first(where: { $0.id == id }) }
+                ?? season.flatMap { ppvProduct(for: $0, in: show) }
+                ?? show.ppvProducts.first
+            guard let product else {
+                checkoutMessage = "This rental is unavailable on this device."
+                return
+            }
+            presentCheckout(product: product, mode: .ppv, season: season, handoffPublicId: handoffPublicId)
+            return
+        }
+
+        let product = productId.flatMap { id in show.svodProducts.first(where: { $0.id == id }) }
+            ?? show.svodProducts.first
+        guard let product else {
+            checkoutMessage = "This subscription is unavailable on this device."
+            return
+        }
+        presentCheckout(product: product, mode: .svod, season: nil, handoffPublicId: handoffPublicId)
+    }
+
+    private func openTrustedURL(_ url: URL) {
+        if InAppBrowserManager.canDisplayInApp(url) {
+            inAppBrowser.open(url)
+        } else {
+            openURL(url)
+        }
     }
 
     @MainActor
@@ -965,7 +1184,7 @@ struct ShowView: View {
 
             if let redirectUrl = response.redirectUrl, let url = URL(string: redirectUrl) {
                 checkoutProduct = nil
-                openURL(url)
+                openTrustedURL(url)
                 return
             }
 
@@ -976,10 +1195,26 @@ struct ShowView: View {
 
             checkoutProduct = nil
             checkoutMessage = mode == .svod ? "Subscription active." : "Rental active."
+            await completeHandoffIfNeeded(product.handoffPublicId)
             await load()
         } catch {
-            checkoutMessage = error.localizedDescription
+            // R3: 409 = the user already holds this entitlement. Not an error — refresh
+            // so the show reflects the access they already have.
+            if case APIError.http(409) = error {
+                checkoutProduct = nil
+                checkoutMessage = mode == .svod ? "You're already subscribed." : "You already have this rental."
+                await completeHandoffIfNeeded(product.handoffPublicId)
+                await load()
+            } else {
+                checkoutMessage = error.localizedDescription
+            }
         }
+    }
+
+    private func completeHandoffIfNeeded(_ handoffPublicId: String?) async {
+        guard let handoffPublicId else { return }
+        _ = try? await APIClient.shared.updateDeviceHandoff(publicId: handoffPublicId, action: "complete")
+        checkoutMessage = "Subscription active\nYou can return to your TV."
     }
 
     // MARK: - Helpers
@@ -1000,8 +1235,50 @@ struct ShowView: View {
     }
 
     private func fmtPrice(_ cents: Int, currency: String) -> String {
-        let val = Double(cents) / 100
-        return String(format: "%.0f \(currency)", val)
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = currency
+        formatter.locale = Locale.current
+        let value = NSNumber(value: Double(cents) / 100)
+        return formatter.string(from: value) ?? "\(currency) \(String(format: "%.2f", Double(cents) / 100))"
+    }
+
+    private func normalizedEntitlementType(_ value: String?) -> String {
+        switch value?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
+        case "SVOD":
+            return "SVOD"
+        case "PPV", "TRANSACTIONAL":
+            return "PPV"
+        default:
+            return "AVOD"
+        }
+    }
+
+    private func isInactiveRental(_ rental: UserRental) -> Bool {
+        switch rental.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "expired", "cancelled", "canceled":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func ppvProduct(for season: ShowSeasonData, in show: ShowData) -> ShowProductInfo? {
+        if let productId = show.ppvProductIdBySeason[season.id],
+           let product = show.ppvProducts.first(where: { $0.id == productId }) {
+            return product
+        }
+
+        let scheduledProductIds = season.episodes
+            .flatMap { $0.schedule?.windows ?? [] }
+            .compactMap(\.productId)
+
+        if let productId = scheduledProductIds.first,
+           let product = show.ppvProducts.first(where: { $0.id == productId }) {
+            return product
+        }
+
+        return show.ppvProducts.first
     }
 
     private func emptyState(icon: String, title: String, sub: String) -> some View {
@@ -1041,6 +1318,7 @@ private struct ShowCheckoutProduct: Identifiable {
     let cycleUnit: String?
     let seasonId: String?
     var episodeId: String? = nil
+    let handoffPublicId: String?
     let scopeLabel: String?
 }
 
@@ -1173,9 +1451,13 @@ private struct ShowCheckoutSheet: View {
     }
 
     private func priceText(_ cents: Int, currency: String?) -> String {
-        let value = Double(cents) / 100
         let code = currency ?? "USD"
-        return String(format: "%.2f %@", value, code)
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = code
+        formatter.locale = Locale.current
+        let value = NSNumber(value: Double(cents) / 100)
+        return formatter.string(from: value) ?? "\(code) \(String(format: "%.2f", Double(cents) / 100))"
     }
 }
 
@@ -1186,31 +1468,41 @@ private struct EpisodeRowView: View {
     let ep: ShowEpisodeItem
     let seasonNumber: Int
     let entitlementType: String?
+    let seasonOfferedTypes: [String]
     let onGateCta: () -> Void
 
     @State private var descExpanded = false
 
     private var premiereAt: String? {
-        ep.schedule?.windows.first(where: { $0.scope == "worldwide" })?.premiereAt
-            ?? ep.schedule?.windows.first?.premiereAt
+        ep.effectiveScheduleWindow?.premiereAt
     }
     private var isPremiereDue: Bool {
-        guard let premiereAt, let date = parseDate(premiereAt) else { return false }
-        return date <= Date()
+        ep.isPremiereDueForSchedule
     }
     private var isComingSoon: Bool {
-        ep.comingSoon && !isPremiereDue
+        ep.isComingSoonForSchedule
     }
     private var isAvailable: Bool {
-        (ep.isPlayable || ep.videoUrl != nil) && !isComingSoon
+        ep.videoUrl != nil && ep.isPlayableForShowAccess
     }
     private var isGated: Bool {
-        !isAvailable && !isComingSoon && (entitlementType == "SVOD" || entitlementType == "PPV")
+        !isAvailable && !isComingSoon && !effectiveOfferedTypes.isEmpty
+    }
+    private var effectiveOfferedTypes: [String] {
+        let types = (ep.offeredTypes.isEmpty ? seasonOfferedTypes : ep.offeredTypes)
+            .map(normalizedEntitlementType)
+            .filter { $0 != "AVOD" }
+        if !types.isEmpty { return Array(Set(types)) }
+        let fallback = normalizedEntitlementType(entitlementType)
+        return fallback == "AVOD" ? [] : [fallback]
+    }
+    private var rentalColor: Color {
+        Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255)
     }
 
     var body: some View {
         Group {
-            if isAvailable {
+            if isAvailable || isGated {
                 NavigationLink(value: AppRoute.episode(ep.id)) {
                     rowContent
                 }
@@ -1219,14 +1511,17 @@ private struct EpisodeRowView: View {
             }
         }
         .buttonStyle(.plain)
-        .opacity(!isAvailable && !isComingSoon ? 0.5 : 1)
+        .opacity(!isAvailable && !isComingSoon && !isGated ? 0.5 : 1)
     }
 
     private var rowContent: some View {
         HStack(alignment: .top, spacing: 12) {
             // Thumbnail
-            ZStack(alignment: .bottomTrailing) {
-                AsyncImage(url: C.mediaURL(ep.thumbnailUrl)) { img in
+            ZStack {
+                CachedRemoteImage(
+                    url: C.mediaURL(ep.thumbnailUrl),
+                    targetSize: CGSize(width: 140, height: 78)
+                ) { img in
                     img.resizable().scaledToFill()
                 } placeholder: {
                     C.surface
@@ -1234,16 +1529,6 @@ private struct EpisodeRowView: View {
                 .frame(width: 140, height: 78) // ~16:9
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .clipped()
-
-                if let dur = ep.duration, dur > 0, !isComingSoon {
-                    Text(fmtDuration(dur))
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 5).padding(.vertical, 2)
-                        .background(.black.opacity(0.72))
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
-                        .padding(5)
-                }
 
                 if isComingSoon {
                     Color.black.opacity(0.55)
@@ -1253,15 +1538,32 @@ private struct EpisodeRowView: View {
                                 .multilineTextAlignment(.center)
                                 .foregroundStyle(.white.opacity(0.85))
                         }
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                 } else if isGated {
                     Color.black.opacity(0.62)
-                        .overlay {
-                            Image(systemName: "lock.fill")
-                                .font(.system(size: 18, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.85))
-                        }
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(.black.opacity(0.72), in: Circle())
+                } else if isAvailable {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(.black.opacity(0.72), in: Circle())
+                }
+
+                if let dur = ep.duration, dur > 0, !isComingSoon {
+                    Text(fmtDuration(dur))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(.black.opacity(0.72))
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                        .padding(5)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 }
             }
             .frame(width: 140, height: 78)
@@ -1285,15 +1587,31 @@ private struct EpisodeRowView: View {
                 }
 
                 if isGated {
-                    Button {
-                        onGateCta()
-                    } label: {
-                        Label(entitlementType == "SVOD" ? "Subscribe to watch" : "Rent Season \(seasonNumber)", systemImage: "lock.fill")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(entitlementType == "SVOD" ? C.listen : .orange)
+                    HStack(spacing: 8) {
+                        if effectiveOfferedTypes.contains("SVOD") {
+                            Label("Subscribe to watch", systemImage: "lock.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(C.listen)
+                        }
+                        if effectiveOfferedTypes.contains("PPV") {
+                            if effectiveOfferedTypes.contains("SVOD") {
+                                Text("Rent Season \(seasonNumber)")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(rentalColor)
+                            } else {
+                                Label("Rent Season \(seasonNumber)", systemImage: "lock.fill")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(rentalColor)
+                            }
+                        }
+                        if effectiveOfferedTypes.isEmpty {
+                            Label("Not available", systemImage: "lock.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(C.textMuted)
+                        }
                     }
-                    .buttonStyle(.plain)
                     .padding(.top, 1)
+                    .accessibilityElement(children: .combine)
                 }
 
                 // Coming soon date
@@ -1331,16 +1649,18 @@ private struct EpisodeRowView: View {
     }
 
     private func parseDate(_ iso: String) -> Date? {
-        let isoFormatter = ISO8601DateFormatter()
-        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = isoFormatter.date(from: iso) { return date }
-        isoFormatter.formatOptions = [.withInternetDateTime]
-        if let date = isoFormatter.date(from: iso) { return date }
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
-        df.timeZone = TimeZone(identifier: "UTC")
-        return df.date(from: iso)
+        ShowScheduleDateParser.parse(iso)
+    }
+
+    private func normalizedEntitlementType(_ value: String?) -> String {
+        switch value?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
+        case "SVOD":
+            return "SVOD"
+        case "PPV", "TRANSACTIONAL":
+            return "PPV"
+        default:
+            return "AVOD"
+        }
     }
 }
 
@@ -1352,51 +1672,100 @@ private struct ShowClipCard: View {
         case short
 
         var aspectRatio: CGFloat {
-            16.0 / 9.0
+            switch self {
+            case .video:
+                return C.mediaAspectRatio(forContentType: "video")
+            case .short:
+                return C.mediaAspectRatio(forContentType: "short")
+            }
         }
     }
 
     let clip: ShowClip
     let style: CardStyle
+    var isLocked: Bool = false
 
     var body: some View {
-        GeometryReader { proxy in
-            let width = proxy.size.width
-            let height = width / style.aspectRatio
+        VStack(alignment: .leading, spacing: 6) {
+            GeometryReader { proxy in
+                let width = proxy.size.width
+                let height = width / style.aspectRatio
 
-            ZStack(alignment: .bottomTrailing) {
-                C.surface
+                ZStack {
+                    C.surface
 
-                if let url = C.mediaURL(clip.thumbnailUrl) {
-                    AsyncImage(url: url) { img in
-                        img.resizable().scaledToFill()
-                    } placeholder: {
-                        C.surface
+                    if let url = C.mediaURL(clip.thumbnailUrl) {
+                        CachedRemoteImage(
+                            url: url,
+                            targetSize: CGSize(width: width, height: height)
+                        ) { img in
+                            img.resizable().scaledToFill()
+                        } placeholder: {
+                            C.surface
+                        }
+                        .frame(width: width, height: height)
+                        .clipped()
                     }
-                    .frame(width: width, height: height)
-                    .clipped()
-                }
 
-                if let dur = clip.duration, dur > 0 {
-                    Text(fmtDuration(dur))
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 5).padding(.vertical, 2)
-                        .background(.black.opacity(0.72))
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
-                        .padding(5)
+                    if isLocked {
+                        Color.black.opacity(0.50)
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 32, height: 32)
+                            .background(.black.opacity(0.62))
+                            .clipShape(Circle())
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                            .padding(6)
+                    } else {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 32, height: 32)
+                            .background(.black.opacity(0.42))
+                            .clipShape(Circle())
+                    }
+
+                    if let dur = clip.duration, dur > 0 {
+                        Text(fmtDuration(dur))
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5).padding(.vertical, 2)
+                            .background(.black.opacity(0.72))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                            .padding(5)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    }
                 }
+                .frame(width: width, height: height)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .clipped()
             }
-            .frame(width: width, height: height)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .clipped()
+            .aspectRatio(style.aspectRatio, contentMode: .fit)
+
+            Text(clip.title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(C.text)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+
+            if clip.views > 0 {
+                Text("\(fmtCount(clip.views)) views")
+                    .font(.caption2)
+                    .foregroundStyle(C.textMuted)
+            }
         }
-        .aspectRatio(style.aspectRatio, contentMode: .fit)
     }
 
     private func fmtDuration(_ s: Double) -> String {
         let m = Int(s) / 60; let sec = Int(s) % 60
         return String(format: "%d:%02d", m, sec)
+    }
+
+    private func fmtCount(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
+        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) }
+        return "\(n)"
     }
 }
 
@@ -1410,7 +1779,10 @@ private struct RelatedShowCard: View {
             ZStack {
                 C.surface
                 if let url = C.mediaURL(show.coverUrl) {
-                    AsyncImage(url: url) { img in
+                    CachedRemoteImage(
+                        url: url,
+                        targetSize: CGSize(width: 150, height: 225)
+                    ) { img in
                         img.resizable().scaledToFill()
                     } placeholder: {
                         C.surface
@@ -1444,7 +1816,7 @@ private struct ChannelPlaylistCard2: View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .bottomTrailing) {
                 mosaicThumbnail
-                    .aspectRatio(16/9, contentMode: .fill)
+                    .aspectRatio(C.mediaAspectRatio(forContentType: playlist.type), contentMode: .fill)
                     .frame(maxWidth: .infinity)
                     .clipped()
 
@@ -1457,7 +1829,7 @@ private struct ChannelPlaylistCard2: View {
                 playlistCountBadge
                     .padding(8)
             }
-            .aspectRatio(16/9, contentMode: .fit)
+            .aspectRatio(C.mediaAspectRatio(forContentType: playlist.type), contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay { RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.08), lineWidth: 1) }
 
@@ -1536,7 +1908,10 @@ private struct ChannelPlaylistCard2: View {
     }
 
     private func mosaicImage(_ url: String) -> some View {
-        AsyncImage(url: C.mediaURL(url)) { img in
+        CachedRemoteImage(
+            url: C.mediaURL(url),
+            targetSize: CGSize(width: 180, height: 102)
+        ) { img in
             img.resizable().scaledToFill()
         } placeholder: {
             C.surface
@@ -1546,7 +1921,60 @@ private struct ChannelPlaylistCard2: View {
 }
 
 private extension ShowEpisodeItem {
-    var isPlayable: Bool {
-        videoUrl != nil && !comingSoon
+    var effectiveScheduleWindow: ShowEpisodeSchedule.Window? {
+        schedule?.windows.first { $0.scope == "worldwide" && !$0.blackout }
+            ?? schedule?.windows.first { !$0.blackout }
+    }
+
+    var isPremiereDueForSchedule: Bool {
+        guard let premiereAt = effectiveScheduleWindow?.premiereAt,
+              let date = ShowScheduleDateParser.parse(premiereAt) else {
+            return false
+        }
+        return date <= Date()
+    }
+
+    var isFinaleEndedForSchedule: Bool {
+        guard let finaleAt = effectiveScheduleWindow?.finaleAt,
+              let date = ShowScheduleDateParser.parse(finaleAt) else {
+            return false
+        }
+        return date < Date()
+    }
+
+    var isComingSoonForSchedule: Bool {
+        if let premiereAt = effectiveScheduleWindow?.premiereAt,
+           let date = ShowScheduleDateParser.parse(premiereAt) {
+            return date > Date()
+        }
+        return comingSoon && !isPremiereDueForSchedule
+    }
+
+    var isPlayableForShowAccess: Bool {
+        guard videoUrl != nil, !isComingSoonForSchedule, !isFinaleEndedForSchedule else {
+            return false
+        }
+
+        if effectiveScheduleWindow?.blackout == true {
+            return false
+        }
+
+        return true
+    }
+}
+
+private enum ShowScheduleDateParser {
+    static func parse(_ iso: String) -> Date? {
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = isoFormatter.date(from: iso) { return date }
+        isoFormatter.formatOptions = [.withInternetDateTime]
+        if let date = isoFormatter.date(from: iso) { return date }
+
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+        df.timeZone = TimeZone(identifier: "UTC")
+        return df.date(from: iso)
     }
 }

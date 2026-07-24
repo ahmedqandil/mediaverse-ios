@@ -36,6 +36,26 @@ final class StoryTimelineEditor: ObservableObject {
         return project.tracks.videoClips.firstIndex { $0.id == selectedClipID }
     }
 
+    private var fullStoryOverlayTimeRange: TimelineRange {
+        TimelineRange(
+            start: CMTimeValueBox(seconds: 0),
+            duration: CMTimeValueBox(seconds: max(project.totalDurationSeconds, 0.2))
+        )
+    }
+
+    private func defaultOverlayTransform(scale: Double = 1) -> Transform2D {
+        let offsets: [(Double, Double)] = [
+            (0, 0),
+            (42, -42),
+            (-42, 42),
+            (72, 36),
+            (-72, -36),
+            (0, 84)
+        ]
+        let offset = offsets[project.tracks.overlays.count % offsets.count]
+        return Transform2D(scale: scale, rotation: 0, tx: offset.0, ty: offset.1)
+    }
+
     var selectedTextOverlay: TextOverlay? {
         guard let selectedOverlayID else { return nil }
         return project.tracks.overlays.compactMap { overlay -> TextOverlay? in
@@ -95,6 +115,20 @@ final class StoryTimelineEditor: ObservableObject {
         selectedOverlayID = nil
     }
 
+    func previewSelectedClip(_ clip: VideoClip) {
+        guard let index = selectedClipIndex else { return }
+        project.tracks.videoClips[index] = clip
+        selectedClipID = clip.id
+        errorMessage = nil
+    }
+
+    func commitSelectedClipPreview(baselineClip: VideoClip?, label: String = "Update Clip") async {
+        guard let index = selectedClipIndex, let baselineClip else { return }
+        var before = project
+        before.tracks.videoClips[index] = baselineClip
+        await commit(project, label: label, before: before)
+    }
+
     func selectOverlay(_ id: UUID?) {
         selectedOverlayID = id
     }
@@ -141,25 +175,44 @@ final class StoryTimelineEditor: ObservableObject {
         var updated = project
         updated.tracks.videoClips.insert(duplicate, at: index + 1)
         guard validateStoryDuration(updated) else {
-            errorMessage = "Duplicating this clip would exceed the 60 second story limit."
+            errorMessage = "Duplicating this clip would exceed the 10 second story limit."
             return
         }
         await commit(updated, label: "Duplicate")
         selectedClipID = duplicate.id
     }
 
-    func trimSelectedClip(to durationSeconds: Double) async {
+    func previewSelectedClipTrim(to durationSeconds: Double) {
         guard let index = selectedClipIndex else { return }
-        let original = project.tracks.videoClips[index]
-        let maxDuration = original.assetRef.durationSeconds - original.sourceStartSeconds
-        let clamped = min(max(durationSeconds * max(original.speed, 0.01), 0.2), max(maxDuration, 0.2))
         var updated = project
-        updated.tracks.videoClips[index].sourceDuration = CMTimeValueBox(seconds: clamped)
+        updateClipTrim(in: &updated, at: index, timelineDurationSeconds: durationSeconds)
         guard validateStoryDuration(updated) else {
-            errorMessage = "Trim would exceed the 60 second story limit."
+            errorMessage = "Trim would exceed the 10 second story limit."
             return
         }
-        await commit(updated, label: "Trim")
+        project = updated
+        selectedClipID = updated.tracks.videoClips[index].id
+        errorMessage = nil
+    }
+
+    func commitSelectedClipTrim(to durationSeconds: Double, baselineClip: VideoClip?) async {
+        guard let index = selectedClipIndex else { return }
+        var before = project
+        if let baselineClip {
+            before.tracks.videoClips[index] = baselineClip
+        }
+        var updated = project
+        updateClipTrim(in: &updated, at: index, timelineDurationSeconds: durationSeconds)
+        guard validateStoryDuration(updated) else {
+            errorMessage = "Trim would exceed the 10 second story limit."
+            return
+        }
+        await commit(updated, label: "Trim", before: before)
+        selectedClipID = updated.tracks.videoClips[index].id
+    }
+
+    func trimSelectedClip(to durationSeconds: Double) async {
+        await commitSelectedClipTrim(to: durationSeconds, baselineClip: nil)
     }
 
     func moveSelectedClip(by offset: Int) async {
@@ -179,12 +232,10 @@ final class StoryTimelineEditor: ObservableObject {
             errorMessage = "Enter text before adding an overlay."
             return
         }
-        let start = min(max(timelineSeconds, 0), max(project.totalDurationSeconds - 0.2, 0))
-        let duration = min(3, max(project.totalDurationSeconds - start, 0.2))
         let overlay = TextOverlay(
             text: String(trimmed.prefix(80)),
-            transform: Transform2D(scale: 1, rotation: 0, tx: 0, ty: 0),
-            timeRange: TimelineRange(start: CMTimeValueBox(seconds: start), duration: CMTimeValueBox(seconds: duration)),
+            transform: defaultOverlayTransform(),
+            timeRange: fullStoryOverlayTimeRange,
             style: style
         )
         var updated = project
@@ -218,14 +269,12 @@ final class StoryTimelineEditor: ObservableObject {
             errorMessage = "Choose an emoji before adding a sticker."
             return
         }
-        let start = min(max(timelineSeconds, 0), max(project.totalDurationSeconds - 0.2, 0))
-        let duration = max(project.totalDurationSeconds - start, 0.2)
         let sticker = StickerOverlay(
             id: UUID(),
             assetRef: nil,
             emoji: String(scalar),
-            transform: Transform2D(scale: 1, rotation: 0, tx: 0, ty: 0),
-            timeRange: TimelineRange(start: CMTimeValueBox(seconds: start), duration: CMTimeValueBox(seconds: duration))
+            transform: defaultOverlayTransform(),
+            timeRange: fullStoryOverlayTimeRange
         )
         var updated = project
         updated.tracks.overlays.append(.sticker(sticker))
@@ -240,13 +289,11 @@ final class StoryTimelineEditor: ObservableObject {
             errorMessage = "Enter a label and a valid HTTPS or app link."
             return
         }
-        let start = min(max(timelineSeconds, 0), max(project.totalDurationSeconds - 0.2, 0))
-        let duration = max(project.totalDurationSeconds - start, 0.2)
         let link = LinkOverlay(
             label: String(trimmedLabel.prefix(32)),
             url: trimmedURL,
-            transform: Transform2D(scale: 1, rotation: 0, tx: 0, ty: 0),
-            timeRange: TimelineRange(start: CMTimeValueBox(seconds: start), duration: CMTimeValueBox(seconds: duration))
+            transform: defaultOverlayTransform(),
+            timeRange: fullStoryOverlayTimeRange
         )
         var updated = project
         updated.tracks.overlays.append(.link(link))
@@ -280,16 +327,14 @@ final class StoryTimelineEditor: ObservableObject {
         targetDate: Date? = nil,
         at timelineSeconds: Double
     ) async {
-        let start = min(max(timelineSeconds, 0), max(project.totalDurationSeconds - 0.2, 0))
-        let duration = max(project.totalDurationSeconds - start, 0.2)
         let overlay = StoryInteractiveOverlay(
             kind: kind,
             title: String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80)),
             subtitle: subtitle.map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80)) },
-            options: options.map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(36)) }.filter { !$0.isEmpty },
+            options: normalizedInteractiveOptions(options),
             targetDate: targetDate,
-            transform: Transform2D(scale: 1, rotation: 0, tx: 0, ty: 0),
-            timeRange: TimelineRange(start: CMTimeValueBox(seconds: start), duration: CMTimeValueBox(seconds: duration))
+            transform: defaultOverlayTransform(),
+            timeRange: fullStoryOverlayTimeRange
         )
         var updated = project
         updated.tracks.overlays.append(.interactive(overlay))
@@ -304,11 +349,19 @@ final class StoryTimelineEditor: ObservableObject {
               case .interactive(var overlay) = updated.tracks.overlays[index] else { return }
         overlay.title = String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
         overlay.subtitle = subtitle.map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80)) }
-        overlay.options = options.map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(36)) }.filter { !$0.isEmpty }
+        overlay.options = normalizedInteractiveOptions(options)
         overlay.targetDate = targetDate
         updated.tracks.overlays[index] = .interactive(overlay)
         await commit(updated, label: "Edit Sticker")
         selectedOverlayID = id
+    }
+
+    private func normalizedInteractiveOptions(_ options: [String]) -> [String] {
+        options.compactMap { option in
+            let trimmed = option.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            return String(trimmed.prefix(trimmed.contains("=") ? 240 : 36))
+        }
     }
 
     private static func isValidStoryURL(_ value: String) -> Bool {
@@ -336,8 +389,8 @@ final class StoryTimelineEditor: ObservableObject {
         at timelineSeconds: Double
     ) async {
         do {
-            let start = min(max(timelineSeconds, 0), max(project.totalDurationSeconds - 0.2, 0))
-            let duration = min(5, max(project.totalDurationSeconds - start, 0.2))
+            let timeRange = fullStoryOverlayTimeRange
+            let duration = timeRange.duration.time.seconds
             let store = await ProjectStore.shared.assetStore(for: project.id)
             let relativePath = try store.importData(imageData, extension: fileExtension)
             let assetRef = AssetRef.make(
@@ -352,8 +405,8 @@ final class StoryTimelineEditor: ObservableObject {
                 id: UUID(),
                 assetRef: assetRef,
                 emoji: nil,
-                transform: Transform2D(scale: 0.42, rotation: 0, tx: 0, ty: 0),
-                timeRange: TimelineRange(start: CMTimeValueBox(seconds: start), duration: CMTimeValueBox(seconds: duration))
+                transform: defaultOverlayTransform(scale: 0.42),
+                timeRange: timeRange
             )
             var updated = project
             updated.tracks.overlays.append(.sticker(overlay))
@@ -378,8 +431,8 @@ final class StoryTimelineEditor: ObservableObject {
             let height = abs(transformed.height) > 0 ? abs(transformed.height) : abs(naturalSize.height)
             let frameRate = (try? await track.load(.nominalFrameRate)) ?? 0
             let sourceDuration = max((try? await asset.load(.duration).seconds) ?? 0, 0.2)
-            let start = min(max(timelineSeconds, 0), max(project.totalDurationSeconds - 0.2, 0))
-            let duration = min(sourceDuration, max(project.totalDurationSeconds - start, 0.2))
+            let timeRange = fullStoryOverlayTimeRange
+            let duration = min(sourceDuration, timeRange.duration.time.seconds)
             let store = await ProjectStore.shared.assetStore(for: project.id)
             let relativePath = try store.importFile(url, extension: url.pathExtension.isEmpty ? "mov" : url.pathExtension)
             let assetRef = AssetRef.make(
@@ -395,8 +448,8 @@ final class StoryTimelineEditor: ObservableObject {
                 id: UUID(),
                 assetRef: assetRef,
                 emoji: nil,
-                transform: Transform2D(scale: 0.42, rotation: 0, tx: 0, ty: 0),
-                timeRange: TimelineRange(start: CMTimeValueBox(seconds: start), duration: CMTimeValueBox(seconds: duration))
+                transform: defaultOverlayTransform(scale: 0.42),
+                timeRange: timeRange
             )
             var updated = project
             updated.tracks.overlays.append(.sticker(overlay))
@@ -409,8 +462,8 @@ final class StoryTimelineEditor: ObservableObject {
 
     func addDrawingOverlay(imageData: Data, width: Int, height: Int, tx: Double = 0, ty: Double = 0, at timelineSeconds: Double) async {
         do {
-            let start = min(max(timelineSeconds, 0), max(project.totalDurationSeconds - 0.2, 0))
-            let duration = min(3, max(project.totalDurationSeconds - start, 0.2))
+            let timeRange = fullStoryOverlayTimeRange
+            let duration = timeRange.duration.time.seconds
             let store = await ProjectStore.shared.assetStore(for: project.id)
             let relativePath = try store.importData(imageData, extension: "png")
             let assetRef = AssetRef.make(
@@ -425,7 +478,7 @@ final class StoryTimelineEditor: ObservableObject {
                 id: UUID(),
                 assetRef: assetRef,
                 transform: Transform2D(scale: 1, rotation: 0, tx: tx, ty: ty),
-                timeRange: TimelineRange(start: CMTimeValueBox(seconds: start), duration: CMTimeValueBox(seconds: duration))
+                timeRange: timeRange
             )
             var updated = project
             updated.tracks.overlays.append(.drawing(drawing))
@@ -601,53 +654,140 @@ final class StoryTimelineEditor: ObservableObject {
         selectedOverlayID = id
     }
 
-    func applyEffectPreset(_ preset: StoryEffectPreset) async {
+    func previewEffectPreset(_ preset: StoryEffectPreset) {
         guard let index = selectedClipIndex else { return }
+        project.tracks.videoClips[index].filterId = preset.id
+        project.tracks.videoClips[index].adjustments = preset.adjustments
+        selectedClipID = project.tracks.videoClips[index].id
+        errorMessage = nil
+    }
+
+    func commitEffectPreset(_ preset: StoryEffectPreset, baselineClip: VideoClip?) async {
+        guard let index = selectedClipIndex else { return }
+        var before = project
+        if let baselineClip {
+            before.tracks.videoClips[index] = baselineClip
+        }
         var updated = project
         updated.tracks.videoClips[index].filterId = preset.id
         updated.tracks.videoClips[index].adjustments = preset.adjustments
-        await commit(updated, label: "Filter")
+        await commit(updated, label: "Filter", before: before)
         selectedClipID = updated.tracks.videoClips[index].id
     }
 
-    func updateSelectedClipAdjustments(_ adjustments: ColorAdjust) async {
+    func applyEffectPreset(_ preset: StoryEffectPreset) async {
+        await commitEffectPreset(preset, baselineClip: nil)
+    }
+
+    func previewSelectedClipAdjustments(_ adjustments: ColorAdjust) {
         guard let index = selectedClipIndex else { return }
+        project.tracks.videoClips[index].adjustments = adjustments
+        if project.tracks.videoClips[index].filterId == nil {
+            project.tracks.videoClips[index].filterId = "custom"
+        }
+        selectedClipID = project.tracks.videoClips[index].id
+        errorMessage = nil
+    }
+
+    func commitSelectedClipAdjustments(_ adjustments: ColorAdjust, baselineClip: VideoClip?) async {
+        guard let index = selectedClipIndex else { return }
+        var before = project
+        if let baselineClip {
+            before.tracks.videoClips[index] = baselineClip
+        }
         var updated = project
         updated.tracks.videoClips[index].adjustments = adjustments
         if updated.tracks.videoClips[index].filterId == nil {
             updated.tracks.videoClips[index].filterId = "custom"
         }
-        await commit(updated, label: "Adjust")
+        await commit(updated, label: "Adjust", before: before)
+        selectedClipID = updated.tracks.videoClips[index].id
+    }
+
+    func updateSelectedClipAdjustments(_ adjustments: ColorAdjust) async {
+        await commitSelectedClipAdjustments(adjustments, baselineClip: nil)
+    }
+
+    func previewSelectedClipAudio(volume: Float, muted: Bool) {
+        guard let index = selectedClipIndex else { return }
+        project.tracks.videoClips[index].volume = min(max(volume, 0), 1)
+        project.tracks.videoClips[index].muted = muted
+        selectedClipID = project.tracks.videoClips[index].id
+        errorMessage = nil
+    }
+
+    func commitSelectedClipAudio(volume: Float, muted: Bool, baselineClip: VideoClip?) async {
+        guard let index = selectedClipIndex else { return }
+        var before = project
+        if let baselineClip {
+            before.tracks.videoClips[index] = baselineClip
+        }
+        var updated = project
+        updated.tracks.videoClips[index].volume = min(max(volume, 0), 1)
+        updated.tracks.videoClips[index].muted = muted
+        await commit(updated, label: "Audio", before: before)
         selectedClipID = updated.tracks.videoClips[index].id
     }
 
     func updateSelectedClipAudio(volume: Float, muted: Bool) async {
-        guard let index = selectedClipIndex else { return }
-        var updated = project
-        updated.tracks.videoClips[index].volume = min(max(volume, 0), 1)
-        updated.tracks.videoClips[index].muted = muted
-        await commit(updated, label: "Audio")
-        selectedClipID = updated.tracks.videoClips[index].id
+        await commitSelectedClipAudio(volume: volume, muted: muted, baselineClip: nil)
     }
 
-    func updateSelectedClipSpeed(_ speed: Double) async {
+    func previewSelectedClipSpeed(_ speed: Double) {
         guard let index = selectedClipIndex else { return }
         var updated = project
         updated.tracks.videoClips[index].speed = min(max(speed, 0.25), 4)
         guard validateStoryDuration(updated) else {
-            errorMessage = "This speed would exceed the 60 second story limit."
+            errorMessage = "This speed would exceed the 10 second story limit."
             return
         }
-        await commit(updated, label: "Speed")
+        project = updated
+        selectedClipID = updated.tracks.videoClips[index].id
+        errorMessage = nil
+    }
+
+    func commitSelectedClipSpeed(_ speed: Double, baselineClip: VideoClip?) async {
+        guard let index = selectedClipIndex else { return }
+        var before = project
+        if let baselineClip {
+            before.tracks.videoClips[index] = baselineClip
+        }
+        var updated = project
+        updated.tracks.videoClips[index].speed = min(max(speed, 0.25), 4)
+        guard validateStoryDuration(updated) else {
+            errorMessage = "This speed would exceed the 10 second story limit."
+            return
+        }
+        await commit(updated, label: "Speed", before: before)
+        selectedClipID = updated.tracks.videoClips[index].id
+    }
+
+    func updateSelectedClipSpeed(_ speed: Double) async {
+        await commitSelectedClipSpeed(speed, baselineClip: nil)
+    }
+
+    func previewSelectedClipReverse(_ reversed: Bool) {
+        guard let index = selectedClipIndex else { return }
+        project.tracks.videoClips[index].reversed = reversed
+        selectedClipID = project.tracks.videoClips[index].id
+        errorMessage = nil
+    }
+
+    func commitSelectedClipReverse(_ reversed: Bool, baselineClip: VideoClip?) async {
+        guard let index = selectedClipIndex else { return }
+        var before = project
+        if let baselineClip {
+            before.tracks.videoClips[index] = baselineClip
+        }
+        var updated = project
+        updated.tracks.videoClips[index].reversed = reversed
+        await commit(updated, label: "Reverse", before: before)
         selectedClipID = updated.tracks.videoClips[index].id
     }
 
     func toggleSelectedClipReverse() async {
         guard let index = selectedClipIndex else { return }
-        var updated = project
-        updated.tracks.videoClips[index].reversed.toggle()
-        await commit(updated, label: "Reverse")
-        selectedClipID = updated.tracks.videoClips[index].id
+        await commitSelectedClipReverse(!project.tracks.videoClips[index].reversed, baselineClip: nil)
     }
 
     func importMusic(from url: URL) async {
@@ -815,10 +955,12 @@ final class StoryTimelineEditor: ObservableObject {
         updateUndoRedoState()
     }
 
-    private func commit(_ updatedProject: Project, label: String) async {
+    private func commit(_ updatedProject: Project, label: String, before beforeProject: Project? = nil) async {
         var updated = updatedProject
         updated.updatedAt = Date()
-        undoStack.append(StoryTimelineCommand(before: project, after: updated, label: label))
+        var before = beforeProject ?? project
+        before.updatedAt = project.updatedAt
+        undoStack.append(StoryTimelineCommand(before: before, after: updated, label: label))
         if undoStack.count > maxCommands {
             undoStack.removeFirst()
         }
@@ -843,7 +985,14 @@ final class StoryTimelineEditor: ObservableObject {
     }
 
     private func validateStoryDuration(_ project: Project) -> Bool {
-        project.storyDestination == nil || project.totalDurationSeconds <= storyMaxDurationSeconds
+        project.totalDurationSeconds <= storyMaxDurationSeconds + 0.05
+    }
+
+    private func updateClipTrim(in project: inout Project, at index: Int, timelineDurationSeconds: Double) {
+        let original = project.tracks.videoClips[index]
+        let maxDuration = original.assetRef.durationSeconds - original.sourceStartSeconds
+        let clamped = min(max(timelineDurationSeconds * max(original.speed, 0.01), 0.2), max(maxDuration, 0.2))
+        project.tracks.videoClips[index].sourceDuration = CMTimeValueBox(seconds: clamped)
     }
 
     private func clipLocation(at timelineSeconds: Double) -> (clip: VideoClip, index: Int, start: CMTime)? {

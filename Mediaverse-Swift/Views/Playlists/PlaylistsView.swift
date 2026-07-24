@@ -312,7 +312,7 @@ struct PlaylistsView: View {
             NavigationLink(value: AppRoute.playlist(pl.id)) {
                 ZStack(alignment: .bottomTrailing) {
                     thumbnailMosaic(thumbURLs: pl.thumbItems.compactMap { $0.video?.thumbnailUrl })
-                        .aspectRatio(16/9, contentMode: .fill)
+                        .aspectRatio(C.mediaAspectRatio(forContentType: pl.type), contentMode: .fill)
                         .frame(maxWidth: .infinity)
                         .clipped()
 
@@ -325,7 +325,7 @@ struct PlaylistsView: View {
                     playlistCountBadge(count: pl.itemCount, type: pl.type)
                         .padding(8)
                 }
-                .aspectRatio(16/9, contentMode: .fit)
+                .aspectRatio(C.mediaAspectRatio(forContentType: pl.type), contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .overlay { RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.08), lineWidth: 1) }
             }
@@ -439,11 +439,13 @@ struct PlaylistsView: View {
     }
 
     private func mosaicImage(_ url: String) -> some View {
-        AsyncImage(url: C.mediaURL(url)) { phase in
-            switch phase {
-            case .success(let img): img.resizable().scaledToFill()
-            default: Rectangle().fill(Color.white.opacity(0.08))
-            }
+        CachedRemoteImage(
+            url: C.mediaURL(url),
+            targetSize: CGSize(width: 180, height: 102)
+        ) { img in
+            img.resizable().scaledToFill()
+        } placeholder: {
+            Rectangle().fill(Color.white.opacity(0.08))
         }
         .clipped()
     }
@@ -454,7 +456,7 @@ struct PlaylistsView: View {
         VStack(alignment: .leading, spacing: 0) {
             Rectangle()
                 .fill(Color.white.opacity(0.08))
-                .aspectRatio(16/9, contentMode: .fit)
+                .aspectRatio(C.mediaAspectRatio(forContentType: "video"), contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
 
             VStack(alignment: .leading, spacing: 6) {
@@ -493,7 +495,7 @@ struct PlaylistsView: View {
     // MARK: - Actions
 
     private func load() async {
-        loading = true
+        loading = playlists.isEmpty
         playlists = (try? await APIClient.shared.fetchPlaylists()) ?? []
         loading = false
     }

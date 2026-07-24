@@ -1,0 +1,1011 @@
+import SwiftUI
+import AVKit
+
+/// Native SwiftUI curation renderer shared by browse surfaces.
+/// The server owns listing order and template type; the client only maps each entity type to a native card.
+struct NativeCurationListingView: View {
+    let listing: AssembledListing
+
+    private var templateType: String {
+        listing.templateType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    var body: some View {
+        switch templateType {
+        case "hero":
+            NativeCurationHero(listing: listing)
+        case "grid":
+            NativeCurationGrid(listing: listing)
+        case "banner":
+            NativeCurationBanner(listing: listing)
+        case "spotlight":
+            NativeCurationSpotlight(listing: listing)
+        case "channels":
+            NativeCurationChannelList(listing: listing)
+        case "carousel":
+            NativeCurationCarousel(listing: listing)
+        case "stories", "continue_watching", "video_feed", "shorts_feed":
+            EmptyView()
+        default:
+            NativeCurationCarousel(listing: listing)
+        }
+    }
+}
+
+private struct NativeCurationHeader: View {
+    let listing: AssembledListing
+    let showSeeAll: Bool
+
+    private var accentColor: Color { listing.accentColor.map(Color.init(hex:)) ?? C.watch }
+    private var seeAllRoute: AppRoute? { listing.seeAllUrl.flatMap { AppRoute.route(link: $0) } }
+
+    var body: some View {
+        if let title = listing.listingTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            HStack(alignment: .center, spacing: 8) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(accentColor)
+                    .frame(width: 3, height: 18)
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(C.text)
+                    .lineLimit(1)
+                if let badge = listing.badge, !badge.isEmpty {
+                    Text(badge.uppercased())
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(C.bg)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(accentColor)
+                        .clipShape(Capsule())
+                }
+                Spacer(minLength: 8)
+                if showSeeAll, let seeAllRoute {
+                    NavigationLink(value: seeAllRoute) {
+                        Text("See all")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(C.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, C.pagePad)
+        }
+    }
+}
+
+private struct NativeCurationCarousel: View {
+    let listing: AssembledListing
+
+    var body: some View {
+        if !listing.items.isEmpty {
+            VStack(alignment: .leading, spacing: C.rowSpacing) {
+                NativeCurationHeader(listing: listing, showSeeAll: true)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: C.rowSpacing) {
+                        ForEach(Array(listing.items.enumerated()), id: \.offset) { _, item in
+                            NativeCurationEntityCard(item: item, mode: .carousel)
+                                .frame(width: NativeCurationEntityCard.width(for: item, mode: .carousel))
+                        }
+                    }
+                    .padding(.horizontal, C.pagePad)
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+    }
+}
+
+private struct NativeCurationDisplayItem: Identifiable {
+    let id: String
+    let item: ContentItem
+    let searchText: String
+
+    init(listingID: String, offset: Int, item: ContentItem) {
+        self.id = "\(listingID)-\(offset)-\(item.id)"
+        self.item = item
+        self.searchText = [item.displayTitle, item.curationSubtitle, item.entityType]
+            .joined(separator: " ")
+            .lowercased()
+    }
+}
+
+private struct NativeCurationGrid: View {
+    let listing: AssembledListing
+    let prefersChannelTreatment: Bool
+    private let displayItems: [NativeCurationDisplayItem]
+
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var filterQuery = ""
+    @State private var appliedFilterQuery = ""
+    @State private var filterTask: Task<Void, Never>?
+
+    init(listing: AssembledListing, prefersChannelTreatment: Bool = false) {
+        self.listing = listing
+        self.prefersChannelTreatment = prefersChannelTreatment
+        self.displayItems = listing.items.enumerated().map { offset, item in
+            NativeCurationDisplayItem(listingID: listing.id, offset: offset, item: item)
+        }
+    }
+
+    private var columns: [GridItem] {
+        let count = horizontalSizeClass == .regular ? 3 : 2
+        return Array(repeating: GridItem(.flexible(), spacing: C.rowSpacing, alignment: .top), count: count)
+    }
+
+    private var filteredItems: [NativeCurationDisplayItem] {
+        let query = appliedFilterQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return displayItems }
+        return displayItems.filter { $0.searchText.contains(query) }
+    }
+
+    private var shouldShowFilter: Bool {
+        displayItems.count > 8
+    }
+
+    var body: some View {
+        if !displayItems.isEmpty {
+            VStack(alignment: .leading, spacing: C.rowSpacing) {
+                NativeCurationHeader(listing: listing, showSeeAll: true)
+                if shouldShowFilter {
+                    NativeCurationInlineSearchField(query: $filterQuery, placeholder: searchPlaceholder)
+                        .padding(.horizontal, C.pagePad)
+                }
+                LazyVGrid(columns: columns, spacing: C.gridSpacing) {
+                    ForEach(filteredItems) { displayItem in
+                        NativeCurationEntityCard(
+                            item: displayItem.item,
+                            mode: prefersChannelTreatment ? .channelGrid : .grid
+                        )
+                    }
+                }
+                .padding(.horizontal, C.pagePad)
+            }
+            .onChange(of: filterQuery) { _, newValue in
+                scheduleFilterApply(newValue)
+            }
+            .onDisappear {
+                filterTask?.cancel()
+            }
+        }
+    }
+
+    private var searchPlaceholder: String {
+        let title = listing.listingTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let title, !title.isEmpty else { return "Search items..." }
+        return "Search \(title.lowercased())..."
+    }
+
+    private func scheduleFilterApply(_ value: String) {
+        filterTask?.cancel()
+        filterTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            guard !Task.isCancelled else { return }
+            appliedFilterQuery = value
+        }
+    }
+}
+
+private struct NativeCurationChannelList: View {
+    let listing: AssembledListing
+    private let displayItems: [NativeCurationDisplayItem]
+
+    @State private var filterQuery = ""
+    @State private var appliedFilterQuery = ""
+    @State private var filterTask: Task<Void, Never>?
+
+    init(listing: AssembledListing) {
+        self.listing = listing
+        self.displayItems = listing.items.enumerated().map { offset, item in
+            NativeCurationDisplayItem(listingID: listing.id, offset: offset, item: item)
+        }
+    }
+
+    private var channelItems: [NativeCurationDisplayItem] {
+        let query = appliedFilterQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return displayItems }
+        return displayItems.filter { $0.searchText.contains(query) }
+    }
+
+    private var shouldShowFilter: Bool { displayItems.count > 8 }
+
+    var body: some View {
+        if !displayItems.isEmpty {
+            VStack(alignment: .leading, spacing: C.rowSpacing) {
+                NativeCurationHeader(listing: listing, showSeeAll: true)
+                if shouldShowFilter {
+                    NativeCurationInlineSearchField(query: $filterQuery, placeholder: searchPlaceholder)
+                        .padding(.horizontal, C.pagePad)
+                }
+                LazyVStack(spacing: C.gridSpacing) {
+                    ForEach(channelItems) { displayItem in
+                        let item = displayItem.item
+                        if item.normalizedEntityType == "channel" {
+                            NativeCurationChannelFullCard(item: item)
+                        } else {
+                            NativeCurationEntityCard(item: item, mode: .grid)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                                .background(C.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous)
+                                        .stroke(C.borderSubtle, lineWidth: 1)
+                                }
+                        }
+                    }
+                }
+                .padding(.horizontal, C.pagePad)
+            }
+            .onChange(of: filterQuery) { _, newValue in
+                scheduleFilterApply(newValue)
+            }
+            .onDisappear {
+                filterTask?.cancel()
+            }
+        }
+    }
+
+    private var searchPlaceholder: String {
+        let title = listing.listingTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let title, !title.isEmpty else { return "Search channels..." }
+        return "Search \(title.lowercased())..."
+    }
+
+    private func scheduleFilterApply(_ value: String) {
+        filterTask?.cancel()
+        filterTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            guard !Task.isCancelled else { return }
+            appliedFilterQuery = value
+        }
+    }
+}
+
+private struct NativeCurationChannelFullCard: View {
+    let item: ContentItem
+    let channel: ChannelBrowseCard
+
+    init(item: ContentItem) {
+        self.item = item
+        self.channel = item.asChannelBrowseCard
+    }
+
+    private var routeHandle: String { channel.handle }
+    private var followerCount: Int { channel._count?.followers ?? 0 }
+    private var videoCount: Int { channel._count?.videos ?? item.metaInt("videos") ?? 0 }
+
+    var body: some View {
+        NavigationLink(value: AppRoute.channel(routeHandle)) {
+            VStack(spacing: 0) {
+                banner
+                bodyContent
+            }
+            .background(C.surface)
+            .clipShape(RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous)
+                    .stroke(C.border, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var banner: some View {
+        ZStack {
+            if let bannerUrl = C.mediaURL(channel.bannerUrl) {
+                CachedRemoteImage(url: bannerUrl, targetSize: CGSize(width: UIScreen.main.bounds.width - C.pagePad * 2, height: 96)) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    fallbackBanner
+                }
+            } else {
+                fallbackBanner
+            }
+        }
+        .frame(height: 96)
+        .frame(maxWidth: .infinity)
+        .clipped()
+        .overlay(Color.black.opacity(channel.bannerUrl == nil ? 0 : 0.32))
+    }
+
+    private var fallbackBanner: some View {
+        LinearGradient(
+            colors: [C.watch.opacity(0.18), C.watch.opacity(0.04)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private var bodyContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .bottom) {
+                avatar
+                    .offset(y: -24)
+                    .padding(.bottom, -24)
+                Spacer(minLength: 12)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(C.textMuted.opacity(0.65))
+            }
+
+            HStack(spacing: 5) {
+                Text(item.displayTitle)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(C.text)
+                    .lineLimit(1)
+                if channel.verified {
+                    Image(systemName: "checkmark.seal")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(C.watch)
+                }
+            }
+
+            Text("@\(channel.handle)")
+                .font(.caption2)
+                .foregroundStyle(C.textMuted.opacity(0.8))
+                .lineLimit(1)
+
+            if let description = channel.description, !description.isEmpty {
+                Text(description)
+                    .font(.caption2)
+                    .foregroundStyle(C.textMuted)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 10) {
+                Text("\(formatCount(followerCount)) followers")
+                Text(".")
+                Text("\(formatCount(videoCount)) videos")
+            }
+            .font(.caption2)
+            .foregroundStyle(C.textMuted.opacity(0.72))
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
+    }
+
+    private var avatar: some View {
+        ZStack {
+            if let avatarUrl = C.mediaURL(channel.avatarUrl) {
+                CachedRemoteImage(url: avatarUrl, targetSize: CGSize(width: 58, height: 58)) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    initialsCircle
+                }
+            } else {
+                initialsCircle
+            }
+        }
+        .frame(width: 58, height: 58)
+        .clipShape(Circle())
+        .overlay { Circle().stroke(C.bg, lineWidth: 3) }
+        .background(C.bg.clipShape(Circle()))
+    }
+
+    private var initialsCircle: some View {
+        Circle()
+            .fill(C.elevated)
+            .overlay {
+                Text(item.displayTitle.first.map(String.init)?.uppercased() ?? "?")
+                    .font(.system(size: 23, weight: .bold))
+                    .foregroundStyle(C.textMuted)
+            }
+    }
+
+    private func formatCount(_ value: Int) -> String {
+        if value >= 1_000_000 { return String(format: "%.1fM", Double(value) / 1_000_000) }
+        if value >= 1_000 { return String(format: "%.1fK", Double(value) / 1_000) }
+        return "\(value)"
+    }
+}
+
+private struct NativeCurationHero: View {
+    let listing: AssembledListing
+
+    @State private var trailerPlayer: AVQueuePlayer?
+    @State private var trailerLooper: AVPlayerLooper?
+    @State private var trailerMuted = true
+    @State private var trailerVisible = false
+    @State private var trailerStartTask: Task<Void, Never>?
+
+    private var item: ContentItem? { listing.items.first }
+    private var accentColor: Color { listing.accentColor.map(Color.init(hex:)) ?? C.watch }
+
+    var body: some View {
+        if let item {
+            ZStack(alignment: .topTrailing) {
+                NavigationLink(value: item.appRoute) {
+                    heroCard(for: item)
+                }
+                .buttonStyle(.plain)
+
+                if trailerPlayer != nil, trailerVisible {
+                    Button { toggleTrailerMute() } label: {
+                        Image(systemName: trailerMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 38, height: 38)
+                            .background(Color.black.opacity(0.48), in: Circle())
+                            .overlay { Circle().stroke(Color.white.opacity(0.18), lineWidth: 1) }
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 14)
+                    .padding(.trailing, 14)
+                    .accessibilityLabel(trailerMuted ? "Unmute trailer" : "Mute trailer")
+                }
+            }
+            .onAppear { startTrailerIfAvailable(for: item) }
+            .onDisappear { stopTrailer() }
+            .onChange(of: item.entityId) { _, _ in
+                stopTrailer()
+                startTrailerIfAvailable(for: item)
+            }
+        }
+    }
+
+    private func heroCard(for item: ContentItem) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .bottomLeading) {
+                heroMedia(for: item)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: C.heroHeight)
+                    .clipped()
+
+                LinearGradient(
+                    colors: [.black.opacity(0.04), .black.opacity(0.42), .black.opacity(0.95)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .opacity(trailerVisible ? 0 : 1)
+                .animation(.easeInOut(duration: 0.3), value: trailerVisible)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text((listing.badge ?? item.entityTypeDisplayName).uppercased())
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(accentColor)
+                    .tracking(2)
+                Text(item.displayTitle)
+                    .font(.system(size: 30, weight: .bold))
+                    .fontDesign(.rounded)
+                    .foregroundStyle(C.text)
+                    .lineLimit(2)
+                if !item.heroDescription.isEmpty {
+                    Text(item.heroDescription)
+                        .font(.subheadline)
+                        .foregroundStyle(C.textMuted)
+                        .lineLimit(3)
+                }
+                HStack(spacing: 8) {
+                    Image(systemName: item.primaryActionIconName)
+                        .font(.system(size: 13, weight: .bold))
+                    Text(item.primaryActionTitle)
+                        .font(.system(size: 14, weight: .bold))
+                }
+                .foregroundStyle(C.bg)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 10)
+                .background(accentColor)
+                .clipShape(Capsule())
+            }
+            .padding(.horizontal, C.pagePad)
+            .padding(.top, 12)
+            .padding(.bottom, C.pagePad)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+
+    private func heroMedia(for item: ContentItem) -> some View {
+        ZStack {
+            heroImage(for: item)
+                .overlay { Color.black.opacity(trailerVisible ? 0 : 0.12) }
+
+            if let trailerPlayer {
+                NativeCurationTrailerSurface(player: trailerPlayer)
+                    .background(Color.black)
+                    .opacity(trailerVisible ? 0.72 : 0)
+                    .animation(.easeInOut(duration: 0.55), value: trailerVisible)
+            }
+        }
+    }
+
+    private func heroImage(for item: ContentItem) -> some View {
+        GeometryReader { proxy in
+            CachedRemoteImage(
+                url: C.mediaURL(item.coverUrl ?? item.thumbnailUrl),
+                targetSize: CGSize(width: proxy.size.width, height: proxy.size.height)
+            ) { image in
+                image.resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+            } placeholder: {
+                LinearGradient(
+                    colors: [C.watch.opacity(0.18), C.bg],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .frame(width: proxy.size.width, height: proxy.size.height)
+            }
+            .clipped()
+        }
+    }
+
+    @MainActor
+    private func startTrailerIfAvailable(for item: ContentItem) {
+        guard trailerPlayer == nil,
+              let trailerURL = item.trailerURL else { return }
+        let playerItem = AVPlayerItem(url: trailerURL)
+        let player = AVQueuePlayer()
+        player.isMuted = true
+        player.volume = 1
+        trailerMuted = true
+        trailerLooper = AVPlayerLooper(player: player, templateItem: playerItem)
+        trailerPlayer = player
+        trailerStartTask?.cancel()
+        trailerStartTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled, trailerPlayer === player else { return }
+            player.play()
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled, trailerPlayer === player else { return }
+            trailerVisible = true
+        }
+    }
+
+    @MainActor
+    private func toggleTrailerMute() {
+        trailerMuted.toggle()
+        trailerPlayer?.isMuted = trailerMuted
+    }
+
+    @MainActor
+    private func stopTrailer() {
+        trailerStartTask?.cancel()
+        trailerStartTask = nil
+        trailerVisible = false
+        trailerPlayer?.pause()
+        trailerLooper = nil
+        trailerPlayer = nil
+    }
+}
+
+private struct NativeCurationTrailerSurface: UIViewRepresentable {
+    let player: AVPlayer
+
+    func makeUIView(context: Context) -> PlayerView {
+        let view = PlayerView()
+        view.player = player
+        return view
+    }
+
+    func updateUIView(_ uiView: PlayerView, context: Context) {
+        uiView.player = player
+    }
+
+    final class PlayerView: UIView {
+        override class var layerClass: AnyClass { AVPlayerLayer.self }
+
+        var playerLayer: AVPlayerLayer? { layer as? AVPlayerLayer }
+
+        var player: AVPlayer? {
+            get { playerLayer?.player }
+            set {
+                playerLayer?.player = newValue
+                playerLayer?.videoGravity = .resizeAspectFill
+            }
+        }
+    }
+}
+
+private struct NativeCurationBanner: View {
+    let listing: AssembledListing
+
+    private var item: ContentItem? { listing.items.first }
+    private var accentColor: Color { listing.accentColor.map(Color.init(hex:)) ?? C.watch }
+    private var title: String? {
+        let listingTitle = listing.listingTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return listingTitle?.isEmpty == false ? listingTitle : item?.displayTitle
+    }
+
+    var body: some View {
+        if let item {
+            NavigationLink(value: listing.seeAllUrl.flatMap { AppRoute.route(link: $0) } ?? item.appRoute) {
+                ZStack(alignment: .bottomLeading) {
+                    NativeCurationArtwork(item: item, aspectRatio: 16.0 / 7.0, cornerRadius: C.cardRadius, preferCover: true)
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(0.82)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let sponsor = listing.sponsoredBy, !sponsor.isEmpty {
+                            Text("Sponsored by \(sponsor)")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(accentColor)
+                        }
+                        if let title, !title.isEmpty {
+                            Text(title)
+                                .font(.headline)
+                                .foregroundStyle(.white)
+                                .lineLimit(2)
+                        }
+                        if !item.curationSubtitle.isEmpty {
+                            Text(item.curationSubtitle)
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.72))
+                                .lineLimit(1)
+                        }
+                    }
+                    .padding(14)
+                }
+                .padding(.horizontal, C.pagePad)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+}
+
+private struct NativeCurationSpotlight: View {
+    let listing: AssembledListing
+
+    private var accentColor: Color { listing.accentColor.map(Color.init(hex:)) ?? C.watch }
+
+    var body: some View {
+        let items = Array(listing.items.prefix(2))
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: C.rowSpacing) {
+                NativeCurationHeader(listing: listing, showSeeAll: true)
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    NavigationLink(value: item.appRoute) {
+                        HStack(alignment: .top, spacing: C.rowSpacing) {
+                            NativeCurationArtwork(item: item, aspectRatio: item.spotlightAspectRatio, cornerRadius: C.cardRadius, preferCover: true)
+                                .frame(width: 132)
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(item.entityTypeDisplayName.uppercased())
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(accentColor)
+                                Text(item.displayTitle)
+                                    .font(.headline)
+                                    .foregroundStyle(C.text)
+                                    .lineLimit(2)
+                                if let description = item.metaString("description"), !description.isEmpty {
+                                    Text(description)
+                                        .font(.subheadline)
+                                        .foregroundStyle(C.textMuted)
+                                        .lineLimit(3)
+                                } else if !item.curationSubtitle.isEmpty {
+                                    Text(item.curationSubtitle)
+                                        .font(.subheadline)
+                                        .foregroundStyle(C.textMuted)
+                                        .lineLimit(2)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(12)
+                        .background(C.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous)
+                                .stroke(C.borderSubtle, lineWidth: 1)
+                        }
+                        .padding(.horizontal, C.pagePad)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+}
+
+private struct NativeCurationEntityCard: View {
+    enum Mode {
+        case carousel
+        case grid
+        case channelGrid
+    }
+
+    let item: ContentItem
+    let mode: Mode
+
+    static func width(for item: ContentItem, mode: Mode) -> CGFloat {
+        switch item.normalizedEntityType {
+        case "video", "episode": return 190
+        case "channel": return 156
+        case "short": return 124
+        default: return 132
+        }
+    }
+
+    private var aspectRatio: CGFloat {
+        switch mode {
+        case .channelGrid where item.normalizedEntityType == "channel": return 1.0
+        default: return item.cardAspectRatio
+        }
+    }
+
+    var body: some View {
+        NavigationLink(value: item.appRoute) {
+            VStack(alignment: .leading, spacing: 8) {
+                ZStack(alignment: .bottomTrailing) {
+                    NativeCurationArtwork(item: item, aspectRatio: aspectRatio, cornerRadius: C.cardRadius, preferCover: mode == .channelGrid)
+                    if let duration = item.durationLabel {
+                        Text(duration)
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(.black.opacity(0.78))
+                            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                            .padding(6)
+                    }
+                    if item.isRentable {
+                        Text("RENT")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4)
+                            .background(Color(hex: "#F59E0B"))
+                            .clipShape(Capsule())
+                            .padding(6)
+                    }
+                }
+
+                HStack(spacing: 5) {
+                    Text(item.displayTitle)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(C.text)
+                        .lineLimit(2)
+                    if item.isVerifiedChannel {
+                        Image(systemName: "checkmark.seal.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(C.watch)
+                    }
+                }
+
+                if !item.curationSubtitle.isEmpty {
+                    Text(item.curationSubtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(C.textMuted)
+                        .lineLimit(2)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct NativeCurationArtwork: View {
+    let item: ContentItem
+    let aspectRatio: CGFloat
+    let cornerRadius: CGFloat
+    let preferCover: Bool
+
+    private var url: URL? {
+        C.mediaURL(preferCover ? (item.coverUrl ?? item.thumbnailUrl) : (item.thumbnailUrl ?? item.coverUrl))
+    }
+
+    var body: some View {
+        ZStack {
+            CachedRemoteImage(url: url, targetSize: targetSize) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } placeholder: {
+                fallback
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+        }
+        .aspectRatio(aspectRatio, contentMode: .fit)
+        .background(C.elevated)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(C.borderSubtle, lineWidth: 1)
+        }
+    }
+
+    private var targetSize: CGSize {
+        let width = min(UIScreen.main.bounds.width - C.pagePad * 2, preferCover ? 520 : 240)
+        return CGSize(width: width, height: width / aspectRatio)
+    }
+
+    private var fallback: some View {
+        ZStack {
+            LinearGradient(
+                colors: [C.elevated, C.surface],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            Image(systemName: item.fallbackIconName)
+                .font(.system(size: 26, weight: .semibold))
+                .foregroundStyle(C.textTertiary)
+        }
+    }
+}
+
+private struct NativeCurationInlineSearchField: View {
+    @Binding var query: String
+    let placeholder: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(C.textMuted)
+            TextField(placeholder, text: $query)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(.subheadline)
+                .foregroundStyle(C.text)
+            if !query.isEmpty {
+                Button { query = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(C.textMuted)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 42)
+        .background(C.elevated)
+        .clipShape(Capsule())
+        .overlay {
+            Capsule().stroke(C.borderSubtle, lineWidth: 1)
+        }
+    }
+}
+
+private extension ContentItem {
+    var displayTitle: String {
+        curationDisplayTitle
+    }
+
+    var normalizedEntityType: String {
+        entityType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    var entityTypeDisplayName: String {
+        switch normalizedEntityType {
+        case "show": return metaString("showType")?.capitalized ?? "Series"
+        case "video": return "Video"
+        case "short": return "Short"
+        case "episode": return "Episode"
+        case "channel": return "Channel"
+        default: return normalizedEntityType.capitalized.isEmpty ? "Featured" : normalizedEntityType.capitalized
+        }
+    }
+
+    var heroDescription: String {
+        if let description = metaString("description")?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty {
+            return description
+        }
+        return curationSubtitle
+    }
+
+    var curationSubtitle: String {
+        switch normalizedEntityType {
+        case "show":
+            return [metaString("productionYear"), seasonText, metaString("genre")]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " · ")
+        case "video", "short":
+            return [metaString("channelName"), viewsText]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " · ")
+        case "episode":
+            let episode = episodeNumberText
+            return [episode, metaString("showTitle")]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " · ")
+        case "channel":
+            return [channelHandleText, followersText]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " · ")
+        default:
+            return [metaString("channelName"), viewsText, metaString("genre")]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " · ")
+        }
+    }
+
+    var cardAspectRatio: CGFloat {
+        switch normalizedEntityType {
+        case "show": return 2.0 / 3.0
+        case "short": return 9.0 / 16.0
+        case "channel": return 1.0
+        case "video", "episode": return 16.0 / 9.0
+        default: return C.mediaAspectRatio(forContentType: metaString("type") ?? entityType)
+        }
+    }
+
+    var spotlightAspectRatio: CGFloat {
+        normalizedEntityType == "short" ? 9.0 / 16.0 : 16.0 / 9.0
+    }
+
+    var durationLabel: String? {
+        guard let seconds = metaDouble("duration") ?? metaInt("duration").map(Double.init), seconds > 0 else { return nil }
+        let total = Int(seconds.rounded())
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let secs = total % 60
+        if hours > 0 { return String(format: "%d:%02d:%02d", hours, minutes, secs) }
+        return String(format: "%d:%02d", minutes, secs)
+    }
+
+    var primaryActionTitle: String {
+        normalizedEntityType == "channel" ? "Open Channel" : "Watch Now"
+    }
+
+    var primaryActionIconName: String {
+        normalizedEntityType == "channel" ? "arrow.right" : "play.fill"
+    }
+
+    var fallbackIconName: String {
+        switch normalizedEntityType {
+        case "show": return "tv"
+        case "video": return "play.rectangle"
+        case "short": return "bolt.fill"
+        case "episode": return "film"
+        case "channel": return "person.crop.square"
+        default: return "rectangle.stack"
+        }
+    }
+
+    var isVerifiedChannel: Bool {
+        normalizedEntityType == "channel" && (metaBool("verified") ?? false)
+    }
+
+    var isRentable: Bool {
+        metaString("entitlementType")?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == "PPV"
+    }
+
+    private var seasonText: String? {
+        guard let seasons = metaInt("seasons"), seasons > 0 else { return nil }
+        return seasons == 1 ? "1 season" : "\(seasons) seasons"
+    }
+
+    private var viewsText: String? {
+        guard let views = metaInt("views") else { return nil }
+        return "\(Self.abbreviatedCount(views)) views"
+    }
+
+    private var followersText: String? {
+        guard let followers = metaInt("followers") else { return nil }
+        return "\(Self.abbreviatedCount(followers)) followers"
+    }
+
+    private var channelHandleText: String? {
+        let handle = metaString("handle") ?? metaString("channelHandle")
+        guard let handle, !handle.isEmpty else { return nil }
+        return handle.hasPrefix("@") ? handle : "@\(handle)"
+    }
+
+    private var episodeNumberText: String? {
+        let season = metaInt("seasonNumber")
+        let episode = metaInt("episodeNumber")
+        if let season, let episode { return "S\(season) E\(episode)" }
+        if let episode { return "Episode \(episode)" }
+        return nil
+    }
+
+    private static func abbreviatedCount(_ value: Int) -> String {
+        let number = Double(value)
+        if value >= 1_000_000 {
+            return String(format: number >= 10_000_000 ? "%.0fM" : "%.1fM", number / 1_000_000)
+        }
+        if value >= 1_000 {
+            return String(format: number >= 10_000 ? "%.0fK" : "%.1fK", number / 1_000)
+        }
+        return "\(value)"
+    }
+}

@@ -106,9 +106,12 @@ struct SaveToCollectionSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(C.watch)
+                    Button("Done") {
+                        lightHaptic()
+                        dismiss()
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(C.watch)
                 }
             }
         }
@@ -134,7 +137,7 @@ struct SaveToCollectionSheet: View {
 
             // Collection list
             ScrollView {
-                VStack(spacing: 0) {
+                LazyVStack(spacing: 0) {
                     if eligibleCollections.isEmpty {
                         emptyState
                     } else {
@@ -159,8 +162,8 @@ struct SaveToCollectionSheet: View {
 
     private var emptyState: some View {
         VStack(spacing: 8) {
-            Image(systemName: "square.grid.2x2")
-                .font(.system(size: 28))
+            MediaverseIcon(name: "library", fallbackSystemName: "square.stack")
+                .frame(width: 30, height: 30)
                 .foregroundStyle(C.textMuted.opacity(0.3))
                 .padding(.bottom, 4)
             Text(targetKind.emptyTitle)
@@ -183,6 +186,7 @@ struct SaveToCollectionSheet: View {
 
         return Button {
             guard busyId == nil else { return }
+            lightHaptic()
             Task { await toggleCollection(col) }
         } label: {
             HStack(spacing: 14) {
@@ -198,8 +202,8 @@ struct SaveToCollectionSheet: View {
                                 .tint(.black)
                                 .scaleEffect(0.65)
                         } else {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 10, weight: .bold))
+                            MediaverseIcon(name: "check", fallbackSystemName: "checkmark")
+                                .frame(width: 10, height: 10)
                                 .foregroundStyle(.black)
                         }
                     } else {
@@ -265,6 +269,7 @@ struct SaveToCollectionSheet: View {
 
                         // Create button
                         Button {
+                            lightHaptic()
                             Task { await createAndAdd() }
                         } label: {
                             Group {
@@ -288,6 +293,7 @@ struct SaveToCollectionSheet: View {
 
                         // Cancel
                         Button {
+                            lightHaptic()
                             withAnimation(.easeInOut(duration: 0.15)) { showCreate = false }
                             newTitle    = ""
                             createError = nil
@@ -309,25 +315,57 @@ struct SaveToCollectionSheet: View {
                 .padding(.horizontal, C.pagePad)
                 .padding(.vertical, 12)
             } else {
-                // "+ New collection" trigger button
                 Button {
+                    lightHaptic()
                     withAnimation(.easeInOut(duration: 0.15)) { showCreate = true }
                 } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 13, weight: .medium))
+                    HStack(spacing: 12) {
+                        ZStack(alignment: .bottomTrailing) {
+                            MediaverseIcon(name: "folder", fallbackSystemName: "folder")
+                                .frame(width: 20, height: 20)
+                                .foregroundStyle(C.watch)
+
+                            Circle()
+                                .fill(C.watch)
+                                .frame(width: 15, height: 15)
+                                .overlay {
+                                    MediaverseIcon(name: "plus", fallbackSystemName: "plus")
+                                        .frame(width: 7, height: 7)
+                                        .foregroundStyle(.black)
+                                }
+                                .offset(x: 3, y: 3)
+                        }
+                        .frame(width: 36, height: 36)
+                        .background(C.watch.opacity(0.14), in: Circle())
+                        .overlay {
+                            Circle().stroke(C.watch.opacity(0.22), lineWidth: 1)
+                        }
+
                         Text("New collection")
-                            .font(.system(size: 14))
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(C.text)
+
+                        Spacer(minLength: 0)
                     }
-                    .foregroundStyle(C.textMuted.opacity(0.6))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, C.pagePad)
-                    .padding(.vertical, 13)
-                    .contentShape(Rectangle())
+                    .padding(.vertical, 12)
+                    .background(C.elevated.opacity(0.82), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(C.border, lineWidth: 1)
+                    }
+                    .padding(.horizontal, C.pagePad)
+                    .padding(.vertical, 10)
+                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    private func lightHaptic() {
+        C.lightHaptic()
     }
 
     // MARK: - Data loading
@@ -497,7 +535,7 @@ struct SaveToPlaylistSheet: View {
             }
 
             ScrollView {
-                VStack(spacing: 0) {
+                LazyVStack(spacing: 0) {
                     if eligiblePlaylists.isEmpty {
                         emptyState
                     } else {

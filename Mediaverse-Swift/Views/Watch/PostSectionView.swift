@@ -6,7 +6,7 @@ import UIKit
 // Mirrors PostSection.tsx exactly:
 //   collapsible "N Clip reactions" header → list of FullWidthPostCards
 //   each card: thumbnail(148pt,16:9) + content(user, caption, like/comment/share/delete)
-//   inline comments expandable per card with reply support
+//   comments open in the shared standard comments sheet.
 
 // MARK: - Target (video or episode)
 
@@ -63,310 +63,18 @@ private func fmtSec(_ s: Int) -> String {
     return String(format: "%d:%02d", m, sec)
 }
 
-// MARK: - Post comment row (single comment + replies)
-
-private struct PostCommentRow: View {
-    let postId: String
-    let comment: PostComment
-    let depth: Int
-    let onReplyAdded: (String, PostComment) -> Void
-
-    @State private var likes: Int
-    @State private var liked = false
-    @State private var replyOpen = false
-    @State private var replyText = ""
-    @State private var sending = false
-
-    @EnvironmentObject private var auth: AuthManager
-
-    init(postId: String, comment: PostComment, depth: Int = 0, onReplyAdded: @escaping (String, PostComment) -> Void) {
-        self.postId = postId
-        self.comment = comment
-        self.depth = depth
-        self.onReplyAdded = onReplyAdded
-        _likes = State(initialValue: comment.likes)
-    }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 6) {
-            // Avatar
-            Circle()
-                .fill(C.elevated)
-                .frame(width: depth > 0 ? 14 : 18, height: depth > 0 ? 14 : 18)
-                .overlay {
-                    if let url = C.mediaURL(comment.user?.image) {
-                        AsyncImage(url: url) { i in i.resizable().scaledToFill() } placeholder: { EmptyView() }
-                            .clipShape(Circle())
-                    } else {
-                        Text(String((comment.user?.name ?? "?").prefix(1)).uppercased())
-                            .font(.system(size: depth > 0 ? 7 : 8, weight: .bold))
-                            .foregroundStyle(C.watch)
-                    }
-                }
-
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(comment.user?.name ?? "User")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.7))
-                    Text(comment.content)
-                        .font(.system(size: 10))
-                        .foregroundStyle(Color.white.opacity(0.5))
-                        .lineLimit(nil)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                HStack(spacing: 8) {
-                    Text(timeAgo(comment.createdAt))
-                        .font(.system(size: 9))
-                        .foregroundStyle(Color.white.opacity(0.25))
-
-                    // Like comment
-                    Button {
-                        toggleLike()
-                    } label: {
-                        HStack(spacing: 2) {
-                            Image(systemName: liked ? "heart.fill" : "heart")
-                                .font(.system(size: 9))
-                            if likes > 0 {
-                                Text("\(likes)")
-                                    .font(.system(size: 9))
-                            }
-                        }
-                        .foregroundStyle(liked ? Color.red.opacity(0.8) : Color.white.opacity(0.3))
-                    }
-                    .buttonStyle(.plain)
-
-                    if depth < 2 {
-                        Button {
-                            guard auth.isAuthenticated else { return }
-                            withAnimation { replyOpen.toggle() }
-                        } label: {
-                            Text("Reply")
-                                .font(.system(size: 9))
-                                .foregroundStyle(Color.white.opacity(0.3))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-
-                // Reply input
-                if replyOpen {
-                    HStack(spacing: 6) {
-                        TextField("Reply to \(comment.user?.name ?? "User")…", text: $replyText)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 8).padding(.vertical, 5)
-                            .background(Color.white.opacity(0.05))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                        Button {
-                            Task { await submitReply() }
-                        } label: {
-                            Text("Send")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(C.bg)
-                                .padding(.horizontal, 8).padding(.vertical, 5)
-                                .background(C.watch)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                        .disabled(replyText.trimmingCharacters(in: .whitespaces).isEmpty || sending)
-                        .buttonStyle(.plain)
-
-                        Button {
-                            replyOpen = false
-                            replyText = ""
-                        } label: {
-                            Text("✕")
-                                .font(.system(size: 9))
-                                .foregroundStyle(Color.white.opacity(0.3))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.top, 2)
-                }
-
-                ForEach(comment.replies ?? []) { reply in
-                    PostCommentRow(postId: postId, comment: reply, depth: depth + 1, onReplyAdded: onReplyAdded)
-                        .padding(.top, 4)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.leading, depth > 0 ? 20 : 0)
-    }
-
-    private func toggleLike() {
-        guard auth.isAuthenticated else { return }
-        let newLiked = !liked
-        liked = newLiked
-        likes = max(0, likes + (newLiked ? 1 : -1))
-        Task {
-            _ = try? await APIClient.shared.likePostComment(postId: postId, commentId: comment.id, liked: newLiked)
-        }
-    }
-
-    private func submitReply() async {
-        let text = replyText.trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty, !sending else { return }
-        sending = true
-        do {
-            let reply = try await APIClient.shared.createPostComment(postId: postId, content: text, parentId: comment.id)
-            await MainActor.run {
-                onReplyAdded(comment.id, reply)
-                replyText = ""
-                replyOpen = false
-            }
-        } catch {}
-        sending = false
-    }
-}
-
-// MARK: - Inline comments for a post
-
-private struct PostCommentsView: View {
-    let postId: String
-
-    @State private var comments: [PostComment] = []
-    @State private var loading = true
-    @State private var fetchError = false
-    @State private var newText = ""
-    @State private var submitting = false
-
-    @EnvironmentObject private var auth: AuthManager
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Divider().background(C.borderSubtle)
-
-            // New comment input
-            HStack(spacing: 6) {
-                TextField(auth.isAuthenticated ? "Add a comment…" : "Sign in to comment",
-                          text: $newText, axis: .vertical)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 8).padding(.vertical, 6)
-                    .background(Color.white.opacity(0.05))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .disabled(!auth.isAuthenticated)
-
-                if auth.isAuthenticated {
-                    Button {
-                        Task { await submitComment() }
-                    } label: {
-                        Text("Post")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(C.bg)
-                            .padding(.horizontal, 8).padding(.vertical, 6)
-                            .background(C.watch)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                    }
-                    .disabled(newText.trimmingCharacters(in: .whitespaces).isEmpty || submitting)
-                    .buttonStyle(.plain)
-                }
-            }
-
-            // Comment list
-            if loading {
-                Text("Loading…")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.white.opacity(0.25))
-            } else if fetchError {
-                Text("Could not load comments.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.white.opacity(0.25))
-            } else if comments.isEmpty {
-                Text("No comments yet. Be the first!")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.white.opacity(0.25))
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(comments) { c in
-                        PostCommentRow(postId: postId, comment: c, onReplyAdded: addReply)
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 12)
-        .task { await loadComments() }
-    }
-
-    private func loadComments() async {
-        loading = true; fetchError = false
-        do {
-            let fetchedComments = try await APIClient.shared.fetchPostComments(postId: postId)
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-                comments = fetchedComments
-            }
-        } catch {
-            fetchError = true
-        }
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-            loading = false
-        }
-    }
-
-    private func submitComment() async {
-        let text = newText.trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty, !submitting else { return }
-        submitting = true
-        do {
-            let c = try await APIClient.shared.createPostComment(postId: postId, content: text)
-            await MainActor.run {
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-                    comments.append(c)
-                    newText = ""
-                }
-            }
-        } catch {}
-        submitting = false
-    }
-
-    private func addReply(parentId: String, reply: PostComment) {
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-            comments = comments.map { $0.addingReply(reply, to: parentId) }
-        }
-    }
-}
-
-private extension PostComment {
-    func addingReply(_ reply: PostComment, to parentId: String) -> PostComment {
-        if id == parentId {
-            return PostComment(
-                id: id,
-                userId: userId,
-                content: content,
-                likes: likes,
-                parentId: self.parentId,
-                createdAt: createdAt,
-                user: user,
-                replies: (replies ?? []) + [reply]
-            )
-        }
-
-        return PostComment(
-            id: id,
-            userId: userId,
-            content: content,
-            likes: likes,
-            parentId: self.parentId,
-            createdAt: createdAt,
-            user: user,
-            replies: replies?.map { $0.addingReply(reply, to: parentId) }
-        )
-    }
-}
-
 // MARK: - Single post card
 
 private struct PostCard: View {
     let post: UserPost
     let target: PostSectionTarget
-    let onSeek: ((Double) -> Void)?
+    let onPlayClip: ((UserPost) -> Void)?
     let onDelete: (String) -> Void
     let onLikeToggle: (String) -> Void
 
     @State private var showComments = false
     @State private var spoilerRevealed = false
+    @State private var displayedCommentCount: Int?
 
     @EnvironmentObject private var auth: AuthManager
 
@@ -387,19 +95,29 @@ private struct PostCard: View {
                 contentArea
             }
 
-            // Collapsible comments
-            if showComments {
-                PostCommentsView(postId: post.id)
-                    .transition(.asymmetric(
-                        insertion: .move(edge: .top).combined(with: .opacity),
-                        removal: .opacity
-                    ))
-            }
         }
         .background(C.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay { RoundedRectangle(cornerRadius: 12).stroke(C.border, lineWidth: 0.5) }
         .animation(.spring(response: 0.28, dampingFraction: 0.9), value: showComments)
+        .sheet(isPresented: $showComments) {
+            StandardCommentsSheet(
+                target: .post(post.id),
+                initialCount: currentCommentCount,
+                onClose: {
+                    showComments = false
+                },
+                onCountChange: { count in
+                    displayedCommentCount = count
+                }
+            )
+        }
+        .onAppear {
+            displayedCommentCount = post.commentCount
+        }
+        .onChange(of: post.commentCount) { _, newValue in
+            displayedCommentCount = newValue
+        }
     }
 
     // MARK: Thumbnail
@@ -423,10 +141,22 @@ private struct PostCard: View {
                     }
                     .onTapGesture { withAnimation { spoilerRevealed = true } }
             } else {
-                if let videoURL = clipVideoURL {
+                if let storedThumbnailURL = C.mediaURL(post.thumbnailUrl) {
+                    CachedRemoteImage(
+                        url: storedThumbnailURL,
+                        targetSize: CGSize(width: 160, height: 90)
+                    ) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        Color.black.opacity(0.4)
+                    }
+                } else if let videoURL = clipVideoURL {
                     ClipFrameThumbnail(url: videoURL, seconds: Double(post.markIn))
                 } else if let fallbackURL = clipFallbackThumbnailURL {
-                    AsyncImage(url: fallbackURL) { image in
+                    CachedRemoteImage(
+                        url: fallbackURL,
+                        targetSize: CGSize(width: 160, height: 90)
+                    ) { image in
                         image.resizable().scaledToFill()
                     } placeholder: {
                         Color.black.opacity(0.4)
@@ -456,7 +186,7 @@ private struct PostCard: View {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        onSeek?(Double(post.markIn))
+                        onPlayClip?(post)
                     }
 
                 // Play overlay hint
@@ -497,8 +227,11 @@ private struct PostCard: View {
                     .fill(C.elevated)
                     .frame(width: 20, height: 20)
                     .overlay {
-                        if let img = post.user?.image, let url = URL(string: img) {
-                            AsyncImage(url: url) { i in i.resizable().scaledToFill() } placeholder: { EmptyView() }
+                        if let url = C.mediaURL(post.user?.image) {
+                            CachedRemoteImage(
+                                url: url,
+                                targetSize: CGSize(width: 20, height: 20)
+                            ) { i in i.resizable().scaledToFill() } placeholder: { EmptyView() }
                                 .clipShape(Circle())
                         } else {
                             Text(String((post.user?.name ?? "?").prefix(1)).uppercased())
@@ -521,12 +254,15 @@ private struct PostCard: View {
 
             // Caption
             if let caption = post.caption, !caption.isEmpty {
-                Text(caption)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.72))
-                    .lineLimit(3)
-                    .lineSpacing(3)
-                    .padding(.horizontal, 12).padding(.top, 6)
+                MentionText(
+                    plain: caption,
+                    html: post.captionHtml,
+                    font: .system(size: 13, weight: .medium),
+                    color: Color.white.opacity(0.72)
+                )
+                .lineLimit(3)
+                .lineSpacing(3)
+                .padding(.horizontal, 12).padding(.top, 6)
             }
 
             Spacer(minLength: 4)
@@ -555,13 +291,21 @@ private struct PostCard: View {
 
                 // Comment
                 Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { showComments.toggle() }
+                    showComments = true
                 } label: {
-                    Image(systemName: "bubble.left")
-                        .font(.system(size: 15, weight: .semibold))
-                        .frame(width: 22, height: 22, alignment: .center)
-                        .foregroundStyle(showComments ? Color.white.opacity(0.86) : Color.white.opacity(0.48))
-                        .padding(.horizontal, 10).padding(.vertical, 8)
+                    HStack(alignment: .center, spacing: 5) {
+                        Image(systemName: "bubble.left")
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 18, height: 18, alignment: .center)
+                        if let count = currentCommentCount, count > 0 {
+                            Text("\(count)")
+                                .font(.system(size: 13, weight: .semibold))
+                                .frame(height: 18, alignment: .center)
+                        }
+                    }
+                    .frame(height: 22, alignment: .center)
+                    .foregroundStyle(showComments ? Color.white.opacity(0.86) : Color.white.opacity(0.48))
+                    .padding(.horizontal, 10).padding(.vertical, 8)
                 }
                 .buttonStyle(.plain)
 
@@ -595,6 +339,10 @@ private struct PostCard: View {
             .padding(.bottom, 2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var currentCommentCount: Int? {
+        displayedCommentCount ?? post.commentCount
     }
 
     private func sharePost() {
@@ -677,7 +425,7 @@ struct PostSectionView: View {
     var previewLimit: Int? = nil
     var startsExpanded: Bool = false
     var onShowMore: ((Int) -> Void)? = nil
-    let onSeek: ((Double) -> Void)?
+    let onPlayClip: ((UserPost) -> Void)?
 
     private let pageSize = 12
 
@@ -700,7 +448,8 @@ struct PostSectionView: View {
         previewLimit: Int? = nil,
         startsExpanded: Bool = false,
         onShowMore: ((Int) -> Void)? = nil,
-        onSeek: ((Double) -> Void)? = nil
+        onSeek: ((Double) -> Void)? = nil,
+        onPlayClip: ((UserPost) -> Void)? = nil
     ) {
         self.target = target
         self.reloadToken = reloadToken
@@ -709,7 +458,13 @@ struct PostSectionView: View {
         self.previewLimit = previewLimit
         self.startsExpanded = startsExpanded
         self.onShowMore = onShowMore
-        self.onSeek = onSeek
+        if let onPlayClip {
+            self.onPlayClip = onPlayClip
+        } else if let onSeek {
+            self.onPlayClip = { post in onSeek(Double(post.markIn)) }
+        } else {
+            self.onPlayClip = nil
+        }
         _expanded = State(initialValue: startsExpanded || previewLimit != nil)
     }
 
@@ -779,7 +534,7 @@ struct PostSectionView: View {
                             .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
                         } else {
                             ForEach(visiblePosts) { post in
-                                PostCard(post: post, target: target, onSeek: onSeek, onDelete: deletePost, onLikeToggle: toggleLike)
+                                PostCard(post: post, target: target, onPlayClip: onPlayClip, onDelete: deletePost, onLikeToggle: toggleLike)
                                     .transition(.asymmetric(
                                         insertion: .move(edge: .bottom).combined(with: .opacity),
                                         removal: .opacity
@@ -897,9 +652,9 @@ struct PostSectionView: View {
             guard p.id == id else { return p }
             return UserPost(
                 id: p.id, userId: p.userId, markIn: p.markIn, markOut: p.markOut,
-                caption: p.caption, isSpoiler: p.isSpoiler, createdAt: p.createdAt,
+                caption: p.caption, captionHtml: p.captionHtml, thumbnailUrl: p.thumbnailUrl, isSpoiler: p.isSpoiler, createdAt: p.createdAt,
                 likeCount: p.likeCount + (p.myLike ? -1 : 1),
-                myLike: !p.myLike, user: p.user
+                commentCount: p.commentCount, myLike: !p.myLike, user: p.user, video: p.video, episode: p.episode
             )
         }
         Task {
@@ -910,9 +665,9 @@ struct PostSectionView: View {
                         guard p.id == id else { return p }
                         return UserPost(
                             id: p.id, userId: p.userId, markIn: p.markIn, markOut: p.markOut,
-                            caption: p.caption, isSpoiler: p.isSpoiler, createdAt: p.createdAt,
+                            caption: p.caption, captionHtml: p.captionHtml, thumbnailUrl: p.thumbnailUrl, isSpoiler: p.isSpoiler, createdAt: p.createdAt,
                             likeCount: p.likeCount + (p.myLike ? 1 : -1),
-                            myLike: !p.myLike, user: p.user
+                            commentCount: p.commentCount, myLike: !p.myLike, user: p.user, video: p.video, episode: p.episode
                         )
                     }
                 }
@@ -923,8 +678,8 @@ struct PostSectionView: View {
                     guard p.id == id else { return p }
                     return UserPost(
                         id: p.id, userId: p.userId, markIn: p.markIn, markOut: p.markOut,
-                        caption: p.caption, isSpoiler: p.isSpoiler, createdAt: p.createdAt,
-                        likeCount: resp.likeCount, myLike: resp.liked, user: p.user
+                        caption: p.caption, captionHtml: p.captionHtml, thumbnailUrl: p.thumbnailUrl, isSpoiler: p.isSpoiler, createdAt: p.createdAt,
+                        likeCount: resp.likeCount, commentCount: p.commentCount, myLike: resp.liked, user: p.user, video: p.video, episode: p.episode
                     )
                 }
             }

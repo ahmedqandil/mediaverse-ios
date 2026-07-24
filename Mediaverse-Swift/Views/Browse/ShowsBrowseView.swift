@@ -4,15 +4,25 @@ import SwiftUI
 /// Mirrors the mobile web /shows route: hero, search mode, New & Popular, and genre rows.
 struct ShowsBrowseView: View {
 
+    @EnvironmentObject private var platformConfig: PlatformConfigManager
     @State private var allShows = [ShowBrowseCard]()
     @State private var searchResults = [ShowBrowseCard]()
     @State private var query = ""
     @State private var selectedGenre = "All"
+    @State private var selectedSectionID: String? = nil
+    @State private var curationSections = [PageSection]()
+    @State private var curationListings = [AssembledListing]()
     @State private var isSearching = false
     @State private var isLoading = true
     @State private var isSearchLoading = false
+    @State private var continueItems = [ProgressItem]()
 
     private var showGenres: [String] {
+        if !curationSections.isEmpty {
+            return curationSections
+                .sorted { $0.order < $1.order }
+                .map(\.name)
+        }
         let genres = Set(
             allShows.compactMap { show in
                 show.genre?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -23,6 +33,7 @@ struct ShowsBrowseView: View {
     }
 
     private var filteredShows: [ShowBrowseCard] {
+        guard curationSections.isEmpty else { return allShows }
         guard selectedGenre != "All" else { return allShows }
         return allShows.filter { show in
             show.genre?.localizedCaseInsensitiveCompare(selectedGenre) == .orderedSame
@@ -31,6 +42,27 @@ struct ShowsBrowseView: View {
 
     private var hero: ShowBrowseCard? { filteredShows.first }
     private var newAndPopular: [ShowBrowseCard] { Array(filteredShows.prefix(16)) }
+    private var pageConfig: PlatformBrowseItem { platformConfig.browseItem(id: "shows") }
+    private var continueWatchingItems: [ProgressItem] {
+        let visibleShowIds = Set(filteredShows.map(\.id))
+        return continueItems.filter { item in
+            guard let show = item.episode?.season?.show,
+                  visibleShowIds.contains(show.id),
+                  !show.isMovie,
+                  C.normalizedContentType(show.showType) != "microdrama",
+                  C.normalizedContentType(show.showType) != "micro-drama" else {
+                return false
+            }
+            return true
+        }
+    }
+    private var curationHeroListings: [AssembledListing] {
+        curationListings.filter { $0.normalizedTemplateType == "hero" }
+    }
+
+    private var curationContentListings: [AssembledListing] {
+        curationListings.filter { $0.normalizedTemplateType != "hero" }
+    }
 
     private var genreRows: [(String, [ShowBrowseCard])] {
         guard selectedGenre == "All" else { return [] }
@@ -49,14 +81,20 @@ struct ShowsBrowseView: View {
         ZStack {
             C.bg.ignoresSafeArea()
 
-            if isLoading {
+            if !pageConfig.enabled {
+                PlatformSectionUnavailableView(item: pageConfig)
+            } else if isLoading {
                 loadingState
-            } else if allShows.isEmpty {
+            } else if allShows.isEmpty && curationListings.isEmpty {
                 emptyState(title: "No shows yet", subtitle: "Shows will appear here once published.")
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 22) {
-                        if let hero, !isSearching {
+                    VStack(alignment: .leading, spacing: C.sectionSpacing) {
+                        if !curationListings.isEmpty, !isSearching {
+                            ForEach(curationHeroListings) { listing in
+                                NativeCurationListingView(listing: listing)
+                            }
+                        } else if let hero, !isSearching {
                             ShowsHeroCard(show: hero)
                         }
 
@@ -65,37 +103,50 @@ struct ShowsBrowseView: View {
                         if isSearching {
                             searchSection
                         } else {
-                            ShowsCarousel(title: selectedGenre == "All" ? "New & Popular" : selectedGenre, shows: newAndPopular, seeAllGenre: nil)
+                            if !continueWatchingItems.isEmpty, curationListings.isEmpty {
+                                ProgressExploreCarousel(items: continueWatchingItems, kind: .shows)
+                            }
 
-                            ForEach(genreRows, id: \.0) { genre, shows in
-                                ShowsCarousel(title: genre, shows: shows, seeAllGenre: genre)
+                            if !curationListings.isEmpty {
+                                ForEach(curationContentListings) { listing in
+                                    NativeCurationListingView(listing: listing)
+                                }
+                            } else {
+                                ShowsCarousel(title: selectedGenre == "All" ? "New & Popular" : selectedGenre, shows: newAndPopular, seeAllGenre: nil)
+
+                                ForEach(genreRows, id: \.0) { genre, shows in
+                                    ShowsCarousel(title: genre, shows: shows, seeAllGenre: genre)
+                                }
                             }
                         }
                     }
                     .padding(.bottom, 28)
                 }
+                .refreshable {
+                    C.lightHaptic()
+                    await load()
+                }
             }
         }
-        .navigationTitle("TV Shows")
-        .navigationBarTitleDisplayMode(.large)
-        .task { await load() }
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            guard pageConfig.enabled else {
+                isLoading = false
+                return
+            }
+            await load()
+        }
     }
 
     private var headerAndSearch: some View {
         VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Browse")
-                    .font(.system(size: 11, weight: .semibold))
-                    .textCase(.uppercase)
-                    .foregroundStyle(C.watch)
-                Text("TV Shows & Series")
-                    .font(.title3.bold())
-                    .foregroundStyle(C.text)
+            if curationListings.isEmpty || !curationSections.isEmpty {
+                genreSubtabs
             }
 
-            genreSubtabs
-
-            HStack(spacing: 10) {
+            if curationListings.isEmpty {
+                HStack(spacing: 10) {
                 TextField("Search shows...", text: $query)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -134,6 +185,7 @@ struct ShowsBrowseView: View {
                 Capsule().stroke(Color.white.opacity(0.1), lineWidth: 1)
             }
             .clipShape(Capsule())
+            }
         }
         .padding(.horizontal, C.pagePad)
     }
@@ -150,12 +202,19 @@ struct ShowsBrowseView: View {
                                 searchResults = []
                             }
                         }
+                        if let section = curationSections.first(where: { $0.name == genre }) {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                selectedSectionID = section.id
+                            }
+                            Task { await load() }
+                        }
                     }
                 }
             }
             .padding(.horizontal, C.pagePad)
         }
         .frame(height: 32)
+        .padding(.top, 12)
         .padding(.horizontal, -C.pagePad)
     }
 
@@ -188,7 +247,7 @@ struct ShowsBrowseView: View {
             VStack(spacing: 18) {
                 RoundedRectangle(cornerRadius: 0)
                     .fill(Color.white.opacity(0.05))
-                    .aspectRatio(16/9, contentMode: .fit)
+                    .aspectRatio(C.mediaAspectRatio(forContentType: "video"), contentMode: .fit)
                     .shimmering()
                 searchLoadingGrid
             }
@@ -204,7 +263,7 @@ struct ShowsBrowseView: View {
             ForEach(0..<12, id: \.self) { _ in
                 RoundedRectangle(cornerRadius: C.cardRadius)
                     .fill(Color.white.opacity(0.06))
-                    .aspectRatio(2/3, contentMode: .fit)
+                    .aspectRatio(C.mediaAspectRatio(forContentType: "show"), contentMode: .fit)
                     .shimmering()
             }
         }
@@ -231,13 +290,50 @@ struct ShowsBrowseView: View {
 
     @MainActor
     private func load() async {
-        isLoading = true
+        if let cachedPage = CurationManager.shared.cachedPage(key: "shows", section: selectedSectionID, allowExpired: true), cachedPage.hasCurationSurface {
+            applyCurationPage(cachedPage)
+            isLoading = false
+        } else {
+            isLoading = allShows.isEmpty && curationListings.isEmpty
+        }
+
         do {
-            allShows = try await APIClient.shared.fetchShowsBrowse()
+            async let pageTask = CurationManager.shared.fetchPage(key: "shows", section: selectedSectionID)
+            async let continueTask = APIClient.shared.fetchContinueWatching()
+            let page = try await pageTask
+            applyCurationPage(page)
+            continueItems = ((try? await continueTask)?.items ?? [])
         } catch {
-            allShows = []
+            if allShows.isEmpty && curationListings.isEmpty {
+                continueItems = []
+                curationSections = []
+                curationListings = []
+                selectedSectionID = nil
+            }
         }
         isLoading = false
+    }
+
+    @MainActor
+    private func applyCurationPage(_ page: AssembledPage) {
+        let sections = page.sortedSections
+        curationSections = sections
+        if let selectedSectionID,
+           let selectedSection = sections.first(where: { $0.id == selectedSectionID }) {
+            selectedGenre = selectedSection.name
+        } else if let firstSection = sections.first {
+            selectedSectionID = firstSection.id
+            selectedGenre = firstSection.name
+        } else if selectedSectionID != nil {
+            selectedSectionID = nil
+            selectedGenre = "All"
+        }
+        curationListings = page.listings(forSectionID: selectedSectionID)
+        let sourceItems = curationListings.isEmpty ? page.curationItems : curationListings.flatMap(\.items)
+        allShows = sourceItems
+            .filter { $0.entityType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "show" }
+            .map(\.asShowBrowseCard)
+            .uniqueByID()
     }
 
     @MainActor
@@ -265,17 +361,19 @@ private struct ShowsHeroCard: View {
 
     var body: some View {
         NavigationLink(value: AppRoute.show(show.id)) {
-            ZStack(alignment: .bottomLeading) {
-                heroImage
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(16/9, contentMode: .fill)
-                    .clipped()
+            VStack(alignment: .leading, spacing: 0) {
+                ZStack(alignment: .bottomLeading) {
+                    heroImage
+                        .frame(maxWidth: .infinity)
+                        .frame(height: C.heroHeight)
+                        .clipped()
 
-                LinearGradient(
-                    colors: [.black.opacity(0.05), .black.opacity(0.9)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+                    LinearGradient(
+                        colors: [.black.opacity(0.05), .black.opacity(0.9)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
 
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Featured Series")
@@ -285,7 +383,7 @@ private struct ShowsHeroCard: View {
 
                     Text(show.title)
                         .font(.system(size: 28, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(C.text)
                         .lineLimit(2)
 
                     HStack(spacing: 8) {
@@ -293,12 +391,12 @@ private struct ShowsHeroCard: View {
                         if show.genre != nil, let language = show.language { Text("."); Text(language.uppercased()) }
                     }
                     .font(.subheadline)
-                    .foregroundStyle(Color.white.opacity(0.72))
+                    .foregroundStyle(C.textMuted)
 
                     if let description = show.description, !description.isEmpty {
                         Text(description)
                             .font(.caption)
-                            .foregroundStyle(Color.white.opacity(0.62))
+                            .foregroundStyle(C.textMuted)
                             .lineLimit(2)
                     }
 
@@ -321,9 +419,10 @@ private struct ShowsHeroCard: View {
                     }
                 }
                 .padding(.horizontal, C.pagePad)
-                .padding(.bottom, 20)
+                .padding(.top, 12)
+                .padding(.bottom, C.pagePad)
             }
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -332,7 +431,7 @@ private struct ShowsHeroCard: View {
     @ViewBuilder
     private var heroImage: some View {
         if let imageURL = C.mediaURL(show.bannerUrl ?? show.coverUrl) {
-            AsyncImage(url: imageURL) { image in
+            CachedRemoteImage(url: imageURL, targetSize: CGSize(width: UIScreen.main.bounds.width, height: C.heroHeight)) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 fallback
@@ -356,8 +455,12 @@ private struct ShowsCarousel: View {
     let shows: [ShowBrowseCard]
     let seeAllGenre: String?
 
+    private var uniqueShows: [ShowBrowseCard] {
+        shows.uniqueByID()
+    }
+
     var body: some View {
-        if !shows.isEmpty {
+        if !uniqueShows.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text(title)
@@ -373,8 +476,8 @@ private struct ShowsCarousel: View {
                 .padding(.horizontal, C.pagePad)
 
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(shows) { show in
+                    HStack(spacing: CarouselCardMetrics.spacing) {
+                        ForEach(uniqueShows) { show in
                             NavigationLink(value: AppRoute.show(show.id)) {
                                 ShowPosterCard(show: show)
                             }
@@ -388,6 +491,15 @@ private struct ShowsCarousel: View {
     }
 }
 
+private extension Array where Element: Identifiable, Element.ID == String {
+    func uniqueByID() -> [Element] {
+        var seen = Set<String>()
+        return filter { item in
+            seen.insert(item.id).inserted
+        }
+    }
+}
+
 struct ShowPosterCard: View {
     let show: ShowBrowseCard
 
@@ -395,7 +507,8 @@ struct ShowPosterCard: View {
         VStack(alignment: .leading, spacing: 7) {
             ZStack(alignment: .topTrailing) {
                 posterImage
-                    .frame(width: 116, height: 174)
+                    .frame(width: CarouselCardMetrics.posterWidth)
+                    .aspectRatio(C.mediaAspectRatio(forContentType: "show"), contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: C.cardRadius - 2))
                     .clipped()
 
@@ -415,28 +528,32 @@ struct ShowPosterCard: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             }
 
-            Text(show.title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(C.text)
-                .lineLimit(2)
-                .frame(width: 116, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(show.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(C.text)
+                    .lineLimit(2)
+                    .frame(width: CarouselCardMetrics.posterWidth, alignment: .leading)
 
-            HStack(spacing: 4) {
-                if let year = show.productionYear { Text(year) }
-                if show.productionYear != nil, show.seasonCount > 0 { Text(".") }
-                if show.seasonCount > 0 { Text("\(show.seasonCount) \(show.seasonCount == 1 ? "season" : "seasons")") }
+                HStack(spacing: 4) {
+                    if let year = show.productionYear { Text(year) }
+                    if show.productionYear != nil, show.seasonCount > 0 { Text(".") }
+                    if show.seasonCount > 0 { Text("\(show.seasonCount) \(show.seasonCount == 1 ? "season" : "seasons")") }
+                }
+                .font(.caption2)
+                .foregroundStyle(C.textMuted)
+                .lineLimit(1)
+                .frame(width: CarouselCardMetrics.posterWidth, height: CarouselCardMetrics.metaHeight, alignment: .leading)
             }
-            .font(.caption2)
-            .foregroundStyle(C.textMuted)
-            .frame(width: 116, alignment: .leading)
+            .frame(width: CarouselCardMetrics.posterWidth, height: CarouselCardMetrics.textBlockHeight, alignment: .topLeading)
         }
-        .frame(width: 116, alignment: .leading)
+        .frame(width: CarouselCardMetrics.posterWidth, alignment: .leading)
     }
 
     @ViewBuilder
     private var posterImage: some View {
         if let imageURL = C.mediaURL(show.coverUrl) {
-            AsyncImage(url: imageURL) { image in
+            CachedRemoteImage(url: imageURL, targetSize: CGSize(width: CarouselCardMetrics.posterWidth, height: CarouselCardMetrics.height(width: CarouselCardMetrics.posterWidth, contentType: "show"))) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 fallbackPoster
@@ -466,11 +583,16 @@ struct GenrePill: View {
             Text(label)
                 .font(.caption.weight(selected ? .semibold : .medium))
                 .foregroundStyle(selected ? Color.black : C.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
                 .padding(.horizontal, 14)
-                .padding(.vertical, 7)
+                .frame(minWidth: C.tabPillMinWidth)
+                .frame(height: C.tabPillHeight)
                 .background(selected ? C.watch : Color.white.opacity(0.08))
                 .clipShape(Capsule())
         }
+        .buttonStyle(.plain)
+        .animation(.easeInOut(duration: 0.18), value: selected)
     }
 }
 

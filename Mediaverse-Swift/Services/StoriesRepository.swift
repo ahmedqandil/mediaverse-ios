@@ -9,14 +9,31 @@ final class StoriesRepository: ObservableObject {
     private let client: StoriesAPIClient
     private var lastRefreshAt: Date?
     private let cacheTTL: TimeInterval = 30
-    private let cacheKey = "westreem.stories.cachedGroups"
+    private var followChangesTask: Task<Void, Never>?
+    private var cacheSaveTask: Task<Void, Never>?
+    private var markViewedFlushTask: Task<Void, Never>?
+    private var pendingViewedStoryIds = Set<String>()
 
     init(client: StoriesAPIClient = .shared) {
         self.client = client
-        self.groups = Self.loadCachedGroups(cacheKey: cacheKey)
+        self.groups = SessionStorage.token == nil ? [] : StoryFeedDiskCache.loadCachedGroups()
+        observeFollowChanges()
+    }
+
+    deinit {
+        followChangesTask?.cancel()
+        cacheSaveTask?.cancel()
+        markViewedFlushTask?.cancel()
     }
 
     func refresh(force: Bool = false) async {
+        guard SessionStorage.token != nil else {
+            groups = []
+            lastRefreshAt = nil
+            lastError = nil
+            return
+        }
+
         if !force, let lastRefreshAt, Date().timeIntervalSince(lastRefreshAt) < cacheTTL, !groups.isEmpty {
             return
         }
@@ -25,32 +42,72 @@ final class StoriesRepository: ObservableObject {
         defer { isLoading = false }
 
         do {
-            let fetched = try await client.fetchGroups()
+            let fetched = try await client.fetchGroups(myChannelId: activeStoryChannelId)
             groups = fetched.filter { !$0.stories.isEmpty }
             saveCachedGroups()
             lastRefreshAt = Date()
             lastError = nil
         } catch {
             if groups.isEmpty {
-                groups = Self.loadCachedGroups(cacheKey: cacheKey)
+                groups = StoryFeedDiskCache.loadCachedGroups()
             }
             lastError = error
         }
     }
 
+    private var activeStoryChannelId: String? {
+        guard let activeContext = SessionStorage.activeContext else { return nil }
+        if let channelId = activeContext.channelId, !channelId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return channelId
+        }
+        return activeContext.type == "channel" ? activeContext.id : nil
+    }
+
+    private func observeFollowChanges() {
+        followChangesTask = Task { [weak self] in
+            for await _ in NotificationCenter.default.notifications(named: .userFollowChanged) {
+                await self?.refresh(force: true)
+            }
+        }
+    }
+
     func markViewed(storyId: String) async {
         applySeen(storyId: storyId)
+        enqueueMarkViewed(storyId: storyId)
+    }
+
+    func toggleLike(storyId: String) async {
+        guard let previous = storyLikeState(storyId: storyId) else { return }
+        let optimisticLiked = !previous.userLiked
+        applyLike(storyId: storyId, liked: optimisticLiked, likeCount: max(0, previous.likeCount + (optimisticLiked ? 1 : -1)))
+
         do {
-            try await client.markViewed(storyId: storyId)
-            saveCachedGroups()
+            let response = try await client.toggleLike(storyId: storyId)
+            applyLike(
+                storyId: storyId,
+                liked: response.liked ?? optimisticLiked,
+                likeCount: response.likeCount ?? max(0, previous.likeCount + (optimisticLiked ? 1 : -1))
+            )
+            lastError = nil
+        } catch StoriesError.notFound {
+            removeStory(id: storyId)
             lastError = nil
         } catch {
+            applyLike(storyId: storyId, liked: previous.userLiked, likeCount: previous.likeCount)
             lastError = error
         }
     }
 
     func deleteStory(id: String) async throws {
-        try await client.deleteStory(id: id)
+        do {
+            try await client.deleteStory(id: id)
+            removeStory(id: id)
+        } catch StoriesError.notFound {
+            removeStory(id: id)
+        }
+    }
+
+    func removeStory(id: String) {
         for index in groups.indices {
             groups[index].stories.removeAll { $0.id == id }
             groups[index].hasUnseen = groups[index].stories.contains { !$0.seen }
@@ -64,21 +121,69 @@ final class StoriesRepository: ObservableObject {
             guard let storyIndex = groups[groupIndex].stories.firstIndex(where: { $0.id == storyId }) else { continue }
             groups[groupIndex].stories[storyIndex].seen = true
             groups[groupIndex].hasUnseen = groups[groupIndex].stories.contains { !$0.seen }
+            return
+        }
+    }
+
+    private func storyLikeState(storyId: String) -> (userLiked: Bool, likeCount: Int)? {
+        for group in groups {
+            if let story = group.stories.first(where: { $0.id == storyId }) {
+                return (story.userLiked, story.likeCount)
+            }
+        }
+        return nil
+    }
+
+    private func applyLike(storyId: String, liked: Bool, likeCount: Int) {
+        for groupIndex in groups.indices {
+            guard let storyIndex = groups[groupIndex].stories.firstIndex(where: { $0.id == storyId }) else { continue }
+            groups[groupIndex].stories[storyIndex].userLiked = liked
+            groups[groupIndex].stories[storyIndex].likeCount = max(0, likeCount)
             saveCachedGroups()
             return
         }
     }
 
     private func saveCachedGroups() {
-        guard let data = try? JSONEncoder().encode(groups) else { return }
-        UserDefaults.standard.set(data, forKey: cacheKey)
+        let snapshot = groups
+        cacheSaveTask?.cancel()
+        cacheSaveTask = Task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            try? await StoryFeedDiskCache.shared.store(snapshot)
+        }
     }
 
-    private static func loadCachedGroups(cacheKey: String) -> [StoryGroup] {
-        guard let data = UserDefaults.standard.data(forKey: cacheKey),
-              let decoded = try? JSONDecoder().decode([StoryGroup].self, from: data) else {
-            return []
+    private func enqueueMarkViewed(storyId: String) {
+        pendingViewedStoryIds.insert(storyId)
+        guard markViewedFlushTask == nil else { return }
+        markViewedFlushTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.flushPendingViewedStories()
         }
-        return decoded.filter { !$0.stories.isEmpty }
+    }
+
+    private func flushPendingViewedStories() async {
+        let storyIds = pendingViewedStoryIds
+        pendingViewedStoryIds.removeAll()
+        markViewedFlushTask = nil
+
+        for storyId in storyIds {
+            do {
+                try await client.markViewed(storyId: storyId)
+                lastError = nil
+            } catch StoriesError.notFound {
+                removeStory(id: storyId)
+                lastError = nil
+            } catch {
+                pendingViewedStoryIds.insert(storyId)
+                lastError = error
+            }
+        }
+
+        if !pendingViewedStoryIds.isEmpty {
+            enqueueMarkViewed(storyId: pendingViewedStoryIds.removeFirst())
+        }
     }
 }

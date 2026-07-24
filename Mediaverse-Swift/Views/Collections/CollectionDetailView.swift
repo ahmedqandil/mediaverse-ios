@@ -8,6 +8,7 @@ struct CollectionDetailView: View {
     @State private var error = false
     @State private var following = false
     @State private var togglingFollow = false
+    @State private var showCommentsSheet = false
 
     private var isShows: Bool { collection?.type == "shows" }
     private var isShorts: Bool { collection?.type == "shorts" }
@@ -36,6 +37,11 @@ struct CollectionDetailView: View {
         .navigationTitle(collection?.title ?? "Collection")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
+        .sheet(isPresented: $showCommentsSheet) {
+            StandardCommentsSheet(target: .collection(collectionId)) {
+                showCommentsSheet = false
+            }
+        }
     }
 
     private func content(_ col: CollectionDetail) -> some View {
@@ -78,20 +84,50 @@ struct CollectionDetailView: View {
                 }
 
                 if col.visibility == "public" {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 10) {
                         Text("Community Discussion")
                             .font(.headline)
                             .foregroundStyle(C.text)
-                        CommentThreadView(
-                            target: .collection(col.id),
-                            showsHeader: false
-                        )
+                        Button {
+                            showCommentsSheet = true
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "bubble.left.and.bubble.right")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(C.watch)
+                                    .frame(width: 34, height: 34)
+                                    .background(C.elevated, in: Circle())
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Open comments")
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundStyle(C.text)
+                                    Text("Join the discussion")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(C.textMuted)
+                                }
+
+                                Spacer()
+
+                                Image(systemName: "chevron.up")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(C.textMuted)
+                            }
+                            .padding(12)
+                            .background(C.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(C.border, lineWidth: 1)
+                            }
+                        }
+                        .buttonStyle(.plain)
                     }
                     .padding(.horizontal, C.pagePad)
                     .padding(.top, 34)
                 }
 
-                Color.clear.frame(height: 44)
+                Color.clear.frame(height: C.bottomMenuClearance)
             }
         }
     }
@@ -169,6 +205,10 @@ struct CollectionDetailView: View {
                     item: item,
                     index: index,
                     collectionType: col.type,
+                    shortIDs: col.items.compactMap { collectionItem in
+                        guard collectionItem.video?.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "short" else { return nil }
+                        return collectionItem.video?.id
+                    },
                     isOwner: col.isOwner,
                     onRemove: { Task { await remove(item) } }
                 )
@@ -277,6 +317,7 @@ private struct CollectionItemCard: View {
     let item: CollectionDetailItem
     let index: Int
     let collectionType: String
+    let shortIDs: [String]
     let isOwner: Bool
     let onRemove: () -> Void
 
@@ -313,6 +354,11 @@ private struct CollectionItemCard: View {
             NavigationLink(value: AppRoute.media(id: video.id, type: video.type)) {
                 videoCard(video)
             }
+            .simultaneousGesture(TapGesture().onEnded {
+                if video.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "short" {
+                    ShortNavigationCache.shared.seedIDs(shortIDs)
+                }
+            })
             .buttonStyle(.plain)
         }
     }
@@ -320,12 +366,15 @@ private struct CollectionItemCard: View {
     private func showCard(_ show: CollectionDetailShow) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             ZStack(alignment: .topLeading) {
-                AsyncImage(url: C.mediaURL(show.coverUrl)) { img in
+                CachedRemoteImage(
+                    url: C.mediaURL(show.coverUrl),
+                    targetSize: CGSize(width: 220, height: 330)
+                ) { img in
                     img.resizable().scaledToFill()
                 } placeholder: {
                     Color.white.opacity(0.06)
                 }
-                .aspectRatio(2/3, contentMode: .fit)
+                .aspectRatio(C.mediaAspectRatio(forContentType: "show"), contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .clipped()
 
@@ -348,12 +397,15 @@ private struct CollectionItemCard: View {
     private func videoCard(_ video: CollectionDetailVideo) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             ZStack(alignment: .topLeading) {
-                AsyncImage(url: C.mediaURL(video.thumbnailUrl)) { img in
+                CachedRemoteImage(
+                    url: C.mediaURL(video.thumbnailUrl),
+                    targetSize: CGSize(width: 220, height: video.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "short" ? 391 : 124)
+                ) { img in
                     img.resizable().scaledToFill()
                 } placeholder: {
                     Color.white.opacity(0.06)
                 }
-                .aspectRatio(isShorts ? 9/16 : 16/9, contentMode: .fit)
+                .aspectRatio(C.mediaAspectRatio(forContentType: video.type), contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .clipped()
 
@@ -473,12 +525,16 @@ private struct AddCollectionItemsPanel: View {
 
     private func addShowRow(_ show: SearchResultShow) -> some View {
         HStack(spacing: 10) {
-            AsyncImage(url: C.mediaURL(show.coverUrl)) { img in
+            CachedRemoteImage(
+                url: C.mediaURL(show.coverUrl),
+                targetSize: CGSize(width: 36, height: 54)
+            ) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 Color.white.opacity(0.06)
             }
-            .frame(width: 36, height: 54)
+            .frame(width: 36)
+            .aspectRatio(C.mediaAspectRatio(forContentType: "show"), contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 5))
 
             VStack(alignment: .leading, spacing: 2) {
@@ -494,12 +550,16 @@ private struct AddCollectionItemsPanel: View {
 
     private func addVideoRow(_ video: SearchResultVideo) -> some View {
         HStack(spacing: 10) {
-            AsyncImage(url: C.mediaURL(video.thumbnailUrl)) { img in
+            CachedRemoteImage(
+                url: C.mediaURL(video.thumbnailUrl),
+                targetSize: CGSize(width: isShorts ? 34 : 64, height: isShorts ? 60 : 36)
+            ) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 Color.white.opacity(0.06)
             }
-            .frame(width: isShorts ? 34 : 64, height: isShorts ? 54 : 36)
+            .frame(width: isShorts ? 34 : 64)
+            .aspectRatio(C.mediaAspectRatio(forContentType: video.type), contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 5))
 
             VStack(alignment: .leading, spacing: 2) {

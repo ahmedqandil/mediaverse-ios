@@ -4,11 +4,39 @@ import SwiftUI
 /// Mirrors web /microdramas: header, hero, trending/new rows, genre rows, and 9:16 cards.
 struct MicrodramasBrowseView: View {
 
+    @EnvironmentObject private var platformConfig: PlatformConfigManager
+    @State private var selectedSectionID: String? = nil
+    @State private var curationSections = [PageSection]()
     @State private var trending = [MicrodramaListShow]()
     @State private var newRels = [MicrodramaListShow]()
+    @State private var curationListings = [AssembledListing]()
+    @State private var continueItems = [ProgressItem]()
     @State private var isLoading = true
+    private var pageConfig: PlatformBrowseItem { platformConfig.browseItem(id: "microdramas") }
 
     private var hero: MicrodramaListShow? { trending.first ?? newRels.first }
+    private var allMicrodramas: [MicrodramaListShow] {
+        var seen = Set<String>()
+        return (trending + newRels).filter { seen.insert($0.id).inserted }
+    }
+    private var continueWatchingItems: [ProgressItem] {
+        let showIds = Set(allMicrodramas.map(\.id))
+        return continueItems.filter { item in
+            guard let show = item.episode?.season?.show,
+                  showIds.contains(show.id) else {
+                return false
+            }
+            let type = C.normalizedContentType(show.showType)
+            return type == "microdrama" || type == "micro-drama" || type == "microdramas" || type == "micro-dramas"
+        }
+    }
+    private var curationHeroListings: [AssembledListing] {
+        curationListings.filter { $0.normalizedTemplateType == "hero" }
+    }
+
+    private var curationContentListings: [AssembledListing] {
+        curationListings.filter { $0.normalizedTemplateType != "hero" }
+    }
 
     private var genreMap: [(String, [MicrodramaListShow])] {
         var map = [String: [MicrodramaListShow]]()
@@ -32,49 +60,80 @@ struct MicrodramasBrowseView: View {
     var body: some View {
         ZStack {
             C.bg.ignoresSafeArea()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 26) {
-                    pageHeader
-
+            if !pageConfig.enabled {
+                PlatformSectionUnavailableView(item: pageConfig)
+            } else {
+                ScrollView {
+                VStack(alignment: .leading, spacing: C.sectionSpacing) {
                     if isLoading {
                         loadingContent
-                    } else if trending.isEmpty && newRels.isEmpty {
+                    } else if trending.isEmpty && newRels.isEmpty && curationListings.isEmpty {
                         emptyState
                     } else {
-                        if let hero {
-                            MicrodramaHero(show: hero)
-                        }
-                        MicrodramaCarousel(title: "Trending", shows: trending, showsIcon: "flame.fill")
-                        MicrodramaCarousel(title: "New Releases", shows: newRels, showsIcon: "sparkles")
-                        ForEach(genreMap, id: \.0) { genre, shows in
-                            MicrodramaCarousel(title: genre, shows: shows, showsIcon: nil)
+                        if !curationListings.isEmpty {
+                            ForEach(curationHeroListings) { listing in
+                                NativeCurationListingView(listing: listing)
+                            }
+
+                            if !curationSections.isEmpty {
+                                sectionTabs
+                            }
+
+                            ForEach(curationContentListings) { listing in
+                                NativeCurationListingView(listing: listing)
+                            }
+                            if !continueWatchingItems.isEmpty {
+                                ProgressExploreCarousel(items: continueWatchingItems, kind: .microdramas)
+                            }
+                        } else {
+                            if let hero {
+                                MicrodramaHero(show: hero)
+                            }
+                            if !continueWatchingItems.isEmpty {
+                                ProgressExploreCarousel(items: continueWatchingItems, kind: .microdramas)
+                            }
+                            MicrodramaCarousel(title: "Trending", shows: trending, showsIcon: "flame.fill")
+                            MicrodramaCarousel(title: "New Releases", shows: newRels, showsIcon: "sparkles")
+                            ForEach(genreMap, id: \.0) { genre, shows in
+                                MicrodramaCarousel(title: genre, shows: shows, showsIcon: nil)
+                            }
                         }
                     }
                 }
                 .padding(.bottom, 28)
             }
+            .refreshable {
+                C.lightHaptic()
+                await load()
+            }
+            }
         }
-        .navigationTitle("Microdramas")
-        .navigationBarTitleDisplayMode(.large)
-        .task { await load() }
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            guard pageConfig.enabled else {
+                isLoading = false
+                return
+            }
+            await load()
+        }
     }
 
-    private var pageHeader: some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private var sectionTabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                Text("Microdramas")
-                    .font(.title2.bold())
-                    .foregroundStyle(C.text)
-                Image(systemName: "iphone")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(C.watch)
+                ForEach(curationSections) { section in
+                    GenrePill(label: section.name, selected: selectedSectionID == section.id) {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            selectedSectionID = section.id
+                        }
+                        Task { await load() }
+                    }
+                }
             }
-            Text("Short vertical series - swipe your way through")
-                .font(.subheadline)
-                .foregroundStyle(C.textMuted)
+            .padding(.horizontal, C.pagePad)
         }
-        .padding(.horizontal, C.pagePad)
-        .padding(.top, 8)
+        .padding(.top, 12)
     }
 
     private var loadingContent: some View {
@@ -98,7 +157,8 @@ struct MicrodramasBrowseView: View {
                             ForEach(0..<5, id: \.self) { _ in
                                 RoundedRectangle(cornerRadius: C.cardRadius)
                                     .fill(Color.white.opacity(0.05))
-                                    .frame(width: 110, height: 196)
+                                    .frame(width: CarouselCardMetrics.posterWidth)
+                                    .aspectRatio(C.mediaAspectRatio(forContentType: "microdrama"), contentMode: .fit)
                                     .shimmering()
                             }
                         }
@@ -128,13 +188,62 @@ struct MicrodramasBrowseView: View {
 
     @MainActor
     private func load() async {
-        isLoading = true
-        async let t = APIClient.shared.fetchMicrodramas(section: "trending", limit: 20)
-        async let n = APIClient.shared.fetchMicrodramas(section: "new", limit: 20)
-        let (tr, nr) = (try? await t, try? await n)
-        trending = tr ?? []
-        newRels = nr ?? []
+        if let cachedPage = CurationManager.shared.cachedPage(key: "microdramas", section: selectedSectionID, allowExpired: true), cachedPage.hasCurationSurface {
+            applyCurationPage(cachedPage)
+            isLoading = false
+        } else {
+            isLoading = trending.isEmpty && newRels.isEmpty && curationListings.isEmpty
+        }
+
+        async let c = APIClient.shared.fetchContinueWatching()
+
+        if let page = try? await CurationManager.shared.fetchPage(key: "microdramas", section: selectedSectionID), page.hasCurationSurface {
+            applyCurationPage(page)
+        } else if trending.isEmpty && newRels.isEmpty {
+            curationSections = []
+            selectedSectionID = nil
+            curationListings = []
+            async let t = APIClient.shared.fetchMicrodramas(section: "trending", limit: 20)
+            async let n = APIClient.shared.fetchMicrodramas(section: "new", limit: 20)
+            let (tr, nr) = (try? await t, try? await n)
+            trending = tr ?? []
+            newRels = nr ?? []
+        }
+
+        continueItems = (try? await c)?.items ?? continueItems
         isLoading = false
+    }
+
+    @MainActor
+    private func applyCurationPage(_ page: AssembledPage) {
+        let sections = page.sortedSections
+        curationSections = sections
+        if let selectedSectionID,
+           !sections.contains(where: { $0.id == selectedSectionID }) {
+            self.selectedSectionID = sections.first?.id
+        } else if selectedSectionID == nil {
+            selectedSectionID = sections.first?.id
+        }
+        curationListings = page.listings(forSectionID: selectedSectionID)
+        let sourceItems = curationListings.isEmpty ? page.curationItems : curationListings.flatMap(\.items)
+        let microdramas = sourceItems
+            .filter { item in
+                let type = item.entityType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                return type == "show" || type == "microdrama"
+            }
+            .map(\.asMicrodramaListShow)
+            .uniqueByID()
+        trending = microdramas
+        newRels = []
+    }
+}
+
+private extension Array where Element: Identifiable, Element.ID == String {
+    func uniqueByID() -> [Element] {
+        var seen = Set<String>()
+        return filter { item in
+            seen.insert(item.id).inserted
+        }
     }
 }
 
@@ -142,17 +251,19 @@ private struct MicrodramaHero: View {
     let show: MicrodramaListShow
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            heroImage
-                .frame(maxWidth: .infinity)
-                .frame(height: 256)
-                .clipped()
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .bottomLeading) {
+                heroImage
+                    .frame(maxWidth: .infinity)
+                    .frame(height: C.heroHeight)
+                    .clipped()
 
-            LinearGradient(
-                colors: [.clear, .black.opacity(0.42), .black.opacity(0.96)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.42), .black.opacity(0.96)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
 
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 6) {
@@ -178,13 +289,13 @@ private struct MicrodramaHero: View {
 
                 Text(show.title)
                     .font(.title2.bold())
-                    .foregroundStyle(.white)
+                    .foregroundStyle(C.text)
                     .lineLimit(2)
 
                 if let description = show.description, !description.isEmpty {
                     Text(description)
                         .font(.caption)
-                        .foregroundStyle(Color.white.opacity(0.62))
+                        .foregroundStyle(C.textMuted)
                         .lineLimit(2)
                 }
 
@@ -212,16 +323,18 @@ private struct MicrodramaHero: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(C.pagePad)
+            .padding(.horizontal, C.pagePad)
+            .padding(.top, 12)
+            .padding(.bottom, C.pagePad)
         }
-        .clipShape(RoundedRectangle(cornerRadius: C.cardRadius))
-        .padding(.horizontal, C.pagePad)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder
     private var heroImage: some View {
         if let imageURL = C.mediaURL(show.bannerUrl ?? show.coverUrl) {
-            AsyncImage(url: imageURL) { image in
+            CachedRemoteImage(url: imageURL, targetSize: CGSize(width: UIScreen.main.bounds.width, height: C.heroHeight)) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 fallback
@@ -261,7 +374,7 @@ private struct MicrodramaCarousel: View {
                 .padding(.horizontal, C.pagePad)
 
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
+                    HStack(spacing: CarouselCardMetrics.spacing) {
                         ForEach(shows) { show in
                             NavigationLink(value: AppRoute.microdramaShow(show.id)) {
                                 MicrodramaCard(show: show)
@@ -283,7 +396,8 @@ private struct MicrodramaCard: View {
         VStack(alignment: .leading, spacing: 7) {
             ZStack(alignment: .bottomLeading) {
                 posterImage
-                    .frame(width: 110, height: 196)
+                    .frame(width: CarouselCardMetrics.posterWidth)
+                    .aspectRatio(C.mediaAspectRatio(forContentType: "microdrama"), contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: C.cardRadius - 2))
                     .clipped()
 
@@ -306,29 +420,35 @@ private struct MicrodramaCard: View {
                         .padding(7)
                 }
             }
-            .frame(width: 110, height: 196)
+            .frame(width: CarouselCardMetrics.posterWidth)
+            .aspectRatio(C.mediaAspectRatio(forContentType: "microdrama"), contentMode: .fit)
 
-            Text(show.title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(C.text)
-                .lineLimit(2)
-                .frame(width: 110, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(show.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(C.text)
+                    .lineLimit(2)
+                    .frame(width: CarouselCardMetrics.posterWidth, alignment: .leading)
 
-            if let genre = show.genre {
-                Text(genre)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(C.textMuted)
-                    .lineLimit(1)
-                    .frame(width: 110, alignment: .leading)
+                if let genre = show.genre {
+                    Text(genre)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(C.textMuted)
+                        .lineLimit(1)
+                        .frame(width: CarouselCardMetrics.posterWidth, height: CarouselCardMetrics.metaHeight, alignment: .leading)
+                } else {
+                    Color.clear.frame(width: CarouselCardMetrics.posterWidth, height: CarouselCardMetrics.metaHeight)
+                }
             }
+            .frame(width: CarouselCardMetrics.posterWidth, height: CarouselCardMetrics.textBlockHeight, alignment: .topLeading)
         }
-        .frame(width: 110, alignment: .leading)
+        .frame(width: CarouselCardMetrics.posterWidth, alignment: .leading)
     }
 
     @ViewBuilder
     private var posterImage: some View {
         if let imageURL = C.mediaURL(show.coverUrl ?? show.bannerUrl) {
-            AsyncImage(url: imageURL) { image in
+            CachedRemoteImage(url: imageURL, targetSize: CGSize(width: CarouselCardMetrics.posterWidth, height: CarouselCardMetrics.height(width: CarouselCardMetrics.posterWidth, contentType: "microdrama"))) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 fallbackPoster

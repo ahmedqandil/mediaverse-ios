@@ -6,9 +6,13 @@ struct ContextSwitcherView: View {
 
     @Binding var contexts: [ActiveContext]
     @Binding var active: ActiveContext?
+    let user: ContextUser?
+    let notificationCounts: [String: Int]
     let onSwitch: (ActiveContext) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var switchingContextKey: String?
+    @State private var errorMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -23,12 +27,24 @@ struct ContextSwitcherView: View {
 
                         Divider().background(C.border)
 
+                        if let errorMessage {
+                            Text(errorMessage)
+                                .font(.footnote.weight(.medium))
+                                .foregroundStyle(.red)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, C.pagePad)
+                                .padding(.vertical, 10)
+                        }
+
                         // Context list
                         LazyVStack(spacing: 0) {
-                            ForEach(contexts) { ctx in
+                            ForEach(contexts, id: \.switcherKey) { ctx in
                                 ContextRow(
                                     ctx: ctx,
-                                    isActive: ctx.id == active?.id && ctx.type == active?.type
+                                    user: user,
+                                    isActive: ctx.id == active?.id && ctx.type == active?.type,
+                                    isSwitching: switchingContextKey == ctx.switcherKey,
+                                    unreadCount: unreadNotificationCount(for: ctx)
                                 ) {
                                     Task { await switchTo(ctx) }
                                 }
@@ -54,7 +70,7 @@ struct ContextSwitcherView: View {
 
     private func activeHeader(_ ctx: ActiveContext) -> some View {
         HStack(spacing: 12) {
-            contextIcon(ctx.type)
+            ContextAvatar(ctx: ctx, user: user, size: 44)
                 .frame(width: 44, height: 44)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -97,14 +113,141 @@ struct ContextSwitcherView: View {
     // MARK: - Switch
 
     private func switchTo(_ ctx: ActiveContext) async {
+        guard switchingContextKey == nil else { return }
+        switchingContextKey = ctx.switcherKey
+        errorMessage = nil
+        defer { switchingContextKey = nil }
+
         do {
-            let resp = try await APIClient.shared.switchContext(ctx)
-            if let newCtx = resp.context ?? (resp.ok ? ctx : nil) {
-                active = newCtx
-                onSwitch(newCtx)
-                dismiss()
+            let response = try await APIClient.shared.switchContext(ctx)
+            guard response.ok else {
+                throw ContextSwitchError.failed
             }
-        } catch {}
+
+            let confirmedContext = response.context ?? ctx
+            if let contextsResponse = try? await APIClient.shared.fetchContexts() {
+                contexts = contextsResponse.contexts
+                active = context(contextsResponse.active, matches: confirmedContext)
+                    ? contextsResponse.active
+                    : contexts.first(where: { context($0, matches: confirmedContext) }) ?? confirmedContext
+            } else {
+                active = confirmedContext
+            }
+
+            let switchedContext = active ?? confirmedContext
+            UploadOptionsCache.clear()
+            UploadOptionsCache.warmContexts()
+            C.lightHaptic()
+            onSwitch(switchedContext)
+            NotificationCenter.default.post(name: .appContextDidChange, object: switchedContext)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func context(_ lhs: ActiveContext, matches rhs: ActiveContext) -> Bool {
+        lhs.type == rhs.type && lhs.id == rhs.id
+    }
+
+    private func unreadNotificationCount(for ctx: ActiveContext) -> Int {
+        let directKeys = ctx.notificationCountKeys
+        for key in directKeys {
+            if let value = notificationCounts[key], value > 0 {
+                return value
+            }
+        }
+
+        if let active, context(ctx, matches: active) {
+            for key in ["unread", "unreadCount", "unread_count", "totalUnread", "total_unread", "notificationsUnread", "notifications_unread"] {
+                if let value = notificationCounts[key], value > 0 {
+                    return value
+                }
+            }
+        }
+
+        return 0
+    }
+}
+
+private extension ActiveContext {
+    var switcherKey: String {
+        [type, id, channelId ?? ""].joined(separator: ":")
+    }
+
+    var notificationCountKeys: [String] {
+        var keys = [
+            switcherKey,
+            "\(type):\(id)",
+            "\(type)_\(id)",
+            "\(type).\(id)",
+            id
+        ]
+
+        if let channelId, channelId != id {
+            keys.append(contentsOf: [
+                "\(type):\(channelId)",
+                "\(type)_\(channelId)",
+                "\(type).\(channelId)",
+                channelId
+            ])
+        }
+
+        return keys
+    }
+}
+
+// MARK: - Context avatar
+
+private struct ContextAvatar: View {
+    let ctx: ActiveContext
+    let user: ContextUser?
+    let size: CGFloat
+
+    private var imageURL: URL? {
+        if let url = C.mediaURL(ctx.avatarUrl ?? ctx.image) {
+            return url
+        }
+        if ctx.type == "user", let url = C.mediaURL(user?.image) {
+            return url
+        }
+        return nil
+    }
+
+    var body: some View {
+        ZStack {
+            if let imageURL {
+                CachedRemoteImage(
+                    url: imageURL,
+                    targetSize: CGSize(width: size, height: size)
+                ) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    fallbackIcon
+                }
+            } else {
+                fallbackIcon
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: ctx.type == "channel" || ctx.type == "user" ? size / 2 : 10))
+    }
+
+    private var fallbackIcon: some View {
+        let (iconName, color): (String, Color) = {
+            switch ctx.type {
+            case "admin": return ("shield.fill", Color(hex: "#EF4444"))
+            case "network": return ("building.2.fill", Color(hex: "#F59E0B"))
+            case "channel": return ("play.rectangle.fill", C.watch)
+            default: return ("person.fill", Color(hex: "#10B981"))
+            }
+        }()
+
+        return Image(systemName: iconName)
+            .font(.system(size: max(14, size * 0.42), weight: .semibold))
+            .foregroundStyle(color)
+            .frame(width: size, height: size)
+            .background(color.opacity(0.12))
     }
 }
 
@@ -112,13 +255,16 @@ struct ContextSwitcherView: View {
 
 private struct ContextRow: View {
     let ctx: ActiveContext
+    let user: ContextUser?
     let isActive: Bool
+    let isSwitching: Bool
+    let unreadCount: Int
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                contextIcon(ctx.type)
+                ContextAvatar(ctx: ctx, user: user, size: 36)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(ctx.name)
@@ -131,15 +277,37 @@ private struct ContextRow: View {
 
                 Spacer()
 
-                if isActive {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(C.watch)
+                if isSwitching {
+                    ProgressView()
+                        .scaleEffect(0.75)
+                        .tint(C.watch)
+                } else {
+                    if unreadCount > 0 {
+                        unreadBadge(unreadCount)
+                    }
+
+                    if isActive {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(C.watch)
+                    }
                 }
             }
             .padding(.horizontal, C.pagePad)
             .padding(.vertical, 14)
         }
+        .disabled(isSwitching)
+    }
+
+    private func unreadBadge(_ count: Int) -> some View {
+        Text(count > 99 ? "99+" : "\(count)")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.black)
+            .monospacedDigit()
+            .padding(.horizontal, count > 9 ? 7 : 6)
+            .frame(minWidth: 20, minHeight: 20)
+            .background(C.watch, in: Capsule())
+            .accessibilityLabel("\(count) unread notifications")
     }
 
     @ViewBuilder
@@ -167,5 +335,13 @@ private struct ContextRow: View {
         case "channel": return "Channel"
         default:        return "Viewer"
         }
+    }
+}
+
+private enum ContextSwitchError: LocalizedError {
+    case failed
+
+    var errorDescription: String? {
+        "Could not switch context. Try again."
     }
 }

@@ -51,12 +51,15 @@ struct BackstageStoriesView: View {
                         .foregroundStyle(C.text)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        onCreate(selectedPublisher)
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 14, weight: .bold))
-                    }
+                Button {
+                    onCreate(selectedPublisher)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 20, weight: .bold))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                    .buttonStyle(.plain)
                     .foregroundStyle(C.watch)
                     .disabled(publishers.isEmpty)
                     .accessibilityLabel("Create story")
@@ -192,10 +195,13 @@ struct BackstageStoriesView: View {
                 }
 
                 if let caption = story.caption, !caption.isEmpty {
-                    Text(caption)
-                        .font(.system(size: 12))
-                        .foregroundStyle(C.textMuted)
-                        .lineLimit(2)
+                    MentionText(
+                        plain: caption,
+                        html: story.captionHtml,
+                        font: .system(size: 12),
+                        color: C.textMuted
+                    )
+                    .lineLimit(2)
                 } else {
                     Text("No caption")
                         .font(.system(size: 12))
@@ -268,13 +274,13 @@ private struct StoryBackstageThumbnail: View {
     var body: some View {
         ZStack {
             if story.mediaType.lowercased() == "image", let url = C.mediaURL(story.mediaUrl) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    default:
-                        C.elevated
-                    }
+                CachedRemoteImage(
+                    url: url,
+                    targetSize: CGSize(width: 120, height: 160)
+                ) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    C.elevated
                 }
             } else {
                 C.elevated.overlay {

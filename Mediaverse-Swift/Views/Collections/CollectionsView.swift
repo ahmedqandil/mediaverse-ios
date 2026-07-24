@@ -5,6 +5,7 @@ import SwiftUI
 struct CollectionsView: View {
 
     @EnvironmentObject private var auth: AuthManager
+    @EnvironmentObject private var platformConfig: PlatformConfigManager
 
     @State private var collections   = [Collection]()
     @State private var publicCollections = [Collection]()
@@ -14,6 +15,7 @@ struct CollectionsView: View {
     @State private var deletingId: String?
     @State private var followingCollectionIds = Set<String>()
     @State private var togglingCollectionId: String?
+    private var pageConfig: PlatformBrowseItem { platformConfig.browseItem(id: "collections") }
 
     private enum CollectionTab: String, CaseIterable, Identifiable {
         case mine, communities
@@ -30,7 +32,9 @@ struct CollectionsView: View {
         ZStack {
             C.bg.ignoresSafeArea()
 
-            if !auth.isAuthenticated {
+            if !pageConfig.enabled {
+                PlatformSectionUnavailableView(item: pageConfig)
+            } else if !auth.isAuthenticated {
                 unauthState
             } else if isLoading {
                 ProgressView().tint(C.watch)
@@ -53,21 +57,28 @@ struct CollectionsView: View {
                 }
             }
         }
-        .navigationTitle("Collections")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                if auth.isAuthenticated {
+                if pageConfig.enabled && auth.isAuthenticated {
                     Button {
+                        C.lightHaptic()
                         showCreate = true
                     } label: {
-                        Image(systemName: "plus")
+                        MediaverseIcon(name: "folder", fallbackSystemName: "folder.badge.plus")
+                            .frame(width: 21, height: 21)
                             .foregroundStyle(C.text)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Create collection")
                 }
             }
         }
         .task {
+            guard pageConfig.enabled else { isLoading = false; return }
             guard auth.isAuthenticated else { isLoading = false; return }
             await load()
         }
@@ -79,32 +90,13 @@ struct CollectionsView: View {
     }
 
     private var tabBar: some View {
-        HStack(spacing: 0) {
-            ForEach(CollectionTab.allCases) { tab in
-                Button {
-                    activeTab = tab
-                } label: {
-                    Text(tab.label)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(activeTab == tab ? C.text : C.textMuted)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .overlay(alignment: .bottom) {
-                            if activeTab == tab {
-                                Rectangle()
-                                    .fill(C.watch)
-                                    .frame(height: 2)
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, C.pagePad)
-        .background(C.bg)
-        .overlay(alignment: .bottom) {
-            Divider().background(C.border)
+        MediaverseUnderlineTabStrip(
+            items: CollectionTab.allCases.map { MediaverseTabItem(id: $0.id, label: $0.label) },
+            selectedID: activeTab.id,
+            fillsWidth: false
+        ) { id in
+            guard let tab = CollectionTab.allCases.first(where: { $0.id == id }) else { return }
+            activeTab = tab
         }
     }
 
@@ -129,24 +121,38 @@ struct CollectionsView: View {
             }
             .padding(C.pagePad)
         }
+        .refreshable {
+            C.lightHaptic()
+            await load()
+        }
     }
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            Image(systemName: "square.stack")
-                .font(.system(size: 40))
+            MediaverseIcon(name: "library", fallbackSystemName: "square.stack")
+                .frame(width: 40, height: 40)
                 .foregroundStyle(C.textMuted)
             Text("No collections yet")
                 .font(.headline).foregroundStyle(C.text)
             Text("Organize your favourite shows and videos")
                 .font(.subheadline).foregroundStyle(C.textMuted)
                 .multilineTextAlignment(.center)
-            Button("Create collection") { showCreate = true }
+            Button {
+                C.lightHaptic()
+                showCreate = true
+            } label: {
+                HStack(spacing: 8) {
+                    MediaverseIcon(name: "folder", fallbackSystemName: "folder.badge.plus")
+                        .frame(width: 15, height: 15)
+                    Text("Create collection")
+                }
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.black)
                 .padding(.horizontal, 20).padding(.vertical, 10)
                 .background(C.watch)
                 .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
@@ -166,8 +172,8 @@ struct CollectionsView: View {
 
     private var unauthState: some View {
         VStack(spacing: 12) {
-            Image(systemName: "square.stack")
-                .font(.system(size: 40))
+            MediaverseIcon(name: "library", fallbackSystemName: "square.stack")
+                .frame(width: 40, height: 40)
                 .foregroundStyle(C.textMuted)
             Text("Sign in to see your collections")
                 .font(.headline).foregroundStyle(C.text)
@@ -176,7 +182,7 @@ struct CollectionsView: View {
     }
 
     private func load() async {
-        isLoading = true
+        isLoading = collections.isEmpty && publicCollections.isEmpty
         async let mineTask = APIClient.shared.fetchCollections()
         async let publicTask = APIClient.shared.fetchPublicCollections()
         collections = (try? await mineTask) ?? []
@@ -337,8 +343,7 @@ private struct MosaicThumbnail: View {
         let thumbs = items.prefix(4).map { item -> String? in
             item.show?.coverUrl ?? item.video?.thumbnailUrl
         }
-        let isShows = type == "shows"
-        let aspectRatio: CGFloat = isShows ? 2/3 : (type == "shorts" ? 9/16 : 16/9)
+        let aspectRatio = C.mediaAspectRatio(forContentType: type)
 
         if thumbs.count >= 4 {
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 2) {
@@ -348,7 +353,10 @@ private struct MosaicThumbnail: View {
                 }
             }
         } else if let url = thumbs.first.flatMap({ $0 }) {
-            AsyncImage(url: C.mediaURL(url)) { img in
+            CachedRemoteImage(
+                url: C.mediaURL(url),
+                targetSize: CGSize(width: 220, height: 220 / max(aspectRatio, 0.01))
+            ) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 Color.white.opacity(0.06)
@@ -368,7 +376,10 @@ private struct MosaicThumbnail: View {
     @ViewBuilder
     private func thumb(_ url: String?) -> some View {
         if let url {
-            AsyncImage(url: C.mediaURL(url)) { img in
+            CachedRemoteImage(
+                url: C.mediaURL(url),
+                targetSize: CGSize(width: 120, height: 120)
+            ) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 Color.white.opacity(0.06)
@@ -399,65 +410,148 @@ private struct CreateCollectionSheet: View {
         NavigationStack {
             ZStack {
                 C.bg.ignoresSafeArea()
-                Form {
-                    Section("Title") {
-                        TextField("My Collection", text: $title)
-                            .foregroundStyle(C.text)
-                    }
-                    .listRowBackground(C.surface)
 
-                    Section("Description (optional)") {
-                        TextField("What's this collection about?", text: $description)
-                            .foregroundStyle(C.text)
-                    }
-                    .listRowBackground(C.surface)
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 22) {
+                        collectionTextField(
+                            title: "Title",
+                            placeholder: "My Collection",
+                            text: $title
+                        )
 
-                    Section("Type") {
-                        Picker("Type", selection: $type) {
-                            ForEach(types, id: \.0) { val, label in
-                                Text(label).tag(val)
-                            }
+                        collectionTextField(
+                            title: "Description (optional)",
+                            placeholder: "What's this collection about?",
+                            text: $description
+                        )
+
+                        segmentedSection(title: "Type", options: types, selection: $type)
+                        segmentedSection(
+                            title: "Visibility",
+                            options: [("private", "Private"), ("public", "Public")],
+                            selection: $visibility
+                        )
+
+                        if let err = errorMsg {
+                            Text(err)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.red)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
-                        .pickerStyle(.segmented)
                     }
-                    .listRowBackground(C.surface)
-
-                    Section("Visibility") {
-                        Picker("Visibility", selection: $visibility) {
-                            Text("Private").tag("private")
-                            Text("Public").tag("public")
-                        }
-                        .pickerStyle(.segmented)
-                    }
-                    .listRowBackground(C.surface)
-
-                    if let err = errorMsg {
-                        Section {
-                            Text(err).foregroundStyle(.red).font(.caption)
-                        }
-                        .listRowBackground(C.surface)
-                    }
+                    .padding(.horizontal, C.pagePad)
+                    .padding(.top, 18)
+                    .padding(.bottom, 28)
                 }
-                .scrollContentBackground(.hidden)
             }
             .navigationTitle("New Collection")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .foregroundStyle(C.textMuted)
+                    Button {
+                        C.lightHaptic()
+                        dismiss()
+                    } label: {
+                        Text("Cancel")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(C.textMuted)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 9)
+                            .background(C.elevated.opacity(0.90), in: Capsule())
+                            .overlay { Capsule().stroke(C.border, lineWidth: 1) }
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") { _ = Task<Void, Never>(priority: nil) { await save() } }
-                        .disabled(title.isEmpty || isSaving)
-                        .foregroundStyle(C.watch)
+                    Button {
+                        C.lightHaptic()
+                        _ = Task<Void, Never>(priority: nil) { await save() }
+                    } label: {
+                        Group {
+                            if isSaving {
+                                ProgressView().tint(.black).scaleEffect(0.72)
+                            } else {
+                                Text("Create")
+                                    .font(.system(size: 15, weight: .bold))
+                            }
+                        }
+                        .foregroundStyle(.black)
+                        .frame(minWidth: 78)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(canSave ? C.watch : C.watch.opacity(0.32), in: Capsule())
+                    }
+                    .disabled(!canSave)
                 }
             }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private var canSave: Bool {
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSaving
+    }
+
+    private func collectionTextField(title label: String, placeholder: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(label)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(C.textMuted)
+
+            TextField(placeholder, text: text)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(C.text)
+                .tint(C.watch)
+                .padding(.horizontal, 16)
+                .frame(height: 54)
+                .background(C.elevated.opacity(0.88), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(C.borderSubtle, lineWidth: 1)
+                }
+        }
+    }
+
+    private func segmentedSection(title label: String, options: [(String, String)], selection: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(label)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(C.textMuted)
+
+            HStack(spacing: 6) {
+                ForEach(options, id: \.0) { value, title in
+                    Button {
+                        C.lightHaptic()
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            selection.wrappedValue = value
+                        }
+                    } label: {
+                        Text(title)
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(selection.wrappedValue == value ? .black : C.textMuted)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 42)
+                            .background(
+                                selection.wrappedValue == value ? Color.white : Color.clear,
+                                in: Capsule()
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(4)
+            .background(C.elevated.opacity(0.88), in: Capsule())
+            .overlay { Capsule().stroke(C.borderSubtle, lineWidth: 1) }
         }
     }
 
     private func save() async {
-        guard !title.isEmpty else { return }
+        guard canSave else { return }
         isSaving = true
         errorMsg = nil
         do {
