@@ -826,11 +826,30 @@ final class StoryTimelineEditor: ObservableObject {
         }
     }
 
-    func updateMusicVolume(_ volume: Float) async {
+    func previewMusicVolume(_ volume: Float) {
         guard !project.tracks.audioClips.isEmpty else { return }
+        project.tracks.audioClips[0].volume = min(max(volume, 0), 1)
+        errorMessage = nil
+    }
+
+    func commitMusicVolume(_ volume: Float, baselineClip: AudioClip?) async {
+        guard !project.tracks.audioClips.isEmpty else { return }
+        let clampedVolume = min(max(volume, 0), 1)
+        if let baselineClip, baselineClip.volume == clampedVolume {
+            project.tracks.audioClips[0] = baselineClip
+            return
+        }
+        var before = project
+        if let baselineClip {
+            before.tracks.audioClips[0] = baselineClip
+        }
         var updated = project
-        updated.tracks.audioClips[0].volume = min(max(volume, 0), 1)
-        await commit(updated, label: "Music Volume")
+        updated.tracks.audioClips[0].volume = clampedVolume
+        await commit(updated, label: "Music Volume", before: before)
+    }
+
+    func updateMusicVolume(_ volume: Float) async {
+        await commitMusicVolume(volume, baselineClip: nil)
     }
 
     func removeMusic() async {

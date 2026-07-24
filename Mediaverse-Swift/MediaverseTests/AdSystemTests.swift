@@ -1,6 +1,54 @@
 import XCTest
 @testable import Mediaverse
 
+@MainActor
+final class StoryTimelineMusicEditingTests: XCTestCase {
+    func testMusicVolumePreviewClampsWithoutCreatingUndoCommand() {
+        let editor = StoryTimelineEditor(project: projectWithMusic(volume: 0.5))
+
+        editor.previewMusicVolume(2)
+
+        XCTAssertEqual(editor.project.tracks.audioClips.first?.volume, 1)
+        XCTAssertFalse(editor.canUndo)
+    }
+
+    func testUnchangedMusicVolumeDoesNotCreateUndoCommand() async {
+        let project = projectWithMusic(volume: 0.5)
+        let editor = StoryTimelineEditor(project: project)
+
+        editor.previewMusicVolume(0.5)
+        await editor.commitMusicVolume(0.5, baselineClip: project.tracks.audioClips[0])
+
+        XCTAssertFalse(editor.canUndo)
+        XCTAssertEqual(editor.project.tracks.audioClips.first?.volume, 0.5)
+    }
+
+    private func projectWithMusic(volume: Float) -> Project {
+        var project = Project.storyDraft(title: "Music test", destination: nil)
+        let asset = AssetRef.make(
+            kind: .audio,
+            relativePath: "media/music.m4a",
+            naturalWidth: 0,
+            naturalHeight: 0,
+            nominalFrameRate: 0,
+            durationSeconds: 5
+        )
+        project.tracks.audioClips = [
+            AudioClip(
+                id: UUID(),
+                assetRef: asset,
+                startOnTimeline: CMTimeValueBox(seconds: 0),
+                sourceStart: CMTimeValueBox(seconds: 0),
+                duration: CMTimeValueBox(seconds: 5),
+                volume: volume,
+                fadeIn: CMTimeValueBox(seconds: 0),
+                fadeOut: CMTimeValueBox(seconds: 0)
+            )
+        ]
+        return project
+    }
+}
+
 final class AdBreakSchedulerTests: XCTestCase {
     func testFindsBreakCrossedByLargePlaybackJump() {
         let breaks = [

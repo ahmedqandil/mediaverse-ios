@@ -369,6 +369,7 @@ struct StoryEditorPreviewView: View {
     @State private var filterBaselineClip: VideoClip?
     @State private var adjustmentBaselineClip: VideoClip?
     @State private var audioBaselineClip: VideoClip?
+    @State private var musicBaselineClip: AudioClip?
     @State private var toolSheetDismissShouldCancel = true
     @FocusState private var isTextComposerFocused: Bool
     @FocusState private var isMentionComposerFocused: Bool
@@ -1540,6 +1541,9 @@ struct StoryEditorPreviewView: View {
         if let baseline = clipBaselineClip ?? filterBaselineClip ?? adjustmentBaselineClip ?? audioBaselineClip {
             editor.previewSelectedClip(baseline)
         }
+        if let baseline = musicBaselineClip {
+            editor.previewMusicVolume(baseline.volume)
+        }
         clearLiveToolBaselines()
     }
 
@@ -1548,6 +1552,7 @@ struct StoryEditorPreviewView: View {
         filterBaselineClip = nil
         adjustmentBaselineClip = nil
         audioBaselineClip = nil
+        musicBaselineClip = nil
     }
 
     private func storyToolButton(_ tool: StoryEditorTool, icon: String) -> some View {
@@ -1693,6 +1698,9 @@ struct StoryEditorPreviewView: View {
         }
         if let baseline = clipBaselineClip {
             await editor.commitSelectedClipPreview(baselineClip: baseline)
+        }
+        if let baseline = musicBaselineClip, let music = editor.project.tracks.audioClips.first {
+            await editor.commitMusicVolume(music.volume, baselineClip: baseline)
         }
     }
 
@@ -2077,9 +2085,23 @@ struct StoryEditorPreviewView: View {
                     Slider(
                         value: Binding(
                             get: { music.volume },
-                            set: { value in Task { await editor.updateMusicVolume(value) } }
+                            set: { value in
+                                musicBaselineClip = musicBaselineClip ?? music
+                                editor.previewMusicVolume(value)
+                            }
                         ),
-                        in: 0...1
+                        in: 0...1,
+                        onEditingChanged: { editing in
+                            guard !editing else { return }
+                            let baseline = musicBaselineClip
+                            musicBaselineClip = nil
+                            Task {
+                                await editor.commitMusicVolume(
+                                    editor.project.tracks.audioClips.first?.volume ?? music.volume,
+                                    baselineClip: baseline
+                                )
+                            }
+                        }
                     )
                     .tint(C.watch)
                     editorButton("Remove Music", systemImage: "trash", role: .destructive) {
