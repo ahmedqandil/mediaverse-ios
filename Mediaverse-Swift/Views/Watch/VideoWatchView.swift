@@ -39,6 +39,8 @@ struct VideoWatchView: View {
     @State private var watchedAdBreakIds: Set<String> = []
     @State private var pendingAdBreakIds: Set<String> = []
     @State private var pendingContentSeekAfterAd: Double?
+    @State private var isSeekEnforcedAdBreak = false
+    @State private var lastObservedContentTime: Double = 0
     @State private var activeAdPlayer: AVPlayer?
     @State private var activeAdPresentation: ActiveAdPresentation?
     @State private var restoredAdPlayer: AVPlayer?
@@ -46,6 +48,9 @@ struct VideoWatchView: View {
     @State private var isCollapsingAdToMiniPlayer = false
     @State private var videoAdConfig: PlatformShortsAdsConfig = .videoDefault
     @State private var videoAdPolicy: EffectiveAdPolicy = .disabled(reason: "not_resolved")
+    @State private var playbackLoadGeneration = UUID()
+    @State private var playbackSessionId = UUID().uuidString
+    @State private var playbackEntryContext: PlaybackEntryContext = .direct
 
     // ── Engagement (optimistic)
     @State private var userLike:      String?   // "like" | "dislike" | nil
@@ -372,9 +377,9 @@ struct VideoWatchView: View {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
             if isAdActive {
-                miniPlayer.presentAd(player: handoffPlayer, title: "Ad · \(video.title)", route: .video(video.id), presentation: activeAdPresentation)
+                miniPlayer.presentAd(player: handoffPlayer, title: "Ad · \(video.title)", route: .video(video.id), presentation: activeAdPresentation, playbackSessionId: playbackSessionId, entryContext: playbackEntryContext)
             } else {
-                miniPlayer.present(player: handoffPlayer, title: video.title, route: .video(video.id))
+                miniPlayer.present(player: handoffPlayer, title: video.title, route: .video(video.id), playbackSessionId: playbackSessionId, entryContext: playbackEntryContext)
             }
             dismiss()
         }
@@ -568,6 +573,7 @@ struct VideoWatchView: View {
                     decision: prerollAdDecision,
                     contentId: currentVideoId,
                     placement: "preroll",
+                    userId: restoredAdPresentation?.userId ?? auth.currentUser?.id,
                     breakId: "preroll",
                     onFullscreen: { presentAdFullscreenPlayerIfNeeded() },
                     preservePlaybackOnDisappear: isCollapsingAdToMiniPlayer,
@@ -575,6 +581,8 @@ struct VideoWatchView: View {
                     initialAdIndex: restoredAdPresentation?.currentAdIndex ?? 0,
                     isPresentationOnly: restoredAdPlayer != nil,
                     brandCardPlacement: .hidden,
+                    initialImpressionTracked: restoredAdPresentation?.hasTrackedImpression ?? false,
+                    initialStartTracked: restoredAdPresentation?.hasTrackedStart ?? false,
                     adPolicy: videoAdPolicy,
                     adRemoval: videoAdPolicy.adRemoval,
                     onActivePlayerChanged: { activeAdPlayer = $0 },
@@ -590,6 +598,7 @@ struct VideoWatchView: View {
                     decision: midrollAdDecision,
                     contentId: currentVideoId,
                     placement: activeAdBreak.placement,
+                    userId: restoredAdPresentation?.userId ?? auth.currentUser?.id,
                     breakId: activeAdBreak.breakId,
                     onFullscreen: { presentAdFullscreenPlayerIfNeeded() },
                     preservePlaybackOnDisappear: isCollapsingAdToMiniPlayer,
@@ -597,8 +606,11 @@ struct VideoWatchView: View {
                     initialAdIndex: restoredAdPresentation?.currentAdIndex ?? 0,
                     isPresentationOnly: restoredAdPlayer != nil,
                     brandCardPlacement: .hidden,
+                    initialImpressionTracked: restoredAdPresentation?.hasTrackedImpression ?? false,
+                    initialStartTracked: restoredAdPresentation?.hasTrackedStart ?? false,
                     adPolicy: videoAdPolicy,
                     adRemoval: videoAdPolicy.adRemoval,
+                    overrideSkippable: isSeekEnforcedAdBreak ? false : nil,
                     onActivePlayerChanged: { activeAdPlayer = $0 },
                     onActiveAdPresentationChanged: { activeAdPresentation = $0 },
                     onSkip: nil,
@@ -1282,20 +1294,27 @@ struct VideoWatchView: View {
     // MARK: - Data loading
 
     private func load() async {
+        let loadGeneration = UUID()
+        playbackLoadGeneration = loadGeneration
+        let loadId = currentVideoId
+        let loadUserId = auth.currentUser?.id
         isLoading = true
         loadError = nil
         savedProgress = 0
         showReplayPrompt = false
         do {
-            let loadId = currentVideoId
             let resolvedAdConfig = loadVideoAdConfig()
             async let progressTask: ProgressItem? = auth.isAuthenticated
                 ? (try? await APIClient.shared.fetchProgress(videoId: loadId))
                 : nil
 
             let v = try await APIClient.shared.fetchVideo(id: loadId)
-            guard currentVideoId == loadId else { return }
-            let policy = v.adPolicy ?? .enabledFallback(reason: "policy_unavailable")
+            guard playbackLoadGeneration == loadGeneration,
+                  currentVideoId == loadId,
+                  auth.currentUser?.id == loadUserId else { return }
+            // Ad eligibility is entitlement-sensitive and must come from the backend.
+            // Missing policy data must not re-enable ads for an ad-free user.
+            let policy = v.adPolicy ?? .disabled(reason: "policy_unavailable")
             videoAdPolicy = policy
             videoAdConfig = policy.applying(to: resolvedAdConfig)
             video             = v
@@ -1308,14 +1327,49 @@ struct VideoWatchView: View {
 
             // Restore progress position
             if let item = await progressTask {
+                guard playbackLoadGeneration == loadGeneration,
+                      currentVideoId == loadId,
+                      auth.currentUser?.id == loadUserId else { return }
                 savedProgress = item.progress
             }
 
             let expandedItem = miniPlayer.takeExpandedItem(for: .video(loadId))
+            if let expandedItem {
+                playbackSessionId = expandedItem.playbackSessionId
+                playbackEntryContext = expandedItem.entryContext
+            } else {
+                playbackSessionId = UUID().uuidString
+                playbackEntryContext = savedProgress > 0.05
+                    ? PlaybackEntryContext(surface: .direct, mode: .resume, contentStartSec: max(0, (v.duration ?? 0) * savedProgress), previewSessionId: nil)
+                    : .direct
+            }
             hideControlsForExpandedHandoff = expandedItem.map { !$0.isAd } ?? false
             if let expandedItem, !expandedItem.isAd {
-                attachPlayer(expandedItem.player, videoId: loadId, autoplay: true)
-                prerollAdDecision = nil
+                let isInitialFeedContinuation =
+                    expandedItem.sourceFrame != nil
+                    && expandedItem.entryContext.mode == .autoplayPreview
+
+                if isInitialFeedContinuation {
+                    // Feed previews are deliberately raw/non-monetized. Preserve their
+                    // player and position, but let the server decide whether deliberate
+                    // watch playback owes a preroll before content continues.
+                    expandedItem.player.pause()
+                    let preroll = await prerollDecision(
+                        contentId: loadId,
+                        contentType: "video",
+                        duration: v.duration
+                    )
+                    guard playbackLoadGeneration == loadGeneration,
+                          currentVideoId == loadId,
+                          auth.currentUser?.id == loadUserId else { return }
+                    attachPlayer(expandedItem.player, videoId: loadId, autoplay: preroll == nil)
+                    prerollAdDecision = preroll
+                } else {
+                    // Expanding an existing mini-player is presentation-only: keep the
+                    // same player/session and never request a second preroll.
+                    attachPlayer(expandedItem.player, videoId: loadId, autoplay: true)
+                    prerollAdDecision = nil
+                }
                 Task { await loadVideoAdBreaks(contentId: loadId, duration: v.duration) }
             } else if let url = C.mediaURL(v.videoUrl) {
                 let (asset, item) = makeStartupOptimizedPlayerItem(url: url)
@@ -1340,11 +1394,17 @@ struct VideoWatchView: View {
                     var durationSeconds = v.duration
                     if durationSeconds == nil {
                         durationSeconds = try? await asset.load(.duration).seconds
+                        guard playbackLoadGeneration == loadGeneration,
+                              currentVideoId == loadId,
+                              auth.currentUser?.id == loadUserId else { return }
                     }
                     if let durationSeconds, durationSeconds.isFinite, durationSeconds > 0 {
                         let seekTo = CMTime(seconds: durationSeconds * savedProgress,
                                            preferredTimescale: 600)
                         await playbackPlayer.seek(to: seekTo, toleranceBefore: .zero, toleranceAfter: .zero)
+                        guard playbackLoadGeneration == loadGeneration,
+                              currentVideoId == loadId,
+                              auth.currentUser?.id == loadUserId else { return }
                     }
                 }
 
@@ -1354,6 +1414,9 @@ struct VideoWatchView: View {
                     Task { await loadVideoAdBreaks(contentId: loadId, duration: v.duration) }
                 } else {
                     let preroll = await prerollDecision(contentId: loadId, contentType: "video", duration: v.duration)
+                    guard playbackLoadGeneration == loadGeneration,
+                          currentVideoId == loadId,
+                          auth.currentUser?.id == loadUserId else { return }
                     attachPlayer(playbackPlayer, videoId: loadId, autoplay: preroll == nil)
                     prerollAdDecision = preroll
                     Task { await loadVideoAdBreaks(contentId: loadId, duration: v.duration) }
@@ -1364,6 +1427,9 @@ struct VideoWatchView: View {
             miniPlayer.markExpandedPlayerAttached()
             Task { await loadSecondaryVideoData(for: v, loadId: loadId) }
         } catch {
+            guard playbackLoadGeneration == loadGeneration,
+                  currentVideoId == loadId,
+                  auth.currentUser?.id == loadUserId else { return }
             loadError = error.localizedDescription
             isLoading = false
             miniPlayer.markExpandedPlayerAttached()
@@ -1455,13 +1521,16 @@ struct VideoWatchView: View {
             momentObserverPlayer = nil
         }
 
+        lastObservedContentTime = max(0, player.currentTime().seconds.validTime ?? 0)
         let token = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 1, preferredTimescale: 600),
             queue: .main
         ) { time in
             guard !time.seconds.isNaN else { return }
+            let previousTime = lastObservedContentTime
+            lastObservedContentTime = max(0, time.seconds)
             currentPlayerSec = Int(time.seconds)
-            if let adBreak = nextDueAdBreak(at: time.seconds) {
+            if let adBreak = nextDueAdBreak(from: previousTime, to: time.seconds) {
                 Task { await startVideoAdBreak(adBreak) }
             }
         }
@@ -1536,6 +1605,7 @@ struct VideoWatchView: View {
         midrollAdDecision = nil
         self.activeAdBreak = nil
         clearRestoredAd()
+        isSeekEnforcedAdBreak = false
         resumeContentAfterAdBreakIfNeeded()
     }
 
@@ -1554,7 +1624,8 @@ struct VideoWatchView: View {
                     skippable: placementConfig.skippable ?? videoAdConfig.skippable,
                     skipAfterSec: placementConfig.skipAfterSec ?? videoAdConfig.skipAfterSec,
                     orientation: "HORIZONTAL",
-                    breakId: "preroll"
+                    breakId: "preroll",
+                    userId: auth.currentUser?.id
                 )
             )
             guard decision.filled, !decision.ads.isEmpty else {
@@ -1569,6 +1640,8 @@ struct VideoWatchView: View {
     }
 
     private func loadVideoAdBreaks(contentId: String, duration: Double?) async {
+        let requestGeneration = playbackLoadGeneration
+        let requestUserId = auth.currentUser?.id
         let placementConfig = videoAdConfig.placementConfig(for: "midroll")
         guard videoAdConfig.enabled, placementConfig.enabled else { return }
         do {
@@ -1576,29 +1649,35 @@ struct VideoWatchView: View {
                 AdRequestContext(
                     contentId: contentId,
                     contentType: "video",
+                    placement: nil,
                     durationSec: duration,
                     maxAds: videoAdMaxAds(for: "midroll"),
                     maxDurationSec: videoAdMaxDurationSec(for: "midroll", placementConfig: placementConfig),
                     skippable: placementConfig.skippable ?? videoAdConfig.skippable,
                     skipAfterSec: placementConfig.skipAfterSec ?? videoAdConfig.skipAfterSec,
-                    orientation: "HORIZONTAL"
+                    orientation: "HORIZONTAL",
+                    userId: requestUserId
                 )
             )
-            guard currentVideoId == contentId else { return }
+            guard playbackLoadGeneration == requestGeneration,
+                  currentVideoId == contentId,
+                  auth.currentUser?.id == requestUserId else { return }
             adBreaks = breaks
-            debugAd("vmap loaded contentId=\(contentId) breaks=\(breaks.count)")
+            debugAd("vmap loaded contentId=\(contentId) scheduledNonPrerollBreaks=\(breaks.count) (preroll is requested separately)")
         } catch {
             debugAd("vmap failed contentId=\(contentId): \(error.localizedDescription)")
         }
     }
 
-    private func nextDueAdBreak(at seconds: Double) -> AdBreak? {
+    private func nextDueAdBreak(from previousSeconds: Double, to seconds: Double) -> AdBreak? {
         guard prerollAdDecision == nil, midrollAdDecision == nil else { return nil }
-        return adBreaks
-            .filter { !watchedAdBreakIds.contains($0.id) && !pendingAdBreakIds.contains($0.id) }
-            .filter { seconds >= $0.timeOffsetSec && seconds < $0.timeOffsetSec + 1.5 }
-            .sorted { $0.timeOffsetSec < $1.timeOffsetSec }
-            .first
+        return AdBreakScheduler.nextDue(
+            in: adBreaks,
+            watchedIds: watchedAdBreakIds,
+            pendingIds: pendingAdBreakIds,
+            from: previousSeconds,
+            to: seconds
+        )
     }
 
     @MainActor
@@ -1609,6 +1688,7 @@ struct VideoWatchView: View {
 
         if let resumeTime {
             pendingContentSeekAfterAd = resumeTime
+            isSeekEnforcedAdBreak = true
         }
 
         let placementConfig = videoAdConfig.placementConfig(for: adBreak.placement)
@@ -1620,11 +1700,14 @@ struct VideoWatchView: View {
 
         pendingAdBreakIds.insert(adBreak.id)
         player?.pause()
+        let requestGeneration = playbackLoadGeneration
+        let requestContentId = currentVideoId
+        let requestUserId = auth.currentUser?.id
         let decision: AdDecision?
         do {
             decision = try await AdServerClient.shared.requestAd(
                 AdRequestContext(
-                    contentId: currentVideoId,
+                    contentId: requestContentId,
                     contentType: "video",
                     placement: nil,
                     durationSec: video?.duration,
@@ -1633,16 +1716,20 @@ struct VideoWatchView: View {
                     skippable: placementConfig.skippable ?? videoAdConfig.skippable,
                     skipAfterSec: placementConfig.skipAfterSec ?? videoAdConfig.skipAfterSec,
                     orientation: "HORIZONTAL",
-                    breakId: adBreak.breakId
+                    breakId: adBreak.breakId,
+                    userId: requestUserId
                 )
             )
         } catch {
-            debugAd("midroll failed contentId=\(currentVideoId) breakId=\(adBreak.breakId): \(error.localizedDescription)")
+            debugAd("midroll failed contentId=\(requestContentId) breakId=\(adBreak.breakId): \(error.localizedDescription)")
             decision = nil
         }
 
+        guard playbackLoadGeneration == requestGeneration,
+              currentVideoId == requestContentId,
+              auth.currentUser?.id == requestUserId else { return }
         guard let decision, decision.filled, !decision.ads.isEmpty else {
-            debugAd("midroll no-fill contentId=\(currentVideoId) breakId=\(adBreak.breakId) reason=\(decision?.noFillReason ?? "none")")
+            debugAd("midroll no-fill contentId=\(requestContentId) breakId=\(adBreak.breakId) reason=\(decision?.noFillReason ?? "none")")
             watchedAdBreakIds.insert(adBreak.id)
             pendingAdBreakIds.remove(adBreak.id)
             resumeContentAfterAdBreakIfNeeded()
@@ -1656,7 +1743,13 @@ struct VideoWatchView: View {
     private func resumeContentAfterAdBreakIfNeeded() {
         guard let player else { return }
         if let resumeTime = pendingContentSeekAfterAd {
+            let current = max(0, player.currentTime().seconds.isFinite ? player.currentTime().seconds : lastObservedContentTime)
+            if let nextBreak = nextDueAdBreak(from: current, to: resumeTime) {
+                Task { await startVideoAdBreak(nextBreak, resumeTime: resumeTime) }
+                return
+            }
             pendingContentSeekAfterAd = nil
+            isSeekEnforcedAdBreak = false
             let target = CMTime(seconds: resumeTime, preferredTimescale: 600)
             player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
                 Task { @MainActor in
@@ -1781,6 +1874,8 @@ struct VideoWatchView: View {
         watchedAdBreakIds = []
         pendingAdBreakIds = []
         pendingContentSeekAfterAd = nil
+        isSeekEnforcedAdBreak = false
+        lastObservedContentTime = 0
         reuseCurrentPlayerForFullscreenSelection = isFullscreenPlayerPresented && player != nil
         if !reuseCurrentPlayerForFullscreenSelection {
             player?.pause()
@@ -1928,16 +2023,19 @@ struct VideoWatchView: View {
               let adPlayer = activeAdPlayer ?? restoredAdPlayer,
               let presentation = activeAdPresentation ?? restoredAdPresentation else { return }
         var didCompleteAd = false
+        var didAdvanceAd = false
         isFullscreenPlayerPresented = true
         openFullscreenAdPlayer(
             adPlayer,
             presentation: presentation,
             onAdCompleted: {
                 didCompleteAd = true
-                finishFullscreenAd(presentation)
+            },
+            onAdFinished: {
+                didAdvanceAd = true
             },
             onDismiss: {
-                if !didCompleteAd && shouldRestoreFullscreenAd(adPlayer) {
+                if !didAdvanceAd && shouldRestoreFullscreenAd(adPlayer) {
                     restoreExpandedAd(player: adPlayer, presentation: presentation)
                 }
                 isFullscreenPlayerPresented = false

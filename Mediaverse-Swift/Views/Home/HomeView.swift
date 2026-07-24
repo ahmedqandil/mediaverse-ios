@@ -709,7 +709,7 @@ struct HomeView: View {
         let player = previewPlayerManager.handoffActivePlayer(for: video.id, muted: playerMuted) ?? AVPlayer(url: url)
         player.isMuted = playerMuted
         player.volume = 1
-        miniPlayer.replaceAndExpand(player: player, title: video.title, route: route(for: video), sourceFrame: sourceFrame)
+        miniPlayer.replaceAndExpand(player: player, title: video.title, route: route(for: video), sourceFrame: sourceFrame, entrySurface: .homeFeed)
     }
 
     private func presentStoryViewer(groupId: String) {

@@ -1152,6 +1152,17 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
         let timelineDuration = resolvedDuration()
         setDurationIfNeeded(timelineDuration)
         let clampedSeconds = min(max(seconds, 0), max(timelineDuration, 0))
+        let playbackPosition = max(0, player.currentTime().seconds.isFinite ? player.currentTime().seconds : currentTime)
+
+        if let adBreak = unwatchedAdBreakCrossed(from: playbackPosition, to: clampedSeconds),
+           let onAdBreakRequested {
+            player.pause()
+            currentTime = playbackPosition
+            isPlaying = false
+            onAdBreakRequested(adBreak, clampedSeconds)
+            return
+        }
+
         let target = CMTime(seconds: clampedSeconds, preferredTimescale: 600)
         let tolerance = exact ? CMTime.zero : CMTime(seconds: 0.25, preferredTimescale: 600)
 

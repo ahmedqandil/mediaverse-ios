@@ -19,6 +19,8 @@ struct EpisodeWatchView: View {
     @State private var watchedAdBreakIds: Set<String> = []
     @State private var pendingAdBreakIds: Set<String> = []
     @State private var pendingContentSeekAfterAd: Double?
+    @State private var isSeekEnforcedAdBreak = false
+    @State private var lastObservedContentTime: Double = 0
     @State private var activeAdPlayer: AVPlayer?
     @State private var activeAdPresentation: ActiveAdPresentation?
     @State private var restoredAdPlayer: AVPlayer?
@@ -26,6 +28,9 @@ struct EpisodeWatchView: View {
     @State private var isCollapsingAdToMiniPlayer = false
     @State private var episodeAdConfig: PlatformShortsAdsConfig = .episodeDefault
     @State private var episodeAdPolicy: EffectiveAdPolicy = .disabled(reason: "not_resolved")
+    @State private var playbackLoadGeneration = UUID()
+    @State private var playbackSessionId = UUID().uuidString
+    @State private var playbackEntryContext: PlaybackEntryContext = .direct
     @State private var isFollowing   = false
     @State private var followerCount = 0
     @State private var savedProgress: Double = 0
@@ -427,6 +432,7 @@ struct EpisodeWatchView: View {
                         decision: prerollAdDecision,
                         contentId: currentEpisodeId,
                         placement: "preroll",
+                        userId: restoredAdPresentation?.userId ?? auth.currentUser?.id,
                         breakId: "preroll",
                         onFullscreen: { presentAdFullscreenPlayerIfNeeded() },
                         preservePlaybackOnDisappear: isCollapsingAdToMiniPlayer,
@@ -434,6 +440,8 @@ struct EpisodeWatchView: View {
                         initialAdIndex: restoredAdPresentation?.currentAdIndex ?? 0,
                         isPresentationOnly: restoredAdPlayer != nil,
                         brandCardPlacement: .hidden,
+                        initialImpressionTracked: restoredAdPresentation?.hasTrackedImpression ?? false,
+                        initialStartTracked: restoredAdPresentation?.hasTrackedStart ?? false,
                         adPolicy: episodeAdPolicy,
                         adRemoval: episodeAdPolicy.adRemoval,
                         onActivePlayerChanged: { activeAdPlayer = $0 },
@@ -449,6 +457,7 @@ struct EpisodeWatchView: View {
                         decision: midrollAdDecision,
                         contentId: currentEpisodeId,
                         placement: activeAdBreak.placement,
+                        userId: restoredAdPresentation?.userId ?? auth.currentUser?.id,
                         breakId: activeAdBreak.breakId,
                         onFullscreen: { presentAdFullscreenPlayerIfNeeded() },
                         preservePlaybackOnDisappear: isCollapsingAdToMiniPlayer,
@@ -456,8 +465,11 @@ struct EpisodeWatchView: View {
                         initialAdIndex: restoredAdPresentation?.currentAdIndex ?? 0,
                         isPresentationOnly: restoredAdPlayer != nil,
                         brandCardPlacement: .hidden,
+                        initialImpressionTracked: restoredAdPresentation?.hasTrackedImpression ?? false,
+                        initialStartTracked: restoredAdPresentation?.hasTrackedStart ?? false,
                         adPolicy: episodeAdPolicy,
                         adRemoval: episodeAdPolicy.adRemoval,
+                        overrideSkippable: isSeekEnforcedAdBreak ? false : nil,
                         onActivePlayerChanged: { activeAdPlayer = $0 },
                         onActiveAdPresentationChanged: { activeAdPresentation = $0 },
                         onSkip: nil,
@@ -598,9 +610,9 @@ struct EpisodeWatchView: View {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
             if isAdActive {
-                miniPlayer.presentAd(player: handoffPlayer, title: "Ad · \(episode.title)", route: .episode(episode.id), presentation: activeAdPresentation)
+                miniPlayer.presentAd(player: handoffPlayer, title: "Ad · \(episode.title)", route: .episode(episode.id), presentation: activeAdPresentation, playbackSessionId: playbackSessionId, entryContext: playbackEntryContext)
             } else {
-                miniPlayer.present(player: handoffPlayer, title: episode.title, route: .episode(episode.id))
+                miniPlayer.present(player: handoffPlayer, title: episode.title, route: .episode(episode.id), playbackSessionId: playbackSessionId, entryContext: playbackEntryContext)
             }
             dismiss()
         }
@@ -1389,6 +1401,9 @@ struct EpisodeWatchView: View {
 
     private func load() async {
         let loadId = currentEpisodeId
+        let loadUserId = auth.currentUser?.id
+        let loadGeneration = UUID()
+        playbackLoadGeneration = loadGeneration
         isLoading = true
         loadError = nil
         savedProgress = 0
@@ -1403,15 +1418,25 @@ struct EpisodeWatchView: View {
         do {
             ep = try await APIClient.shared.fetchEpisode(id: loadId)
         } catch {
+            guard playbackLoadGeneration == loadGeneration,
+                  currentEpisodeId == loadId,
+                  auth.currentUser?.id == loadUserId else { return }
             loadError = error.localizedDescription
             isLoading = false
             return
         }
 
-        guard loadId == currentEpisodeId else { return }
+        guard playbackLoadGeneration == loadGeneration,
+              loadId == currentEpisodeId,
+              auth.currentUser?.id == loadUserId else { return }
         guard let ep else { isLoading = false; return }
         let ent = await entitlementTask
-        let policy = ep.adPolicy ?? .enabledFallback(reason: "policy_unavailable")
+        guard playbackLoadGeneration == loadGeneration,
+              loadId == currentEpisodeId,
+              auth.currentUser?.id == loadUserId else { return }
+        // Ad eligibility is entitlement-sensitive and must come from the backend.
+        // Missing policy data must not re-enable ads for an ad-free user.
+        let policy = ep.adPolicy ?? .disabled(reason: "policy_unavailable")
         episodeAdPolicy = policy
         episodeAdConfig = policy.applying(to: resolvedAdConfig)
         episode       = ep
@@ -1434,10 +1459,22 @@ struct EpisodeWatchView: View {
 
         if canPlay {
             if let item = await progressTask {
+                guard playbackLoadGeneration == loadGeneration,
+                      loadId == currentEpisodeId,
+                      auth.currentUser?.id == loadUserId else { return }
                 savedProgress = item.progress
             }
 
             let expandedItem = miniPlayer.takeExpandedItem(for: .episode(loadId))
+            if let expandedItem {
+                playbackSessionId = expandedItem.playbackSessionId
+                playbackEntryContext = expandedItem.entryContext
+            } else {
+                playbackSessionId = UUID().uuidString
+                playbackEntryContext = savedProgress > 0.05
+                    ? PlaybackEntryContext(surface: .direct, mode: .resume, contentStartSec: max(0, (ep.duration ?? 0) * savedProgress), previewSessionId: nil)
+                    : .direct
+            }
             hideControlsForExpandedHandoff = expandedItem.map { !$0.isAd } ?? false
             if let expandedItem, !expandedItem.isAd {
                 attachPlayer(expandedItem.player, episodeId: loadId, autoplay: true)
@@ -1466,11 +1503,17 @@ struct EpisodeWatchView: View {
                     var durationSeconds = ep.duration
                     if durationSeconds == nil {
                         durationSeconds = try? await asset.load(.duration).seconds
+                        guard playbackLoadGeneration == loadGeneration,
+                              loadId == currentEpisodeId,
+                              auth.currentUser?.id == loadUserId else { return }
                     }
                     if let durationSeconds, durationSeconds.isFinite, durationSeconds > 0 {
                         let seekTo = CMTime(seconds: durationSeconds * savedProgress,
                                            preferredTimescale: 600)
                         await playbackPlayer.seek(to: seekTo, toleranceBefore: .zero, toleranceAfter: .zero)
+                        guard playbackLoadGeneration == loadGeneration,
+                              loadId == currentEpisodeId,
+                              auth.currentUser?.id == loadUserId else { return }
                     }
                 }
 
@@ -1480,6 +1523,9 @@ struct EpisodeWatchView: View {
                     Task { await loadEpisodeAdBreaks(contentId: loadId, duration: ep.duration) }
                 } else {
                     let preroll = await prerollDecision(contentId: loadId, duration: ep.duration)
+                    guard playbackLoadGeneration == loadGeneration,
+                          loadId == currentEpisodeId,
+                          auth.currentUser?.id == loadUserId else { return }
                     attachPlayer(playbackPlayer, episodeId: loadId, autoplay: preroll == nil)
                     prerollAdDecision = preroll
                     Task { await loadEpisodeAdBreaks(contentId: loadId, duration: ep.duration) }
@@ -1567,13 +1613,16 @@ struct EpisodeWatchView: View {
             momentObserverPlayer = nil
         }
 
+        lastObservedContentTime = max(0, player.currentTime().seconds.validTime ?? 0)
         let token = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 1, preferredTimescale: 600),
             queue: .main
         ) { time in
             guard !time.seconds.isNaN else { return }
+            let previousTime = lastObservedContentTime
+            lastObservedContentTime = max(0, time.seconds)
             currentPlayerSec = Int(time.seconds)
-            if let adBreak = nextDueAdBreak(at: time.seconds) {
+            if let adBreak = nextDueAdBreak(from: previousTime, to: time.seconds) {
                 Task { await startEpisodeAdBreak(adBreak) }
             }
         }
@@ -1663,6 +1712,7 @@ struct EpisodeWatchView: View {
         midrollAdDecision = nil
         self.activeAdBreak = nil
         clearRestoredAd()
+        isSeekEnforcedAdBreak = false
         resumeContentAfterAdBreakIfNeeded()
     }
 
@@ -1681,7 +1731,8 @@ struct EpisodeWatchView: View {
                     skippable: placementConfig.skippable ?? episodeAdConfig.skippable,
                     skipAfterSec: placementConfig.skipAfterSec ?? episodeAdConfig.skipAfterSec,
                     orientation: "HORIZONTAL",
-                    breakId: "preroll"
+                    breakId: "preroll",
+                    userId: auth.currentUser?.id
                 )
             )
             guard decision.filled, !decision.ads.isEmpty else {
@@ -1696,6 +1747,8 @@ struct EpisodeWatchView: View {
     }
 
     private func loadEpisodeAdBreaks(contentId: String, duration: Double?) async {
+        let requestGeneration = playbackLoadGeneration
+        let requestUserId = auth.currentUser?.id
         let placementConfig = episodeAdConfig.placementConfig(for: "midroll")
         guard episodeAdConfig.enabled, placementConfig.enabled else { return }
         do {
@@ -1703,29 +1756,35 @@ struct EpisodeWatchView: View {
                 AdRequestContext(
                     contentId: contentId,
                     contentType: "episode",
+                    placement: nil,
                     durationSec: duration,
                     maxAds: episodeAdMaxAds(for: "midroll"),
                     maxDurationSec: episodeAdMaxDurationSec(for: "midroll", placementConfig: placementConfig),
                     skippable: placementConfig.skippable ?? episodeAdConfig.skippable,
                     skipAfterSec: placementConfig.skipAfterSec ?? episodeAdConfig.skipAfterSec,
-                    orientation: "HORIZONTAL"
+                    orientation: "HORIZONTAL",
+                    userId: requestUserId
                 )
             )
-            guard currentEpisodeId == contentId else { return }
+            guard playbackLoadGeneration == requestGeneration,
+                  currentEpisodeId == contentId,
+                  auth.currentUser?.id == requestUserId else { return }
             adBreaks = breaks
-            debugAd("vmap loaded contentId=\(contentId) breaks=\(breaks.count)")
+            debugAd("vmap loaded contentId=\(contentId) scheduledNonPrerollBreaks=\(breaks.count) (preroll is requested separately)")
         } catch {
             debugAd("vmap failed contentId=\(contentId): \(error.localizedDescription)")
         }
     }
 
-    private func nextDueAdBreak(at seconds: Double) -> AdBreak? {
+    private func nextDueAdBreak(from previousSeconds: Double, to seconds: Double) -> AdBreak? {
         guard prerollAdDecision == nil, midrollAdDecision == nil else { return nil }
-        return adBreaks
-            .filter { !watchedAdBreakIds.contains($0.id) && !pendingAdBreakIds.contains($0.id) }
-            .filter { seconds >= $0.timeOffsetSec && seconds < $0.timeOffsetSec + 1.5 }
-            .sorted { $0.timeOffsetSec < $1.timeOffsetSec }
-            .first
+        return AdBreakScheduler.nextDue(
+            in: adBreaks,
+            watchedIds: watchedAdBreakIds,
+            pendingIds: pendingAdBreakIds,
+            from: previousSeconds,
+            to: seconds
+        )
     }
 
     @MainActor
@@ -1736,6 +1795,7 @@ struct EpisodeWatchView: View {
 
         if let resumeTime {
             pendingContentSeekAfterAd = resumeTime
+            isSeekEnforcedAdBreak = true
         }
 
         let placementConfig = episodeAdConfig.placementConfig(for: adBreak.placement)
@@ -1747,11 +1807,14 @@ struct EpisodeWatchView: View {
 
         pendingAdBreakIds.insert(adBreak.id)
         player?.pause()
+        let requestGeneration = playbackLoadGeneration
+        let requestContentId = currentEpisodeId
+        let requestUserId = auth.currentUser?.id
         let decision: AdDecision?
         do {
             decision = try await AdServerClient.shared.requestAd(
                 AdRequestContext(
-                    contentId: currentEpisodeId,
+                    contentId: requestContentId,
                     contentType: "episode",
                     placement: nil,
                     durationSec: episode?.duration,
@@ -1760,16 +1823,20 @@ struct EpisodeWatchView: View {
                     skippable: placementConfig.skippable ?? episodeAdConfig.skippable,
                     skipAfterSec: placementConfig.skipAfterSec ?? episodeAdConfig.skipAfterSec,
                     orientation: "HORIZONTAL",
-                    breakId: adBreak.breakId
+                    breakId: adBreak.breakId,
+                    userId: requestUserId
                 )
             )
         } catch {
-            debugAd("midroll failed contentId=\(currentEpisodeId) breakId=\(adBreak.breakId): \(error.localizedDescription)")
+            debugAd("midroll failed contentId=\(requestContentId) breakId=\(adBreak.breakId): \(error.localizedDescription)")
             decision = nil
         }
 
+        guard playbackLoadGeneration == requestGeneration,
+              currentEpisodeId == requestContentId,
+              auth.currentUser?.id == requestUserId else { return }
         guard let decision, decision.filled, !decision.ads.isEmpty else {
-            debugAd("midroll no-fill contentId=\(currentEpisodeId) breakId=\(adBreak.breakId) reason=\(decision?.noFillReason ?? "none")")
+            debugAd("midroll no-fill contentId=\(requestContentId) breakId=\(adBreak.breakId) reason=\(decision?.noFillReason ?? "none")")
             watchedAdBreakIds.insert(adBreak.id)
             pendingAdBreakIds.remove(adBreak.id)
             resumeContentAfterAdBreakIfNeeded()
@@ -1783,7 +1850,13 @@ struct EpisodeWatchView: View {
     private func resumeContentAfterAdBreakIfNeeded() {
         guard let player else { return }
         if let resumeTime = pendingContentSeekAfterAd {
+            let current = max(0, player.currentTime().seconds.isFinite ? player.currentTime().seconds : lastObservedContentTime)
+            if let nextBreak = nextDueAdBreak(from: current, to: resumeTime) {
+                Task { await startEpisodeAdBreak(nextBreak, resumeTime: resumeTime) }
+                return
+            }
             pendingContentSeekAfterAd = nil
+            isSeekEnforcedAdBreak = false
             let target = CMTime(seconds: resumeTime, preferredTimescale: 600)
             player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
                 Task { @MainActor in
@@ -1892,6 +1965,8 @@ struct EpisodeWatchView: View {
         watchedAdBreakIds = []
         pendingAdBreakIds = []
         pendingContentSeekAfterAd = nil
+        isSeekEnforcedAdBreak = false
+        lastObservedContentTime = 0
         reuseCurrentPlayerForFullscreenSelection = isFullscreenPlayerPresented && player != nil
         if !reuseCurrentPlayerForFullscreenSelection {
             player?.pause()
@@ -2055,16 +2130,19 @@ struct EpisodeWatchView: View {
               let adPlayer = activeAdPlayer ?? restoredAdPlayer,
               let presentation = activeAdPresentation ?? restoredAdPresentation else { return }
         var didCompleteAd = false
+        var didAdvanceAd = false
         isFullscreenPlayerPresented = true
         openFullscreenAdPlayer(
             adPlayer,
             presentation: presentation,
             onAdCompleted: {
                 didCompleteAd = true
-                finishFullscreenAd(presentation)
+            },
+            onAdFinished: {
+                didAdvanceAd = true
             },
             onDismiss: {
-                if !didCompleteAd && shouldRestoreFullscreenAd(adPlayer) {
+                if !didAdvanceAd && shouldRestoreFullscreenAd(adPlayer) {
                     restoreExpandedAd(player: adPlayer, presentation: presentation)
                 }
                 isFullscreenPlayerPresented = false

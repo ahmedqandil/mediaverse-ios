@@ -10,6 +10,8 @@ final class MiniPlayerManager: ObservableObject {
         let isAd: Bool
         let adPresentation: ActiveAdPresentation?
         let sourceFrame: CGRect?
+        let playbackSessionId: String
+        let entryContext: PlaybackEntryContext
     }
 
     @Published var item: Item?
@@ -18,24 +20,39 @@ final class MiniPlayerManager: ObservableObject {
     @Published private(set) var isExpansionHandoffActive = false
     private var expandedItem: Item?
 
-    func present(player: AVPlayer, title: String, route: AppRoute) {
+    func present(player: AVPlayer, title: String, route: AppRoute, playbackSessionId: String = UUID().uuidString, entryContext: PlaybackEntryContext = .direct) {
         isExpansionHandoffActive = false
-        item = Item(player: player, title: title, route: route, isAd: false, adPresentation: nil, sourceFrame: nil)
+        item = Item(player: player, title: title, route: route, isAd: false, adPresentation: nil, sourceFrame: nil, playbackSessionId: playbackSessionId, entryContext: entryContext)
         player.play()
     }
 
-    func presentAd(player: AVPlayer, title: String, route: AppRoute, presentation: ActiveAdPresentation?) {
+    func presentAd(player: AVPlayer, title: String, route: AppRoute, presentation: ActiveAdPresentation?, playbackSessionId: String = UUID().uuidString, entryContext: PlaybackEntryContext = .direct) {
         isExpansionHandoffActive = false
-        item = Item(player: player, title: title, route: route, isAd: true, adPresentation: presentation, sourceFrame: nil)
+        item = Item(player: player, title: title, route: route, isAd: true, adPresentation: presentation, sourceFrame: nil, playbackSessionId: playbackSessionId, entryContext: entryContext)
         player.play()
     }
 
-    func replaceAndExpand(player: AVPlayer, title: String, route: AppRoute, sourceFrame: CGRect? = nil) {
+    func replaceAndExpand(player: AVPlayer, title: String, route: AppRoute, sourceFrame: CGRect? = nil, entrySurface: PlaybackEntrySurface) {
         item?.player.pause()
         expandedItem?.player.pause()
         isExpansionHandoffActive = false
         expandedItem = nil
-        item = Item(player: player, title: title, route: route, isAd: false, adPresentation: nil, sourceFrame: sourceFrame)
+        let seconds = player.currentTime().seconds
+        item = Item(
+            player: player,
+            title: title,
+            route: route,
+            isAd: false,
+            adPresentation: nil,
+            sourceFrame: sourceFrame,
+            playbackSessionId: UUID().uuidString,
+            entryContext: PlaybackEntryContext(
+                surface: entrySurface,
+                mode: .autoplayPreview,
+                contentStartSec: seconds.isFinite ? max(0, seconds) : 0,
+                previewSessionId: UUID().uuidString
+            )
+        )
         player.playImmediately(atRate: 1)
         replaceAndExpandToken += 1
     }

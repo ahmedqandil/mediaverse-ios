@@ -158,7 +158,10 @@ private enum ShortsFeedAssembler {
         shortsAdConfig: PlatformShortsAdsConfig
     ) -> ShortsAdCandidate {
         let placement = shortsAdPlacement(at: index)
-        let policy = short.adPolicy ?? .enabledFallback(reason: "policy_unavailable")
+        // Ad eligibility is entitlement-sensitive and must come from the backend.
+        // If the policy is absent, fail closed instead of potentially showing ads
+        // to a user whose subscription removes them.
+        let policy = short.adPolicy ?? .disabled(reason: "policy_unavailable")
         let adConfig = policy.applying(to: shortsAdConfig)
         return ShortsAdCandidate(
             id: shortsAdItemID(placement: placement, shortID: short.id),
@@ -234,23 +237,24 @@ private extension AssembledListing {
 }
 
 private enum ShortsAdFrequencyStore {
-    static func canShow(placement: String, cap: Int?) -> Bool {
+    static func canShow(placement: String, userId: String?, cap: Int?) -> Bool {
         guard let cap else { return true }
         guard cap > 0 else { return false }
-        return UserDefaults.standard.integer(forKey: storageKey(for: placement)) < cap
+        return UserDefaults.standard.integer(forKey: storageKey(for: placement, userId: userId)) < cap
     }
 
-    static func record(placement: String, cap: Int?) {
+    static func record(placement: String, userId: String?, cap: Int?) {
         guard let cap, cap > 0 else { return }
-        let key = storageKey(for: placement)
+        let key = storageKey(for: placement, userId: userId)
         let nextCount = min(cap, UserDefaults.standard.integer(forKey: key) + 1)
         UserDefaults.standard.set(nextCount, forKey: key)
     }
 
-    private static func storageKey(for placement: String) -> String {
+    private static func storageKey(for placement: String, userId: String?) -> String {
         let date = Calendar.current.dateComponents([.year, .month, .day], from: Date())
         let day = "\(date.year ?? 0)-\(date.month ?? 0)-\(date.day ?? 0)"
-        return "westreem.shortsAdFrequency.\(day).\(placement)"
+        let identityScope = userId?.nilIfEmpty ?? "anonymous"
+        return "westreem.shortsAdFrequency.\(day).\(identityScope).\(placement)"
     }
 }
 
@@ -660,6 +664,7 @@ struct ShortsView: View {
     @State private var pendingShortsAdItemIds = Set<String>()
     @State private var filledShortsAdDecisions = [String: AdDecision]()
     @State private var filledShortsAdPolicies = [String: EffectiveAdPolicy]()
+    @State private var shortsAdIdentityGeneration = UUID()
     @State private var shortsAdConfig: PlatformShortsAdsConfig = .default
     @State private var shortsFeedListings = [AssembledListing]()
     @StateObject private var playbackManager: ShortsPlaybackManager
@@ -859,6 +864,7 @@ struct ShortsView: View {
                         placement: placement,
                         adIndex: afterIndex,
                         adConfig: adConfig,
+                        userId: auth.currentUser?.id,
                         isActive: item.id == currentID,
                         onAdPlaybackChanged: { isPlayingAd in
                             if isPlayingAd {
@@ -920,6 +926,17 @@ struct ShortsView: View {
             }
             .onChange(of: isMuted) { _, _ in
                 configurePlayback()
+            }
+            .onChange(of: auth.currentUser?.id) { _, _ in
+                // Decisions and local frequency counters are identity-scoped.
+                // Discard prefetched decisions whenever the signed-in account
+                // changes so one user's targeting cannot leak into another.
+                skippedShortsAdItemIds.removeAll()
+                pendingShortsAdItemIds.removeAll()
+                filledShortsAdDecisions.removeAll()
+                filledShortsAdPolicies.removeAll()
+                shortsAdIdentityGeneration = UUID()
+                prefetchUpcomingShortsAds()
             }
             .overlay(alignment: .bottom) {
                 if let paginationError {
@@ -1204,7 +1221,13 @@ struct ShortsView: View {
 
     @MainActor
     private func prefetchShortsAd(_ candidate: ShortsAdCandidate) async {
-        defer { pendingShortsAdItemIds.remove(candidate.id) }
+        let identityGeneration = shortsAdIdentityGeneration
+        defer {
+            if identityGeneration == shortsAdIdentityGeneration {
+                pendingShortsAdItemIds.remove(candidate.id)
+            }
+        }
+        let requestUserId = auth.currentUser?.id
         guard candidate.adConfig.enabled,
               candidate.adConfig.placementConfig(for: candidate.placement).enabled else {
             skippedShortsAdItemIds.insert(candidate.id)
@@ -1234,13 +1257,16 @@ struct ShortsView: View {
                     maxDurationSec: effectiveMaxDurationSec,
                     skippable: effectiveSkippable,
                     skipAfterSec: effectiveSkipAfterSec,
-                    orientation: "VERTICAL"
+                    orientation: "VERTICAL",
+                    userId: requestUserId
                 )
             )
         } catch {
             decision = nil
         }
 
+        guard identityGeneration == shortsAdIdentityGeneration,
+              requestUserId == auth.currentUser?.id else { return }
         guard let decision, decision.filled, !decision.ads.isEmpty else {
             skippedShortsAdItemIds.insert(candidate.id)
             return
@@ -1320,6 +1346,7 @@ struct ShortsView: View {
         guard placementConfig.enabled else { return false }
         guard ShortsAdFrequencyStore.canShow(
             placement: placement,
+            userId: auth.currentUser?.id,
             cap: placementConfig.frequencyPerUserPerDay
         ) else {
             return false
@@ -3053,6 +3080,7 @@ private struct ShortsAdCardView: View {
     let placement: String
     let adIndex: Int
     let adConfig: PlatformShortsAdsConfig
+    let userId: String?
     let isActive: Bool
     let onAdPlaybackChanged: (Bool) -> Void
     let onSwipeUnlocked: () -> Void
@@ -3082,31 +3110,36 @@ private struct ShortsAdCardView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            NativeAdPlayerView(
-                decision: decision,
-                contentId: contentId,
-                placement: placement,
-                aspectRatio: 9 / 16,
-                bottomContentInset: adBottomClearance,
-                progressHorizontalInset: progressBarHorizontalInset,
-                fillVerticalContainer: true,
-                adPolicy: policy,
-                adRemoval: policy.adRemoval,
-                overrideSkippable: effectiveSkippable,
-                overrideSkipAfterSec: effectiveSkipAfterSec,
-                onCanSkipChanged: { canSkip in
-                    if canSkip {
-                        onSwipeUnlocked()
+            if isActive {
+                NativeAdPlayerView(
+                    decision: decision,
+                    contentId: contentId,
+                    placement: placement,
+                    userId: userId,
+                    aspectRatio: 9 / 16,
+                    bottomContentInset: adBottomClearance,
+                    progressHorizontalInset: progressBarHorizontalInset,
+                    fillVerticalContainer: true,
+                    adPolicy: policy,
+                    adRemoval: policy.adRemoval,
+                    overrideSkippable: effectiveSkippable,
+                    overrideSkipAfterSec: effectiveSkipAfterSec,
+                    onImpression: {
+                        recordImpressionIfNeeded()
+                    },
+                    onCanSkipChanged: { canSkip in
+                        if canSkip {
+                            onSwipeUnlocked()
+                        }
                     }
+                ) {
+                    finishAd()
                 }
-            ) {
-                finishAd()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onChange(of: isActive) { _, active in
             if active {
-                recordImpressionIfNeeded()
                 onAdPlaybackChanged(true)
             } else {
                 onAdPlaybackChanged(false)
@@ -3114,7 +3147,6 @@ private struct ShortsAdCardView: View {
         }
         .onAppear {
             if isActive {
-                recordImpressionIfNeeded()
                 onAdPlaybackChanged(true)
             }
         }
@@ -3134,6 +3166,7 @@ private struct ShortsAdCardView: View {
         didRecordImpression = true
         ShortsAdFrequencyStore.record(
             placement: placement,
+            userId: userId,
             cap: placementConfig.frequencyPerUserPerDay
         )
     }

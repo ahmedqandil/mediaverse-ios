@@ -697,6 +697,8 @@ struct EpisodeDetail: Codable, Identifiable {
 struct EffectiveAdPolicy: Codable {
     let adsEnabled: Bool
     let reason: String?
+    let deliveryMode: String?
+    let deliveryByDevice: [String: String]?
     let adLoad: Int?
     let cadenceKind: String?
     let cadenceValue: Int?
@@ -714,25 +716,8 @@ struct EffectiveAdPolicy: Codable {
         EffectiveAdPolicy(
             adsEnabled: false,
             reason: reason,
-            adLoad: nil,
-            cadenceKind: nil,
-            cadenceValue: nil,
-            frequencySec: nil,
-            firstAfter: nil,
-            skippable: nil,
-            skipAfterSec: nil,
-            minGapSec: nil,
-            maxDurationSec: nil,
-            maxAdDurationSec: nil,
-            pods: nil,
-            adRemoval: nil
-        )
-    }
-
-    static func enabledFallback(reason: String? = nil) -> EffectiveAdPolicy {
-        EffectiveAdPolicy(
-            adsEnabled: true,
-            reason: reason,
+            deliveryMode: nil,
+            deliveryByDevice: nil,
             adLoad: nil,
             cadenceKind: nil,
             cadenceValue: nil,

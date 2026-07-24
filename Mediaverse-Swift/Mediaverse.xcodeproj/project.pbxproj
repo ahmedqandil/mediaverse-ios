@@ -10,6 +10,7 @@
 		0330DE777F7802F12B216F12 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1079593180F3AC1E7E78616 /* LoginView.swift */; };
 		0465594F090062B86606BD71 /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 244896868E339180BDFCBB1F /* ProfileView.swift */; };
 		074934FE7811BA935B449923 /* EpisodeWatchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A90D9B1C22E7B0B62BDCD3C6 /* EpisodeWatchView.swift */; };
+		080888BB0248C4C96764B4AA /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 347AEE7FBFC318EB5B2B800E /* Foundation.framework */; };
 		094187FAC3DC90ECC72194B6 /* AuthManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE266C709CC31195D060B1D /* AuthManager.swift */; };
 		0D03EF1A793A64780EF61734 /* CollectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8C8906EFE783CA2E17AE270 /* CollectionsView.swift */; };
 		132BF304D93ABFA1C8E2FA0B /* AppRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00284911F531EED24A1B0F42 /* AppRoute.swift */; };
@@ -21,6 +22,7 @@
 		4AC3CC81E57719BC21834EE5 /* ShowsBrowseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 499AD1F0EE7A8E3BC6E5870A /* ShowsBrowseView.swift */; };
 		57BB74E6C9FA90E30D147337 /* ChannelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D9F29B896B1EA46746594D9 /* ChannelView.swift */; };
 		5C718E8424A7481445F48651 /* MicrodramaWatchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE5995D6861476D2F23A3EC4 /* MicrodramaWatchView.swift */; };
+		6A5D4A1BE219DE951B754C92 /* AdSystemTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C92C17EFE5EBABDB49E43085 /* AdSystemTests.swift */; };
 		6B778FFA6F88A2548DF07061 /* BrowseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97C79E3B3589DB146431C06F /* BrowseView.swift */; };
 		84366B0630061FA3009977FA /* DevicePairingViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84366B0530061FA3009977FA /* DevicePairingViews.swift */; };
 		84366B0A3006CC08009977FA /* PushNotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84366B093006CC08009977FA /* PushNotificationManager.swift */; };
@@ -68,6 +70,7 @@
 		8467891E2FFD942100DED05E /* ViewerCountChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8467891D2FFD942100DED05E /* ViewerCountChip.swift */; };
 		846789202FFD947500DED05E /* ViewersSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8467891F2FFD947500DED05E /* ViewersSheet.swift */; };
 		847E740630034085006C0861 /* AdServerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 847E740530034085006C0861 /* AdServerClient.swift */; };
+		847E741030034085006C0861 /* SGAIPlayback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 847E740F30034085006C0861 /* SGAIPlayback.swift */; };
 		84A9BD6865EADDEEF6EA2989 /* MicrodramasBrowseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 048C927F22ABD7E30850299B /* MicrodramasBrowseView.swift */; };
 		84FC77F22FFA59E800681F7A /* UploadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84FC77F12FFA59E800681F7A /* UploadView.swift */; };
 		84FC77F42FFA657100681F7A /* CollectionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84FC77F32FFA657100681F7A /* CollectionDetailView.swift */; };
@@ -99,6 +102,16 @@
 		F7F54ABC6F9C53F9031D04F4 /* MediaverseApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 101BED1847DF62F6274A4615 /* MediaverseApp.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		239FE7F8B4F9DAAC5D47F488 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DD7512F5E0289CDDCE66B0F8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = FA640C03D22EB3B57265CB31;
+			remoteInfo = Mediaverse;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		00284911F531EED24A1B0F42 /* AppRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRoute.swift; sourceTree = "<group>"; };
 		048C927F22ABD7E30850299B /* MicrodramasBrowseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MicrodramasBrowseView.swift; sourceTree = "<group>"; };
@@ -106,8 +119,10 @@
 		101BED1847DF62F6274A4615 /* MediaverseApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaverseApp.swift; sourceTree = "<group>"; };
 		1D4EF59B96B5483FBB01BC0F /* FollowingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowingView.swift; sourceTree = "<group>"; };
 		244896868E339180BDFCBB1F /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileView.swift; sourceTree = "<group>"; };
+		25BF1A786BBBB58C59AFF35C /* MediaverseTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MediaverseTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3029CD1181A4288D29FA2F38 /* NotificationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationsView.swift; sourceTree = "<group>"; };
 		31ED9554BF69E2045799C727 /* Constants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Constants.swift; sourceTree = "<group>"; };
+		347AEE7FBFC318EB5B2B800E /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		499AD1F0EE7A8E3BC6E5870A /* ShowsBrowseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowsBrowseView.swift; sourceTree = "<group>"; };
 		49D9342E9462482CB2A9CB1F /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
 		5151635616D8FDACB6A63C78 /* ContextSwitcherView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextSwitcherView.swift; sourceTree = "<group>"; };
@@ -164,6 +179,7 @@
 		8467891D2FFD942100DED05E /* ViewerCountChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewerCountChip.swift; sourceTree = "<group>"; };
 		8467891F2FFD947500DED05E /* ViewersSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewersSheet.swift; sourceTree = "<group>"; };
 		847E740530034085006C0861 /* AdServerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdServerClient.swift; sourceTree = "<group>"; };
+		847E740F30034085006C0861 /* SGAIPlayback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SGAIPlayback.swift; sourceTree = "<group>"; };
 		84FC77F12FFA59E800681F7A /* UploadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadView.swift; sourceTree = "<group>"; };
 		84FC77F32FFA657100681F7A /* CollectionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionDetailView.swift; sourceTree = "<group>"; };
 		84FC77F52FFA686700681F7A /* ChannelsBrowseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChannelsBrowseView.swift; sourceTree = "<group>"; };
@@ -186,6 +202,7 @@
 		C1D2E3F4A5B6C7D8E9F0A1B2 /* WatchHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchHistoryView.swift; sourceTree = "<group>"; };
 		C434464188B03F634CC1FA37 /* MoviesBrowseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoviesBrowseView.swift; sourceTree = "<group>"; };
 		C8C8906EFE783CA2E17AE270 /* CollectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionsView.swift; sourceTree = "<group>"; };
+		C92C17EFE5EBABDB49E43085 /* AdSystemTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AdSystemTests.swift; sourceTree = "<group>"; };
 		D1E2F3A4B5C6D7E8F9A0B1C2 /* PlaylistsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistsView.swift; sourceTree = "<group>"; };
 		E1079593180F3AC1E7E78616 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		E1F2A3B4C5D6E7F8A9B0C1D2 /* PlaylistDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistDetailView.swift; sourceTree = "<group>"; };
@@ -194,6 +211,14 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		02B0BA9E035DF6D35360D7B1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				080888BB0248C4C96764B4AA /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		8275042644AAC1068F42F1DF /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -209,6 +234,7 @@
 			isa = PBXGroup;
 			children = (
 				8279F99B5DC950C1401F5EFD /* Mediaverse.app */,
+				25BF1A786BBBB58C59AFF35C /* MediaverseTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -264,6 +290,14 @@
 			path = Channel;
 			sourceTree = "<group>";
 		};
+		626C27538428EA6B3EED1AB7 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				347AEE7FBFC318EB5B2B800E /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
 		6B980F5795F1A3F489EA3B24 /* Collections */ = {
 			isa = PBXGroup;
 			children = (
@@ -297,6 +331,7 @@
 				846789062FFC352000DED05E /* StoryExportService.swift */,
 				846789112FFD2BEF00DED05E /* GlobalUploadProgressManager.swift */,
 				847E740530034085006C0861 /* AdServerClient.swift */,
+				847E740F30034085006C0861 /* SGAIPlayback.swift */,
 				84366B093006CC08009977FA /* PushNotificationManager.swift */,
 				84366B0D300B860B009977FA /* DiskJSONCache.swift */,
 				84366B0F300B876A009977FA /* MainPageWarmupService.swift */,
@@ -365,6 +400,23 @@
 			path = ViewModels;
 			sourceTree = "<group>";
 		};
+		873010BA2AE5CCAC0AAAE368 /* MediaverseTests */ = {
+			isa = PBXGroup;
+			children = (
+				C92C17EFE5EBABDB49E43085 /* AdSystemTests.swift */,
+			);
+			name = MediaverseTests;
+			path = MediaverseTests;
+			sourceTree = "<group>";
+		};
+		877E5A2E84907C5FB29F1CC6 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				626C27538428EA6B3EED1AB7 /* iOS */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		A68BF0C70F879BCB3789CA59 /* Microdrama */ = {
 			isa = PBXGroup;
 			children = (
@@ -405,6 +457,8 @@
 				84FC78092FFBCF8000681F7A /* AppIcon 2.swift */,
 				0B8536557FEB21A0EFA66E4F /* Products */,
 				8467891B2FFD93FD00DED05E /* ViewModels */,
+				877E5A2E84907C5FB29F1CC6 /* Frameworks */,
+				873010BA2AE5CCAC0AAAE368 /* MediaverseTests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -489,6 +543,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		109571F60D591CBC5E08B3A8 /* MediaverseTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E9715AA174171C1093EB5E03 /* Build configuration list for PBXNativeTarget "MediaverseTests" */;
+			buildPhases = (
+				733ED63B7B2D338EEBB05468 /* Sources */,
+				02B0BA9E035DF6D35360D7B1 /* Frameworks */,
+				E6809F0ED47E3DC134A88D16 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7CEBFB03BB0B1FFB93BDA24F /* PBXTargetDependency */,
+			);
+			name = MediaverseTests;
+			productName = MediaverseTests;
+			productReference = 25BF1A786BBBB58C59AFF35C /* MediaverseTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		FA640C03D22EB3B57265CB31 /* Mediaverse */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = F5DEB712F0732774111A6929 /* Build configuration list for PBXNativeTarget "Mediaverse" */;
@@ -538,6 +610,7 @@
 			projectRoot = "";
 			targets = (
 				FA640C03D22EB3B57265CB31 /* Mediaverse */,
+				109571F60D591CBC5E08B3A8 /* MediaverseTests */,
 			);
 		};
 /* End PBXProject section */
@@ -552,9 +625,24 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E6809F0ED47E3DC134A88D16 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		733ED63B7B2D338EEBB05468 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6A5D4A1BE219DE951B754C92 /* AdSystemTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		E2ACE6D20D33089F5A902453 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -605,6 +693,7 @@
 				846789162FFD7E1200DED05E /* ChannelSettingsView.swift in Sources */,
 				5C718E8424A7481445F48651 /* MicrodramaWatchView.swift in Sources */,
 				847E740630034085006C0861 /* AdServerClient.swift in Sources */,
+				847E741030034085006C0861 /* SGAIPlayback.swift in Sources */,
 				846789142FFD6DAF00DED05E /* Mentions.swift in Sources */,
 				3A875BF20CD3F5E714C0304B /* ContextSwitcherView.swift in Sources */,
 				846788F02FFC2C0200DED05E /* StoriesRepository.swift in Sources */,
@@ -650,6 +739,15 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		7CEBFB03BB0B1FFB93BDA24F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = Mediaverse;
+			target = FA640C03D22EB3B57265CB31 /* Mediaverse */;
+			targetProxy = 239FE7F8B4F9DAAC5D47F488 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		0CCE54F3C7EDE59FA89285C1 /* Release */ = {
@@ -785,6 +883,22 @@
 			};
 			name = Debug;
 		};
+		AFE50CDBC9D411D3ED2D250A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.westreem.app.tests;
+				PRODUCT_MODULE_NAME = MediaverseTests;
+				PRODUCT_NAME = MediaverseTests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Mediaverse.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Mediaverse";
+			};
+			name = Debug;
+		};
 		D2511DC3F7A66CA2EFBC31B5 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -813,6 +927,23 @@
 			};
 			name = Release;
 		};
+		F2069D69719283EEF9FE3233 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.westreem.app.tests;
+				PRODUCT_MODULE_NAME = MediaverseTests;
+				PRODUCT_NAME = MediaverseTests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Mediaverse.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Mediaverse";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -821,6 +952,15 @@
 			buildConfigurations = (
 				1709DD17361E119B987D6257 /* Debug */,
 				0CCE54F3C7EDE59FA89285C1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E9715AA174171C1093EB5E03 /* Build configuration list for PBXNativeTarget "MediaverseTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F2069D69719283EEF9FE3233 /* Release */,
+				AFE50CDBC9D411D3ED2D250A /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

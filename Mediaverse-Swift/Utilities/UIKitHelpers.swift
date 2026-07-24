@@ -134,6 +134,7 @@ private struct FullscreenAdPlayer: View {
     let onDismiss: () -> Void
 
     @State private var didRequestDismiss = false
+    @State private var didSkipCurrentAd = false
 
     var body: some View {
         ZStack {
@@ -143,6 +144,7 @@ private struct FullscreenAdPlayer: View {
                     decision: presentation.decision,
                     contentId: presentation.contentId,
                     placement: presentation.placement,
+                    userId: presentation.userId,
                     breakId: presentation.breakId,
                     aspectRatio: 16 / 9,
                     onFullscreen: requestDismissOnce,
@@ -150,16 +152,27 @@ private struct FullscreenAdPlayer: View {
                     initialAdIndex: presentation.currentAdIndex,
                     isPresentationOnly: true,
                     brandCardPlacement: .playerOverlay,
-                    onSkip: nil,
+                    initialImpressionTracked: presentation.hasTrackedImpression,
+                    initialStartTracked: presentation.hasTrackedStart,
+                    adPolicy: presentation.adPolicy,
+                    adRemoval: presentation.adRemoval,
+                    overrideSkippable: presentation.overrideSkippable,
+                    overrideSkipAfterSec: presentation.overrideSkipAfterSec,
+                    onSkip: {
+                        didSkipCurrentAd = true
+                    },
                     onFinish: nil
                 ) {
-                    onAdCompleted?()
-                    requestDismissOnce()
-                    if let onAdFinished {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
-                            onAdFinished()
-                        }
+                    if didSkipCurrentAd {
+                        presentation.onSkip?()
+                    } else {
+                        presentation.onFinish?()
                     }
+                    onAdFinished?()
+                    if presentation.currentAdIndex + 1 >= presentation.decision.ads.count {
+                        onAdCompleted?()
+                    }
+                    requestDismissOnce()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -239,8 +252,13 @@ func openFullscreenAdPlayer(
     onAdFinished: (() -> Void)? = nil,
     onDismiss: (() -> Void)? = nil
 ) {
-    MediaverseAppDelegate.orientationLock = .landscape
-    ActiveAdFullscreenHandoff.protect(player)
+    guard let presenter = UIApplication.shared.firstKeyWindow?
+        .rootViewController?
+        .topMostPresented,
+          !(presenter is FullScreenPlayerHostVC<FullscreenAdPlayer>) else {
+        player.play()
+        return
+    }
 
     var vc: FullScreenPlayerHostVC<FullscreenAdPlayer>!
     let dismissFullscreen = {
@@ -265,14 +283,8 @@ func openFullscreenAdPlayer(
         onDismiss?()
     }
 
-    guard let presenter = UIApplication.shared.firstKeyWindow?
-        .rootViewController?
-        .topMostPresented else { return }
-    if presenter is FullScreenPlayerHostVC<FullscreenAdPlayer> {
-        player.play()
-        return
-    }
-
+    MediaverseAppDelegate.orientationLock = .landscape
+    ActiveAdFullscreenHandoff.protect(player)
     presenter.present(vc, animated: true) {
         requestFullscreenLandscapeGeometry()
         player.play()

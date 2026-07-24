@@ -18,6 +18,13 @@ struct AdDecisionPolicy: Decodable {
     let skipAfterSec: Double?
 }
 
+private struct PendingAdTrackingEvent: Codable {
+    let id: String
+    let url: String
+    let createdAt: Date
+    var failedAttempts: Int
+}
+
 struct AdRemovalOffer: Codable {
     let scope: String?
     let entityId: String?
@@ -217,12 +224,39 @@ struct AdBreak: Identifiable, Equatable {
     let placement: String
 }
 
+enum AdBreakScheduler {
+    static func nextDue(
+        in breaks: [AdBreak],
+        watchedIds: Set<String>,
+        pendingIds: Set<String>,
+        from previousSeconds: Double,
+        to currentSeconds: Double
+    ) -> AdBreak? {
+        guard currentSeconds >= previousSeconds else { return nil }
+        return breaks
+            .filter { !watchedIds.contains($0.id) && !pendingIds.contains($0.id) }
+            .filter {
+                $0.timeOffsetSec > previousSeconds + 0.05
+                    && $0.timeOffsetSec <= currentSeconds + 0.25
+            }
+            .sorted { $0.timeOffsetSec < $1.timeOffsetSec }
+            .first
+    }
+}
+
 struct ActiveAdPresentation {
     let decision: AdDecision
     let contentId: String
     let placement: String?
     let breakId: String?
+    let userId: String?
     let currentAdIndex: Int
+    let hasTrackedImpression: Bool
+    let hasTrackedStart: Bool
+    let adPolicy: EffectiveAdPolicy?
+    let adRemoval: AdRemovalOffer?
+    let overrideSkippable: Bool?
+    let overrideSkipAfterSec: Int?
     let onSkip: (() -> Void)?
     let onFinish: (() -> Void)?
 }
@@ -256,6 +290,8 @@ actor AdServerClient {
     private let session = URLSession(configuration: .ephemeral)
     private let trackingSession = URLSession(configuration: .default)
     private let decoder = JSONDecoder()
+    private let trackingQueueCacheKey = "ads.pending-tracking.v1"
+    private var isFlushingTrackingQueue = false
 
     private var sessionId: String {
         let idKey = "westreem.adSessionId"
@@ -288,6 +324,7 @@ actor AdServerClient {
     }
 
     func requestAd(_ context: AdRequestContext) async throws -> AdDecision {
+        scheduleTrackingQueueFlush()
         let deviceKind = await MainActor.run {
             UIDevice.current.userInterfaceIdiom == .pad ? "tablet" : "mobile"
         }
@@ -346,6 +383,7 @@ actor AdServerClient {
     }
 
     func requestVMAP(_ context: AdRequestContext) async throws -> [AdBreak] {
+        scheduleTrackingQueueFlush()
         let deviceKind = await MainActor.run {
             UIDevice.current.userInterfaceIdiom == .pad ? "tablet" : "mobile"
         }
@@ -382,6 +420,9 @@ actor AdServerClient {
         if let breakId = context.breakId {
             items.append(URLQueryItem(name: "breakId", value: breakId))
         }
+        if let userId = context.userId {
+            items.append(URLQueryItem(name: "userId", value: userId))
+        }
         components?.queryItems = items
         guard let url = components?.url else {
             throw APIError.badURL(C.adServerURL + "/vmap")
@@ -392,12 +433,14 @@ actor AdServerClient {
 
         let (data, response) = try await session.data(from: url)
         try validate(response)
-        return VMAPBreakParser.parse(data)
+        return try VMAPBreakParser.parse(data, durationSec: context.durationSec)
     }
 
     func track(event: String, ad: AdCreative, decisionId: String?, contentId: String, placement: String?, breakId: String? = nil, userId: String? = nil) async {
+        let eventId = UUID().uuidString
         var components = URLComponents(string: C.adServerURL + "/track")
         components?.queryItems = [
+            URLQueryItem(name: "eid", value: eventId),
             URLQueryItem(name: "e", value: event),
             URLQueryItem(name: "iid", value: ad.impressionId),
             URLQueryItem(name: "did", value: decisionId),
@@ -419,7 +462,7 @@ actor AdServerClient {
         }
 
         guard let url = components?.url, C.isTrustedAdURL(url) else { return }
-        let attempts = event == "impression" ? 3 : 1
+        let attempts = event == "impression" ? 3 : 2
         for attempt in 1...attempts {
             do {
                 let (_, response) = try await trackingSession.data(from: url)
@@ -428,10 +471,82 @@ actor AdServerClient {
             } catch {
                 guard attempt < attempts else {
                     Self.debugLog("track failed event=\(event) impression=\(ad.impressionId): \(error.localizedDescription)")
+                    await enqueueTrackingEvent(id: eventId, url: url)
                     return
                 }
                 try? await Task.sleep(nanoseconds: UInt64(attempt) * 500_000_000)
             }
+        }
+    }
+
+    private func scheduleTrackingQueueFlush() {
+        Task {
+            await AdServerClient.shared.flushTrackingQueue()
+        }
+    }
+
+    private func enqueueTrackingEvent(id: String, url: URL) async {
+        var queued = (try? await DiskJSONCache.shared.value(
+            forKey: trackingQueueCacheKey,
+            as: [PendingAdTrackingEvent].self
+        )) ?? []
+        guard !queued.contains(where: { $0.id == id }) else { return }
+        queued.append(
+            PendingAdTrackingEvent(
+                id: id,
+                url: url.absoluteString,
+                createdAt: Date(),
+                failedAttempts: 0
+            )
+        )
+        if queued.count > 200 {
+            queued.removeFirst(queued.count - 200)
+        }
+        try? await DiskJSONCache.shared.store(
+            queued,
+            forKey: trackingQueueCacheKey,
+            ttl: 24 * 60 * 60
+        )
+    }
+
+    private func flushTrackingQueue() async {
+        guard !isFlushingTrackingQueue else { return }
+        isFlushingTrackingQueue = true
+        defer { isFlushingTrackingQueue = false }
+
+        guard let queued = try? await DiskJSONCache.shared.value(
+            forKey: trackingQueueCacheKey,
+            as: [PendingAdTrackingEvent].self
+        ), !queued.isEmpty else { return }
+
+        let now = Date()
+        var remaining = [PendingAdTrackingEvent]()
+        for var item in queued.prefix(20) {
+            guard now.timeIntervalSince(item.createdAt) < 24 * 60 * 60,
+                  let url = URL(string: item.url),
+                  C.isTrustedAdURL(url) else { continue }
+            do {
+                let (_, response) = try await trackingSession.data(from: url)
+                try validate(response)
+            } catch {
+                item.failedAttempts += 1
+                if item.failedAttempts < 8 {
+                    remaining.append(item)
+                }
+            }
+        }
+        if queued.count > 20 {
+            remaining.append(contentsOf: queued.dropFirst(20))
+        }
+
+        if remaining.isEmpty {
+            try? await DiskJSONCache.shared.removeValue(forKey: trackingQueueCacheKey)
+        } else {
+            try? await DiskJSONCache.shared.store(
+                remaining,
+                forKey: trackingQueueCacheKey,
+                ttl: 24 * 60 * 60
+            )
         }
     }
 
@@ -450,14 +565,23 @@ actor AdServerClient {
     }
 }
 
-private final class VMAPBreakParser: NSObject, XMLParserDelegate {
+final class VMAPBreakParser: NSObject, XMLParserDelegate {
     private var breaks = [AdBreak]()
+    private let durationSec: Double?
 
-    static func parse(_ data: Data) -> [AdBreak] {
+    private init(durationSec: Double?) {
+        self.durationSec = durationSec
+    }
+
+    static func parse(_ data: Data, durationSec: Double?) throws -> [AdBreak] {
         let parser = XMLParser(data: data)
-        let delegate = VMAPBreakParser()
+        let delegate = VMAPBreakParser(durationSec: durationSec)
         parser.delegate = delegate
-        parser.parse()
+        guard parser.parse() else {
+            throw APIError.invalidResponse(
+                parser.parserError?.localizedDescription ?? "Invalid VMAP response"
+            )
+        }
         return delegate.breaks
             .filter { $0.timeOffsetSec > 0 }
             .sorted { $0.timeOffsetSec < $1.timeOffsetSec }
@@ -473,7 +597,7 @@ private final class VMAPBreakParser: NSObject, XMLParserDelegate {
         let normalized = elementName.lowercased()
         guard normalized == "adbreak" || normalized.hasSuffix(":adbreak") else { return }
 
-        guard let offset = attributeDict["timeOffset"].flatMap(Self.parseOffset) else { return }
+        guard let offset = attributeDict["timeOffset"].flatMap(parseOffset) else { return }
         let breakId = attributeDict["breakId"]
             ?? attributeDict["breakID"]
             ?? attributeDict["id"]
@@ -498,14 +622,23 @@ private final class VMAPBreakParser: NSObject, XMLParserDelegate {
         if normalizedBreakId.contains("midroll") || normalizedBreakId.contains("mid-roll") {
             return "midroll"
         }
+        if normalizedBreakId.contains("postroll") || normalizedBreakId.contains("post-roll") {
+            return "postroll"
+        }
         return offset <= 0 ? "preroll" : "midroll"
     }
 
-    private static func parseOffset(_ value: String) -> Double? {
+    private func parseOffset(_ value: String) -> Double? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if trimmed == "start" { return 0 }
-        if trimmed == "end" { return nil }
-        if trimmed.hasSuffix("%") { return nil }
+        if trimmed == "end" { return durationSec }
+        if trimmed.hasSuffix("%"),
+           let durationSec,
+           durationSec.isFinite,
+           durationSec > 0,
+           let percent = Double(trimmed.dropLast()) {
+            return durationSec * min(max(percent, 0), 100) / 100
+        }
         if let seconds = Double(trimmed) { return seconds }
 
         let parts = trimmed.split(separator: ":").map(String.init)
@@ -535,10 +668,13 @@ struct NativeAdPlayerView: View {
     var initialAdIndex = 0
     var isPresentationOnly = false
     var brandCardPlacement: NativeAdBrandCardPlacement? = nil
+    var initialImpressionTracked = false
+    var initialStartTracked = false
     var adPolicy: EffectiveAdPolicy? = nil
     var adRemoval: AdRemovalOffer? = nil
     var overrideSkippable: Bool? = nil
     var overrideSkipAfterSec: Int? = nil
+    var onImpression: (() -> Void)? = nil
     var onCanSkipChanged: ((Bool) -> Void)? = nil
     var onActivePlayerChanged: ((AVPlayer?) -> Void)? = nil
     var onActiveAdPresentationChanged: ((ActiveAdPresentation?) -> Void)? = nil
@@ -555,6 +691,7 @@ struct NativeAdPlayerView: View {
     @State private var endObserver: NSObjectProtocol?
     @State private var failureObserver: NSObjectProtocol?
     @State private var playbackStartTask: Task<Void, Never>?
+    @State private var playbackWatchdogTask: Task<Void, Never>?
     @State private var firedEvents: Set<String> = []
     @State private var isPaused = false
 
@@ -663,6 +800,10 @@ struct NativeAdPlayerView: View {
         }
         .onDisappear {
             if preservePlaybackOnDisappear || ActiveAdFullscreenHandoff.isProtected(player) {
+                if let player,
+                   player.timeControlStatus == .playing || player.currentTime().seconds > 0.05 {
+                    recordPlaybackStartIfNeeded()
+                }
                 publishActiveAdState(player)
                 detachPlaybackObservers()
             } else if isPresentationOnly {
@@ -893,13 +1034,9 @@ struct NativeAdPlayerView: View {
     private var skipControl: some View {
         if canSkip {
             Button {
-                if isPresentationOnly {
-                    playNextOrFinish()
-                } else {
-                    trackEvent("skip")
-                    onSkip?()
-                    playNextOrFinish()
-                }
+                trackEvent("skip")
+                onSkip?()
+                playNextOrFinish()
             } label: {
                 Text("Skip ad ▸")
                     .font(.system(size: 12, weight: .semibold))
@@ -1130,15 +1267,17 @@ struct NativeAdPlayerView: View {
             playNextOrFinish()
         }
 
-        trackEvent("impression")
         nextPlayer.play()
         schedulePlaybackStartTracking(for: nextPlayer)
+        schedulePlaybackWatchdog(for: nextPlayer)
         onCanSkipChanged?(canSkip)
     }
 
     private func detachPlaybackObservers() {
         playbackStartTask?.cancel()
         playbackStartTask = nil
+        playbackWatchdogTask?.cancel()
+        playbackWatchdogTask = nil
         if let observer {
             player?.removeTimeObserver(observer)
             self.observer = nil
@@ -1181,7 +1320,14 @@ struct NativeAdPlayerView: View {
                 contentId: contentId,
                 placement: placement,
                 breakId: breakId,
+                userId: userId,
                 currentAdIndex: currentAdIndex,
+                hasTrackedImpression: firedEvents.contains("impression"),
+                hasTrackedStart: firedEvents.contains("start"),
+                adPolicy: adPolicy,
+                adRemoval: adRemoval,
+                overrideSkippable: overrideSkippable,
+                overrideSkipAfterSec: overrideSkipAfterSec,
                 onSkip: {
                     trackEvent("skip")
                     playNextOrFinish()
@@ -1195,6 +1341,12 @@ struct NativeAdPlayerView: View {
 
     private func attachExternalPlayerIfNeeded() {
         guard let externalPlayer else { return }
+        if initialImpressionTracked {
+            firedEvents.insert("impression")
+        }
+        if initialStartTracked {
+            firedEvents.insert("start")
+        }
         if player !== externalPlayer {
             detachPresentationObserver()
             player = externalPlayer
@@ -1228,6 +1380,8 @@ struct NativeAdPlayerView: View {
         }
         isPaused = externalPlayer.timeControlStatus == .paused
         externalPlayer.play()
+        schedulePlaybackStartTracking(for: externalPlayer)
+        schedulePlaybackWatchdog(for: externalPlayer)
     }
 
     private func schedulePlaybackStartTracking(for player: AVPlayer) {
@@ -1235,11 +1389,58 @@ struct NativeAdPlayerView: View {
         playbackStartTask = Task { @MainActor in
             while !Task.isCancelled {
                 if player.timeControlStatus == .playing || player.currentTime().seconds > 0.05 {
-                    trackEvent("start")
+                    recordPlaybackStartIfNeeded()
                     playbackStartTask = nil
                     return
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+    }
+
+    private func recordPlaybackStartIfNeeded() {
+        let shouldNotifyImpression = !firedEvents.contains("impression")
+        trackEvent("impression")
+        trackEvent("start")
+        if shouldNotifyImpression {
+            onImpression?()
+        }
+    }
+
+    private func schedulePlaybackWatchdog(for watchedPlayer: AVPlayer) {
+        playbackWatchdogTask?.cancel()
+        let watchedAdIndex = currentAdIndex
+        playbackWatchdogTask = Task { @MainActor in
+            var lastProgress = max(0, watchedPlayer.currentTime().seconds)
+            var lastProgressAt = Date()
+
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled,
+                      player === watchedPlayer,
+                      currentAdIndex == watchedAdIndex else { return }
+
+                if UIApplication.shared.applicationState != .active || isPaused {
+                    lastProgress = max(0, watchedPlayer.currentTime().seconds)
+                    lastProgressAt = Date()
+                    continue
+                }
+
+                let currentProgress = max(0, watchedPlayer.currentTime().seconds)
+                if currentProgress > lastProgress + 0.1 {
+                    lastProgress = currentProgress
+                    lastProgressAt = Date()
+                    continue
+                }
+
+                let hasStarted = firedEvents.contains("start") || currentProgress > 0.05
+                let timeout: TimeInterval = hasStarted ? 15 : 12
+                guard Date().timeIntervalSince(lastProgressAt) >= timeout else { continue }
+
+                trackEvent("error")
+                playbackWatchdogTask = nil
+                playNextOrFinish()
+                return
             }
         }
     }
