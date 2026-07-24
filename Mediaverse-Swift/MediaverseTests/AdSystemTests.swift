@@ -343,3 +343,91 @@ final class StoryOverlayLayoutTests: XCTestCase {
         }
     }
 }
+
+final class StoryFeedNormalizerTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 2_000_000)
+
+    func testMergesDuplicatePublisherGroupsAndStoryIds() {
+        let first = group(
+            type: "Channel",
+            id: "publisher-1",
+            stories: [story(id: "story-1"), story(id: "story-1")]
+        )
+        let second = group(
+            type: " channel ",
+            id: "publisher-1",
+            stories: [story(id: "story-2", seen: true)]
+        )
+
+        let normalized = StoryFeedNormalizer.normalize([first, second], now: now)
+
+        XCTAssertEqual(normalized.count, 1)
+        XCTAssertEqual(normalized[0].stories.map(\.id), ["story-1", "story-2"])
+        XCTAssertTrue(normalized[0].hasUnseen)
+    }
+
+    func testDropsExpiredEmptyAndMalformedEntries() {
+        let expired = story(id: "expired", expiresAt: now.addingTimeInterval(-1))
+        let malformed = story(id: " ", expiresAt: now.addingTimeInterval(60))
+        let emptyPublisher = group(type: "channel", id: " ", stories: [story(id: "hidden")])
+        let valid = group(type: "show", id: "show-1", stories: [
+            expired,
+            malformed,
+            story(id: "active", expiresAt: now.addingTimeInterval(60), seen: true)
+        ])
+
+        let normalized = StoryFeedNormalizer.normalize([emptyPublisher, valid], now: now)
+
+        XCTAssertEqual(normalized.count, 1)
+        XCTAssertEqual(normalized[0].stories.map(\.id), ["active"])
+        XCTAssertFalse(normalized[0].hasUnseen)
+    }
+
+    func testPreservesLocallySeenStateAcrossStaleRefresh() {
+        let staleServerGroup = group(
+            type: "channel",
+            id: "publisher-1",
+            stories: [story(id: "viewed-locally", seen: false)]
+        )
+
+        let normalized = StoryFeedNormalizer.normalize(
+            [staleServerGroup],
+            now: now,
+            preservingSeenStoryIds: ["viewed-locally"]
+        )
+
+        XCTAssertTrue(normalized[0].stories[0].seen)
+        XCTAssertFalse(normalized[0].hasUnseen)
+    }
+
+    private func group(type: String, id: String, stories: [StoryItem]) -> StoryGroup {
+        StoryGroup(
+            publisherType: type,
+            publisherId: id,
+            publisherName: "Publisher",
+            publisherImageUrl: nil,
+            stories: stories,
+            hasUnseen: false
+        )
+    }
+
+    private func story(
+        id: String,
+        expiresAt: Date? = nil,
+        seen: Bool = false
+    ) -> StoryItem {
+        StoryItem(
+            id: id,
+            mediaUrl: "https://example.com/\(id).jpg",
+            mediaType: "image",
+            duration: 5,
+            caption: nil,
+            ctaLabel: nil,
+            ctaUrl: nil,
+            expiresAt: expiresAt ?? now.addingTimeInterval(60),
+            createdAt: now,
+            viewCount: 0,
+            seen: seen
+        )
+    }
+}

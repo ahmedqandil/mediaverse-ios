@@ -1,5 +1,53 @@
 import Foundation
 
+enum StoryFeedNormalizer {
+    static func normalize(
+        _ groups: [StoryGroup],
+        now: Date = Date(),
+        preservingSeenStoryIds: Set<String> = []
+    ) -> [StoryGroup] {
+        var normalized = [StoryGroup]()
+        var groupIndexes = [String: Int]()
+        var storyIdsByGroup = [String: Set<String>]()
+
+        for group in groups {
+            let publisherType = group.publisherType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let publisherId = group.publisherId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !publisherType.isEmpty, !publisherId.isEmpty else { continue }
+            let groupKey = "\(publisherType):\(publisherId)"
+            let activeStories = group.stories.filter {
+                !$0.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.expiresAt > now
+            }.map { story in
+                guard preservingSeenStoryIds.contains(story.id), !story.seen else { return story }
+                var seenStory = story
+                seenStory.seen = true
+                return seenStory
+            }
+            guard !activeStories.isEmpty else { continue }
+
+            if let index = groupIndexes[groupKey] {
+                var knownStoryIds = storyIdsByGroup[groupKey] ?? Set(normalized[index].stories.map(\.id))
+                for story in activeStories where knownStoryIds.insert(story.id).inserted {
+                    normalized[index].stories.append(story)
+                }
+                normalized[index].hasUnseen = normalized[index].stories.contains { !$0.seen }
+                storyIdsByGroup[groupKey] = knownStoryIds
+            } else {
+                var knownStoryIds = Set<String>()
+                let uniqueStories = activeStories.filter { knownStoryIds.insert($0.id).inserted }
+                var cleanGroup = group
+                cleanGroup.stories = uniqueStories
+                cleanGroup.hasUnseen = uniqueStories.contains { !$0.seen }
+                groupIndexes[groupKey] = normalized.count
+                storyIdsByGroup[groupKey] = knownStoryIds
+                normalized.append(cleanGroup)
+            }
+        }
+
+        return normalized
+    }
+}
+
 @MainActor
 final class StoriesRepository: ObservableObject {
     @Published private(set) var groups: [StoryGroup] = []
@@ -13,10 +61,13 @@ final class StoriesRepository: ObservableObject {
     private var cacheSaveTask: Task<Void, Never>?
     private var markViewedFlushTask: Task<Void, Never>?
     private var pendingViewedStoryIds = Set<String>()
+    private var refreshGeneration = 0
 
     init(client: StoriesAPIClient = .shared) {
         self.client = client
-        self.groups = SessionStorage.token == nil ? [] : StoryFeedDiskCache.loadCachedGroups()
+        self.groups = SessionStorage.token == nil
+            ? []
+            : StoryFeedNormalizer.normalize(StoryFeedDiskCache.loadCachedGroups())
         observeFollowChanges()
     }
 
@@ -28,9 +79,11 @@ final class StoriesRepository: ObservableObject {
 
     func refresh(force: Bool = false) async {
         guard SessionStorage.token != nil else {
+            refreshGeneration += 1
             groups = []
             lastRefreshAt = nil
             lastError = nil
+            isLoading = false
             return
         }
 
@@ -38,20 +91,32 @@ final class StoriesRepository: ObservableObject {
             return
         }
 
+        refreshGeneration += 1
+        let generation = refreshGeneration
         isLoading = true
-        defer { isLoading = false }
 
         do {
             let fetched = try await client.fetchGroups(myChannelId: activeStoryChannelId)
-            groups = fetched.filter { !$0.stories.isEmpty }
+            guard generation == refreshGeneration else { return }
+            let locallySeenStoryIds = Set(
+                groups.flatMap(\.stories).filter(\.seen).map(\.id)
+            ).union(pendingViewedStoryIds)
+            groups = StoryFeedNormalizer.normalize(
+                fetched,
+                preservingSeenStoryIds: locallySeenStoryIds
+            )
             saveCachedGroups()
             lastRefreshAt = Date()
             lastError = nil
         } catch {
+            guard generation == refreshGeneration else { return }
             if groups.isEmpty {
-                groups = StoryFeedDiskCache.loadCachedGroups()
+                groups = StoryFeedNormalizer.normalize(StoryFeedDiskCache.loadCachedGroups())
             }
             lastError = error
+        }
+        if generation == refreshGeneration {
+            isLoading = false
         }
     }
 
