@@ -696,20 +696,24 @@ private enum StoryCoreImageEffects {
             )
         }
 
-        let glowAmount = settings.skinGlow * settings.intensity
+        let highEndMaster = highEndMasterAmount(settings.intensity)
+        let glowAmount = max(
+            boostedAmount(settings.skinGlow, master: settings.intensity),
+            highEndMaster * 0.72
+        )
         if glowAmount > 0.001 {
             let glow = target.applyingFilter("CIBloom", parameters: [
-                kCIInputRadiusKey: 5 + glowAmount * 13,
-                kCIInputIntensityKey: 0.25 + glowAmount * 0.72
+                kCIInputRadiusKey: 4 + glowAmount * 9,
+                kCIInputIntensityKey: 0.20 + glowAmount * 0.48
             ]).cropped(to: image.extent)
             target = mix(
                 base: target,
                 target: glow,
-                amount: min(0.15 + glowAmount * 0.58, 0.68)
+                amount: min(0.12 + glowAmount * 0.42, 0.54)
             )
         }
 
-        let brightness = settings.brightness * settings.intensity * 0.16
+        let brightness = settings.brightness * settings.intensity * 0.16 + highEndMaster * 0.055
         if abs(brightness) > 0.001 {
             target = target.applyingFilter("CIColorControls", parameters: [
                 kCIInputBrightnessKey: brightness
@@ -729,7 +733,6 @@ private enum StoryCoreImageEffects {
                 ])
         }
 
-        let highEndMaster = highEndMasterAmount(settings.intensity)
         if highEndMaster > 0.001 {
             let polished = target
                 .applyingFilter("CINoiseReduction", parameters: [
@@ -737,19 +740,19 @@ private enum StoryCoreImageEffects {
                     "inputSharpness": max(0.30 - highEndMaster * 0.22, 0.04)
                 ])
                 .applyingFilter("CIColorControls", parameters: [
-                    kCIInputBrightnessKey: highEndMaster * 0.10,
-                    kCIInputContrastKey: 1 - highEndMaster * 0.08,
-                    kCIInputSaturationKey: 1 + highEndMaster * 0.15
+                    kCIInputBrightnessKey: highEndMaster * 0.055,
+                    kCIInputContrastKey: 1 - highEndMaster * 0.045,
+                    kCIInputSaturationKey: 1 + highEndMaster * 0.09
                 ])
                 .applyingFilter("CIBloom", parameters: [
                     kCIInputRadiusKey: 5 + highEndMaster * 9,
-                    kCIInputIntensityKey: 0.22 + highEndMaster * 0.58
+                    kCIInputIntensityKey: 0.18 + highEndMaster * 0.38
                 ])
                 .cropped(to: image.extent)
             target = mix(
                 base: target,
                 target: polished,
-                amount: min(0.22 + highEndMaster * 0.58, 0.80)
+                amount: min(0.18 + highEndMaster * 0.42, 0.60)
             )
         }
 
@@ -802,7 +805,11 @@ private enum StoryCoreImageEffects {
             )
         }
 
-        let glowAmount = settings.skinGlow * settings.intensity
+        let highEndMaster = highEndMasterAmount(settings.intensity)
+        let glowAmount = max(
+            boostedAmount(settings.skinGlow, master: settings.intensity),
+            highEndMaster * 0.65
+        )
         if glowAmount > 0.001 {
             let glow = output.applyingFilter("CIBloom", parameters: [
                 kCIInputRadiusKey: 4 + glowAmount * 10,
@@ -811,7 +818,7 @@ private enum StoryCoreImageEffects {
             output = mix(base: output, target: glow, amount: min(glowAmount * 0.52, 0.52))
         }
 
-        let brightness = settings.brightness * settings.intensity * 0.10
+        let brightness = settings.brightness * settings.intensity * 0.10 + highEndMaster * 0.04
         if abs(brightness) > 0.001 {
             output = output.applyingFilter("CIColorControls", parameters: [
                 kCIInputBrightnessKey: brightness
@@ -831,7 +838,6 @@ private enum StoryCoreImageEffects {
                 ])
         }
 
-        let highEndMaster = highEndMasterAmount(settings.intensity)
         if highEndMaster > 0.001 {
             let polished = output
                 .applyingFilter("CINoiseReduction", parameters: [
@@ -891,40 +897,50 @@ private enum StoryCoreImageEffects {
         for face in faces {
             let unit = max(min(face.bounds.width, face.bounds.height), 1)
 
-            if settings.eyeBrightening > 0.001 {
+            let eyeAmount = max(
+                settings.eyeBrightening * master,
+                highEndMasterAmount(master) * 0.42
+            )
+            if eyeAmount > 0.001 {
                 let target = result
                     .applyingFilter("CIColorControls", parameters: [
-                        kCIInputBrightnessKey: 0.10 * settings.eyeBrightening * master,
-                        kCIInputSaturationKey: 1 + 0.08 * settings.eyeBrightening * master
+                        kCIInputBrightnessKey: 0.10 * eyeAmount,
+                        kCIInputSaturationKey: 1 + 0.08 * eyeAmount
                     ])
                     .applyingFilter("CISharpenLuminance", parameters: [
-                        kCIInputSharpnessKey: 0.22 * settings.eyeBrightening * master
+                        kCIInputSharpnessKey: 0.22 * eyeAmount
                     ])
                 for position in eyePositions(face) {
                     let mask = radialMask(
                         center: position,
                         radius: unit * 0.115,
                         extent: image.extent,
-                        intensity: settings.eyeBrightening * master
+                        intensity: eyeAmount
                     )
                     result = blend(base: result, target: target, mask: mask)
                 }
             }
 
-            if settings.underEye > 0.001 {
-                let target = result.applyingFilter("CIColorControls", parameters: [
-                    kCIInputBrightnessKey: 0.075 * settings.underEye * master,
-                    kCIInputContrastKey: 0.98
-                ])
+            let underEyeAmount = max(
+                settings.underEye * master,
+                highEndMasterAmount(master) * 0.68
+            )
+            if underEyeAmount > 0.001 {
+                let softened = strongSkinSmoothing(result, amount: min(underEyeAmount * 0.74, 0.74))
+                    .applyingFilter("CIColorControls", parameters: [
+                        kCIInputBrightnessKey: 0.105 * underEyeAmount,
+                        kCIInputContrastKey: 1 - 0.08 * underEyeAmount,
+                        kCIInputSaturationKey: 1 - 0.10 * underEyeAmount
+                    ])
                 for position in eyePositions(face) {
                     let underEyeCenter = CGPoint(x: position.x, y: position.y - unit * 0.055)
                     let mask = radialMask(
                         center: underEyeCenter,
-                        radius: unit * 0.13,
+                        radius: unit * 0.145,
                         extent: image.extent,
-                        intensity: settings.underEye * master
+                        intensity: min(underEyeAmount * 0.82, 0.82)
                     )
-                    result = blend(base: result, target: target, mask: mask)
+                    result = blend(base: result, target: softened, mask: mask)
                 }
             }
 
@@ -1104,12 +1120,13 @@ private enum StoryCoreImageEffects {
         }
         guard let combined else { return nil }
 
-        let skinLikelihood = StorySemanticFaceParser.shared.skinMask(
+        let semanticMask = StorySemanticFaceParser.shared.skinMask(
             for: image,
             faces: faces,
             trackingKey: trackingKey,
             time: time
-        ) ?? image
+        )
+        let skinLikelihood = semanticMask ?? image
             .applyingFilter("CIColorCube", parameters: [
                 "inputCubeDimension": skinMaskCubeDimension,
                 "inputCubeData": skinMaskCubeData
@@ -1118,7 +1135,8 @@ private enum StoryCoreImageEffects {
         var semanticSkin = combined.applyingFilter("CIMultiplyCompositing", parameters: [
             kCIInputBackgroundImageKey: skinLikelihood
         ]).cropped(to: extent)
-        let safetyAmount = CGFloat(highEndMasterAmount(intensity) * 0.46)
+        let safetyStrength: Float = semanticMask == nil ? 0.46 : 0.08
+        let safetyAmount = CGFloat(highEndMasterAmount(intensity) * safetyStrength)
         if safetyAmount > 0.001 {
             let safetyMask = combined.applyingFilter("CIColorMatrix", parameters: [
                 "inputRVector": CIVector(x: safetyAmount, y: 0, z: 0, w: 0),
