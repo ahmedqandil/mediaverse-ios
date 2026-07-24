@@ -246,21 +246,80 @@ final class MetalPetalStoryFilterProcessor {
 }
 #endif
 
+private struct StoryDetectedFace {
+    let bounds: CGRect
+    let leftEyePosition: CGPoint?
+    let rightEyePosition: CGPoint?
+    let mouthPosition: CGPoint?
+}
+
+private final class StoryFaceAnalyzer: @unchecked Sendable {
+    private let detector = CIDetector(
+        ofType: CIDetectorTypeFace,
+        context: nil,
+        options: [CIDetectorAccuracy: CIDetectorAccuracyLow]
+    )
+    private let lock = NSLock()
+    private let maximumAnalysisSide: CGFloat = 360
+
+    func faces(in image: CIImage) -> [StoryDetectedFace] {
+        guard let detector else { return [] }
+        let extent = image.extent
+        let longestSide = max(extent.width, extent.height)
+        guard longestSide > 0 else { return [] }
+
+        let scale = min(maximumAnalysisSide / longestSide, 1)
+        let analysisImage = image
+            .transformed(by: CGAffineTransform(
+                translationX: -extent.minX,
+                y: -extent.minY
+            ))
+            .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+
+        lock.lock()
+        let features = detector.features(in: analysisImage).compactMap { $0 as? CIFaceFeature }
+        lock.unlock()
+
+        func fullResolutionPoint(_ point: CGPoint) -> CGPoint {
+            CGPoint(
+                x: point.x / scale + extent.minX,
+                y: point.y / scale + extent.minY
+            )
+        }
+
+        return features.map { feature in
+            StoryDetectedFace(
+                bounds: CGRect(
+                    x: feature.bounds.minX / scale + extent.minX,
+                    y: feature.bounds.minY / scale + extent.minY,
+                    width: feature.bounds.width / scale,
+                    height: feature.bounds.height / scale
+                ),
+                leftEyePosition: feature.hasLeftEyePosition
+                    ? fullResolutionPoint(feature.leftEyePosition)
+                    : nil,
+                rightEyePosition: feature.hasRightEyePosition
+                    ? fullResolutionPoint(feature.rightEyePosition)
+                    : nil,
+                mouthPosition: feature.hasMouthPosition
+                    ? fullResolutionPoint(feature.mouthPosition)
+                    : nil
+            )
+        }
+    }
+}
+
 private enum StoryCoreImageEffects {
+    private static let faceAnalyzer = StoryFaceAnalyzer()
+
     static func smoothSkin(_ image: CIImage, smoothness: Float = 8.0, intensity: Float = 0.6) -> CIImage {
         blendedSkinSmoothing(image, smoothness: smoothness, intensity: intensity)
     }
 
     static func faceAwareBeauty(_ image: CIImage, settings: StoryBeautySettings) -> CIImage {
         let settings = settings.clamped()
-        guard settings.isEnabled,
-              let detector = CIDetector(
-                ofType: CIDetectorTypeFace,
-                context: nil,
-                options: [CIDetectorAccuracy: CIDetectorAccuracyLow]
-              ) else { return image }
-
-        let faces = detector.features(in: image).compactMap { $0 as? CIFaceFeature }
+        guard settings.isEnabled else { return image }
+        let faces = faceAnalyzer.faces(in: image)
         guard !faces.isEmpty else { return image }
 
         let smoothing = max(settings.skinSmoothing * settings.intensity, 0)
@@ -306,7 +365,7 @@ private enum StoryCoreImageEffects {
     private static func applyFeatureBeauty(
         to image: CIImage,
         original: CIImage,
-        faces: [CIFaceFeature],
+        faces: [StoryDetectedFace],
         settings: StoryBeautySettings
     ) -> CIImage {
         var result = image
@@ -352,12 +411,12 @@ private enum StoryCoreImageEffects {
                 }
             }
 
-            if face.hasMouthPosition, settings.teethWhitening > 0.001 {
+            if let mouthPosition = face.mouthPosition, settings.teethWhitening > 0.001 {
                 let target = result.applyingFilter("CIColorControls", parameters: [
                     kCIInputBrightnessKey: 0.12 * settings.teethWhitening * master,
                     kCIInputSaturationKey: max(1 - 0.72 * settings.teethWhitening * master, 0)
                 ])
-                let center = CGPoint(x: face.mouthPosition.x, y: face.mouthPosition.y + unit * 0.012)
+                let center = CGPoint(x: mouthPosition.x, y: mouthPosition.y + unit * 0.012)
                 let mask = radialMask(
                     center: center,
                     radius: unit * 0.085,
@@ -367,7 +426,7 @@ private enum StoryCoreImageEffects {
                 result = blend(base: result, target: target, mask: mask)
             }
 
-            if face.hasMouthPosition, abs(settings.lipColor) > 0.001 {
+            if let mouthPosition = face.mouthPosition, abs(settings.lipColor) > 0.001 {
                 let amount = settings.lipColor * master
                 let target = result
                     .applyingFilter("CIColorControls", parameters: [
@@ -378,7 +437,7 @@ private enum StoryCoreImageEffects {
                         "inputTargetNeutral": CIVector(x: 6500 + CGFloat(amount) * 900, y: 0)
                     ])
                 let mask = radialMask(
-                    center: face.mouthPosition,
+                    center: mouthPosition,
                     radius: unit * 0.105,
                     extent: image.extent,
                     intensity: abs(amount)
@@ -410,11 +469,8 @@ private enum StoryCoreImageEffects {
         return result.cropped(to: image.extent)
     }
 
-    private static func eyePositions(_ face: CIFaceFeature) -> [CGPoint] {
-        var positions = [CGPoint]()
-        if face.hasLeftEyePosition { positions.append(face.leftEyePosition) }
-        if face.hasRightEyePosition { positions.append(face.rightEyePosition) }
-        return positions
+    private static func eyePositions(_ face: StoryDetectedFace) -> [CGPoint] {
+        [face.leftEyePosition, face.rightEyePosition].compactMap { $0 }
     }
 
     private static func radialMask(
@@ -445,7 +501,7 @@ private enum StoryCoreImageEffects {
     }
 
     private static func faceMask(
-        for faces: [CIFaceFeature],
+        for faces: [StoryDetectedFace],
         extent: CGRect,
         intensity: Float
     ) -> CIImage? {
