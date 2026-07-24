@@ -970,7 +970,7 @@ final class StoryTimelineEditor: ObservableObject {
         guard let command = undoStack.popLast() else { return }
         redoStack.append(command)
         project = command.before
-        selectedClipID = project.tracks.videoClips.first?.id
+        reconcileSelection()
         await persist()
         updateUndoRedoState()
     }
@@ -979,9 +979,20 @@ final class StoryTimelineEditor: ObservableObject {
         guard let command = redoStack.popLast() else { return }
         undoStack.append(command)
         project = command.after
-        selectedClipID = project.tracks.videoClips.first?.id
+        reconcileSelection()
         await persist()
         updateUndoRedoState()
+    }
+
+    private func reconcileSelection() {
+        if let selectedClipID,
+           !project.tracks.videoClips.contains(where: { $0.id == selectedClipID }) {
+            self.selectedClipID = project.tracks.videoClips.first?.id
+        }
+        if let selectedOverlayID,
+           !project.tracks.overlays.contains(where: { $0.id == selectedOverlayID }) {
+            self.selectedOverlayID = nil
+        }
     }
 
     private func commit(_ updatedProject: Project, label: String, before beforeProject: Project? = nil) async {

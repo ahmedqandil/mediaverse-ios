@@ -105,6 +105,20 @@ final class StoryTimelineOverlayEditingTests: XCTestCase {
 
         XCTAssertFalse(editor.canUndo)
     }
+
+    func testUndoClearsSelectionWhenAddedOverlayNoLongerExists() async {
+        let editor = StoryTimelineEditor(
+            project: Project.storyDraft(title: "Overlay test", destination: nil)
+        )
+
+        await editor.addTextOverlay(text: "Temporary", at: 0)
+        XCTAssertNotNil(editor.selectedOverlayID)
+
+        await editor.undo()
+
+        XCTAssertTrue(editor.project.tracks.overlays.isEmpty)
+        XCTAssertNil(editor.selectedOverlayID)
+    }
 }
 
 final class AdBreakSchedulerTests: XCTestCase {
