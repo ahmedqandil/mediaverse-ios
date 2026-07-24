@@ -945,6 +945,7 @@ final class StoryLookEditingTests: XCTestCase {
         let decoded = try JSONDecoder().decode(VideoClip.self, from: legacyData)
 
         XCTAssertNil(decoded.effectStack)
+        XCTAssertEqual(decoded.resolvedEffectStack.version, 0)
         XCTAssertEqual(decoded.resolvedEffectStack.lookId, decoded.filterId)
         XCTAssertEqual(decoded.resolvedEffectStack.lookIntensity, decoded.filterIntensity)
         XCTAssertEqual(decoded.resolvedEffectStack.beauty, .off)
@@ -1011,6 +1012,7 @@ final class StoryLookEditingTests: XCTestCase {
 
         XCTAssertTrue(editor.canUndo)
         XCTAssertEqual(editor.selectedClip?.filterId, "cinema")
+        XCTAssertEqual(editor.selectedClip?.resolvedEffectStack.version, StoryEffectStack.currentVersion)
         XCTAssertEqual(try! XCTUnwrap(editor.selectedClip?.filterIntensity), 0.62, accuracy: 0.001)
         XCTAssertEqual(editor.selectedClip?.resolvedEffectStack.lookId, "cinema")
         XCTAssertEqual(try! XCTUnwrap(editor.selectedClip?.resolvedEffectStack.lookIntensity), 0.62, accuracy: 0.001)

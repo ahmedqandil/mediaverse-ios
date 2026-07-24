@@ -754,6 +754,7 @@ final class StoryTimelineEditor: ObservableObject {
         project.tracks.videoClips[index].filterIntensity = 1
         project.tracks.videoClips[index].adjustments = preset.adjustments
         var stack = project.tracks.videoClips[index].resolvedEffectStack
+        stack.version = StoryEffectStack.currentVersion
         stack.lookId = preset.id
         stack.lookIntensity = 1
         project.tracks.videoClips[index].effectStack = stack
@@ -772,6 +773,7 @@ final class StoryTimelineEditor: ObservableObject {
         updated.tracks.videoClips[index].filterIntensity = 1
         updated.tracks.videoClips[index].adjustments = preset.adjustments
         var stack = updated.tracks.videoClips[index].resolvedEffectStack
+        stack.version = StoryEffectStack.currentVersion
         stack.lookId = preset.id
         stack.lookIntensity = 1
         updated.tracks.videoClips[index].effectStack = stack

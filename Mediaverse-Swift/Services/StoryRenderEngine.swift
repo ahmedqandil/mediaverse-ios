@@ -668,8 +668,13 @@ struct StoryEffectGraph {
     func render(sourceImage: CIImage, time: CMTime, clip: VideoClip, overlays: [RenderedOverlay], canvas: CanvasSpec, useMetalPetal: Bool = true) -> CIImage {
         let sourceExtent = sourceImage.extent
         let stack = clip.resolvedEffectStack
-        var filtered = applyColorAdjustments(clip.adjustments, to: sourceImage, useMetalPetal: useMetalPetal).cropped(to: sourceExtent)
-        filtered = applyRenderEffect(StoryEffectCatalog.preset(id: stack.lookId).renderEffect, to: filtered, useMetalPetal: useMetalPetal).cropped(to: sourceExtent)
+        let preset = StoryEffectCatalog.preset(id: stack.lookId)
+        var lookInput = sourceImage
+        if stack.version >= StoryEffectStack.currentVersion, let lut = preset.lut {
+            lookInput = StoryColorLUT.apply(lut, to: lookInput)
+        }
+        var filtered = applyColorAdjustments(clip.adjustments, to: lookInput, useMetalPetal: useMetalPetal).cropped(to: sourceExtent)
+        filtered = applyRenderEffect(preset.renderEffect, to: filtered, useMetalPetal: useMetalPetal).cropped(to: sourceExtent)
         var image = blend(source: sourceImage, filtered: filtered, intensity: stack.lookIntensity)
         if stack.beauty.isEnabled {
             image = StoryCoreImageEffects.faceAwareBeauty(image, settings: stack.beauty).cropped(to: sourceExtent)
@@ -841,6 +846,85 @@ struct StoryEffectGraph {
             return overlayImage.composited(over: current)
         }
     }
+}
+
+private enum StoryColorLUT {
+    private static let dimension = 24
+    private static let dataByProfile = Dictionary(
+        uniqueKeysWithValues: StoryLUTProfile.allProfiles.map { ($0, makeCube(for: $0)) }
+    )
+
+    static func apply(_ profile: StoryLUTProfile, to image: CIImage) -> CIImage {
+        guard let data = dataByProfile[profile] else { return image }
+        return image.applyingFilter("CIColorCube", parameters: [
+            "inputCubeDimension": dimension,
+            "inputCubeData": data
+        ]).cropped(to: image.extent)
+    }
+
+    private static func makeCube(for profile: StoryLUTProfile) -> Data {
+        var values = [Float]()
+        values.reserveCapacity(dimension * dimension * dimension * 4)
+        let denominator = Float(dimension - 1)
+
+        for blueIndex in 0..<dimension {
+            for greenIndex in 0..<dimension {
+                for redIndex in 0..<dimension {
+                    let input = SIMD3<Float>(
+                        Float(redIndex) / denominator,
+                        Float(greenIndex) / denominator,
+                        Float(blueIndex) / denominator
+                    )
+                    let output = grade(input, profile: profile)
+                    values.append(contentsOf: [
+                        min(max(output.x, 0), 1),
+                        min(max(output.y, 0), 1),
+                        min(max(output.z, 0), 1),
+                        1
+                    ])
+                }
+            }
+        }
+        return values.withUnsafeBytes { Data($0) }
+    }
+
+    private static func grade(_ color: SIMD3<Float>, profile: StoryLUTProfile) -> SIMD3<Float> {
+        let luma = color.x * 0.2126 + color.y * 0.7152 + color.z * 0.0722
+        switch profile {
+        case .portrait:
+            return SIMD3(color.x * 1.035 + 0.018, color.y * 1.01 + 0.008, color.z * 0.975)
+        case .golden:
+            return SIMD3(color.x * 1.08 + 0.015, color.y * 1.025 + 0.008, color.z * 0.91)
+        case .cinema:
+            let shadows = 1 - smoothstep(0.18, 0.62, luma)
+            let highlights = smoothstep(0.42, 0.9, luma)
+            return SIMD3(
+                color.x + highlights * 0.035 - shadows * 0.025,
+                color.y + shadows * 0.025,
+                color.z + shadows * 0.06 - highlights * 0.025
+            )
+        case .film:
+            let lifted = color * 0.93 + SIMD3(repeating: 0.035)
+            return SIMD3(lifted.x * 1.025, lifted.y, lifted.z * 0.965)
+        case .vivid:
+            let saturated = SIMD3<Float>(repeating: luma) + (color - SIMD3<Float>(repeating: luma)) * 1.16
+            return saturated
+        case .vintage:
+            let faded = color * 0.86 + SIMD3<Float>(repeating: 0.075)
+            return SIMD3(faded.x * 1.07, faded.y * 1.015, faded.z * 0.88)
+        }
+    }
+
+    private static func smoothstep(_ edge0: Float, _ edge1: Float, _ value: Float) -> Float {
+        let x = min(max((value - edge0) / (edge1 - edge0), 0), 1)
+        return x * x * (3 - 2 * x)
+    }
+}
+
+private extension StoryLUTProfile {
+    static let allProfiles: [StoryLUTProfile] = [
+        .portrait, .golden, .cinema, .film, .vivid, .vintage
+    ]
 }
 
 enum StoryRenderQuality {

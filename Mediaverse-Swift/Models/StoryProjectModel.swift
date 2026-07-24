@@ -98,6 +98,7 @@ struct VideoClip: Codable, Identifiable, Equatable {
             return effectStack
         }
         var migrated = StoryEffectStack.none
+        migrated.version = 0
         migrated.lookId = filterId
         migrated.lookIntensity = filterIntensity
         return migrated
