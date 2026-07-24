@@ -24,8 +24,8 @@ struct StoryBeautySettings: Codable, Equatable {
     )
 
     static let natural = StoryBeautySettings(
-        intensity: 0.55,
-        skinSmoothing: 0.32,
+        intensity: 0.62,
+        skinSmoothing: 0.46,
         skinTone: 0.10,
         brightness: 0.08,
         eyeBrightening: 0.12,

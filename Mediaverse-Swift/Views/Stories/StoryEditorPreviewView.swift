@@ -2348,8 +2348,8 @@ struct StoryEditorPreviewView: View {
                 beautyPresetButton(
                     "Polished",
                     settings: StoryBeautySettings(
-                        intensity: 0.72,
-                        skinSmoothing: 0.52,
+                        intensity: 0.78,
+                        skinSmoothing: 0.72,
                         skinTone: 0.14,
                         brightness: 0.12,
                         eyeBrightening: 0.22,

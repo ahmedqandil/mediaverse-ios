@@ -326,8 +326,8 @@ private enum StoryCoreImageEffects {
         var target = smoothing > 0.001
             ? blendedSkinSmoothing(
                 image,
-                smoothness: 4 + smoothing * 10,
-                intensity: min(0.2 + smoothing * 0.72, 0.88)
+                smoothness: 6 + smoothing * 16,
+                intensity: min(0.30 + smoothing * 0.90, 0.93)
             )
             : image
 
