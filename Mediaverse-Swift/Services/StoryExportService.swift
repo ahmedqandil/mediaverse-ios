@@ -21,6 +21,19 @@ struct StoryExportResult {
     }
 }
 
+func storyProjectRequiresAnimatedExport(_ project: Project) -> Bool {
+    if project.tracks.videoClips.contains(where: { $0.assetRef.kind == .video }) {
+        return true
+    }
+    return project.tracks.overlays.contains { overlay in
+        guard case .sticker(let sticker) = overlay, let assetRef = sticker.assetRef else { return false }
+        if assetRef.kind == .video { return true }
+        guard assetRef.kind == .image else { return false }
+        let ext = URL(fileURLWithPath: assetRef.relativePath).pathExtension.lowercased()
+        return ext == "gif" || ext == "webp"
+    }
+}
+
 actor StoryExportService {
     private let compositor: StoryCompositor
     private let ciContext: CIContext
@@ -85,7 +98,7 @@ actor StoryExportService {
 
     private func exportCacheKey(for project: Project, assetStore: AssetStore) throws -> String {
         let input = ExportCacheInput(
-            schemaVersion: 2,
+            schemaVersion: 3,
             project: project,
             codec: "h264",
             nativePreset: AVAssetExportPresetHighestQuality,
@@ -153,7 +166,9 @@ actor StoryExportService {
     }
 
     private func isImageOnly(_ project: Project) -> Bool {
-        !project.tracks.videoClips.isEmpty && project.tracks.videoClips.allSatisfy { $0.assetRef.kind == .image }
+        !project.tracks.videoClips.isEmpty
+            && project.tracks.videoClips.allSatisfy { $0.assetRef.kind == .image }
+            && !storyProjectRequiresAnimatedExport(project)
     }
 
     private func exportSimpleVideoIfPossible(

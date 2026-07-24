@@ -13,6 +13,47 @@ final class StoryTimedMediaOverlayTests: XCTestCase {
         XCTAssertEqual(storyLoopedMediaTime(elapsed: 1, duration: 0), 0)
         XCTAssertEqual(storyLoopedMediaTime(elapsed: .infinity, duration: 2), 0)
     }
+
+    func testAnimatedOverlaysForceVideoExportForPhotoStories() {
+        XCTAssertFalse(storyProjectRequiresAnimatedExport(projectWithOverlay(kind: .image, path: "media/sticker.png")))
+        XCTAssertTrue(storyProjectRequiresAnimatedExport(projectWithOverlay(kind: .image, path: "media/sticker.gif")))
+        XCTAssertTrue(storyProjectRequiresAnimatedExport(projectWithOverlay(kind: .image, path: "media/sticker.webp")))
+        XCTAssertTrue(storyProjectRequiresAnimatedExport(projectWithOverlay(kind: .video, path: "media/overlay.mov")))
+    }
+
+    private func projectWithOverlay(kind: AssetKind, path: String) -> Project {
+        var project = Project.storyDraft(title: "Animated export", destination: nil)
+        let background = AssetRef.make(
+            kind: .image,
+            relativePath: "media/background.jpg",
+            naturalWidth: 1080,
+            naturalHeight: 1920,
+            nominalFrameRate: 0,
+            durationSeconds: 5
+        )
+        try! project.addStoryClip(.storyClip(assetRef: background, durationSeconds: 5))
+        let overlayAsset = AssetRef.make(
+            kind: kind,
+            relativePath: path,
+            naturalWidth: 320,
+            naturalHeight: 320,
+            nominalFrameRate: kind == .video ? 30 : 0,
+            durationSeconds: 2
+        )
+        project.tracks.overlays = [
+            .sticker(StickerOverlay(
+                id: UUID(),
+                assetRef: overlayAsset,
+                emoji: nil,
+                transform: .identity,
+                timeRange: TimelineRange(
+                    start: CMTimeValueBox(seconds: 0),
+                    duration: CMTimeValueBox(seconds: 5)
+                )
+            ))
+        ]
+        return project
+    }
 }
 
 @MainActor
