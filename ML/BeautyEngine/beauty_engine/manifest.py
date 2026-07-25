@@ -26,6 +26,9 @@ CONTROL_KEYS = (
     "teeth",
     "detail",
 )
+COMMERCIAL_SCOPE = "commercial"
+RESEARCH_SCOPE = "research_noncommercial"
+USAGE_SCOPES = (COMMERCIAL_SCOPE, RESEARCH_SCOPE)
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,8 @@ class ManifestRecord:
     split: str
     license_id: str
     consent_id: str
+    usage_scope: str
+    citation: str
 
 
 def _resolve(root: Path, value: str) -> Path:
@@ -46,7 +51,14 @@ def _resolve(root: Path, value: str) -> Path:
     return path if path.is_absolute() else root / path
 
 
-def parse_record(raw: dict, root: Path, line_number: int) -> ManifestRecord:
+def parse_record(
+    raw: dict,
+    root: Path,
+    line_number: int,
+    manifest_mode: str = COMMERCIAL_SCOPE,
+) -> ManifestRecord:
+    if manifest_mode not in USAGE_SCOPES:
+        raise ValueError(f"unsupported manifest mode: {manifest_mode}")
     required = ("id", "subject_id", "source", "target", "masks", "controls", "split", "rights")
     missing = [key for key in required if key not in raw]
     if missing:
@@ -69,9 +81,25 @@ def parse_record(raw: dict, root: Path, line_number: int) -> ManifestRecord:
     license_id = str(rights.get("license_id", "")).strip()
     consent_id = str(rights.get("consent_id", "")).strip()
     commercial = rights.get("commercial_training")
-    if not license_id or not consent_id or commercial is not True:
+    usage_scope = str(rights.get("usage_scope", COMMERCIAL_SCOPE)).strip()
+    citation = str(rights.get("citation", "")).strip()
+    if usage_scope != manifest_mode:
+        raise ValueError(
+            f"line {line_number}: usage_scope={usage_scope!r} does not match "
+            f"manifest mode {manifest_mode!r}"
+        )
+    if manifest_mode == COMMERCIAL_SCOPE and (
+        not license_id or not consent_id or commercial is not True
+    ):
         raise ValueError(
             f"line {line_number}: explicit license, consent, and commercial_training=true are required"
+        )
+    if manifest_mode == RESEARCH_SCOPE and (
+        not license_id or commercial is not False or not citation
+    ):
+        raise ValueError(
+            f"line {line_number}: research manifests require license, citation, "
+            "and commercial_training=false"
         )
 
     return ManifestRecord(
@@ -84,17 +112,25 @@ def parse_record(raw: dict, root: Path, line_number: int) -> ManifestRecord:
         split=str(raw["split"]),
         license_id=license_id,
         consent_id=consent_id,
+        usage_scope=usage_scope,
+        citation=citation,
     )
 
 
-def read_manifest(path: Path, check_files: bool = True) -> list[ManifestRecord]:
+def read_manifest(
+    path: Path,
+    check_files: bool = True,
+    manifest_mode: str = COMMERCIAL_SCOPE,
+) -> list[ManifestRecord]:
     records: list[ManifestRecord] = []
     ids: set[str] = set()
     with path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
-            record = parse_record(json.loads(line), path.parent, line_number)
+            record = parse_record(
+                json.loads(line), path.parent, line_number, manifest_mode=manifest_mode
+            )
             if record.sample_id in ids:
                 raise ValueError(f"line {line_number}: duplicate id {record.sample_id}")
             ids.add(record.sample_id)
@@ -109,13 +145,19 @@ def read_manifest(path: Path, check_files: bool = True) -> list[ManifestRecord]:
     return records
 
 
-def audit_identity_splits(manifests: list[Path], check_files: bool = True) -> dict:
+def audit_identity_splits(
+    manifests: list[Path],
+    check_files: bool = True,
+    manifest_mode: str = COMMERCIAL_SCOPE,
+) -> dict:
     subjects_by_split: dict[str, set[str]] = {}
     licenses: set[str] = set()
     consent_ids: set[str] = set()
     sample_count = 0
     for manifest in manifests:
-        for record in read_manifest(manifest, check_files=check_files):
+        for record in read_manifest(
+            manifest, check_files=check_files, manifest_mode=manifest_mode
+        ):
             subjects_by_split.setdefault(record.split, set()).add(record.subject_id)
             licenses.add(record.license_id)
             consent_ids.add(record.consent_id)
@@ -136,6 +178,7 @@ def audit_identity_splits(manifests: list[Path], check_files: bool = True) -> di
         "splits": {key: len(value) for key, value in sorted(subjects_by_split.items())},
         "licenses": sorted(licenses),
         "consents": len(consent_ids),
+        "usage_scope": manifest_mode,
     }
 
 
@@ -144,10 +187,12 @@ def main() -> None:
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--additional", type=Path, nargs="*", default=[])
     parser.add_argument("--skip-files", action="store_true")
+    parser.add_argument("--mode", choices=USAGE_SCOPES, default=COMMERCIAL_SCOPE)
     args = parser.parse_args()
     report = audit_identity_splits(
         [args.manifest, *args.additional],
         check_files=not args.skip_files,
+        manifest_mode=args.mode,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
 

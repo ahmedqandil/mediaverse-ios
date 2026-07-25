@@ -1,0 +1,30 @@
+experiment: mediaverse_beauty_ffhqr_smoke
+usage_scope: research_noncommercial
+license_id: CC-BY-NC-SA-4.0
+citation: Shafaei, Little, and Schmidt, AutoRetouch, WACV 2021
+seed: 20260725
+data:
+  train_manifest: research/ffhqr-smoke/manifests/train.jsonl
+  validation_manifest: research/ffhqr-smoke/manifests/validation.jsonl
+  manifest_mode: research_noncommercial
+  crop_size: 32
+  semantic_channels: 8
+model:
+  base_channels: 8
+  residual_blocks: 1
+  control_count: 8
+training:
+  epochs: 1
+  batch_size: 1
+  learning_rate: 0.0002
+  weight_decay: 0.0001
+  num_workers: 0
+  checkpoint_dir: research/checkpoints/ffhqr-smoke
+loss:
+  reconstruction: 1.0
+  frequency: 0.1
+  texture: 0.1
+  background: 1.0
+  mask: 0.1
+  monotonicity: 0.1
+  zero_state: 1.0

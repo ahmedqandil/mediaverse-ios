@@ -8,7 +8,7 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
-from .manifest import ManifestRecord, SEMANTIC_KEYS, read_manifest
+from .manifest import COMMERCIAL_SCOPE, ManifestRecord, SEMANTIC_KEYS, read_manifest
 
 
 def _rgb(path: Path, size: int) -> torch.Tensor:
@@ -24,8 +24,16 @@ def _mask(path: Path, size: int) -> torch.Tensor:
 
 
 class BeautyDataset(Dataset):
-    def __init__(self, manifest: str | Path, crop_size: int, augment: bool) -> None:
-        self.records: list[ManifestRecord] = read_manifest(Path(manifest))
+    def __init__(
+        self,
+        manifest: str | Path,
+        crop_size: int,
+        augment: bool,
+        manifest_mode: str = COMMERCIAL_SCOPE,
+    ) -> None:
+        self.records: list[ManifestRecord] = read_manifest(
+            Path(manifest), manifest_mode=manifest_mode
+        )
         self.crop_size = crop_size
         self.augment = augment
 
@@ -51,4 +59,3 @@ class BeautyDataset(Dataset):
             "masks": masks,
             "controls": torch.tensor(record.controls, dtype=torch.float32),
         }
-

@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import torch
+
 from .manifest import audit_identity_splits
 from .provenance import digest
 
@@ -31,6 +33,13 @@ def check_metrics(metrics: dict[str, float]) -> list[str]:
     return failures
 
 
+def check_checkpoint_scope(checkpoint: dict) -> list[str]:
+    scope = str(checkpoint.get("artifact_metadata", {}).get("usage_scope", "missing"))
+    if scope != "commercial":
+        return [f"checkpoint usage_scope={scope!r} is not commercial"]
+    return []
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=Path, required=True)
@@ -53,6 +62,8 @@ def main() -> None:
 
     metrics = json.loads(args.metrics.read_text(encoding="utf-8"))
     failures = check_metrics(metrics)
+    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    failures.extend(check_checkpoint_scope(checkpoint))
     dataset_audit = audit_identity_splits(args.manifests, check_files=True)
     if dataset_audit["splits"].get("validation", 0) == 0:
         failures.append("validation split is empty")

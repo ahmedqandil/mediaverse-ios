@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 
 from .dataset import BeautyDataset
 from .losses import BeautyLoss, monotonicity_loss, zero_state_loss
+from .manifest import COMMERCIAL_SCOPE, RESEARCH_SCOPE, USAGE_SCOPES
 from .model import BeautyEngine, BeautyEngineConfig
 
 
@@ -31,12 +32,27 @@ def save_checkpoint(
     config: dict,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    usage_scope = str(config.get("usage_scope", COMMERCIAL_SCOPE))
+    if usage_scope not in USAGE_SCOPES:
+        raise ValueError(f"unsupported usage_scope: {usage_scope}")
+    artifact_metadata = {
+        "usage_scope": usage_scope,
+        "license_id": str(config.get("license_id", "")),
+        "citation": str(config.get("citation", "")),
+    }
+    if usage_scope == RESEARCH_SCOPE and (
+        not artifact_metadata["license_id"] or not artifact_metadata["citation"]
+    ):
+        raise ValueError("research checkpoints require license_id and citation")
+    if usage_scope == COMMERCIAL_SCOPE and not artifact_metadata["license_id"]:
+        raise ValueError("commercial checkpoints require license_id")
     torch.save(
         {
             "epoch": epoch,
             "model": model.state_dict(),
             "optimizer": optimizer.state_dict(),
             "config": config,
+            "artifact_metadata": artifact_metadata,
         },
         path,
     )
@@ -51,15 +67,24 @@ def run(config_path: Path) -> None:
     device = choose_device()
 
     data_config = config["data"]
+    usage_scope = str(config.get("usage_scope", COMMERCIAL_SCOPE))
+    manifest_mode = str(data_config.get("manifest_mode", COMMERCIAL_SCOPE))
+    if usage_scope != manifest_mode:
+        raise ValueError("config usage_scope must match data.manifest_mode")
+    checkpoint_dir = Path(config["training"]["checkpoint_dir"])
+    if usage_scope == RESEARCH_SCOPE and "research" not in checkpoint_dir.parts:
+        raise ValueError("research checkpoints must be written under a research directory")
     train_data = BeautyDataset(
         data_config["train_manifest"],
         crop_size=int(data_config["crop_size"]),
         augment=True,
+        manifest_mode=manifest_mode,
     )
     validation_data = BeautyDataset(
         data_config["validation_manifest"],
         crop_size=int(data_config["crop_size"]),
         augment=False,
+        manifest_mode=manifest_mode,
     )
     training = config["training"]
     train_loader = DataLoader(
@@ -84,7 +109,6 @@ def run(config_path: Path) -> None:
         lr=float(training["learning_rate"]),
         weight_decay=float(training["weight_decay"]),
     )
-    checkpoint_dir = Path(training["checkpoint_dir"])
     best_validation = float("inf")
 
     for epoch in range(1, int(training["epochs"]) + 1):

@@ -30,9 +30,16 @@ def model_from_checkpoint(path: Path, device: torch.device) -> tuple[BeautyEngin
 
 def run(teacher_path: Path, student_config_path: Path) -> None:
     device = choose_device()
-    teacher, _ = model_from_checkpoint(teacher_path, device)
+    teacher, teacher_config = model_from_checkpoint(teacher_path, device)
     teacher.eval()
     config = yaml.safe_load(student_config_path.read_text(encoding="utf-8"))
+    teacher_scope = str(teacher_config.get("usage_scope", "commercial"))
+    student_scope = str(config.get("usage_scope", "commercial"))
+    if teacher_scope != student_scope:
+        raise ValueError(
+            f"refusing cross-scope distillation: teacher={teacher_scope}, "
+            f"student={student_scope}"
+        )
     student = BeautyEngine(
         BeautyEngineConfig(
             semantic_channels=int(config["data"]["semantic_channels"]),
@@ -45,6 +52,7 @@ def run(teacher_path: Path, student_config_path: Path) -> None:
         config["data"]["train_manifest"],
         crop_size=int(config["data"]["crop_size"]),
         augment=True,
+        manifest_mode=str(config["data"].get("manifest_mode", "commercial")),
     )
     loader = DataLoader(
         dataset,

@@ -34,6 +34,67 @@ python -m pip install -r requirements.txt
 Do not install research-only pretrained weights. Mediaverse model checkpoints must be
 trained from commercially licensed data.
 
+## FFHQR research boundary
+
+FFHQR is useful for reproducing published retouching benchmarks, but its retouched
+images are licensed CC BY-NC-SA 4.0 and the underlying FFHQ images carry mixed
+licenses. It must not be used to train, fine-tune, distill, or release a commercial
+Mediaverse checkpoint.
+
+Local copies can be indexed and prepared for quarantined noncommercial research
+training. The command does not download either dataset:
+
+```sh
+PYTHONPATH=. python -m beauty_engine.ffhqr \
+  --ffhq-root /datasets/ffhq/images1024x1024 \
+  --ffhqr-root /datasets/ffhqr/images1024x1024 \
+  --output research/ffhqr/index.jsonl \
+  --prepare-training \
+  --face-parser ../../Mediaverse-Swift/Resources/ML/FaceParser.mlpackage
+```
+
+The adapter applies the published folder split (00000–55999 train,
+56000–62999 validation, and 63000–69999 test), rejects incomplete pairs by
+default, and marks every record `research_noncommercial` with
+`commercial_training: false`.
+
+Mask preparation sends only the original FFHQ source image to the bundled FaceParser;
+the retouched target is never used to derive a mask. FaceParser exposes only a skin
+channel. Consequently, this research adapter writes its skin prediction, an inverse
+skin background mask, and zero masks for beard, hair, eyes, brows, lips, and teeth.
+This is adequate for a controlled skin-retouching experiment, but it cannot validate
+the unsupported controls or distinguish hair/clothing from true background. Any
+future richer parser must remain source-only.
+
+Train the separate research Render model:
+
+```sh
+PYTHONPATH=. python -m beauty_engine.train \
+  --config configs/ffhqr-render-research.yaml
+```
+
+Research checkpoints go under `research/checkpoints` and contain immutable
+`usage_scope`, license, and citation metadata. Normal Core ML export refuses them.
+For offline research inspection only, use `--allow-research-export`; the exported
+model retains those labels and the iOS runtime rejects every model whose
+`mediaverse.usage_scope` is not `commercial`.
+
+```sh
+PYTHONPATH=. python -m beauty_engine.export_coreml \
+  --checkpoint research/checkpoints/ffhqr-render/best.pt \
+  --output research/exports/MediaverseBeautyFFHQRResearch.mlpackage \
+  --allow-research-export
+```
+
+For a deterministic one-sample-per-split smoke run:
+
+```sh
+PYTHONPATH=. python -m beauty_engine.smoke_fixture \
+  --output research/ffhqr-smoke
+PYTHONPATH=. python -m beauty_engine.train \
+  --config configs/ffhqr-smoke.yaml
+```
+
 ## Dataset contract
 
 Each JSONL record contains:

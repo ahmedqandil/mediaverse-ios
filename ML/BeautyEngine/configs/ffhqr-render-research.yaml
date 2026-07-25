@@ -1,10 +1,12 @@
-experiment: mediaverse_beauty_render_v1
-usage_scope: commercial
-license_id: Mediaverse-Proprietary
+experiment: mediaverse_beauty_ffhqr_render_research_v1
+usage_scope: research_noncommercial
+license_id: CC-BY-NC-SA-4.0
+citation: Shafaei, Little, and Schmidt, AutoRetouch, WACV 2021
 seed: 20260725
 data:
-  train_manifest: data/train.jsonl
-  validation_manifest: data/validation.jsonl
+  train_manifest: research/ffhqr/manifests/train.jsonl
+  validation_manifest: research/ffhqr/manifests/validation.jsonl
+  manifest_mode: research_noncommercial
   crop_size: 512
   semantic_channels: 8
 model:
@@ -17,7 +19,7 @@ training:
   learning_rate: 0.00015
   weight_decay: 0.0001
   num_workers: 4
-  checkpoint_dir: checkpoints/render
+  checkpoint_dir: research/checkpoints/ffhqr-render
 loss:
   reconstruction: 1.0
   perceptual: 0.0

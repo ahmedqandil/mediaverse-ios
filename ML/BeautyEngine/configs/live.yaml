@@ -1,4 +1,6 @@
 experiment: mediaverse_beauty_live_v1
+usage_scope: commercial
+license_id: Mediaverse-Proprietary
 seed: 20260725
 data:
   train_manifest: data/train.jsonl

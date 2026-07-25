@@ -46,6 +46,13 @@ final class StoryBeautyModelRuntime: @unchecked Sendable {
                 let configuration = MLModelConfiguration()
                 configuration.computeUnits = tier == .live ? .cpuAndNeuralEngine : .all
                 let model = try MLModel(contentsOf: url, configuration: configuration)
+                let creatorMetadata = model.modelDescription.metadata[.creatorDefinedKey]
+                    as? [String: String]
+                guard creatorMetadata?["mediaverse.usage_scope"] == "commercial" else {
+                    let reason = "Beauty model is not licensed for commercial use"
+                    states[tier] = .incompatible(reason)
+                    return .incompatible(reason)
+                }
                 let inputNames = Set(model.modelDescription.inputDescriptionsByName.keys)
                 let outputNames = Set(model.modelDescription.outputDescriptionsByName.keys)
                 guard requiredInputs.isSubset(of: inputNames),
