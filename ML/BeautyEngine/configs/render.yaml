@@ -1,0 +1,27 @@
+experiment: mediaverse_beauty_render_v1
+seed: 20260725
+data:
+  train_manifest: data/train.jsonl
+  validation_manifest: data/validation.jsonl
+  crop_size: 512
+  semantic_channels: 8
+model:
+  base_channels: 48
+  residual_blocks: 10
+  control_count: 8
+training:
+  epochs: 160
+  batch_size: 4
+  learning_rate: 0.00015
+  weight_decay: 0.0001
+  num_workers: 4
+  checkpoint_dir: checkpoints/render
+loss:
+  reconstruction: 1.0
+  perceptual: 0.0
+  frequency: 0.50
+  texture: 0.30
+  background: 5.0
+  mask: 0.75
+  identity: 0.0
+

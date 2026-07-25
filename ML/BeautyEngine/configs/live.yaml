@@ -1,0 +1,27 @@
+experiment: mediaverse_beauty_live_v1
+seed: 20260725
+data:
+  train_manifest: data/train.jsonl
+  validation_manifest: data/validation.jsonl
+  crop_size: 320
+  semantic_channels: 8
+model:
+  base_channels: 32
+  residual_blocks: 6
+  control_count: 8
+training:
+  epochs: 120
+  batch_size: 8
+  learning_rate: 0.0002
+  weight_decay: 0.0001
+  num_workers: 4
+  checkpoint_dir: checkpoints/live
+loss:
+  reconstruction: 1.0
+  perceptual: 0.0
+  frequency: 0.35
+  texture: 0.20
+  background: 4.0
+  mask: 0.50
+  identity: 0.0
+
