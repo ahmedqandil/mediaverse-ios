@@ -476,6 +476,14 @@ private final class StoryFaceAnalyzer: @unchecked Sendable {
     }
 }
 
+enum StorySemanticMaskQuality {
+    static func isUsable(litPixelCount: Int, totalPixelCount: Int) -> Bool {
+        guard totalPixelCount > 0 else { return false }
+        let coverage = Float(litPixelCount) / Float(totalPixelCount)
+        return coverage >= 0.015 && coverage <= 0.88
+    }
+}
+
 private final class StorySemanticFaceParser: @unchecked Sendable {
     static let shared = StorySemanticFaceParser()
 
@@ -597,6 +605,12 @@ private final class StorySemanticFaceParser: @unchecked Sendable {
             let values = mask.dataPointer.bindMemory(to: Double.self, capacity: mask.count)
             fillMask(&pixels, strides: strides) { Float(values[$0]) }
         default:
+            return nil
+        }
+        guard StorySemanticMaskQuality.isUsable(
+            litPixelCount: pixels.reduce(into: 0) { $0 += $1 == 0 ? 0 : 1 },
+            totalPixelCount: pixels.count
+        ) else {
             return nil
         }
 

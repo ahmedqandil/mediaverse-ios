@@ -1671,6 +1671,32 @@ final class StoryLookEditingTests: XCTestCase {
         XCTAssertTrue(beauty.isEnabled)
     }
 
+    func testNaturalBeautyPresetIsVisiblyConfigured() {
+        let beauty = StoryBeautySettings.natural
+
+        XCTAssertGreaterThanOrEqual(beauty.intensity, 0.75)
+        XCTAssertGreaterThanOrEqual(beauty.skinSmoothing, 0.65)
+        XCTAssertGreaterThanOrEqual(beauty.wrinkleReduction, 0.5)
+        XCTAssertGreaterThan(beauty.skinGlow, 0.3)
+        XCTAssertGreaterThan(beauty.underEye, 0.15)
+        XCTAssertTrue(beauty.isEnabled)
+    }
+
+    func testSemanticSkinMaskRejectsEmptyAndImplausibleCoverage() {
+        XCTAssertFalse(
+            StorySemanticMaskQuality.isUsable(litPixelCount: 0, totalPixelCount: 10_000)
+        )
+        XCTAssertFalse(
+            StorySemanticMaskQuality.isUsable(litPixelCount: 100, totalPixelCount: 10_000)
+        )
+        XCTAssertTrue(
+            StorySemanticMaskQuality.isUsable(litPixelCount: 4_000, totalPixelCount: 10_000)
+        )
+        XCTAssertFalse(
+            StorySemanticMaskQuality.isUsable(litPixelCount: 9_000, totalPixelCount: 10_000)
+        )
+    }
+
     func testMasterBeautyPreservesExistingCustomControls() {
         var beauty = StoryBeautySettings.off
         beauty.skinSmoothing = 0.2

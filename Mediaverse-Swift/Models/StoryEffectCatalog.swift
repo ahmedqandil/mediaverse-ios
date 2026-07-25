@@ -30,18 +30,18 @@ struct StoryBeautySettings: Codable, Equatable {
     )
 
     static let natural = StoryBeautySettings(
-        intensity: 0.62,
-        skinSmoothing: 0.46,
-        wrinkleReduction: 0.32,
-        skinGlow: 0.20,
-        faceClarity: 0.18,
-        skinTone: 0.10,
-        brightness: 0.08,
-        eyeBrightening: 0.12,
-        underEye: 0.10,
-        teethWhitening: 0.08,
-        lipColor: 0.05,
-        contour: 0
+        intensity: 0.78,
+        skinSmoothing: 0.68,
+        wrinkleReduction: 0.56,
+        skinGlow: 0.34,
+        faceClarity: 0.26,
+        skinTone: 0.12,
+        brightness: 0.12,
+        eyeBrightening: 0.20,
+        underEye: 0.18,
+        teethWhitening: 0.14,
+        lipColor: 0.08,
+        contour: 0.06
     )
 
     var isEnabled: Bool {
