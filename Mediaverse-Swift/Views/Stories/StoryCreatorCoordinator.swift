@@ -85,12 +85,14 @@ struct StoryCreatorCoordinator: View {
     @State private var isLoadingPublishers = true
     @State private var errorText: String?
 
-    @State private var isCameraPresented = true
+    @State private var isCameraPresented = false
     @State private var shouldDismissOnCameraCancel = false
     @State private var isShowingPostDrawer = false
     @State private var isShowingEditorExitConfirmation = false
     @State private var draftMedia: StoryDraftMedia?
     @State private var currentProject: Project?
+    @State private var savedDrafts: [Project] = []
+    @State private var isLoadingDrafts = true
     @State private var isPreparingMedia = false
 
     @State private var caption = ""
@@ -190,13 +192,10 @@ struct StoryCreatorCoordinator: View {
         } message: {
             Text("Your changes are saved automatically. You can keep the draft or discard it permanently.")
         }
-        .onAppear {
-            if draftMedia == nil {
-                step = .media
-                isCameraPresented = true
-            }
+        .task {
+            await loadPublishers()
+            await loadSavedDrafts()
         }
-        .task { await loadPublishers() }
     }
 
     @ViewBuilder
@@ -308,6 +307,10 @@ struct StoryCreatorCoordinator: View {
                 mediaPreview(draftMedia)
             }
 
+            if currentProject == nil {
+                savedDraftSection
+            }
+
             mediaSourceButton(icon: "camera", title: "Open Camera", subtitle: "Capture a story or choose existing media from the camera controls") {
                 openCamera()
             }
@@ -319,6 +322,130 @@ struct StoryCreatorCoordinator: View {
                     step = .editor
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var savedDraftSection: some View {
+        if isLoadingDrafts {
+            loadingRow("Loading drafts...")
+        } else if !savedDrafts.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Drafts")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(C.text)
+
+                ForEach(savedDrafts) { draft in
+                    HStack(spacing: 10) {
+                        Button {
+                            Task { await resumeSavedDraft(draft) }
+                        } label: {
+                            HStack(spacing: 11) {
+                                Image(systemName: draft.tracks.videoClips.first?.assetRef.kind == .video
+                                    ? "play.rectangle.fill"
+                                    : "photo.fill")
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .foregroundStyle(C.watch)
+                                    .frame(width: 42, height: 42)
+                                    .background(C.watch.opacity(0.12))
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("Story draft")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(C.text)
+                                    Text("\(Int(ceil(draft.totalDurationSeconds)))s · Edited \(draft.updatedAt, style: .relative)")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(C.textTertiary)
+                                }
+
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(C.textTertiary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(role: .destructive) {
+                            Task { await deleteSavedDraft(draft) }
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.red)
+                                .frame(width: 36, height: 36)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Delete story draft")
+                    }
+                    .padding(10)
+                    .background(C.surface)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func loadSavedDrafts() async {
+        isLoadingDrafts = true
+        defer { isLoadingDrafts = false }
+        do {
+            savedDrafts = try await ProjectStore.shared.list()
+                .filter { !$0.tracks.videoClips.isEmpty }
+        } catch {
+            savedDrafts = []
+            errorText = "Could not load saved story drafts."
+        }
+    }
+
+    @MainActor
+    private func resumeSavedDraft(_ draft: Project) async {
+        guard let clip = draft.tracks.videoClips.first else { return }
+        isPreparingMedia = true
+        errorText = nil
+        defer { isPreparingMedia = false }
+
+        let store = await ProjectStore.shared.assetStore(for: draft.id)
+        let mediaURL = store.absoluteURL(for: clip.assetRef.relativePath)
+        guard FileManager.default.fileExists(atPath: mediaURL.path) else {
+            errorText = "This draft’s original media is missing."
+            return
+        }
+
+        switch clip.assetRef.kind {
+        case .image:
+            guard let data = try? Data(contentsOf: mediaURL),
+                  let preview = UIImage(data: data) else {
+                errorText = "Could not open this image draft."
+                return
+            }
+            draftMedia = .image(data: data, preview: preview)
+        case .video:
+            let thumbnail = await makeVideoThumbnail(url: mediaURL)
+            draftMedia = .video(
+                url: mediaURL,
+                duration: max(1, Int(ceil(draft.totalDurationSeconds))),
+                thumbnail: thumbnail
+            )
+        case .audio:
+            errorText = "This draft does not contain visual media."
+            return
+        }
+
+        currentProject = draft
+        step = .editor
+    }
+
+    @MainActor
+    private func deleteSavedDraft(_ draft: Project) async {
+        do {
+            try await ProjectStore.shared.delete(id: draft.id)
+            savedDrafts.removeAll { $0.id == draft.id }
+        } catch {
+            errorText = "Could not delete this story draft."
         }
     }
 
