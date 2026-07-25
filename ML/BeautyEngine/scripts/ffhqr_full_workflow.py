@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -40,6 +41,33 @@ def stamp() -> str:
 def run(command: list[str], *, cwd: Path | None = None) -> None:
     print(json.dumps({"at": stamp(), "command": command, "cwd": str(cwd or Path.cwd())}))
     subprocess.run(command, cwd=cwd, check=True)
+
+
+def run_with_backoff(
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    retry_seconds: int = 900,
+) -> None:
+    attempt = 1
+    while True:
+        try:
+            run(command, cwd=cwd)
+            return
+        except subprocess.CalledProcessError as error:
+            print(
+                json.dumps(
+                    {
+                        "at": stamp(),
+                        "attempt": attempt,
+                        "exit_code": error.returncode,
+                        "retry_in_seconds": retry_seconds,
+                    }
+                ),
+                flush=True,
+            )
+            attempt += 1
+            time.sleep(retry_seconds)
 
 
 def sha256(path: Path) -> str:
@@ -171,7 +199,7 @@ def main() -> None:
     ffhq_zip = downloads / "images1024x1024.zip"
     ffhq_marker = ffhq_root / f".{ffhq_zip.name}.extracted"
     if count_pngs(ffhq_images) != 70_000 and not ffhq_marker.exists():
-        run(
+        run_with_backoff(
             [
                 sys.executable,
                 "-m",
