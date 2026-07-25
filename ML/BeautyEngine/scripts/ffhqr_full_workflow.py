@@ -176,7 +176,6 @@ def main() -> None:
                 sys.executable,
                 "-m",
                 "gdown",
-                "--id",
                 "1WvlAIvuochQn_L_f9p3OdFdTiSLlnnhv",
                 "--continue",
                 "-O",
