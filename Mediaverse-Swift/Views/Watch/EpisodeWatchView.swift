@@ -179,6 +179,8 @@ struct EpisodeWatchView: View {
             guard UIDevice.current.orientation.isLandscape else { return }
             if prerollAdDecision != nil || midrollAdDecision != nil {
                 presentAdFullscreenPlayerIfNeeded()
+            } else if serverAdCoordinator.presentation != nil {
+                openFullscreenServerAdPlayer(serverAdCoordinator)
             } else {
                 presentFullscreenPlayerIfNeeded()
             }
@@ -207,6 +209,14 @@ struct EpisodeWatchView: View {
             VStack(spacing: 0) {
                 episodePinnedPlayer(ep, geometry: geo, progress: progress)
 
+                if let ad = standardAdCompanionCreative {
+                    NativeAdCompanionCard(ad: ad)
+                        .padding(.horizontal, C.pagePad)
+                        .padding(.top, 12)
+                        .padding(.bottom, 16)
+                        .background(C.bg)
+                }
+
                 if let panel = underPlayerPanel {
                     episodeUnderPlayerPanelView(panel, episode: ep)
                         .id(panel.id)
@@ -214,11 +224,6 @@ struct EpisodeWatchView: View {
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
-                    if let ad = activeInlineAdCreative {
-                        NativeAdCompanionCard(ad: ad)
-                            .padding(.bottom, 4)
-                    }
-
                     // Show + season label
                     if let show = ep.season.show {
                         NavigationLink(value: AppRoute.show(show.id)) {
@@ -486,6 +491,15 @@ struct EpisodeWatchView: View {
                         finishEpisodeAdBreak()
                     }
                     .frame(maxWidth: .infinity)
+                } else if serverAdCoordinator.presentation != nil {
+                    ServerGuidedAdPlayerView(
+                        coordinator: serverAdCoordinator,
+                        brandCardPlacement: .hidden,
+                        onFullscreen: {
+                            openFullscreenServerAdPlayer(serverAdCoordinator)
+                        }
+                    )
+                    .frame(maxWidth: .infinity)
                 } else {
                     WatchPlayerChrome(
                         player: p,
@@ -545,6 +559,17 @@ struct EpisodeWatchView: View {
             } else if showReplayPrompt {
                 episodeReplayOverlay
             }
+#if DEBUG
+            VStack {
+                HStack {
+                    AdDeliveryDebugBadge(mode: adDeliveryMode)
+                    Spacer()
+                }
+                Spacer()
+            }
+            .padding(8)
+            .allowsHitTesting(false)
+#endif
         }
         .frame(width: geo.size.width)
         .scaleEffect(x: collapseScale(progress), y: collapseScale(progress), anchor: .top)
@@ -723,19 +748,6 @@ struct EpisodeWatchView: View {
                             playClipPost(post)
                         }
                     )
-                    .overlay {
-                        if let presentation = serverAdCoordinator.presentation {
-                            ServerAdOverlay(
-                                presentation: presentation,
-                                isPaused: serverAdCoordinator.isPaused,
-                                isMuted: serverAdCoordinator.isMuted,
-                                onTogglePause: { serverAdCoordinator.togglePause() },
-                                onToggleMute: { serverAdCoordinator.toggleMute() },
-                                onSkip: { serverAdCoordinator.skip() },
-                                onOpen: { serverAdCoordinator.openAdvertiser() }
-                            )
-                        }
-                    }
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
                 .id(panel.id)
@@ -784,6 +796,10 @@ struct EpisodeWatchView: View {
             ?? 0
         guard let decision, decision.ads.indices.contains(index) else { return nil }
         return decision.ads[index]
+    }
+
+    private var standardAdCompanionCreative: AdCreative? {
+        activeInlineAdCreative ?? serverAdCoordinator.activeCreative
     }
 
     // MARK: - Episode list
@@ -1479,14 +1495,37 @@ struct EpisodeWatchView: View {
         entitlement = ent ?? mediaOnlyAccess(for: ep, canPlay: canPlay)
 
         if canPlay {
+            let expandedItem = miniPlayer.takeExpandedItem(for: .episode(loadId))
+            if let mediaURL = C.mediaURL(ep.videoUrl) {
+                let resolvedMode = AdDeliveryResolver.resolve(policy: policy)
+                adDeliveryMode = (resolvedMode == .sgai || resolvedMode == .ssai)
+                    && mediaURL.pathExtension.lowercased() != "m3u8"
+                    ? .csai
+                    : resolvedMode
+                debugAd(
+                    "delivery configured=\(policy.deliveryMode ?? "missing") "
+                    + "native=\(policy.deliveryByDevice?["nativeApp"] ?? "missing") "
+                    + "resolved=\(adDeliveryMode.rawValue)"
+                )
+            } else {
+                adDeliveryMode = .none
+            }
+            let prerollTask = Task {
+                expandedItem == nil
+                    ? await prerollDecision(contentId: loadId, duration: ep.duration)
+                    : nil
+            }
+
             if let item = await progressTask {
                 guard playbackLoadGeneration == loadGeneration,
                       loadId == currentEpisodeId,
-                      auth.currentUser?.id == loadUserId else { return }
+                      auth.currentUser?.id == loadUserId else {
+                    prerollTask.cancel()
+                    return
+                }
                 savedProgress = item.progress
             }
 
-            let expandedItem = miniPlayer.takeExpandedItem(for: .episode(loadId))
             if let expandedItem {
                 playbackSessionId = expandedItem.playbackSessionId
                 playbackEntryContext = expandedItem.entryContext
@@ -1495,15 +1534,6 @@ struct EpisodeWatchView: View {
                 playbackEntryContext = savedProgress > 0.05
                     ? PlaybackEntryContext(surface: .direct, mode: .resume, contentStartSec: max(0, (ep.duration ?? 0) * savedProgress), previewSessionId: nil)
                     : .direct
-            }
-            if let mediaURL = C.mediaURL(ep.videoUrl) {
-                let resolvedMode = AdDeliveryResolver.resolve(policy: policy)
-                adDeliveryMode = (resolvedMode == .sgai || resolvedMode == .ssai)
-                    && mediaURL.pathExtension.lowercased() != "m3u8"
-                    ? .csai
-                    : resolvedMode
-            } else {
-                adDeliveryMode = .none
             }
             if adDeliveryMode != .sgai {
                 serverInterstitialMonitor = nil
@@ -1563,6 +1593,14 @@ struct EpisodeWatchView: View {
                         context: playbackContext,
                         policy: policy
                     )
+                } else if deliveryPlan.mode == .ssai {
+                    serverInterstitialMonitor = nil
+                    serverAdCoordinator.configureSSAI(
+                        player: playbackPlayer,
+                        context: playbackContext,
+                        policy: policy,
+                        durationSec: ep.duration
+                    )
                 } else {
                     serverInterstitialMonitor = nil
                     serverAdCoordinator.reset()
@@ -1577,7 +1615,11 @@ struct EpisodeWatchView: View {
                               auth.currentUser?.id == loadUserId else { return }
                     }
                     if let durationSeconds, durationSeconds.isFinite, durationSeconds > 0 {
-                        let seekTo = CMTime(seconds: durationSeconds * savedProgress,
+                        let contentTime = durationSeconds * savedProgress
+                        let playbackTime = deliveryPlan.mode == .ssai
+                            ? serverAdCoordinator.stitchedTime(forContentTime: contentTime)
+                            : contentTime
+                        let seekTo = CMTime(seconds: playbackTime,
                                            preferredTimescale: 600)
                         await playbackPlayer.seek(to: seekTo, toleranceBefore: .zero, toleranceAfter: .zero)
                         guard playbackLoadGeneration == loadGeneration,
@@ -1591,7 +1633,7 @@ struct EpisodeWatchView: View {
                     restoreExpandedAd(player: expandedItem.player, presentation: presentation)
                     Task { await loadEpisodeAdBreaks(contentId: loadId, duration: ep.duration) }
                 } else {
-                    let preroll = await prerollDecision(contentId: loadId, duration: ep.duration)
+                    let preroll = await prerollTask.value
                     guard playbackLoadGeneration == loadGeneration,
                           loadId == currentEpisodeId,
                           auth.currentUser?.id == loadUserId else { return }
@@ -1981,11 +2023,18 @@ struct EpisodeWatchView: View {
     private func startProgress(episodeId: String, player: AVPlayer) {
         progressTimer?.invalidate()
         progressTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
-            guard let item = player.currentItem else { return }
-            let cur = player.currentTime().seconds
-            let tot = item.duration.seconds
-            guard tot > 0, !tot.isNaN else { return }
-            Task { try? await APIClient.shared.recordProgress(episodeId: episodeId, seconds: Int(cur), percent: min(1.0, cur / tot)) }
+            Task { @MainActor in
+                guard let item = player.currentItem else { return }
+                let stitchedTime = player.currentTime().seconds
+                let cur = adDeliveryMode == .ssai
+                    ? serverAdCoordinator.contentTime(forStitchedTime: stitchedTime)
+                    : stitchedTime
+                let tot = adDeliveryMode == .ssai
+                    ? (episode?.duration ?? item.duration.seconds)
+                    : item.duration.seconds
+                guard tot > 0, !tot.isNaN else { return }
+                try? await APIClient.shared.recordProgress(episodeId: episodeId, seconds: Int(cur), percent: min(1.0, cur / tot))
+            }
         }
     }
 
@@ -2009,8 +2058,13 @@ struct EpisodeWatchView: View {
         }
         cancelAutoplay()
         if let p = player, let item = p.currentItem {
-            let cur = p.currentTime().seconds
-            let tot = item.duration.seconds
+            let stitchedTime = p.currentTime().seconds
+            let cur = adDeliveryMode == .ssai
+                ? serverAdCoordinator.contentTime(forStitchedTime: stitchedTime)
+                : stitchedTime
+            let tot = adDeliveryMode == .ssai
+                ? (episode?.duration ?? item.duration.seconds)
+                : item.duration.seconds
             guard tot > 0 else { return }
             Task { try? await APIClient.shared.recordProgress(episodeId: currentEpisodeId, seconds: Int(cur), percent: min(1.0, cur / tot)) }
         }

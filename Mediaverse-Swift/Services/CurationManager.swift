@@ -62,7 +62,14 @@ final class CurationManager {
         // non-curated platform tabs such as Following and Collections remain visible.
         guard completedChecks > 0 else { return platformItems }
         return indexedItems.compactMap { index, item in
-            Self.pageKey(for: item.id) == nil || curatedIndexes.contains(index) ? item : nil
+            // Microdramas has a dedicated discovery API and must remain reachable when
+            // its optional curation page is empty. The screen will fall back to that API.
+            let normalizedID = PlatformBrowseItem.normalizedId(item.id)
+            return Self.pageKey(for: item.id) == nil
+                || normalizedID == "microdramas"
+                || curatedIndexes.contains(index)
+                ? item
+                : nil
         }
     }
 

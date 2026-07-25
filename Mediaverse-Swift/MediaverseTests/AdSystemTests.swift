@@ -484,19 +484,35 @@ final class SGAIPlaybackTests: XCTestCase {
         XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .csai)
     }
 
-    func testExplicitSSAIIsPreserved() throws {
+    func testLegacyMasterSSAIValueFailsClosedToCSAI() throws {
         let data = Data(#"{"adsEnabled":true,"deliveryMode":"ssai"}"#.utf8)
         let policy = try JSONDecoder().decode(EffectiveAdPolicy.self, from: data)
-        XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .ssai)
+        XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .csai)
     }
 
-    func testAutoDefaultsToSGAIAndUnsupportedFallsBackToCSAI() throws {
+    func testDeviceOverrideIsIgnoredUnlessMasterModeIsServer() throws {
         let policy = try JSONDecoder().decode(
             EffectiveAdPolicy.self,
             from: Data(#"{"adsEnabled":true,"deliveryByDevice":{"nativeApp":"auto"}}"#.utf8)
         )
+        XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .csai)
+    }
+
+    func testServerAutoDefaultsToSGAIAndUnsupportedFallsBackToSSAI() throws {
+        let policy = try JSONDecoder().decode(
+            EffectiveAdPolicy.self,
+            from: Data(#"{"adsEnabled":true,"deliveryMode":"server","deliveryByDevice":{"nativeApp":"auto"}}"#.utf8)
+        )
         XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .sgai)
-        XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy, supportsHLSInterstitials: false), .csai)
+        XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy, supportsHLSInterstitials: false), .ssai)
+    }
+
+    func testGlobalCSAIModeOverridesNativeServerSetting() throws {
+        let policy = try JSONDecoder().decode(
+            EffectiveAdPolicy.self,
+            from: Data(#"{"adsEnabled":true,"deliveryMode":"csai","deliveryByDevice":{"nativeApp":"ssai"}}"#.utf8)
+        )
+        XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .csai)
     }
 
     func testShortsKeepFeedAdsClientSideAndUseSGAIOnlyForHLS() throws {

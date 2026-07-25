@@ -105,9 +105,10 @@ struct NativeAdCompanionCard: View {
     @Environment(\.openURL) private var openURL
 
     private var clickThroughURL: URL? {
-        guard let value = ad.clickThroughUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !value.isEmpty,
-              let url = URL(string: value),
+        guard let rawValue = ad.clickThroughUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawValue.isEmpty else { return nil }
+        let value = rawValue.lowercased().hasPrefix("www.") ? "https://\(rawValue)" : rawValue
+        guard let url = URL(string: value),
               url.scheme == "https" || url.scheme == "http" else { return nil }
         return url
     }
@@ -215,7 +216,7 @@ struct NativeAdCompanionCard: View {
 
     private var ctaLabel: String? {
         let raw = ad.ctaText?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let raw, !raw.isEmpty else { return nil }
+        guard let raw, !raw.isEmpty else { return "Learn more →" }
         return raw.hasSuffix("→") ? raw : "\(raw) →"
     }
 }
@@ -262,6 +263,8 @@ struct ActiveAdPresentation {
     let overrideSkipAfterSec: Int?
     let onSkip: (() -> Void)?
     let onFinish: (() -> Void)?
+    var suppressTracking = false
+    var observeExternalCompletion = true
 }
 
 enum NativeAdBrandCardPlacement {
@@ -382,6 +385,10 @@ actor AdServerClient {
         Self.debugLog(
             "decision contentId=\(context.contentId) placement=\(context.placement ?? "linear") filled=\(decision.filled) ads=\(decision.ads.count) noFill=\(decision.noFillReason ?? "none")"
         )
+        let mediaURLs = decision.ads.compactMap { C.mediaURL($0.mediaUrl) }
+        Task { @MainActor in
+            NativeAdMediaCache.shared.prefetch(mediaURLs)
+        }
         return decision
     }
 
@@ -655,6 +662,59 @@ final class VMAPBreakParser: NSObject, XMLParserDelegate {
     }
 }
 
+@MainActor
+private final class NativeAdMediaCache {
+    static let shared = NativeAdMediaCache()
+
+    private struct Entry {
+        let asset: AVURLAsset
+        var lastAccess: UInt64
+        var preparationTask: Task<Void, Never>?
+    }
+
+    private let capacity = 8
+    private var accessCounter: UInt64 = 0
+    private var entries: [URL: Entry] = [:]
+
+    func asset(for url: URL) -> AVURLAsset {
+        accessCounter &+= 1
+        if var entry = entries[url] {
+            entry.lastAccess = accessCounter
+            entries[url] = entry
+            return entry.asset
+        }
+
+        let asset = AVURLAsset(
+            url: url,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+        )
+        let preparationTask = Task {
+            _ = try? await asset.load(.isPlayable)
+        }
+        entries[url] = Entry(
+            asset: asset,
+            lastAccess: accessCounter,
+            preparationTask: preparationTask
+        )
+        evictIfNeeded()
+        return asset
+    }
+
+    func prefetch(_ urls: [URL]) {
+        for url in urls.prefix(capacity) {
+            _ = asset(for: url)
+        }
+    }
+
+    private func evictIfNeeded() {
+        while entries.count > capacity,
+              let oldest = entries.min(by: { $0.value.lastAccess < $1.value.lastAccess })?.key {
+            entries[oldest]?.preparationTask?.cancel()
+            entries.removeValue(forKey: oldest)
+        }
+    }
+}
+
 struct NativeAdPlayerView: View {
     let decision: AdDecision
     let contentId: String
@@ -683,8 +743,11 @@ struct NativeAdPlayerView: View {
     var onActivePlayerChanged: ((AVPlayer?) -> Void)? = nil
     var onActiveAdPresentationChanged: ((ActiveAdPresentation?) -> Void)? = nil
     var onSkip: (() -> Void)? = nil
+    var onClick: (() -> Void)? = nil
     var onComplete: (() -> Void)? = nil
     var onFinish: (() -> Void)? = nil
+    var suppressTracking = false
+    var observeExternalCompletion = true
     let onFinished: () -> Void
 
     @Environment(\.openURL) private var openURL
@@ -1242,11 +1305,16 @@ struct NativeAdPlayerView: View {
         firedEvents = []
         elapsed = 0
         isPaused = false
-        let item = AVPlayerItem(url: url)
+        let item = AVPlayerItem(asset: NativeAdMediaCache.shared.asset(for: url))
+        item.preferredForwardBufferDuration = 1
         let nextPlayer = AVPlayer(playerItem: item)
+        nextPlayer.automaticallyWaitsToMinimizeStalling = false
         nextPlayer.isMuted = isMuted
         player = nextPlayer
         publishActiveAdState(nextPlayer)
+        NativeAdMediaCache.shared.prefetch(
+            decision.ads.dropFirst(currentAdIndex + 1).compactMap { C.mediaURL($0.mediaUrl) }
+        )
 
         observer = nextPlayer.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
@@ -1368,7 +1436,7 @@ struct NativeAdPlayerView: View {
             ) { time in
                 elapsed = max(0, time.seconds)
             }
-            if let item = externalPlayer.currentItem {
+            if observeExternalCompletion, let item = externalPlayer.currentItem {
                 endObserver = NotificationCenter.default.addObserver(
                     forName: .AVPlayerItemDidPlayToEndTime,
                     object: item,
@@ -1391,8 +1459,10 @@ struct NativeAdPlayerView: View {
         }
         isPaused = externalPlayer.timeControlStatus == .paused
         externalPlayer.play()
-        schedulePlaybackStartTracking(for: externalPlayer)
-        schedulePlaybackWatchdog(for: externalPlayer)
+        if !suppressTracking {
+            schedulePlaybackStartTracking(for: externalPlayer)
+            schedulePlaybackWatchdog(for: externalPlayer)
+        }
     }
 
     private func schedulePlaybackStartTracking(for player: AVPlayer) {
@@ -1494,6 +1564,7 @@ struct NativeAdPlayerView: View {
     private func openAdURL(_ url: URL) {
         trackEvent("click")
         trackEvent("ctaClick")
+        onClick?()
         openURL(url)
     }
 
@@ -1535,6 +1606,7 @@ struct NativeAdPlayerView: View {
             guard !firedEvents.contains(event) else { return }
             firedEvents.insert(event)
         }
+        guard !suppressTracking else { return }
         let decisionId = decision.decisionId
         let contentId = contentId
         let placement = placement

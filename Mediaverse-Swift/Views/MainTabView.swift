@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
-/// Root tab container: Home · Shorts · Upload · Explore · Me
+/// Root page container: Upload · Explore · Home · Shorts · Me
 /// All watch/channel/show/microdrama screens are PUSHED on the relevant NavigationStack.
 /// On iOS 26 the tab bar adopts Liquid Glass automatically — UITabBar.appearance()
 /// is skipped on that OS to avoid fighting the compositor.
@@ -90,7 +90,6 @@ struct MainTabView: View {
     var body: some View {
         layeredRoot
         .simultaneousGesture(mainScrollActivityGesture)
-        .simultaneousGesture(homeUploadSwipeGesture)
         .animation(.spring(response: 0.26, dampingFraction: 0.88), value: isUploadSheetPresented)
         .animation(.spring(response: 0.24, dampingFraction: 0.86), value: isBottomTabBarCompressed)
         .onAppear {
@@ -264,6 +263,23 @@ struct MainTabView: View {
 
     private var rootTabView: some View {
         TabView(selection: $selectedTab) {
+            NavigationStack {
+                UploadView(presentationStyle: .screen)
+            }
+            .ignoresSafeArea(edges: .bottom)
+            .tabItem { appTabLabel("Upload", icon: "upload", fallback: "plus.circle") }
+            .tag(AppTab.upload)
+
+            NavigationStack(path: $explorePath) {
+                BrowseView(isRootActive: selectedTab == .explore)
+                    .navigationDestination(for: AppRoute.self) { route in
+                        routeDestination(route)
+                    }
+            }
+            .ignoresSafeArea(edges: .bottom)
+            .tabItem { appTabLabel("Explore", icon: "explore", fallback: "safari") }
+            .tag(AppTab.explore)
+
             NavigationStack(path: $homePath) {
                 HomeView()
                     .navigationDestination(for: AppRoute.self) { route in
@@ -283,16 +299,6 @@ struct MainTabView: View {
             .ignoresSafeArea(edges: .bottom)
             .tabItem { appTabLabel("Shorts", icon: "short", fallback: "play.rectangle.on.rectangle") }
             .tag(AppTab.shorts)
-
-            NavigationStack(path: $explorePath) {
-                BrowseView(isRootActive: selectedTab == .explore)
-                    .navigationDestination(for: AppRoute.self) { route in
-                        routeDestination(route)
-                    }
-            }
-            .ignoresSafeArea(edges: .bottom)
-            .tabItem { appTabLabel("Explore", icon: "explore", fallback: "safari") }
-            .tag(AppTab.explore)
 
             NavigationStack(path: $profilePath) {
                 ProfileView(isRootActive: selectedTab == .profile)
@@ -425,9 +431,10 @@ struct MainTabView: View {
                 Spacer(minLength: 0)
 
                 HStack(spacing: 0) {
+                    bottomTabButton(.upload, title: "Upload", icon: "upload", fallback: "plus.circle")
+                    bottomTabButton(.explore, title: "Explore", icon: "explore", fallback: "safari")
                     bottomTabButton(.home, title: "Home", icon: "home", fallback: "house")
                     bottomTabButton(.shorts, title: "Shorts", icon: "short", fallback: "bolt")
-                    bottomTabButton(.explore, title: "Explore", icon: "explore", fallback: "safari")
                     bottomTabButton(.profile, title: "Me", icon: "user", fallback: "person")
                 }
                 .padding(.horizontal, 10)
@@ -465,29 +472,6 @@ struct MainTabView: View {
             .onEnded { _ in
                 scheduleBottomTabBarRestore()
             }
-    }
-
-    private var homeUploadSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 28, coordinateSpace: .global)
-            .onEnded { value in
-                guard canOpenUploadFromHomeSwipe else { return }
-                let translation = value.translation
-                let predicted = value.predictedEndTranslation
-                let isRightSwipe = translation.width > 92 || predicted.width > 150
-                let isMostlyHorizontal = abs(translation.width) > abs(translation.height) * 1.65
-                guard isRightSwipe, isMostlyHorizontal else { return }
-                openUploadOptions()
-            }
-    }
-
-    private var canOpenUploadFromHomeSwipe: Bool {
-        selectedTab == .home
-            && isUploadEligible
-            && homePath.isEmpty
-            && !isUploadSheetPresented
-            && !isCommentsOverlayPresented
-            && !isKeyboardVisible
-            && expandingMiniItem == nil
     }
 
     private func scheduleBottomTabBarRestore() {

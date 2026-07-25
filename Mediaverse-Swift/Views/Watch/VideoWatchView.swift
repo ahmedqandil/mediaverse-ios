@@ -208,6 +208,8 @@ struct VideoWatchView: View {
             guard UIDevice.current.orientation.isLandscape else { return }
             if prerollAdDecision != nil || midrollAdDecision != nil {
                 presentAdFullscreenPlayerIfNeeded()
+            } else if serverAdCoordinator.presentation != nil {
+                openFullscreenServerAdPlayer(serverAdCoordinator)
             } else {
                 presentFullscreenPlayerIfNeeded()
             }
@@ -257,6 +259,14 @@ struct VideoWatchView: View {
             VStack(spacing: 0) {
                 pinnedPlayer(v, geometry: geo)
 
+                if let ad = standardAdCompanionCreative {
+                    NativeAdCompanionCard(ad: ad)
+                        .padding(.horizontal, C.pagePad)
+                        .padding(.top, 12)
+                        .padding(.bottom, 16)
+                        .background(C.bg)
+                }
+
                 if let panel = underPlayerPanel {
                     underPlayerPanelView(panel, video: v)
                         .id(panel.id)
@@ -264,13 +274,6 @@ struct VideoWatchView: View {
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
-                            if let ad = activeInlineAdCreative {
-                                NativeAdCompanionCard(ad: ad)
-                                    .padding(.horizontal, C.pagePad)
-                                    .padding(.top, 12)
-                                    .padding(.bottom, 16)
-                            }
-
                             videoDetailsContent(v)
 
                             if let playlistPanel {
@@ -312,6 +315,17 @@ struct VideoWatchView: View {
             } else if showReplayPrompt {
                 replayOverlay
             }
+#if DEBUG
+            VStack {
+                HStack {
+                    AdDeliveryDebugBadge(mode: adDeliveryMode)
+                    Spacer()
+                }
+                Spacer()
+            }
+            .padding(8)
+            .allowsHitTesting(false)
+#endif
         }
         .frame(width: geo.size.width)
         .frame(maxWidth: .infinity)
@@ -571,6 +585,10 @@ struct VideoWatchView: View {
         return decision.ads[index]
     }
 
+    private var standardAdCompanionCreative: AdCreative? {
+        activeInlineAdCreative ?? serverAdCoordinator.activeCreative
+    }
+
     // MARK: - Player area
 
     @ViewBuilder
@@ -627,6 +645,15 @@ struct VideoWatchView: View {
                     finishVideoAdBreak()
                 }
                 .frame(maxWidth: .infinity)
+            } else if serverAdCoordinator.presentation != nil {
+                ServerGuidedAdPlayerView(
+                    coordinator: serverAdCoordinator,
+                    brandCardPlacement: .hidden,
+                    onFullscreen: {
+                        openFullscreenServerAdPlayer(serverAdCoordinator)
+                    }
+                )
+                .frame(maxWidth: .infinity)
             } else {
                 WatchPlayerChrome(
                     player: p,
@@ -672,19 +699,6 @@ struct VideoWatchView: View {
                     }
                 ) {
                     playerMarkerOverlay
-                }
-                .overlay {
-                    if let presentation = serverAdCoordinator.presentation {
-                        ServerAdOverlay(
-                            presentation: presentation,
-                            isPaused: serverAdCoordinator.isPaused,
-                            isMuted: serverAdCoordinator.isMuted,
-                            onTogglePause: { serverAdCoordinator.togglePause() },
-                            onToggleMute: { serverAdCoordinator.toggleMute() },
-                            onSkip: { serverAdCoordinator.skip() },
-                            onOpen: { serverAdCoordinator.openAdvertiser() }
-                        )
-                    }
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -1346,15 +1360,45 @@ struct VideoWatchView: View {
             showFollowerCount = v.showFollowerCount
             localComments     = v.comments
 
-            // Restore progress position
+            let expandedItem = miniPlayer.takeExpandedItem(for: .video(loadId))
+            if let mediaURL = C.mediaURL(v.videoUrl) {
+                let resolvedMode = AdDeliveryResolver.resolve(policy: policy)
+                adDeliveryMode = (resolvedMode == .sgai || resolvedMode == .ssai)
+                    && mediaURL.pathExtension.lowercased() != "m3u8"
+                    ? .csai
+                    : resolvedMode
+                debugAd(
+                    "delivery configured=\(policy.deliveryMode ?? "missing") "
+                    + "native=\(policy.deliveryByDevice?["nativeApp"] ?? "missing") "
+                    + "resolved=\(adDeliveryMode.rawValue)"
+                )
+            } else {
+                adDeliveryMode = .none
+            }
+            let isInitialFeedContinuation = expandedItem.map {
+                !$0.isAd
+                    && $0.sourceFrame != nil
+                    && $0.entryContext.mode == .autoplayPreview
+            } ?? false
+            let shouldRequestPreroll = expandedItem == nil || isInitialFeedContinuation
+            let prerollTask = Task {
+                shouldRequestPreroll
+                    ? await prerollDecision(contentId: loadId, contentType: "video", duration: v.duration)
+                    : nil
+            }
+
+            // Progress restoration and preroll decisioning are independent. The
+            // decision is already running while this request completes.
             if let item = await progressTask {
                 guard playbackLoadGeneration == loadGeneration,
                       currentVideoId == loadId,
-                      auth.currentUser?.id == loadUserId else { return }
+                      auth.currentUser?.id == loadUserId else {
+                    prerollTask.cancel()
+                    return
+                }
                 savedProgress = item.progress
             }
 
-            let expandedItem = miniPlayer.takeExpandedItem(for: .video(loadId))
             if let expandedItem {
                 playbackSessionId = expandedItem.playbackSessionId
                 playbackEntryContext = expandedItem.entryContext
@@ -1363,15 +1407,6 @@ struct VideoWatchView: View {
                 playbackEntryContext = savedProgress > 0.05
                     ? PlaybackEntryContext(surface: .direct, mode: .resume, contentStartSec: max(0, (v.duration ?? 0) * savedProgress), previewSessionId: nil)
                     : .direct
-            }
-            if let mediaURL = C.mediaURL(v.videoUrl) {
-                let resolvedMode = AdDeliveryResolver.resolve(policy: policy)
-                adDeliveryMode = (resolvedMode == .sgai || resolvedMode == .ssai)
-                    && mediaURL.pathExtension.lowercased() != "m3u8"
-                    ? .csai
-                    : resolvedMode
-            } else {
-                adDeliveryMode = .none
             }
             if adDeliveryMode != .sgai {
                 serverInterstitialMonitor = nil
@@ -1383,20 +1418,12 @@ struct VideoWatchView: View {
             hideControlsForExpandedHandoff = expandedItem.map { !$0.isAd } ?? false
             if let expandedItem, !expandedItem.isAd,
                adDeliveryMode != .sgai, adDeliveryMode != .ssai {
-                let isInitialFeedContinuation =
-                    expandedItem.sourceFrame != nil
-                    && expandedItem.entryContext.mode == .autoplayPreview
-
                 if isInitialFeedContinuation {
                     // Feed previews are deliberately raw/non-monetized. Preserve their
                     // player and position, but let the server decide whether deliberate
                     // watch playback owes a preroll before content continues.
                     expandedItem.player.pause()
-                    let preroll = await prerollDecision(
-                        contentId: loadId,
-                        contentType: "video",
-                        duration: v.duration
-                    )
+                    let preroll = await prerollTask.value
                     guard playbackLoadGeneration == loadGeneration,
                           currentVideoId == loadId,
                           auth.currentUser?.id == loadUserId else { return }
@@ -1454,6 +1481,14 @@ struct VideoWatchView: View {
                         context: playbackContext,
                         policy: policy
                     )
+                } else if deliveryPlan.mode == .ssai {
+                    serverInterstitialMonitor = nil
+                    serverAdCoordinator.configureSSAI(
+                        player: playbackPlayer,
+                        context: playbackContext,
+                        policy: policy,
+                        durationSec: v.duration
+                    )
                 } else {
                     serverInterstitialMonitor = nil
                     serverAdCoordinator.reset()
@@ -1468,7 +1503,11 @@ struct VideoWatchView: View {
                               auth.currentUser?.id == loadUserId else { return }
                     }
                     if let durationSeconds, durationSeconds.isFinite, durationSeconds > 0 {
-                        let seekTo = CMTime(seconds: durationSeconds * savedProgress,
+                        let contentTime = durationSeconds * savedProgress
+                        let playbackTime = deliveryPlan.mode == .ssai
+                            ? serverAdCoordinator.stitchedTime(forContentTime: contentTime)
+                            : contentTime
+                        let seekTo = CMTime(seconds: playbackTime,
                                            preferredTimescale: 600)
                         await playbackPlayer.seek(to: seekTo, toleranceBefore: .zero, toleranceAfter: .zero)
                         guard playbackLoadGeneration == loadGeneration,
@@ -1482,7 +1521,7 @@ struct VideoWatchView: View {
                     restoreExpandedAd(player: expandedItem.player, presentation: presentation)
                     Task { await loadVideoAdBreaks(contentId: loadId, duration: v.duration) }
                 } else {
-                    let preroll = await prerollDecision(contentId: loadId, contentType: "video", duration: v.duration)
+                    let preroll = await prerollTask.value
                     guard playbackLoadGeneration == loadGeneration,
                           currentVideoId == loadId,
                           auth.currentUser?.id == loadUserId else { return }
@@ -1874,11 +1913,18 @@ struct VideoWatchView: View {
     private func startProgress(videoId: String, player: AVPlayer) {
         progressTimer?.invalidate()
         progressTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
-            guard let item = player.currentItem else { return }
-            let cur = player.currentTime().seconds
-            let tot = item.duration.seconds
-            guard tot > 0, !tot.isNaN else { return }
-            Task { try? await APIClient.shared.recordProgress(videoId: videoId, seconds: Int(cur), percent: min(1.0, cur / tot)) }
+            Task { @MainActor in
+                guard let item = player.currentItem else { return }
+                let stitchedTime = player.currentTime().seconds
+                let cur = adDeliveryMode == .ssai
+                    ? serverAdCoordinator.contentTime(forStitchedTime: stitchedTime)
+                    : stitchedTime
+                let tot = adDeliveryMode == .ssai
+                    ? (video?.duration ?? item.duration.seconds)
+                    : item.duration.seconds
+                guard tot > 0, !tot.isNaN else { return }
+                try? await APIClient.shared.recordProgress(videoId: videoId, seconds: Int(cur), percent: min(1.0, cur / tot))
+            }
         }
     }
 
@@ -1902,8 +1948,13 @@ struct VideoWatchView: View {
         }
         cancelAutoplay()
         guard let p = player, let item = p.currentItem else { return }
-        let cur = p.currentTime().seconds
-        let tot = item.duration.seconds
+        let stitchedTime = p.currentTime().seconds
+        let cur = adDeliveryMode == .ssai
+            ? serverAdCoordinator.contentTime(forStitchedTime: stitchedTime)
+            : stitchedTime
+        let tot = adDeliveryMode == .ssai
+            ? (video?.duration ?? item.duration.seconds)
+            : item.duration.seconds
         guard tot > 0 else { return }
         Task { try? await APIClient.shared.recordProgress(videoId: currentVideoId, seconds: Int(cur), percent: min(1.0, cur / tot)) }
     }
