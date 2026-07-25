@@ -484,6 +484,22 @@ enum StorySemanticMaskQuality {
     }
 }
 
+enum StoryBeautyLuminosity {
+    static func gammaPower(for settings: StoryBeautySettings) -> Float {
+        let master = min(max(settings.intensity, 0), 1)
+        guard master > 0 else { return 1 }
+        let highEndPosition = min(max((master - 0.52) / 0.48, 0), 1)
+        let highEnd = highEndPosition * highEndPosition * (3 - 2 * highEndPosition)
+        let lift = min(
+            max(settings.skinGlow, 0) * master * 0.16
+                + max(settings.brightness, 0) * master * 0.18
+                + highEnd * 0.08,
+            0.25
+        )
+        return 1 - lift
+    }
+}
+
 private final class StorySemanticFaceParser: @unchecked Sendable {
     static let shared = StorySemanticFaceParser()
 
@@ -768,6 +784,13 @@ private enum StoryCoreImageEffects {
                 target: polished,
                 amount: min(0.18 + highEndMaster * 0.42, 0.60)
             )
+        }
+
+        let gammaPower = StoryBeautyLuminosity.gammaPower(for: settings)
+        if gammaPower < 0.999 {
+            target = target.applyingFilter("CIGammaAdjust", parameters: [
+                "inputPower": gammaPower
+            ]).cropped(to: image.extent)
         }
 
         guard let mask = faceMask(

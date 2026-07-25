@@ -1697,6 +1697,23 @@ final class StoryLookEditingTests: XCTestCase {
         )
     }
 
+    func testBeautyLuminosityIsControlScaledAndZeroSafe() {
+        XCTAssertEqual(StoryBeautyLuminosity.gammaPower(for: .off), 1)
+
+        let naturalPower = StoryBeautyLuminosity.gammaPower(for: .natural)
+        XCTAssertLessThan(naturalPower, 0.95)
+        XCTAssertGreaterThanOrEqual(naturalPower, 0.75)
+
+        let studio = StoryBeautySettings(
+            intensity: 1,
+            skinSmoothing: 1,
+            skinGlow: 1,
+            skinTone: 0,
+            brightness: 1
+        )
+        XCTAssertEqual(StoryBeautyLuminosity.gammaPower(for: studio), 0.75)
+    }
+
     func testMasterBeautyPreservesExistingCustomControls() {
         var beauty = StoryBeautySettings.off
         beauty.skinSmoothing = 0.2
