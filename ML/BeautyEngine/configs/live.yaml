@@ -24,4 +24,6 @@ loss:
   background: 4.0
   mask: 0.50
   identity: 0.0
-
+  monotonicity: 0.20
+  zero_state: 10.0
+  temporal: 0.0

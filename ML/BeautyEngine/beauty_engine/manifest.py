@@ -31,6 +31,7 @@ CONTROL_KEYS = (
 @dataclass(frozen=True)
 class ManifestRecord:
     sample_id: str
+    subject_id: str
     source: Path
     target: Path
     masks: dict[str, Path]
@@ -46,7 +47,7 @@ def _resolve(root: Path, value: str) -> Path:
 
 
 def parse_record(raw: dict, root: Path, line_number: int) -> ManifestRecord:
-    required = ("id", "source", "target", "masks", "controls", "split", "rights")
+    required = ("id", "subject_id", "source", "target", "masks", "controls", "split", "rights")
     missing = [key for key in required if key not in raw]
     if missing:
         raise ValueError(f"line {line_number}: missing {', '.join(missing)}")
@@ -75,6 +76,7 @@ def parse_record(raw: dict, root: Path, line_number: int) -> ManifestRecord:
 
     return ManifestRecord(
         sample_id=str(raw["id"]),
+        subject_id=str(raw["subject_id"]),
         source=_resolve(root, str(raw["source"])),
         target=_resolve(root, str(raw["target"])),
         masks={key: _resolve(root, str(masks_raw[key])) for key in SEMANTIC_KEYS},
@@ -107,16 +109,48 @@ def read_manifest(path: Path, check_files: bool = True) -> list[ManifestRecord]:
     return records
 
 
+def audit_identity_splits(manifests: list[Path], check_files: bool = True) -> dict:
+    subjects_by_split: dict[str, set[str]] = {}
+    licenses: set[str] = set()
+    consent_ids: set[str] = set()
+    sample_count = 0
+    for manifest in manifests:
+        for record in read_manifest(manifest, check_files=check_files):
+            subjects_by_split.setdefault(record.split, set()).add(record.subject_id)
+            licenses.add(record.license_id)
+            consent_ids.add(record.consent_id)
+            sample_count += 1
+
+    splits = sorted(subjects_by_split)
+    overlaps: list[str] = []
+    for index, first in enumerate(splits):
+        for second in splits[index + 1 :]:
+            shared = subjects_by_split[first] & subjects_by_split[second]
+            if shared:
+                overlaps.append(f"{first}/{second}: {','.join(sorted(shared))}")
+    if overlaps:
+        raise ValueError("subject leakage across splits: " + "; ".join(overlaps))
+    return {
+        "samples": sample_count,
+        "subjects": sum(len(values) for values in subjects_by_split.values()),
+        "splits": {key: len(value) for key, value in sorted(subjects_by_split.items())},
+        "licenses": sorted(licenses),
+        "consents": len(consent_ids),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Validate a Mediaverse Beauty JSONL manifest.")
     parser.add_argument("manifest", type=Path)
+    parser.add_argument("--additional", type=Path, nargs="*", default=[])
     parser.add_argument("--skip-files", action="store_true")
     args = parser.parse_args()
-    records = read_manifest(args.manifest, check_files=not args.skip_files)
-    splits = sorted({record.split for record in records})
-    print(f"valid: {len(records)} samples; splits={','.join(splits)}")
+    report = audit_identity_splits(
+        [args.manifest, *args.additional],
+        check_files=not args.skip_files,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
     main()
-

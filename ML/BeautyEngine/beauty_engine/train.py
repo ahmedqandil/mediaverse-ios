@@ -11,7 +11,7 @@ import yaml
 from torch.utils.data import DataLoader
 
 from .dataset import BeautyDataset
-from .losses import BeautyLoss
+from .losses import BeautyLoss, monotonicity_loss, zero_state_loss
 from .model import BeautyEngine, BeautyEngineConfig
 
 
@@ -96,11 +96,30 @@ def run(config_path: Path) -> None:
             masks = batch["masks"].to(device)
             controls = batch["controls"].to(device)
             residual, confidence, refined_skin, detail = model(source, masks, controls)
+            effect_strength = 1 - torch.prod(1 - controls, dim=1)
             output = model.composite(
-                source, residual, confidence, refined_skin, detail, controls[:, 0]
+                source, residual, confidence, refined_skin, detail, effect_strength
             )
             loss, _ = loss_function(
                 source, target, output, confidence, refined_skin, masks[:, :1]
+            )
+            zero_controls = torch.zeros_like(controls)
+            zero_predictions = model(source, masks, zero_controls)
+            zero_output = model.composite(
+                source, *zero_predictions, 1 - torch.prod(1 - zero_controls, dim=1)
+            )
+            stronger_controls = torch.clamp(controls + 0.15, 0, 1)
+            stronger_predictions = model(source, masks, stronger_controls)
+            stronger_output = model.composite(
+                source,
+                *stronger_predictions,
+                1 - torch.prod(1 - stronger_controls, dim=1),
+            )
+            loss = (
+                loss
+                + float(config["loss"].get("zero_state", 0)) * zero_state_loss(source, zero_output)
+                + float(config["loss"].get("monotonicity", 0))
+                * monotonicity_loss(source, output, stronger_output)
             )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -118,7 +137,12 @@ def run(config_path: Path) -> None:
                 controls = batch["controls"].to(device)
                 residual, confidence, refined_skin, detail = model(source, masks, controls)
                 output = model.composite(
-                    source, residual, confidence, refined_skin, detail, controls[:, 0]
+                    source,
+                    residual,
+                    confidence,
+                    refined_skin,
+                    detail,
+                    1 - torch.prod(1 - controls, dim=1),
                 )
                 loss, _ = loss_function(
                     source, target, output, confidence, refined_skin, masks[:, :1]
@@ -147,4 +171,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

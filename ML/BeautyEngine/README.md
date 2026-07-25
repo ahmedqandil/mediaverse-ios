@@ -39,6 +39,7 @@ trained from commercially licensed data.
 Each JSONL record contains:
 
 - source and professionally retouched target;
+- a stable, non-identifying `subject_id`;
 - eight aligned semantic masks;
 - the intended control strengths;
 - split name;
@@ -51,11 +52,14 @@ See `examples/manifest.jsonl` for the complete schema.
 The source, target, and masks must be geometrically aligned. Identity splits are
 mandatory: the same person must never occur across train, validation, and test.
 
-Validate before training:
+Audit all splits together before training. This rejects the same identity appearing in
+more than one split and optionally verifies every referenced file:
 
 ```sh
-PYTHONPATH=. python -m beauty_engine.manifest data/train.jsonl
-PYTHONPATH=. python -m beauty_engine.manifest data/validation.jsonl
+PYTHONPATH=. python -m beauty_engine.manifest \
+  data/train.jsonl \
+  --additional data/validation.jsonl data/test.jsonl \
+  --check-files
 ```
 
 ## Train
@@ -65,10 +69,23 @@ PYTHONPATH=. python -m beauty_engine.train --config configs/render.yaml
 PYTHONPATH=. python -m beauty_engine.train --config configs/live.yaml
 ```
 
-Train the Render model first. The Live configuration is the mobile architecture and
-should later be distilled from the accepted Render checkpoint. Configuration weights
+Train the Render model first. Distill its accepted behavior into the smaller Live
+architecture:
+
+```sh
+PYTHONPATH=. python -m beauty_engine.distill \
+  --teacher checkpoints/render/best.pt \
+  --student-config configs/live.yaml
+```
+
+Configuration weights
 for external perceptual and identity losses default to zero until Mediaverse approves
 commercially safe feature extractors.
+
+The training objective includes exact zero-control reconstruction, control
+monotonicity, protected-region preservation, and an occlusion-aware temporal primitive.
+Video production training must supply adjacent frames plus optical flow and occlusion
+masks; repeating still frames is only a pipeline smoke test, not temporal validation.
 
 ## Evaluate
 
@@ -97,6 +114,23 @@ PYTHONPATH=. python -m beauty_engine.export_coreml \
 Export begins with FP16. Quantization is allowed only after the FP16 model passes
 PyTorch/Core ML golden-tensor parity and real-device visual evaluation.
 
+Run numerical parity:
+
+```sh
+PYTHONPATH=. python -m beauty_engine.parity \
+  --checkpoint checkpoints/live/best.pt \
+  --model exports/MediaverseBeautyLive.mlpackage
+```
+
+Create immutable provenance:
+
+```sh
+PYTHONPATH=. python -m beauty_engine.provenance \
+  --checkpoint checkpoints/live/best.pt \
+  --manifests data/train.jsonl data/validation.jsonl data/test.jsonl \
+  --output reports/provenance.json
+```
+
 ## Tests
 
 With the Python 3.11 environment:
@@ -123,3 +157,20 @@ A checkpoint cannot enter the iOS app until it has:
 8. demographic and hard-case review;
 9. a model card with checkpoint hash, source revision, and dataset revision.
 
+The final automated gate refuses promotion when required artifacts, validation/test
+splits, file-backed dataset records, metrics, or Core ML parity are missing:
+
+```sh
+PYTHONPATH=. python -m beauty_engine.release_gate \
+  --checkpoint checkpoints/live/best.pt \
+  --coreml-model exports/MediaverseBeautyLive.mlpackage \
+  --manifests data/train.jsonl data/validation.jsonl data/test.jsonl \
+  --metrics reports/release-metrics.json \
+  --model-card reports/model-card.md \
+  --output reports/release-gate.json
+```
+
+Required metric keys are `zero_strength_max_delta`, `background_mean_delta`,
+`protected_feature_mean_delta`, `coreml_max_delta`, and
+`preview_export_mean_delta`. Passing this automated gate does not replace real-device
+latency/thermal testing or blinded demographic and hard-case review.

@@ -18,6 +18,29 @@ def laplacian_level(value: torch.Tensor) -> torch.Tensor:
     return value - F.interpolate(low, size=value.shape[-2:], mode="bilinear", align_corners=False)
 
 
+def zero_state_loss(source: torch.Tensor, zero_output: torch.Tensor) -> torch.Tensor:
+    return torch.max(torch.abs(zero_output - source))
+
+
+def monotonicity_loss(
+    source: torch.Tensor,
+    weaker_output: torch.Tensor,
+    stronger_output: torch.Tensor,
+    tolerance: float = 1e-4,
+) -> torch.Tensor:
+    weak_delta = torch.abs(weaker_output - source).mean(dim=1, keepdim=True)
+    strong_delta = torch.abs(stronger_output - source).mean(dim=1, keepdim=True)
+    return F.relu(weak_delta - strong_delta - tolerance).mean()
+
+
+def temporal_warp_loss(
+    current_output: torch.Tensor,
+    warped_previous_output: torch.Tensor,
+    visibility: torch.Tensor,
+) -> torch.Tensor:
+    return charbonnier((current_output - warped_previous_output) * visibility.clamp(0, 1))
+
+
 class BeautyLoss(nn.Module):
     def __init__(self, weights: dict[str, float]) -> None:
         super().__init__()
@@ -52,4 +75,3 @@ class BeautyLoss(nn.Module):
         }
         total = sum(self.weights.get(name, 0.0) * value for name, value in terms.items())
         return total, terms
-

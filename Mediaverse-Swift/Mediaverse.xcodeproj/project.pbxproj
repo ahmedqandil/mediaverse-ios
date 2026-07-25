@@ -55,6 +55,7 @@
 		846788FD2FFC316000DED05E /* StoryProjectModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846788FC2FFC316000DED05E /* StoryProjectModel.swift */; };
 		846788FF2FFC318000DED05E /* ProjectStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846788FE2FFC318000DED05E /* ProjectStore.swift */; };
 		846789012FFC32B600DED05E /* StoryRenderEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846789002FFC32B600DED05E /* StoryRenderEngine.swift */; };
+		846789263019B00100DED05E /* StoryBeautyModelRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846789253019B00100DED05E /* StoryBeautyModelRuntime.swift */; };
 		846789032FFC339E00DED05E /* StoryEditorPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846789022FFC339E00DED05E /* StoryEditorPreviewView.swift */; };
 		846789052FFC345100DED05E /* StoryTimelineEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846789042FFC345100DED05E /* StoryTimelineEditor.swift */; };
 		846789072FFC352000DED05E /* StoryExportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846789062FFC352000DED05E /* StoryExportService.swift */; };
@@ -167,6 +168,7 @@
 		846788FC2FFC316000DED05E /* StoryProjectModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryProjectModel.swift; sourceTree = "<group>"; };
 		846788FE2FFC318000DED05E /* ProjectStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectStore.swift; sourceTree = "<group>"; };
 		846789002FFC32B600DED05E /* StoryRenderEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryRenderEngine.swift; sourceTree = "<group>"; };
+		846789253019B00100DED05E /* StoryBeautyModelRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryBeautyModelRuntime.swift; sourceTree = "<group>"; };
 		846789022FFC339E00DED05E /* StoryEditorPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryEditorPreviewView.swift; sourceTree = "<group>"; };
 		846789042FFC345100DED05E /* StoryTimelineEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryTimelineEditor.swift; sourceTree = "<group>"; };
 		846789062FFC352000DED05E /* StoryExportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoryExportService.swift; sourceTree = "<group>"; };
@@ -331,6 +333,7 @@
 				846788FA2FFC2F9D00DED05E /* PlatformConfigManager.swift */,
 				846788FE2FFC318000DED05E /* ProjectStore.swift */,
 				846789002FFC32B600DED05E /* StoryRenderEngine.swift */,
+				846789253019B00100DED05E /* StoryBeautyModelRuntime.swift */,
 				846789042FFC345100DED05E /* StoryTimelineEditor.swift */,
 				846789062FFC352000DED05E /* StoryExportService.swift */,
 				846789112FFD2BEF00DED05E /* GlobalUploadProgressManager.swift */,
@@ -714,6 +717,7 @@
 				84FC77F42FFA657100681F7A /* CollectionDetailView.swift in Sources */,
 				25EE16459A473C3012A70680 /* ShortsView.swift in Sources */,
 				846789012FFC32B600DED05E /* StoryRenderEngine.swift in Sources */,
+				846789263019B00100DED05E /* StoryBeautyModelRuntime.swift in Sources */,
 				846789223014000100DED05E /* FaceParser.mlpackage in Sources */,
 				8F1193906867A67ADF5123A9 /* ShowView.swift in Sources */,
 				84FC77F22FFA59E800681F7A /* UploadView.swift in Sources */,
