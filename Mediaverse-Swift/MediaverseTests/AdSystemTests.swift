@@ -556,6 +556,136 @@ final class SGAIPlaybackTests: XCTestCase {
     }
 }
 
+final class ShortsFeedLifecycleTests: XCTestCase {
+    func testInitialPrewarmKeyIsIdentityAndContextScopedWithoutRawIdentity() {
+        let first = ShortsFeedCacheScope.initialFeedKey(userId: "user-123@example.com", context: "channel-a")
+        let second = ShortsFeedCacheScope.initialFeedKey(userId: "user-456@example.com", context: "channel-a")
+        let otherContext = ShortsFeedCacheScope.initialFeedKey(userId: "user-123@example.com", context: "channel-b")
+
+        XCTAssertNotEqual(first, second)
+        XCTAssertNotEqual(first, otherContext)
+        XCTAssertFalse(first.contains("user-123@example.com"))
+        XCTAssertEqual(
+            ShortsFeedCacheScope.initialFeedKey(userId: nil, context: nil),
+            ShortsFeedCacheScope.initialFeedKey(userId: "", context: "")
+        )
+    }
+
+    func testRevalidationPreservesOrderAndCurrentSessionWhileUpdatingMatches() {
+        let visible = [
+            makeShort(id: "a", title: "old-a"),
+            makeShort(id: "b", title: "old-b"),
+            makeShort(id: "c", title: "old-c")
+        ]
+        let fresh = [
+            makeShort(id: "b", title: "new-b"),
+            makeShort(id: "a", title: "new-a"),
+            makeShort(id: "d", title: "new-d")
+        ]
+
+        let result = ShortsFeedReconciliation.reconcile(
+            visible: visible,
+            fresh: fresh,
+            currentCursor: "old-cursor",
+            freshCursor: "fresh-cursor"
+        )
+
+        XCTAssertTrue(result.shouldApply)
+        XCTAssertEqual(result.shorts.map(\.id), ["a", "b", "c", "d"])
+        XCTAssertEqual(result.shorts.map(\.title), ["new-a", "new-b", "old-c", "new-d"])
+        XCTAssertEqual(result.nextCursor, "fresh-cursor")
+    }
+
+    func testRevalidationWithNoMeaningfulOverlapKeepsVisibleSessionAndCursor() {
+        let visible = [makeShort(id: "a"), makeShort(id: "b"), makeShort(id: "c")]
+        let fresh = [makeShort(id: "x"), makeShort(id: "y"), makeShort(id: "z")]
+
+        let result = ShortsFeedReconciliation.reconcile(
+            visible: visible,
+            fresh: fresh,
+            currentCursor: "old-cursor",
+            freshCursor: "fresh-cursor"
+        )
+
+        XCTAssertFalse(result.shouldApply)
+        XCTAssertEqual(result.shorts.map(\.id), ["a", "b", "c"])
+        XCTAssertEqual(result.nextCursor, "old-cursor")
+    }
+
+    @MainActor
+    func testRestoredRootSnapshotCannotContainFilledOrPendingAdDecisions() {
+        let manager = ShortsPlaybackManager()
+        let snapshot = ShortsPlaybackManager.RootFeedSnapshot(
+            cacheScope: ShortsFeedCacheScope.initialFeedKey(userId: "user-a", context: "channel-a"),
+            feed: .forYou,
+            shorts: [makeShort(id: "a")],
+            currentID: "a",
+            nextCursor: "cursor",
+            feedSessionSeed: "seed",
+            feedSessionIDs: nil,
+            shortsFeedListings: [],
+            skippedShortsAdItemIds: ["shorts-ad-a"]
+        )
+
+        manager.saveRootFeedSnapshot(snapshot)
+        let restored = manager.restoreRootFeedSnapshot(userId: "user-a", context: "channel-a")
+        let labels = Set(Mirror(reflecting: try! XCTUnwrap(restored)).children.compactMap(\.label))
+
+        XCTAssertEqual(restored?.skippedShortsAdItemIds, ["shorts-ad-a"])
+        XCTAssertFalse(labels.contains("pendingShortsAdItemIds"))
+        XCTAssertFalse(labels.contains("filledShortsAdDecisions"))
+        XCTAssertFalse(labels.contains("filledShortsAdPolicies"))
+        XCTAssertNil(manager.restoreRootFeedSnapshot(userId: "user-b", context: "channel-a"))
+    }
+
+    private func makeShort(id: String, title: String = "title") -> Short {
+        Short(
+            id: id,
+            title: title,
+            description: nil,
+            videoUrl: "https://example.com/\(id).mp4",
+            thumbnailUrl: nil,
+            views: 0,
+            likes: 0,
+            duration: nil,
+            channelId: nil,
+            showId: nil,
+            channel: nil,
+            linkedClipId: nil,
+            linkedEpisodeId: nil,
+            linkedClip: nil,
+            linkedEpisode: nil
+        )
+    }
+}
+
+final class DiskJSONCacheTests: XCTestCase {
+    private final class TestClock: @unchecked Sendable {
+        var date: Date
+
+        init(date: Date) {
+            self.date = date
+        }
+    }
+
+    func testExpiredValueRemainsAvailableForStaleFallback() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DiskJSONCacheTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let clock = TestClock(date: Date(timeIntervalSince1970: 1_000))
+        let cache = DiskJSONCache(rootURL: root, now: { clock.date })
+
+        try await cache.store(["value": 7], forKey: "expired", ttl: 10)
+        clock.date = Date(timeIntervalSince1970: 1_011)
+
+        let fresh: [String: Int]? = try await cache.value(forKey: "expired")
+        let stale: [String: Int]? = try await cache.staleValue(forKey: "expired")
+
+        XCTAssertNil(fresh)
+        XCTAssertEqual(stale, ["value": 7])
+    }
+}
+
 final class StoryOverlayLayoutTests: XCTestCase {
     private let canvas = CanvasSpec.storyDefault
 

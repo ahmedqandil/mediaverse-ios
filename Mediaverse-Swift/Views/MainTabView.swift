@@ -112,6 +112,7 @@ struct MainTabView: View {
             openPushRoute(route)
         }
         .onReceive(NotificationCenter.default.publisher(for: .appContextDidChange)) { notification in
+            shortsPlaybackManager.resetForIdentityChange()
             miniPlayer.close()
             homePath = []
             explorePath = []
@@ -180,7 +181,7 @@ struct MainTabView: View {
         .onChange(of: isMuted) { _, muted in
             shortsPlaybackManager.setMuted(muted)
         }
-        .onChange(of: auth.isAuthenticated, handleAuthenticationChange)
+        .onChange(of: auth.currentUser?.id, handleAuthenticationChange)
     }
 
     private var layeredRoot: some View {
@@ -347,8 +348,14 @@ struct MainTabView: View {
     }
 
     private func prewarmShortsRootFeed() async {
-        shortsPlaybackManager.prewarmInitialFeed(isMuted: isMuted)
-        await shortsPlaybackManager.prepareRootInitialFeedSnapshot(isMuted: isMuted)
+        let userId = auth.currentUser?.id
+        let context = SessionStorage.activeContextCookieValue
+        shortsPlaybackManager.prewarmInitialFeed(isMuted: isMuted, userId: userId, context: context)
+        await shortsPlaybackManager.prepareRootInitialFeedSnapshot(
+            isMuted: isMuted,
+            userId: userId,
+            context: context
+        )
     }
 
     private func refreshUploadEligibility() async {
@@ -386,12 +393,17 @@ struct MainTabView: View {
         }
         lastContentTab = newValue
         if newValue != .shorts {
-            shortsPlaybackManager.prewarmInitialFeed(isMuted: isMuted)
+            shortsPlaybackManager.prewarmInitialFeed(
+                isMuted: isMuted,
+                userId: auth.currentUser?.id,
+                context: SessionStorage.activeContextCookieValue
+            )
         }
     }
 
-    private func handleAuthenticationChange(oldValue: Bool, newValue: Bool) {
-        scheduleDeferredContextRefresh(isAuthenticated: newValue)
+    private func handleAuthenticationChange(oldValue: String?, newValue: String?) {
+        shortsPlaybackManager.resetForIdentityChange()
+        scheduleDeferredContextRefresh(isAuthenticated: newValue != nil)
     }
 
     private func dismissUploadOptionsAfterSelection() {
@@ -523,7 +535,11 @@ struct MainTabView: View {
 
     private func handleBottomTabTap(_ tab: AppTab) {
         if tab == .shorts {
-            shortsPlaybackManager.prewarmInitialFeed(isMuted: isMuted)
+            shortsPlaybackManager.prewarmInitialFeed(
+                isMuted: isMuted,
+                userId: auth.currentUser?.id,
+                context: SessionStorage.activeContextCookieValue
+            )
         }
         if selectedTab != tab {
             withAnimation(.easeInOut(duration: 0.18)) {

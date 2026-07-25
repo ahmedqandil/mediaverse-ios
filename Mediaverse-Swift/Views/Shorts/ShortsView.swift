@@ -3,7 +3,7 @@ import AVKit
 
 // MARK: - Feed enum
 
-private enum ShortsFeed: String, CaseIterable {
+enum ShortsFeed: String, CaseIterable {
     case forYou    = "recommended"
     case following = "following"
     var label: String { self == .forYou ? "For You" : "Following" }
@@ -222,6 +222,68 @@ private struct InitialShortsPrewarm: Codable {
     let response: ShortsResponse
 }
 
+enum ShortsFeedCacheScope {
+    static func identityScope(userId: String?) -> String {
+        guard let userId = userId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !userId.isEmpty else {
+            return "anonymous"
+        }
+        return "user-\(stableDigest(userId))"
+    }
+
+    static func initialFeedKey(userId: String?, context: String?) -> String {
+        let contextValue = context?.nilIfEmpty ?? "default"
+        return "shorts.initial.recommended.v2.\(identityScope(userId: userId)).context-\(stableDigest(contextValue))"
+    }
+
+    private static func stableDigest(_ value: String) -> String {
+        let hash = value.utf8.reduce(UInt64(14_695_981_039_346_656_037)) { partial, byte in
+            (partial ^ UInt64(byte))
+                .multipliedReportingOverflow(by: 1_099_511_628_211)
+                .partialValue
+        }
+        return String(hash, radix: 16)
+    }
+}
+
+struct ShortsFeedReconciliation {
+    let shorts: [Short]
+    let nextCursor: String?
+    let shouldApply: Bool
+
+    static func reconcile(
+        visible: [Short],
+        fresh: [Short],
+        currentCursor: String?,
+        freshCursor: String?
+    ) -> ShortsFeedReconciliation {
+        let freshByID = fresh.reduce(into: [String: Short]()) { result, short in
+            result[short.id] = short
+        }
+        let visibleIDs = Set(visible.map(\.id))
+        let overlapCount = fresh.reduce(into: 0) { count, short in
+            if visibleIDs.contains(short.id) { count += 1 }
+        }
+        let meaningfulOverlap = overlapCount >= min(2, min(visible.count, fresh.count))
+        guard meaningfulOverlap else {
+            return ShortsFeedReconciliation(
+                shorts: visible,
+                nextCursor: currentCursor,
+                shouldApply: false
+            )
+        }
+
+        var reconciled = visible.map { freshByID[$0.id] ?? $0 }
+        var seen = visibleIDs
+        reconciled.append(contentsOf: fresh.filter { seen.insert($0.id).inserted })
+        return ShortsFeedReconciliation(
+            shorts: reconciled,
+            nextCursor: freshCursor,
+            shouldApply: true
+        )
+    }
+}
+
 private extension AssembledPage {
     var shortsFeedListings: [AssembledListing] {
         activeListings.filter { $0.normalizedTemplateType == "shorts_feed" }
@@ -253,7 +315,7 @@ private enum ShortsAdFrequencyStore {
     private static func storageKey(for placement: String, userId: String?) -> String {
         let date = Calendar.current.dateComponents([.year, .month, .day], from: Date())
         let day = "\(date.year ?? 0)-\(date.month ?? 0)-\(date.day ?? 0)"
-        let identityScope = userId?.nilIfEmpty ?? "anonymous"
+        let identityScope = ShortsFeedCacheScope.identityScope(userId: userId)
         return "westreem.shortsAdFrequency.\(day).\(identityScope).\(placement)"
     }
 }
@@ -262,7 +324,8 @@ private enum ShortsAdFrequencyStore {
 final class ShortsPlaybackManager: ObservableObject {
     @Published private(set) var players: [String: AVPlayer] = [:]
 
-    fileprivate struct RootFeedSnapshot {
+    struct RootFeedSnapshot {
+        let cacheScope: String
         let feed: ShortsFeed
         let shorts: [Short]
         let currentID: String?
@@ -271,8 +334,6 @@ final class ShortsPlaybackManager: ObservableObject {
         let feedSessionIDs: [String]?
         let shortsFeedListings: [AssembledListing]
         let skippedShortsAdItemIds: Set<String>
-        let filledShortsAdDecisions: [String: AdDecision]
-        let filledShortsAdPolicies: [String: EffectiveAdPolicy]
     }
 
     private let backwardWarmCount = 2
@@ -283,6 +344,7 @@ final class ShortsPlaybackManager: ObservableObject {
     private var warmTasks: [String: Task<Void, Never>] = [:]
     private var initialPrewarmTask: Task<Void, Never>?
     private var initialPrewarmPayload: (seed: String, response: ShortsResponse)?
+    private var initialPrewarmScope: String?
     private var failedWarmIDs: [String: Date] = [:]
     private var memoryWarningObserver: NSObjectProtocol?
     private var endObservers: [String: NSObjectProtocol] = [:]
@@ -313,16 +375,28 @@ final class ShortsPlaybackManager: ObservableObject {
         players[id]
     }
 
-    func prewarmInitialFeed(isMuted: Bool) {
+    func prewarmInitialFeed(isMuted: Bool, userId: String?, context: String?) {
         guard activeID == nil else { return }
         players.values.forEach { $0.isMuted = isMuted }
         pruneFailedWarmIDs()
+        let cacheKey = ShortsFeedCacheScope.initialFeedKey(userId: userId, context: context)
+        if initialPrewarmScope != cacheKey {
+            initialPrewarmTask?.cancel()
+            initialPrewarmTask = nil
+            initialPrewarmPayload = nil
+            initialPrewarmScope = cacheKey
+        }
         guard initialPrewarmPayload == nil, initialPrewarmTask == nil else { return }
 
         initialPrewarmTask = Task { [weak self] in
-            let cacheKey = Self.initialFeedCacheKey()
             if let cached: InitialShortsPrewarm = try? await DiskJSONCache.shared.value(forKey: cacheKey) {
-                self?.storeInitialPrewarm(seed: cached.seed, response: cached.response, isMuted: isMuted)
+                self?.storeInitialPrewarm(
+                    seed: cached.seed,
+                    response: cached.response,
+                    isMuted: isMuted,
+                    cacheKey: cacheKey,
+                    userId: userId
+                )
                 return
             }
 
@@ -330,7 +404,7 @@ final class ShortsPlaybackManager: ObservableObject {
             do {
                 let response = try await APIClient.shared.fetchShorts(
                     feed: ShortsFeed.forYou.rawValue,
-                    limit: 7,
+                    limit: 10,
                     seed: seed
                 )
                 try? await DiskJSONCache.shared.store(
@@ -338,27 +412,48 @@ final class ShortsPlaybackManager: ObservableObject {
                     forKey: cacheKey,
                     ttl: 300
                 )
-                self?.storeInitialPrewarm(seed: seed, response: response, isMuted: isMuted)
+                self?.storeInitialPrewarm(
+                    seed: seed,
+                    response: response,
+                    isMuted: isMuted,
+                    cacheKey: cacheKey,
+                    userId: userId
+                )
             } catch {
                 if let stale: InitialShortsPrewarm = try? await DiskJSONCache.shared.staleValue(forKey: cacheKey) {
-                    self?.storeInitialPrewarm(seed: stale.seed, response: stale.response, isMuted: isMuted)
+                    self?.storeInitialPrewarm(
+                        seed: stale.seed,
+                        response: stale.response,
+                        isMuted: isMuted,
+                        cacheKey: cacheKey,
+                        userId: userId
+                    )
                 } else {
-                    self?.clearInitialPrewarmTask()
+                    self?.clearInitialPrewarmTask(cacheKey: cacheKey)
                 }
             }
         }
     }
 
-    func takePreparedInitialFeedIfAvailable(isMuted: Bool) async -> (seed: String, response: ShortsResponse)? {
-        await preparedInitialFeedPayload(isMuted: isMuted)
+    func takePreparedInitialFeedIfAvailable(
+        isMuted: Bool,
+        userId: String?,
+        context: String?
+    ) async -> (seed: String, response: ShortsResponse)? {
+        await preparedInitialFeedPayload(isMuted: isMuted, userId: userId, context: context)
     }
 
-    func prepareRootInitialFeedSnapshot(isMuted: Bool) async {
+    func prepareRootInitialFeedSnapshot(isMuted: Bool, userId: String?, context: String?) async {
         guard activeID == nil, rootFeedSnapshot == nil else { return }
-        guard let payload = await preparedInitialFeedPayload(isMuted: isMuted),
+        guard let payload = await preparedInitialFeedPayload(
+            isMuted: isMuted,
+            userId: userId,
+            context: context
+        ),
               !payload.response.shorts.isEmpty else { return }
         let currentID = payload.response.shorts.first { C.mediaURL($0.videoUrl) != nil }?.id ?? payload.response.shorts.first?.id
         rootFeedSnapshot = RootFeedSnapshot(
+            cacheScope: ShortsFeedCacheScope.initialFeedKey(userId: userId, context: context),
             feed: .forYou,
             shorts: payload.response.shorts,
             currentID: currentID,
@@ -366,14 +461,17 @@ final class ShortsPlaybackManager: ObservableObject {
             feedSessionSeed: payload.seed,
             feedSessionIDs: nil,
             shortsFeedListings: [],
-            skippedShortsAdItemIds: [],
-            filledShortsAdDecisions: [:],
-            filledShortsAdPolicies: [:]
+            skippedShortsAdItemIds: []
         )
     }
 
-    private func preparedInitialFeedPayload(isMuted: Bool) async -> (seed: String, response: ShortsResponse)? {
-        prewarmInitialFeed(isMuted: isMuted)
+    private func preparedInitialFeedPayload(
+        isMuted: Bool,
+        userId: String?,
+        context: String?
+    ) async -> (seed: String, response: ShortsResponse)? {
+        let cacheKey = ShortsFeedCacheScope.initialFeedKey(userId: userId, context: context)
+        prewarmInitialFeed(isMuted: isMuted, userId: userId, context: context)
         if let payload = takeReadyInitialFeed() {
             return payload
         }
@@ -385,11 +483,16 @@ final class ShortsPlaybackManager: ObservableObject {
             }
         }
 
-        let cacheKey = Self.initialFeedCacheKey()
         guard let cached: InitialShortsPrewarm = try? await DiskJSONCache.shared.value(forKey: cacheKey) else {
             return nil
         }
-        storeInitialPrewarm(seed: cached.seed, response: cached.response, isMuted: isMuted)
+        storeInitialPrewarm(
+            seed: cached.seed,
+            response: cached.response,
+            isMuted: isMuted,
+            cacheKey: cacheKey,
+            userId: userId
+        )
         return takeReadyInitialFeed()
     }
 
@@ -500,25 +603,54 @@ final class ShortsPlaybackManager: ObservableObject {
         Array(assetCache.keys).forEach(releaseWarmState)
     }
 
-    fileprivate func saveRootFeedSnapshot(_ snapshot: RootFeedSnapshot) {
+    func resetForIdentityChange() {
+        initialPrewarmTask?.cancel()
+        initialPrewarmTask = nil
+        initialPrewarmPayload = nil
+        initialPrewarmScope = nil
+        rootFeedSnapshot = nil
+        reset()
+    }
+
+    func saveRootFeedSnapshot(_ snapshot: RootFeedSnapshot) {
         rootFeedSnapshot = snapshot
     }
 
-    fileprivate func restoreRootFeedSnapshot() -> RootFeedSnapshot? {
-        rootFeedSnapshot
+    func restoreRootFeedSnapshot(userId: String?, context: String?) -> RootFeedSnapshot? {
+        let expectedScope = ShortsFeedCacheScope.initialFeedKey(userId: userId, context: context)
+        guard rootFeedSnapshot?.cacheScope == expectedScope else {
+            rootFeedSnapshot = nil
+            return nil
+        }
+        return rootFeedSnapshot
     }
 
     fileprivate func clearRootFeedSnapshot() {
         rootFeedSnapshot = nil
     }
 
-    private static func initialFeedCacheKey() -> String {
-        let tokenScope = SessionStorage.token == nil ? "anonymous" : "authenticated"
-        let contextScope = SessionStorage.activeContextCookieValue ?? "default"
-        return "shorts.initial.recommended.v1.\(tokenScope).\(contextScope)"
+    func cacheInitialFeedForNextSession(
+        seed: String,
+        response: ShortsResponse,
+        userId: String?,
+        context: String?
+    ) async {
+        let cacheKey = ShortsFeedCacheScope.initialFeedKey(userId: userId, context: context)
+        try? await DiskJSONCache.shared.store(
+            InitialShortsPrewarm(seed: seed, response: response),
+            forKey: cacheKey,
+            ttl: 300
+        )
     }
 
-    private func storeInitialPrewarm(seed: String, response: ShortsResponse, isMuted: Bool) {
+    private func storeInitialPrewarm(
+        seed: String,
+        response: ShortsResponse,
+        isMuted: Bool,
+        cacheKey: String,
+        userId: String?
+    ) {
+        guard initialPrewarmScope == cacheKey else { return }
         initialPrewarmPayload = (seed, response)
         initialPrewarmTask = nil
         let feedItems = response.shorts.enumerated().map { index, short in
@@ -533,7 +665,8 @@ final class ShortsPlaybackManager: ObservableObject {
         }
     }
 
-    private func clearInitialPrewarmTask() {
+    private func clearInitialPrewarmTask(cacheKey: String) {
+        guard initialPrewarmScope == cacheKey else { return }
         initialPrewarmTask = nil
     }
 
@@ -742,6 +875,12 @@ struct ShortsView: View {
         .onChange(of: platformConfig.isLoaded) { _, _ in
             loadShortsAdConfig()
         }
+        .onChange(of: auth.currentUser?.id) { _, _ in
+            handleIdentityChange()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .appContextDidChange)) { _ in
+            handleIdentityChange()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .mainTabScrollToTopRequested)) { notification in
             guard (notification.object as? String) == "shorts" else { return }
             adLockedItemId = nil
@@ -898,7 +1037,6 @@ struct ShortsView: View {
                 configurePlayback(ensureAutoplay: true)
                 prefetchUpcomingShortsAds()
                 prefetchNearbyShortImages(around: currentID, in: assembledFeedItems)
-                prefetchNearbyShortImages(around: currentID, in: assembledFeedItems)
                 recordShortViewIfNeeded(itemID: currentID)
             }
             .onChange(of: shorts.count) { _, _ in
@@ -927,17 +1065,6 @@ struct ShortsView: View {
             .onChange(of: isMuted) { _, _ in
                 configurePlayback()
             }
-            .onChange(of: auth.currentUser?.id) { _, _ in
-                // Decisions and local frequency counters are identity-scoped.
-                // Discard prefetched decisions whenever the signed-in account
-                // changes so one user's targeting cannot leak into another.
-                skippedShortsAdItemIds.removeAll()
-                pendingShortsAdItemIds.removeAll()
-                filledShortsAdDecisions.removeAll()
-                filledShortsAdPolicies.removeAll()
-                shortsAdIdentityGeneration = UUID()
-                prefetchUpcomingShortsAds()
-            }
             .overlay(alignment: .bottom) {
                 if let paginationError {
                     paginationErrorBanner(paginationError)
@@ -961,12 +1088,7 @@ struct ShortsView: View {
                         configurePlayback(ensureAutoplay: true)
                     }
                 } else {
-                    feedRevalidationTask?.cancel()
-                    feedRevalidationTask = nil
-                    pendingShortViewTask?.cancel()
-                    pendingShortViewTask = nil
-                    activationRetryTask?.cancel()
-                    activationRetryTask = nil
+                    cancelSessionTasks()
                     saveRootFeedSessionIfNeeded()
                     adLockedItemId = nil
                     postShortsAdPlaybackVisibility(false)
@@ -1436,6 +1558,43 @@ struct ShortsView: View {
 
     // MARK: - Data
 
+    private func cancelSessionTasks() {
+        feedRevalidationTask?.cancel()
+        feedRevalidationTask = nil
+        pendingShortViewTask?.cancel()
+        pendingShortViewTask = nil
+        imagePrefetchTask?.cancel()
+        imagePrefetchTask = nil
+        activationRetryTask?.cancel()
+        activationRetryTask = nil
+    }
+
+    private func handleIdentityChange() {
+        cancelSessionTasks()
+        feedGeneration = UUID()
+        feedSessionSeed = UUID().uuidString
+        feedSessionIDs = nil
+        shortsFeedListings.removeAll()
+        shorts.removeAll()
+        nextCursor = nil
+        currentID = nil
+        emptyReason = nil
+        loadError = nil
+        paginationError = nil
+        isLoading = false
+        recordedShortViewIds.removeAll()
+        skippedShortsAdItemIds.removeAll()
+        pendingShortsAdItemIds.removeAll()
+        filledShortsAdDecisions.removeAll()
+        filledShortsAdPolicies.removeAll()
+        adLockedItemId = nil
+        postShortsAdPlaybackVisibility(false)
+        shortsAdIdentityGeneration = UUID()
+        playbackManager.resetForIdentityChange()
+        guard shouldLoadInitialShorts else { return }
+        Task { await loadInitial(replacingExisting: true) }
+    }
+
     private func loadShortsAdConfig() {
         shortsAdConfig = platformConfig.config.ads.shorts
     }
@@ -1443,7 +1602,10 @@ struct ShortsView: View {
     private func restoreRootFeedSessionIfNeeded() -> Bool {
         guard canPersistRootFeedSession,
               shorts.isEmpty,
-              let snapshot = playbackManager.restoreRootFeedSnapshot(),
+              let snapshot = playbackManager.restoreRootFeedSnapshot(
+                userId: auth.currentUser?.id,
+                context: SessionStorage.activeContextCookieValue
+              ),
               !snapshot.shorts.isEmpty
         else { return false }
 
@@ -1457,8 +1619,9 @@ struct ShortsView: View {
         feedSessionIDs = snapshot.feedSessionIDs
         shortsFeedListings = snapshot.shortsFeedListings
         skippedShortsAdItemIds = snapshot.skippedShortsAdItemIds
-        filledShortsAdDecisions = snapshot.filledShortsAdDecisions
-        filledShortsAdPolicies = snapshot.filledShortsAdPolicies
+        pendingShortsAdItemIds.removeAll()
+        filledShortsAdDecisions.removeAll()
+        filledShortsAdPolicies.removeAll()
         emptyReason = nil
         loadError = nil
         paginationError = nil
@@ -1469,6 +1632,10 @@ struct ShortsView: View {
         guard canPersistRootFeedSession, !shorts.isEmpty else { return }
         playbackManager.saveRootFeedSnapshot(
             ShortsPlaybackManager.RootFeedSnapshot(
+                cacheScope: ShortsFeedCacheScope.initialFeedKey(
+                    userId: auth.currentUser?.id,
+                    context: SessionStorage.activeContextCookieValue
+                ),
                 feed: feed,
                 shorts: shorts,
                 currentID: currentID,
@@ -1476,9 +1643,7 @@ struct ShortsView: View {
                 feedSessionSeed: feedSessionSeed,
                 feedSessionIDs: feedSessionIDs,
                 shortsFeedListings: shortsFeedListings,
-                skippedShortsAdItemIds: skippedShortsAdItemIds,
-                filledShortsAdDecisions: filledShortsAdDecisions,
-                filledShortsAdPolicies: filledShortsAdPolicies
+                skippedShortsAdItemIds: skippedShortsAdItemIds
             )
         )
     }
@@ -1498,6 +1663,11 @@ struct ShortsView: View {
         }
 
         isLoading = replacingExisting || shorts.isEmpty
+        defer {
+            if feedGeneration == generation {
+                isLoading = false
+            }
+        }
         loadError = nil
         paginationError = nil
 
@@ -1522,7 +1692,13 @@ struct ShortsView: View {
         }
 
         let canUsePrewarmedFeed = resolvedSourceContext == nil && requestedShortIds == nil && initialShortId == nil && feed == .forYou
-        let prewarmedFeed = canUsePrewarmedFeed ? await playbackManager.takePreparedInitialFeedIfAvailable(isMuted: isMuted) : nil
+        let prewarmedFeed = canUsePrewarmedFeed
+            ? await playbackManager.takePreparedInitialFeedIfAvailable(
+                isMuted: isMuted,
+                userId: auth.currentUser?.id,
+                context: SessionStorage.activeContextCookieValue
+            )
+            : nil
         guard feedGeneration == generation, !Task.isCancelled else { return }
         if let prewarmedFeed {
             feedSessionSeed = prewarmedFeed.seed
@@ -1587,9 +1763,6 @@ struct ShortsView: View {
                 loadError = error.localizedDescription
             }
         }
-        if feedGeneration == generation {
-            isLoading = false
-        }
     }
 
     private func refreshShorts() async {
@@ -1610,6 +1783,8 @@ struct ShortsView: View {
         let requestedFeed = feed
         let requestedSeed = feedSessionSeed
         let requestedIDs = feedSessionIDs
+        let requestedUserId = auth.currentUser?.id
+        let requestedContext = SessionStorage.activeContextCookieValue
         feedRevalidationTask = Task {
             defer {
                 if feedGeneration == generation {
@@ -1630,16 +1805,23 @@ struct ShortsView: View {
                       feedSessionSeed == requestedSeed else { return }
                 let refreshedShorts = uniqueByID(refreshed.shorts)
                 guard !refreshedShorts.isEmpty else { return }
-                let previousCurrentID = currentID
-                skippedShortsAdItemIds.removeAll()
-                pendingShortsAdItemIds.removeAll()
-                filledShortsAdDecisions.removeAll()
-                filledShortsAdPolicies.removeAll()
-                shorts = refreshedShorts
-                nextCursor = refreshed.nextCursor
-                currentID = previousCurrentID.flatMap { id in
-                    refreshedShorts.contains(where: { $0.id == id }) ? id : nil
-                } ?? refreshedShorts.first?.id
+                let reconciliation = ShortsFeedReconciliation.reconcile(
+                    visible: shorts,
+                    fresh: refreshedShorts,
+                    currentCursor: nextCursor,
+                    freshCursor: refreshed.nextCursor
+                )
+                guard reconciliation.shouldApply else {
+                    await playbackManager.cacheInitialFeedForNextSession(
+                        seed: requestedSeed,
+                        response: refreshed,
+                        userId: requestedUserId,
+                        context: requestedContext
+                    )
+                    return
+                }
+                shorts = reconciliation.shorts
+                nextCursor = reconciliation.nextCursor
                 emptyReason = nil
                 paginationError = nil
                 saveRootFeedSessionIfNeeded()
@@ -1706,6 +1888,11 @@ struct ShortsView: View {
         guard !isLoading, let cursor = nextCursor else { return }
         let generation = feedGeneration
         isLoading = true
+        defer {
+            if feedGeneration == generation {
+                isLoading = false
+            }
+        }
         do {
             let resp = try await APIClient.shared.fetchShorts(
                 feed: feed.rawValue,
@@ -1724,9 +1911,6 @@ struct ShortsView: View {
         } catch {
             guard feedGeneration == generation, !Task.isCancelled else { return }
             paginationError = error.localizedDescription
-        }
-        if feedGeneration == generation {
-            isLoading = false
         }
     }
 
@@ -1751,6 +1935,13 @@ struct ShortsView: View {
             emptyReason = nil
             paginationError = nil
             isLoading = true
+        }
+        defer {
+            if feedGeneration == generation {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    isLoading = false
+                }
+            }
         }
         do {
             let canUseCuration = sourceContext == nil && newFeed == .forYou
@@ -1782,11 +1973,6 @@ struct ShortsView: View {
         } catch {
             guard feedGeneration == generation, !Task.isCancelled else { return }
             loadError = error.localizedDescription
-        }
-        if feedGeneration == generation {
-            withAnimation(.easeInOut(duration: 0.16)) {
-                isLoading = false
-            }
         }
     }
 

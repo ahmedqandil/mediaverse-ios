@@ -20,15 +20,22 @@ actor DiskJSONCache {
     private let rootURL: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private let now: @Sendable () -> Date
 
-    init(fileManager: FileManager = .default) {
+    init(
+        fileManager: FileManager = .default,
+        rootURL: URL? = nil,
+        now: @escaping @Sendable () -> Date = { Date() }
+    ) {
         self.fileManager = fileManager
         self.encoder = JSONEncoder()
         self.decoder = JSONDecoder()
+        self.now = now
 
         let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
-        self.rootURL = caches.appendingPathComponent("MediaverseMetadataCache", isDirectory: true)
+        self.rootURL = rootURL
+            ?? caches.appendingPathComponent("MediaverseMetadataCache", isDirectory: true)
     }
 
     func value<Value: Decodable>(forKey key: String, as type: Value.Type = Value.self) throws -> Value? {
@@ -40,8 +47,7 @@ actor DiskJSONCache {
 
         let data = try Data(contentsOf: fileURL)
         let envelope = try decoder.decode(DecodedEnvelope<Value>.self, from: data)
-        guard Date().timeIntervalSince(envelope.cachedAt) < envelope.ttl else {
-            try? fileManager.removeItem(at: fileURL)
+        guard now().timeIntervalSince(envelope.cachedAt) < envelope.ttl else {
             CacheMetrics.shared.recordMiss(Self.metricsNamespace)
             return nil
         }
@@ -63,7 +69,7 @@ actor DiskJSONCache {
 
     func store<Value: Encodable>(_ value: Value, forKey key: String, ttl: TimeInterval) throws {
         try ensureRootDirectory()
-        let envelope = EncodedEnvelope(cachedAt: Date(), ttl: ttl, value: value)
+        let envelope = EncodedEnvelope(cachedAt: now(), ttl: ttl, value: value)
         let data = try encoder.encode(envelope)
         let fileURL = cacheFileURL(forKey: key)
         try data.write(to: fileURL, options: [.atomic])
