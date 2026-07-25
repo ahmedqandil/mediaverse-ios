@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import zipfile
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
@@ -22,6 +23,9 @@ OFFICIAL_SOURCES = {
     "ffhq_downloader": (
         "https://raw.githubusercontent.com/NVlabs/ffhq-dataset/"
         "master/download_ffhq.py"
+    ),
+    "ffhq_images_zip": (
+        "https://drive.google.com/uc?id=1WvlAIvuochQn_L_f9p3OdFdTiSLlnnhv"
     ),
     "ffhqr_repository": "https://github.com/skylab-tech/ffhqr-dataset",
     "ffhqr_archives": FFHQR_URLS,
@@ -85,6 +89,35 @@ def extract_validated(archive_path: Path, destination: Path) -> None:
     marker.write_text(stamp() + "\n", encoding="utf-8")
 
 
+def extract_validated_zip(archive_path: Path, destination: Path) -> None:
+    marker = destination / f".{archive_path.name}.extracted"
+    if marker.exists():
+        return
+    with zipfile.ZipFile(archive_path) as archive:
+        members = archive.infolist()
+        for member in members:
+            path = PurePosixPath(member.filename)
+            unix_mode = member.external_attr >> 16
+            if path.is_absolute() or ".." in path.parts:
+                raise RuntimeError(f"unsafe ZIP path: {member.filename}")
+            if (unix_mode & 0o170000) == 0o120000:
+                raise RuntimeError(f"ZIP symlink is not allowed: {member.filename}")
+        bad = archive.testzip()
+        if bad is not None:
+            raise RuntimeError(f"ZIP CRC validation failed: {bad}")
+        print(
+            json.dumps(
+                {
+                    "at": stamp(),
+                    "archive": str(archive_path),
+                    "validated_members": len(members),
+                }
+            )
+        )
+        archive.extractall(destination)
+    marker.write_text(stamp() + "\n", encoding="utf-8")
+
+
 def count_pngs(path: Path) -> int:
     return sum(1 for item in path.rglob("*.png") if item.is_file())
 
@@ -134,23 +167,41 @@ def main() -> None:
                 OFFICIAL_SOURCES["ffhq_downloader"],
             ]
         )
-    if count_pngs(ffhq_root / "images1024x1024") != 70_000:
+    ffhq_images = ffhq_root / "images1024x1024"
+    ffhq_zip = downloads / "images1024x1024.zip"
+    ffhq_marker = ffhq_root / f".{ffhq_zip.name}.extracted"
+    if count_pngs(ffhq_images) != 70_000 and not ffhq_marker.exists():
         run(
             [
                 sys.executable,
-                str(ffhq_downloader),
-                "--images",
-                "--num_threads",
-                str(args.ffhq_threads),
-                "--status_delay",
-                "5",
-            ],
-            cwd=ffhq_root,
+                "-m",
+                "gdown",
+                "--id",
+                "1WvlAIvuochQn_L_f9p3OdFdTiSLlnnhv",
+                "--continue",
+                "-O",
+                str(ffhq_zip),
+            ]
         )
+        ffhq_zip_record = {
+            "url": OFFICIAL_SOURCES["ffhq_images_zip"],
+            "path": str(ffhq_zip),
+            "bytes": ffhq_zip.stat().st_size,
+            "sha256": sha256(ffhq_zip),
+        }
+        provenance["ffhq_images_zip"] = ffhq_zip_record
+        provenance_path.write_text(
+            json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        extract_validated_zip(ffhq_zip, ffhq_root)
+        ffhq_zip.unlink()
 
     archive_provenance = []
     for url in FFHQR_URLS:
         archive_path = downloads / Path(url).name
+        marker = ffhqr_root / f".{archive_path.name}.extracted"
+        if marker.exists():
+            continue
         run(
             [
                 "curl",
@@ -180,6 +231,7 @@ def main() -> None:
             }
         )
         extract_validated(archive_path, ffhqr_root)
+        archive_path.unlink()
         require_disk_space(dataset_root)
 
     provenance["archives"] = archive_provenance
@@ -188,7 +240,6 @@ def main() -> None:
         json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
 
-    ffhq_images = ffhq_root / "images1024x1024"
     if count_pngs(ffhq_images) != 70_000:
         raise RuntimeError("FFHQ validation failed: expected 70,000 PNG files")
     if count_pngs(ffhqr_root) != 70_000:
