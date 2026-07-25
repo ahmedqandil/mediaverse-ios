@@ -1224,6 +1224,17 @@ final class StoryLookEditingTests: XCTestCase {
         XCTAssertEqual(beauty.brightness, 0)
     }
 
+    func testAdvancedBeautyControlActivatesBeautyWhenStartingFromOff() {
+        var beauty = StoryBeautySettings.off
+        beauty.skinSmoothing = 0.65
+
+        beauty.activateForConfiguredControls()
+
+        XCTAssertEqual(beauty.intensity, 1)
+        XCTAssertEqual(beauty.skinSmoothing, 0.65)
+        XCTAssertTrue(beauty.isEnabled)
+    }
+
     func testLookSessionCommitsFilterAndAdjustmentsAsOneUndoableEdit() async {
         let project = projectWithClip()
         let editor = StoryTimelineEditor(project: project)

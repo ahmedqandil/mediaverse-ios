@@ -2581,6 +2581,7 @@ struct StoryEditorPreviewView: View {
         beginLookPreview(from: clip)
         var beauty = clip.resolvedEffectStack.beauty
         update(&beauty)
+        beauty.activateForConfiguredControls()
         editor.previewSelectedClipBeauty(beauty)
     }
 

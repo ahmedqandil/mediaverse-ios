@@ -96,6 +96,11 @@ struct StoryBeautySettings: Codable, Equatable {
         contour = 0.08
     }
 
+    mutating func activateForConfiguredControls() {
+        guard intensity <= 0.001, hasConfiguredControls else { return }
+        intensity = 1
+    }
+
     private var hasConfiguredControls: Bool {
         skinSmoothing > 0.001 ||
             wrinkleReduction > 0.001 ||
