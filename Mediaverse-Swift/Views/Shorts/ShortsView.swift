@@ -368,9 +368,9 @@ private extension AssembledListing {
 
 private enum ShortsAdFrequencyStore {
     static func canShow(placement: String, userId: String?, cap: Int?) -> Bool {
-        guard let cap else { return true }
-        guard cap > 0 else { return false }
-        return UserDefaults.standard.integer(forKey: storageKey(for: placement, userId: userId)) < cap
+        // Frequency/session caps are enforced by the server. A second persistent
+        // client cap can become stale and suppress otherwise eligible inventory.
+        true
     }
 
     static func record(placement: String, userId: String?, cap: Int?) {
@@ -1788,7 +1788,7 @@ struct ShortsView: View {
     }
 
     private func prefetchUpcomingShortsAds() {
-        guard platformConfig.isLoaded, shortsAdConfig.enabled else { return }
+        guard shortsAdConfig.enabled else { return }
         guard let currentShortIndex = currentShortIndexForAdPrefetch() else { return }
         let candidates = ShortsFeedAssembler.adCandidates(
             shorts: shorts,
@@ -1866,7 +1866,6 @@ struct ShortsView: View {
               request.feedSeed == feedSessionSeed,
               request.shortsIDs == shorts.map(\.id),
               requestUserId == auth.currentUser?.id,
-              platformConfig.isLoaded,
               shouldRequestShortsAd(
                   at: candidate.afterIndex,
                   placement: candidate.placement,
@@ -1879,7 +1878,11 @@ struct ShortsView: View {
             skippedShortsAdItemIds.insert(candidate.id)
             return
         }
-        guard let decision, decision.filled, !decision.ads.isEmpty else {
+        guard let decision else {
+            // Do not permanently consume this slot after a transient timeout.
+            return
+        }
+        guard decision.filled, !decision.ads.isEmpty else {
             skippedShortsAdItemIds.insert(candidate.id)
             return
         }
@@ -1962,8 +1965,7 @@ struct ShortsView: View {
 
     private func shouldRequestShortsAd(at index: Int, placement: String, adConfig: PlatformShortsAdsConfig) -> Bool {
         let config = adConfig
-        guard platformConfig.isLoaded,
-              ShortsAdSchedule.isEligible(afterShortAt: index, placement: placement, config: config)
+        guard ShortsAdSchedule.isEligible(afterShortAt: index, placement: placement, config: config)
         else { return false }
         let placementConfig = config.placementConfig(for: placement)
         guard ShortsAdFrequencyStore.canShow(
@@ -2088,7 +2090,10 @@ struct ShortsView: View {
     }
 
     private func loadShortsAdConfig() {
-        shortsAdConfig = platformConfig.isLoaded ? platformConfig.config.ads.shorts : .disabled
+        // Start with safe platform defaults so config loading cannot block the
+        // first ad prefetch. Once loaded, the real config invalidates in-flight
+        // requests through shortsAdConfigGeneration and replaces these values.
+        shortsAdConfig = platformConfig.isLoaded ? platformConfig.config.ads.shorts : .default
         playbackManager.setShortsAdsEnabled(shortsAdConfig.enabled)
     }
 

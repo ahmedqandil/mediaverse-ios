@@ -410,8 +410,7 @@ struct EpisodeWatchView: View {
                         onShowMore: { _ in setUnderPlayerPanel(.reactions) },
                         onSeek: { seekSeconds in
                             activeClipRange = nil
-                            let t = CMTime(seconds: seekSeconds, preferredTimescale: 600)
-                            player?.seek(to: t, toleranceBefore: CMTime(seconds: 0.25, preferredTimescale: 600), toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600))
+                            seekContentRespectingAds(to: seekSeconds)
                         },
                         onPlayClip: { post in
                             playClipPost(post)
@@ -741,8 +740,7 @@ struct EpisodeWatchView: View {
                         startsExpanded: true,
                         onSeek: { seekSeconds in
                             activeClipRange = nil
-                            let t = CMTime(seconds: seekSeconds, preferredTimescale: 600)
-                            player?.seek(to: t, toleranceBefore: CMTime(seconds: 0.25, preferredTimescale: 600), toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600))
+                            seekContentRespectingAds(to: seekSeconds)
                         },
                         onPlayClip: { post in
                             playClipPost(post)
@@ -1858,7 +1856,7 @@ struct EpisodeWatchView: View {
     private func prerollDecision(contentId: String, duration: Double?) async -> AdDecision? {
         guard adDeliveryMode == .csai else { return nil }
         let placementConfig = episodeAdConfig.placementConfig(for: "preroll")
-        guard episodeAdConfig.enabled, placementConfig.enabled else { return nil }
+        guard episodeAdPolicy.adsEnabled else { return nil }
         do {
             let decision = try await AdServerClient.shared.requestAd(
                 AdRequestContext(
@@ -1868,8 +1866,8 @@ struct EpisodeWatchView: View {
                     durationSec: duration,
                     maxAds: episodeAdMaxAds(for: "preroll"),
                     maxDurationSec: episodeAdMaxDurationSec(for: "preroll", placementConfig: placementConfig),
-                    skippable: placementConfig.skippable ?? episodeAdConfig.skippable,
-                    skipAfterSec: placementConfig.skipAfterSec ?? episodeAdConfig.skipAfterSec,
+                    skippable: episodeAdPolicy.skippable,
+                    skipAfterSec: episodeAdPolicy.skipAfterSec,
                     orientation: "HORIZONTAL",
                     breakId: "preroll",
                     userId: auth.currentUser?.id
@@ -1894,7 +1892,7 @@ struct EpisodeWatchView: View {
         let requestGeneration = playbackLoadGeneration
         let requestUserId = auth.currentUser?.id
         let placementConfig = episodeAdConfig.placementConfig(for: "midroll")
-        guard episodeAdConfig.enabled, placementConfig.enabled else { return }
+        guard episodeAdPolicy.adsEnabled else { return }
         do {
             let breaks = try await AdServerClient.shared.requestVMAP(
                 AdRequestContext(
@@ -1904,8 +1902,8 @@ struct EpisodeWatchView: View {
                     durationSec: duration,
                     maxAds: episodeAdMaxAds(for: "midroll"),
                     maxDurationSec: episodeAdMaxDurationSec(for: "midroll", placementConfig: placementConfig),
-                    skippable: placementConfig.skippable ?? episodeAdConfig.skippable,
-                    skipAfterSec: placementConfig.skipAfterSec ?? episodeAdConfig.skipAfterSec,
+                    skippable: episodeAdPolicy.skippable,
+                    skipAfterSec: episodeAdPolicy.skipAfterSec,
                     orientation: "HORIZONTAL",
                     userId: requestUserId
                 )
@@ -1945,7 +1943,7 @@ struct EpisodeWatchView: View {
         }
 
         let placementConfig = episodeAdConfig.placementConfig(for: adBreak.placement)
-        guard episodeAdConfig.enabled, placementConfig.enabled else {
+        guard episodeAdPolicy.adsEnabled else {
             watchedAdBreakIds.insert(adBreak.id)
             resumeContentAfterAdBreakIfNeeded()
             return
@@ -1966,8 +1964,8 @@ struct EpisodeWatchView: View {
                     durationSec: episode?.duration,
                     maxAds: episodeAdMaxAds(for: "midroll"),
                     maxDurationSec: episodeAdMaxDurationSec(for: "midroll", placementConfig: placementConfig),
-                    skippable: placementConfig.skippable ?? episodeAdConfig.skippable,
-                    skipAfterSec: placementConfig.skipAfterSec ?? episodeAdConfig.skipAfterSec,
+                    skippable: episodeAdPolicy.skippable,
+                    skipAfterSec: episodeAdPolicy.skipAfterSec,
                     orientation: "HORIZONTAL",
                     breakId: adBreak.breakId,
                     userId: requestUserId
@@ -2011,6 +2009,27 @@ struct EpisodeWatchView: View {
             }
         } else {
             player.play()
+        }
+    }
+
+    private func seekContentRespectingAds(to seconds: Double, autoplay: Bool = false) {
+        guard let player else { return }
+        let target = max(0, seconds)
+        let playerTime = player.currentTime().seconds
+        let current = max(0, playerTime.isFinite ? playerTime : lastObservedContentTime)
+        if let adBreak = nextDueAdBreak(from: current, to: target) {
+            player.pause()
+            Task { await startEpisodeAdBreak(adBreak, resumeTime: target) }
+            return
+        }
+        player.seek(
+            to: CMTime(seconds: target, preferredTimescale: 600),
+            toleranceBefore: CMTime(seconds: 0.25, preferredTimescale: 600),
+            toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600)
+        ) { _ in
+            if autoplay {
+                Task { @MainActor in player.play() }
+            }
         }
     }
 
@@ -2364,12 +2383,7 @@ struct EpisodeWatchView: View {
     private func playClipPost(_ post: UserPost) {
         guard post.markOut > post.markIn else { return }
         activeClipRange = ClipPlaybackRange(markIn: Double(post.markIn), markOut: Double(post.markOut))
-        let target = CMTime(seconds: Double(post.markIn), preferredTimescale: 600)
-        player?.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-            Task { @MainActor in
-                player?.play()
-            }
-        }
+        seekContentRespectingAds(to: Double(post.markIn), autoplay: true)
     }
 
     private func uploadClipThumbnailIfNeeded(_ thumbnailData: Data?) async throws -> String? {

@@ -293,7 +293,13 @@ enum ActiveAdFullscreenHandoff {
 actor AdServerClient {
     static let shared = AdServerClient()
 
-    private let session = URLSession(configuration: .ephemeral)
+    private let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 3.5
+        configuration.timeoutIntervalForResource = 5
+        configuration.waitsForConnectivity = false
+        return URLSession(configuration: configuration)
+    }()
     private let trackingSession = URLSession(configuration: .default)
     private let decoder = JSONDecoder()
     private let trackingQueueCacheKey = "ads.pending-tracking.v1"
@@ -1515,7 +1521,10 @@ struct NativeAdPlayerView: View {
                 }
 
                 let hasStarted = firedEvents.contains("start") || currentProgress > 0.05
-                let timeout: TimeInterval = hasStarted ? 15 : 12
+                if !hasStarted, watchedPlayer.currentItem?.status == .unknown {
+                    continue
+                }
+                let timeout: TimeInterval = hasStarted ? 20 : 30
                 guard Date().timeIntervalSince(lastProgressAt) >= timeout else { continue }
 
                 trackEvent("error")
