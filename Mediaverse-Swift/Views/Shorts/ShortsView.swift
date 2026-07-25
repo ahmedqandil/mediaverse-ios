@@ -500,6 +500,10 @@ final class ShortsPlaybackManager: ObservableObject {
                     provenance: .fresh
                 )
             } catch {
+                guard !Task.isCancelled else {
+                    self?.clearInitialPrewarmTask(cacheKey: cacheKey)
+                    return
+                }
                 if let stale: InitialShortsPrewarm = try? await DiskJSONCache.shared.staleValue(forKey: cacheKey) {
                     self?.storeInitialPrewarm(
                         seed: stale.seed,
@@ -557,24 +561,35 @@ final class ShortsPlaybackManager: ObservableObject {
             return payload
         }
 
-        if let initialPrewarmTask {
-            await initialPrewarmTask.value
+        // Give a fresh response priority without making startup wait on a slow
+        // network indefinitely. Disk is considered only after this head start.
+        for _ in 0..<8 {
+            guard initialPrewarmTask != nil else { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
             if let payload = takeReadyInitialFeed() {
                 return payload
             }
         }
 
-        guard let cached: InitialShortsPrewarm = try? await DiskJSONCache.shared.staleValue(forKey: cacheKey) else {
-            return nil
+        if let cached: InitialShortsPrewarm = try? await DiskJSONCache.shared.staleValue(forKey: cacheKey) {
+            initialPrewarmTask?.cancel()
+            initialPrewarmTask = nil
+            storeInitialPrewarm(
+                seed: cached.seed,
+                response: cached.response,
+                isMuted: isMuted,
+                cacheKey: cacheKey,
+                userId: userId,
+                provenance: .cacheFallback
+            )
+            return takeReadyInitialFeed()
         }
-        storeInitialPrewarm(
-            seed: cached.seed,
-            response: cached.response,
-            isMuted: isMuted,
-            cacheKey: cacheKey,
-            userId: userId,
-            provenance: .cacheFallback
-        )
+
+        // With no disk fallback, continue waiting for the already-running fresh
+        // request so first-time users do not receive an artificial empty state.
+        if let initialPrewarmTask {
+            await initialPrewarmTask.value
+        }
         return takeReadyInitialFeed()
     }
 
@@ -998,7 +1013,10 @@ final class ShortsPlaybackManager: ObservableObject {
                         progress: 0,
                         canSkip: false
                     )
-                    self.trackServerAdEvent("impression", id: id)
+                    // The SGAI Worker owns impression when AVPlayer fetches the
+                    // ASSET-LIST. The client begins with start to avoid double
+                    // counting the billable impression.
+                    self.trackServerAdEvent("start", id: id)
                 }
             } catch {
                 // AVFoundation can still finish the server-guided break when optional
@@ -1029,7 +1047,7 @@ final class ShortsPlaybackManager: ObservableObject {
                 progress: 0,
                 canSkip: false
             )
-            trackServerAdEvent("impression", id: id)
+            trackServerAdEvent("start", id: id)
         }
         guard let refreshed = serverAdPresentations[id] else { return }
         let itemDuration = monitor?.interstitialPlayer.currentItem?.duration.seconds
@@ -2271,6 +2289,9 @@ struct ShortsView: View {
             }
             configurePlayback(ensureAutoplay: true)
             recordShortViewIfNeeded(itemID: currentID)
+            if canUsePrewarmedFeed, initialFeedProvenance == .cacheFallback {
+                scheduleCachedFeedRevalidation()
+            }
         } catch {
             guard feedGeneration == generation, !Task.isCancelled else { return }
             if !replacingExisting && restoreRootFeedSessionIfNeeded() {
@@ -2344,6 +2365,12 @@ struct ShortsView: View {
                 nextCursor = reconciliation.nextCursor
                 emptyReason = nil
                 paginationError = nil
+                await playbackManager.cacheInitialFeedForNextSession(
+                    seed: requestedSeed,
+                    response: refreshed,
+                    userId: requestedUserId,
+                    context: requestedContext
+                )
                 saveRootFeedSessionIfNeeded()
                 configurePlayback(ensureAutoplay: true)
             } catch {

@@ -637,6 +637,7 @@ final class ServerAdPlaybackCoordinator: ObservableObject {
     func skip() {
         guard presentation?.canSkip == true else { return }
         if let activeSSAIWindow, let primaryPlayer {
+            track("skip")
             primaryPlayer.seek(
                 to: CMTime(seconds: activeSSAIWindow.end, preferredTimescale: 600),
                 toleranceBefore: .zero,
@@ -756,6 +757,9 @@ final class ServerAdPlaybackCoordinator: ObservableObject {
             isSkippable: isSkippable,
             skipCountdown: Int(ceil(max(0, skipOffset - adElapsed)))
         )
+        // True SSAI tracking is segment-driven at the Worker. The first ad
+        // segment fires impression/start and later segment redirects fire
+        // quartiles/complete. The client only owns interactive click/skip.
     }
 
     private func handleEventChange(monitor: AVPlayerInterstitialEventMonitor?) {
@@ -799,7 +803,7 @@ final class ServerAdPlaybackCoordinator: ObservableObject {
                         progress: 0,
                         canSkip: false
                     )
-                    self.track("impression")
+                    self.track("start")
                 }
             } catch {
                 // The interstitial can continue without optional companion metadata.
@@ -827,7 +831,7 @@ final class ServerAdPlaybackCoordinator: ObservableObject {
                 progress: 0,
                 canSkip: false
             )
-            track("impression")
+            track("start")
         }
         guard let refreshed = presentation else { return }
 
@@ -933,6 +937,11 @@ struct ServerGuidedAdPlayerView: View {
                 brandCardPlacement: brandCardPlacement,
                 initialImpressionTracked: true,
                 initialStartTracked: true,
+                presentationElapsed: max(
+                    0,
+                    (presentation.asset?.duration ?? presentation.remainingSec)
+                        - presentation.remainingSec
+                ),
                 adPolicy: coordinator.policy,
                 adRemoval: coordinator.policy?.adRemoval,
                 overrideSkippable: coordinator.policy?.skippable,
