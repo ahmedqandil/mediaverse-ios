@@ -112,7 +112,7 @@ def load_face_parser(model_path: Path) -> Callable[[Path], np.ndarray]:
     """Load the bundled Core ML parser and return a source-image-only predictor."""
     import coremltools as ct
 
-    model = ct.models.MLModel(model_path)
+    model = ct.models.MLModel(str(model_path))
 
     def predict(source: Path) -> np.ndarray:
         image = Image.open(source).convert("RGB").resize((512, 512), Image.Resampling.LANCZOS)

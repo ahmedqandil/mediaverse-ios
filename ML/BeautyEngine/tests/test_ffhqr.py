@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,7 @@ from beauty_engine.ffhqr import (
     FFHQR_LICENSE,
     RESEARCH_USE,
     index_pairs,
+    load_face_parser,
     prepare_research_manifests,
     split_for_sample,
     write_index,
@@ -25,6 +27,12 @@ from beauty_engine.train import save_checkpoint
 
 
 class FFHQRTests(unittest.TestCase):
+    def test_face_parser_passes_coreml_a_string_path(self) -> None:
+        fake_model = MagicMock()
+        with patch("coremltools.models.MLModel", return_value=fake_model) as constructor:
+            load_face_parser(Path("/models/FaceParser.mlpackage"))
+        constructor.assert_called_once_with("/models/FaceParser.mlpackage")
+
     def test_uses_official_folder_splits(self) -> None:
         self.assertEqual(split_for_sample("00000"), "train")
         self.assertEqual(split_for_sample("55999"), "train")
