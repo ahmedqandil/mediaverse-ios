@@ -105,8 +105,11 @@ struct NativeAdCompanionCard: View {
     @Environment(\.openURL) private var openURL
 
     private var clickThroughURL: URL? {
-        guard let value = ad.clickThroughUrl, !value.isEmpty else { return nil }
-        return URL(string: value)
+        guard let value = ad.clickThroughUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty,
+              let url = URL(string: value),
+              url.scheme == "https" || url.scheme == "http" else { return nil }
+        return url
     }
 
     var body: some View {
@@ -680,6 +683,7 @@ struct NativeAdPlayerView: View {
     var onActivePlayerChanged: ((AVPlayer?) -> Void)? = nil
     var onActiveAdPresentationChanged: ((ActiveAdPresentation?) -> Void)? = nil
     var onSkip: (() -> Void)? = nil
+    var onComplete: (() -> Void)? = nil
     var onFinish: (() -> Void)? = nil
     let onFinished: () -> Void
 
@@ -1184,8 +1188,10 @@ struct NativeAdPlayerView: View {
     }
 
     private var clickThroughURL: URL? {
-        guard let click = currentAd?.clickThroughUrl else { return nil }
-        return URL(string: click)
+        guard let click = currentAd?.clickThroughUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let url = URL(string: click),
+              url.scheme == "https" || url.scheme == "http" else { return nil }
+        return url
     }
 
     private var adStatusText: String {
@@ -1257,6 +1263,9 @@ struct NativeAdPlayerView: View {
         ) { _ in
             guard !ActiveAdFullscreenHandoff.isProtected(nextPlayer) else { return }
             trackEvent("complete")
+            if currentAdIndex + 1 >= decision.ads.count {
+                onComplete?()
+            }
             playNextOrFinish()
         }
         failureObserver = NotificationCenter.default.addObserver(

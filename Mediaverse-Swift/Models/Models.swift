@@ -2172,7 +2172,22 @@ extension ContentItem {
     }
 
     var appRoute: AppRoute {
-        switch entityType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        let normalizedEntityType = entityType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedContentType = (metaString("showType") ?? metaString("type") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let isExplicitMicrodrama = normalizedEntityType == "microdrama"
+            || normalizedEntityType == "microdramas"
+            || normalizedEntityType == "micro-drama"
+            || normalizedEntityType == "micro-dramas"
+        let isMicrodramaShow = normalizedEntityType == "show"
+            && (normalizedContentType.contains("microdrama") || normalizedContentType.contains("micro-drama"))
+
+        if isExplicitMicrodrama || isMicrodramaShow {
+            return .microdramaShow(entityId)
+        }
+
+        switch normalizedEntityType {
         case "show":
             return .show(entityId)
         case "short":
@@ -2364,10 +2379,26 @@ struct MicrodramaEpisode: Codable, Identifiable {
     let videoUrl: String?      // nil if locked
     let duration: Double?
     let accessState: String    // "free"|"svod"|"ppv"|"locked"
+    let adUnlockAvailable: Bool?
 }
 
 struct MicrodramaConfig: Codable {
     let freeEpisodeCount: Int
+    let adUnlockEnabled: Bool
+    let adUnlockStartEpisode: Int
+    let adUnlockDailyLimit: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case freeEpisodeCount, adUnlockEnabled, adUnlockStartEpisode, adUnlockDailyLimit
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        freeEpisodeCount = try container.decodeIfPresent(Int.self, forKey: .freeEpisodeCount) ?? 0
+        adUnlockEnabled = try container.decodeIfPresent(Bool.self, forKey: .adUnlockEnabled) ?? false
+        adUnlockStartEpisode = try container.decodeIfPresent(Int.self, forKey: .adUnlockStartEpisode) ?? 1
+        adUnlockDailyLimit = try container.decodeIfPresent(Int.self, forKey: .adUnlockDailyLimit) ?? 0
+    }
 }
 
 struct MicrodramaOffers: Codable {
@@ -2401,6 +2432,22 @@ struct MicrodramaEpisodesResponse: Codable {
     let config: MicrodramaConfig?
     let episodes: [MicrodramaEpisode]
     let offers: MicrodramaOffers?
+    let remainingAdUnlocks: Int?
+    let dailyCap: Int?
+    let adUnlockPlacement: String?
+    let adUnlockPolicy: MicrodramaAdUnlockPolicy?
+}
+
+struct MicrodramaAdUnlockPolicy: Codable {
+    let placement: String?
+    let maxAdDurationSec: Int?
+    let skippable: Bool?
+    let skipAfterSec: Int?
+}
+
+struct MicrodramaAdUnlockGrant: Codable {
+    let granted: Bool
+    let remainingToday: Int?
 }
 
 // ── Following feed ────────────────────────────────────────────────────────────

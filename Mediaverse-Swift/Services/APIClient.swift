@@ -1527,6 +1527,11 @@ actor APIClient {
         return try await get("/api/microdrama/\(C.pathSegment(showId))/episodes")
     }
 
+    func grantMicrodramaAdUnlock(episodeId: String) async throws -> MicrodramaAdUnlockGrant {
+        struct Body: Encodable { let episodeId: String }
+        return try await post("/api/microdrama/ad-unlock", body: Body(episodeId: episodeId))
+    }
+
     // MARK: - Following feed
 
     func fetchFollowingFeed() async throws -> [FollowingFeedItem] {

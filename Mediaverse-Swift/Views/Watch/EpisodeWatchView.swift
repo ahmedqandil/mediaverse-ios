@@ -28,6 +28,10 @@ struct EpisodeWatchView: View {
     @State private var isCollapsingAdToMiniPlayer = false
     @State private var episodeAdConfig: PlatformShortsAdsConfig = .episodeDefault
     @State private var episodeAdPolicy: EffectiveAdPolicy = .disabled(reason: "not_resolved")
+    @State private var adDeliveryMode: AdDeliveryMode = .none
+    @State private var serverInterstitialMonitor: AVPlayerInterstitialEventMonitor?
+    @StateObject private var serverAdCoordinator = ServerAdPlaybackCoordinator()
+    @State private var serverFallbackSourceURL: URL?
     @State private var playbackLoadGeneration = UUID()
     @State private var playbackSessionId = UUID().uuidString
     @State private var playbackEntryContext: PlaybackEntryContext = .direct
@@ -166,6 +170,10 @@ struct EpisodeWatchView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification)) { notification in
             handlePlaybackEnded(notification)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.failedToPlayToEndTimeNotification)) { notification in
+            guard notification.object as? AVPlayerItem === player?.currentItem else { return }
+            Task { await fallbackFromServerDelivery() }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
             guard UIDevice.current.orientation.isLandscape else { return }
@@ -715,6 +723,19 @@ struct EpisodeWatchView: View {
                             playClipPost(post)
                         }
                     )
+                    .overlay {
+                        if let presentation = serverAdCoordinator.presentation {
+                            ServerAdOverlay(
+                                presentation: presentation,
+                                isPaused: serverAdCoordinator.isPaused,
+                                isMuted: serverAdCoordinator.isMuted,
+                                onTogglePause: { serverAdCoordinator.togglePause() },
+                                onToggleMute: { serverAdCoordinator.toggleMute() },
+                                onSkip: { serverAdCoordinator.skip() },
+                                onOpen: { serverAdCoordinator.openAdvertiser() }
+                            )
+                        }
+                    }
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
                 .id(panel.id)
@@ -1475,12 +1496,47 @@ struct EpisodeWatchView: View {
                     ? PlaybackEntryContext(surface: .direct, mode: .resume, contentStartSec: max(0, (ep.duration ?? 0) * savedProgress), previewSessionId: nil)
                     : .direct
             }
+            if let mediaURL = C.mediaURL(ep.videoUrl) {
+                let resolvedMode = AdDeliveryResolver.resolve(policy: policy)
+                adDeliveryMode = (resolvedMode == .sgai || resolvedMode == .ssai)
+                    && mediaURL.pathExtension.lowercased() != "m3u8"
+                    ? .csai
+                    : resolvedMode
+            } else {
+                adDeliveryMode = .none
+            }
+            if adDeliveryMode != .sgai {
+                serverInterstitialMonitor = nil
+                serverAdCoordinator.reset()
+            }
+            if adDeliveryMode != .sgai && adDeliveryMode != .ssai {
+                serverFallbackSourceURL = nil
+            }
             hideControlsForExpandedHandoff = expandedItem.map { !$0.isAd } ?? false
-            if let expandedItem, !expandedItem.isAd {
+            if let expandedItem, !expandedItem.isAd,
+               adDeliveryMode != .sgai, adDeliveryMode != .ssai {
                 attachPlayer(expandedItem.player, episodeId: loadId, autoplay: true)
                 prerollAdDecision = nil
                 Task { await loadEpisodeAdBreaks(contentId: loadId, duration: ep.duration) }
-            } else if let url = C.mediaURL(ep.videoUrl) {
+            } else if let originalURL = C.mediaURL(ep.videoUrl) {
+                let playbackContext = SGAIPlaybackContext(
+                    contentId: loadId,
+                    contentType: "episode",
+                    sessionId: playbackSessionId,
+                    userId: loadUserId,
+                    deviceId: AdPlaybackDevice.stableId,
+                    country: nil,
+                    orientation: "HORIZONTAL",
+                    entry: playbackEntryContext
+                )
+                let deliveryPlan = WatchAdDeliveryPlan.resolve(
+                    policy: policy,
+                    mediaURL: originalURL,
+                    context: playbackContext
+                )
+                adDeliveryMode = deliveryPlan.mode
+                serverFallbackSourceURL = deliveryPlan.usesServerDelivery ? originalURL : nil
+                let url = deliveryPlan.playbackURL
                 let (asset, item) = makeStartupOptimizedPlayerItem(url: url)
                 let shouldReuseFullscreenPlayer = reuseCurrentPlayerForFullscreenSelection
                 reuseCurrentPlayerForFullscreenSelection = false
@@ -1497,6 +1553,19 @@ struct EpisodeWatchView: View {
                     p.isMuted = playerMuted
                     p.volume = 1
                     playbackPlayer = p
+                }
+                if deliveryPlan.mode == .sgai {
+                    let monitor = AVPlayerInterstitialEventMonitor(primaryPlayer: playbackPlayer)
+                    serverInterstitialMonitor = monitor
+                    serverAdCoordinator.configure(
+                        player: playbackPlayer,
+                        monitor: monitor,
+                        context: playbackContext,
+                        policy: policy
+                    )
+                } else {
+                    serverInterstitialMonitor = nil
+                    serverAdCoordinator.reset()
                 }
 
                 if savedProgress > 0.05 && savedProgress < 0.95 {
@@ -1598,6 +1667,34 @@ struct EpisodeWatchView: View {
         item.preferredForwardBufferDuration = 12
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         return (asset, item)
+    }
+
+    @MainActor
+    private func fallbackFromServerDelivery() async {
+        guard adDeliveryMode == .sgai || adDeliveryMode == .ssai,
+              let originalURL = serverFallbackSourceURL,
+              let player else { return }
+        serverFallbackSourceURL = nil
+        serverInterstitialMonitor = nil
+        serverAdCoordinator.reset()
+        adDeliveryMode = .csai
+        adBreaks = []
+        let resumeTime = max(0, player.currentTime().seconds.validTime ?? 0)
+        let (_, item) = makeStartupOptimizedPlayerItem(url: originalURL)
+        player.replaceCurrentItem(with: item)
+        if resumeTime > 0 {
+            await player.seek(
+                to: CMTime(seconds: resumeTime, preferredTimescale: 600),
+                toleranceBefore: .zero,
+                toleranceAfter: .zero
+            )
+        }
+        let preroll = resumeTime < 1
+            ? await prerollDecision(contentId: currentEpisodeId, duration: episode?.duration)
+            : nil
+        prerollAdDecision = preroll
+        attachPlayer(player, episodeId: currentEpisodeId, autoplay: preroll == nil)
+        Task { await loadEpisodeAdBreaks(contentId: currentEpisodeId, duration: episode?.duration) }
     }
 
     private func configureFullPlaybackBuffering(for player: AVPlayer) {
@@ -1717,6 +1814,7 @@ struct EpisodeWatchView: View {
     }
 
     private func prerollDecision(contentId: String, duration: Double?) async -> AdDecision? {
+        guard adDeliveryMode == .csai else { return nil }
         let placementConfig = episodeAdConfig.placementConfig(for: "preroll")
         guard episodeAdConfig.enabled, placementConfig.enabled else { return nil }
         do {
@@ -1747,6 +1845,10 @@ struct EpisodeWatchView: View {
     }
 
     private func loadEpisodeAdBreaks(contentId: String, duration: Double?) async {
+        guard adDeliveryMode == .csai else {
+            adBreaks = []
+            return
+        }
         let requestGeneration = playbackLoadGeneration
         let requestUserId = auth.currentUser?.id
         let placementConfig = episodeAdConfig.placementConfig(for: "midroll")
@@ -1777,6 +1879,7 @@ struct EpisodeWatchView: View {
     }
 
     private func nextDueAdBreak(from previousSeconds: Double, to seconds: Double) -> AdBreak? {
+        guard adDeliveryMode == .csai else { return nil }
         guard prerollAdDecision == nil, midrollAdDecision == nil else { return nil }
         return AdBreakScheduler.nextDue(
             in: adBreaks,
@@ -1789,6 +1892,7 @@ struct EpisodeWatchView: View {
 
     @MainActor
     private func startEpisodeAdBreak(_ adBreak: AdBreak, resumeTime: Double? = nil) async {
+        guard adDeliveryMode == .csai else { return }
         guard !watchedAdBreakIds.contains(adBreak.id),
               !pendingAdBreakIds.contains(adBreak.id),
               midrollAdDecision == nil else { return }

@@ -464,10 +464,30 @@ final class SGAIPlaybackTests: XCTestCase {
         XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .none)
     }
 
+    func testMissingServerDeliveryPolicyStaysOnCSAI() throws {
+        let policy = try JSONDecoder().decode(
+            EffectiveAdPolicy.self,
+            from: Data(#"{"adsEnabled":true}"#.utf8)
+        )
+        XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .csai)
+    }
+
     func testNativeAppOverrideSelectsCSAI() throws {
         let data = Data(#"{"adsEnabled":true,"deliveryMode":"server","deliveryByDevice":{"nativeApp":"csai"}}"#.utf8)
         let policy = try JSONDecoder().decode(EffectiveAdPolicy.self, from: data)
         XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .csai)
+    }
+
+    func testMalformedNativeOverrideFailsClosedToCSAI() throws {
+        let data = Data(#"{"adsEnabled":true,"deliveryMode":"server","deliveryByDevice":{"nativeApp":"broken"}}"#.utf8)
+        let policy = try JSONDecoder().decode(EffectiveAdPolicy.self, from: data)
+        XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .csai)
+    }
+
+    func testExplicitSSAIIsPreserved() throws {
+        let data = Data(#"{"adsEnabled":true,"deliveryMode":"ssai"}"#.utf8)
+        let policy = try JSONDecoder().decode(EffectiveAdPolicy.self, from: data)
+        XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .ssai)
     }
 
     func testAutoDefaultsToSGAIAndUnsupportedFallsBackToCSAI() throws {
@@ -477,6 +497,45 @@ final class SGAIPlaybackTests: XCTestCase {
         )
         XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .sgai)
         XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy, supportsHLSInterstitials: false), .csai)
+    }
+
+    func testShortsKeepFeedAdsClientSideAndUseSGAIOnlyForHLS() throws {
+        let policy = try JSONDecoder().decode(
+            EffectiveAdPolicy.self,
+            from: Data(#"{"adsEnabled":true,"deliveryMode":"server"}"#.utf8)
+        )
+        let hlsURL = try XCTUnwrap(URL(string: "https://example.com/short/master.m3u8?token=1"))
+        let mp4URL = try XCTUnwrap(URL(string: "https://example.com/short.mp4"))
+
+        XCTAssertEqual(
+            ShortsAdDeliveryPlan.resolve(policy: policy, mediaURL: hlsURL),
+            ShortsAdDeliveryPlan(feed: .csai, inStream: .sgai)
+        )
+        XCTAssertEqual(
+            ShortsAdDeliveryPlan.resolve(policy: policy, mediaURL: mp4URL),
+            ShortsAdDeliveryPlan(feed: .csai, inStream: .none)
+        )
+    }
+
+    func testShortsHonorNativeCSAIOverrideAndCapabilityFallback() throws {
+        let policy = try JSONDecoder().decode(
+            EffectiveAdPolicy.self,
+            from: Data(#"{"adsEnabled":true,"deliveryMode":"server","deliveryByDevice":{"nativeApp":"csai"}}"#.utf8)
+        )
+        let hlsURL = try XCTUnwrap(URL(string: "https://example.com/short.m3u8"))
+
+        XCTAssertEqual(
+            ShortsAdDeliveryPlan.resolve(policy: policy, mediaURL: hlsURL),
+            ShortsAdDeliveryPlan(feed: .csai, inStream: .none)
+        )
+        XCTAssertEqual(
+            ShortsAdDeliveryPlan.resolve(
+                policy: policy,
+                mediaURL: hlsURL,
+                supportsHLSInterstitials: false
+            ).inStream,
+            .none
+        )
     }
 
     func testWrappedURLCarriesStablePlaybackAndContinuationContext() throws {
@@ -510,6 +569,81 @@ final class SGAIPlaybackTests: XCTestCase {
         XCTAssertNil(query["breaks"], "Break cadence must remain server-owned")
     }
 
+    func testWrappedURLCarriesSkipAndDurationPolicy() throws {
+        let stream = try XCTUnwrap(URL(string: "https://example.com/manifest/video.m3u8"))
+        let context = SGAIPlaybackContext(
+            contentId: "short-1",
+            contentType: "short",
+            sessionId: "short-session",
+            userId: nil,
+            deviceId: "device-1",
+            country: nil,
+            orientation: "VERTICAL",
+            entry: PlaybackEntryContext(
+                surface: .shortsFeed,
+                mode: .userPlay,
+                contentStartSec: 0,
+                previewSessionId: nil
+            )
+        )
+
+        let wrapped = SGAIPlaybackURLBuilder.makeURL(
+            streamMaster: stream,
+            mode: .ssai,
+            context: context,
+            skippable: true,
+            maxDurationSec: 30
+        )
+        let query = Dictionary(uniqueKeysWithValues:
+            (URLComponents(url: wrapped, resolvingAgainstBaseURL: false)?.queryItems ?? [])
+                .map { ($0.name, $0.value ?? "") }
+        )
+
+        XCTAssertEqual(query["mode"], "ssai")
+        XCTAssertEqual(query["restrict"], "JUMP")
+        XCTAssertEqual(query["maxDurationSec"], "30")
+        XCTAssertEqual(query["contentType"], "short")
+        XCTAssertEqual(query["platform"], "ios")
+    }
+
+    func testMustWatchURLDoesNotRelaxWorkerRestrictions() throws {
+        let stream = try XCTUnwrap(URL(string: "https://example.com/video.m3u8"))
+        let context = SGAIPlaybackContext(
+            contentId: "short-1",
+            contentType: "short",
+            sessionId: "short-session",
+            userId: nil,
+            deviceId: nil,
+            country: nil,
+            orientation: "VERTICAL",
+            entry: .direct
+        )
+        let wrapped = SGAIPlaybackURLBuilder.makeURL(
+            streamMaster: stream,
+            mode: .sgai,
+            context: context,
+            skippable: false
+        )
+        let query = URLComponents(url: wrapped, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertFalse(query.contains(where: { $0.name == "restrict" }))
+    }
+
+    func testServerAdPresentationRejectsUnsafeClickSchemes() throws {
+        let assetJSON = """
+        {"URI":"https://example.com/ad.m3u8","X-WESTREEM-IID":"imp",
+         "X-WESTREEM-CLICK":"javascript:alert(1)"}
+        """
+        let asset = try JSONDecoder().decode(SGAIAsset.self, from: Data(assetJSON.utf8))
+        let presentation = ShortsServerAdPresentation(
+            breakId: "preroll",
+            asset: asset,
+            remainingSec: 5,
+            progress: 0.5,
+            canSkip: false
+        )
+        XCTAssertNil(presentation.clickThroughURL)
+    }
+
     func testCSAILeavesContentURLUnchanged() throws {
         let stream = try XCTUnwrap(URL(string: "https://example.com/video.m3u8"))
         let context = SGAIPlaybackContext(
@@ -526,6 +660,80 @@ final class SGAIPlaybackTests: XCTestCase {
             SGAIPlaybackURLBuilder.makeURL(streamMaster: stream, mode: .csai, context: context),
             stream
         )
+    }
+
+    func testWatchPlanUsesSGAIForServerHLSAndDisablesCSAI() throws {
+        let policy = try JSONDecoder().decode(
+            EffectiveAdPolicy.self,
+            from: Data(#"{"adsEnabled":true,"deliveryMode":"server","skippable":true,"pods":{"maxAdDurationSec":30}}"#.utf8)
+        )
+        let stream = try XCTUnwrap(URL(string: "https://cdn.example.com/master.m3u8"))
+        let context = SGAIPlaybackContext(
+            contentId: "video-1",
+            contentType: "video",
+            sessionId: "session-1",
+            userId: nil,
+            deviceId: nil,
+            country: nil,
+            orientation: "HORIZONTAL",
+            entry: .direct
+        )
+
+        let plan = WatchAdDeliveryPlan.resolve(policy: policy, mediaURL: stream, context: context)
+
+        XCTAssertEqual(plan.mode, .sgai)
+        XCTAssertTrue(plan.usesServerDelivery)
+        XCTAssertFalse(plan.usesClientSideAds)
+        XCTAssertNotEqual(plan.playbackURL, stream)
+    }
+
+    func testWatchPlanFallsBackToCSAIForServerMP4() throws {
+        let policy = try JSONDecoder().decode(
+            EffectiveAdPolicy.self,
+            from: Data(#"{"adsEnabled":true,"deliveryMode":"server"}"#.utf8)
+        )
+        let stream = try XCTUnwrap(URL(string: "https://cdn.example.com/video.mp4"))
+        let context = SGAIPlaybackContext(
+            contentId: "episode-1",
+            contentType: "episode",
+            sessionId: "session-1",
+            userId: nil,
+            deviceId: nil,
+            country: nil,
+            orientation: "HORIZONTAL",
+            entry: .direct
+        )
+
+        let plan = WatchAdDeliveryPlan.resolve(policy: policy, mediaURL: stream, context: context)
+
+        XCTAssertEqual(plan.mode, .csai)
+        XCTAssertTrue(plan.usesClientSideAds)
+        XCTAssertEqual(plan.playbackURL, stream)
+    }
+
+    func testWatchPlanHonorsNativeSSAIOverride() throws {
+        let policy = try JSONDecoder().decode(
+            EffectiveAdPolicy.self,
+            from: Data(#"{"adsEnabled":true,"deliveryMode":"server","deliveryByDevice":{"nativeApp":"ssai"}}"#.utf8)
+        )
+        let stream = try XCTUnwrap(URL(string: "https://cdn.example.com/master.m3u8"))
+        let context = SGAIPlaybackContext(
+            contentId: "episode-1",
+            contentType: "episode",
+            sessionId: "session-1",
+            userId: nil,
+            deviceId: nil,
+            country: nil,
+            orientation: "HORIZONTAL",
+            entry: .direct
+        )
+
+        let plan = WatchAdDeliveryPlan.resolve(policy: policy, mediaURL: stream, context: context)
+        let query = try XCTUnwrap(URLComponents(url: plan.playbackURL, resolvingAgainstBaseURL: false))
+            .queryItems ?? []
+
+        XCTAssertEqual(plan.mode, .ssai)
+        XCTAssertTrue(query.contains(URLQueryItem(name: "mode", value: "ssai")))
     }
 
     func testAssetListDecodingAndBreakIdentifier() throws {
@@ -702,6 +910,19 @@ final class ShortsAdAuthorityAndScheduleTests: XCTestCase {
         XCTAssertTrue(ShortsAdSchedule.isEligible(afterShortAt: 2, placement: "shorts_feed", config: config))
         XCTAssertTrue(ShortsAdSchedule.isEligible(afterShortAt: 7, placement: "shorts_feed", config: config))
         XCTAssertFalse(ShortsAdSchedule.isEligible(afterShortAt: 3, placement: "shorts_feed", config: config))
+    }
+
+    func testServerCadenceWrapsOnlyTheConfiguredFeedBoundaries() throws {
+        let policy = try JSONDecoder().decode(
+            EffectiveAdPolicy.self,
+            from: Data(#"{"adsEnabled":true,"deliveryMode":"server","cadenceKind":"count","cadenceValue":5,"firstAfter":5,"minGapSec":300}"#.utf8)
+        )
+
+        XCTAssertFalse(ShortsServerAdSchedule.isEligible(shortIndex: 0, policy: policy))
+        XCTAssertFalse(ShortsServerAdSchedule.isEligible(shortIndex: 4, policy: policy))
+        XCTAssertTrue(ShortsServerAdSchedule.isEligible(shortIndex: 5, policy: policy))
+        XCTAssertFalse(ShortsServerAdSchedule.isEligible(shortIndex: 6, policy: policy))
+        XCTAssertTrue(ShortsServerAdSchedule.isEligible(shortIndex: 10, policy: policy))
     }
 
     func testCadenceEdgeCasesAndFirstViewIndependence() {

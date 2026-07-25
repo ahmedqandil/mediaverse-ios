@@ -265,6 +265,21 @@ enum ShortsAdSchedule {
     }
 }
 
+enum ShortsServerAdSchedule {
+    static func isEligible(shortIndex index: Int, policy: EffectiveAdPolicy) -> Bool {
+        guard policy.adsEnabled,
+              policy.cadenceKind?.lowercased() == "count",
+              let cadence = policy.cadenceValue,
+              cadence > 0 else {
+            return false
+        }
+        // A preroll on item N occupies the feed boundary after N prior items.
+        let firstBreak = max(1, policy.firstAfter ?? cadence)
+        guard index >= firstBreak else { return false }
+        return (index - firstBreak).isMultiple(of: cadence)
+    }
+}
+
 enum ShortsAdLayoutClearance {
     static func top(safeAreaTop: CGFloat) -> CGFloat {
         max(8, safeAreaTop + 8)
@@ -376,6 +391,7 @@ private enum ShortsAdFrequencyStore {
 @MainActor
 final class ShortsPlaybackManager: ObservableObject {
     @Published private(set) var players: [String: AVPlayer] = [:]
+    @Published private(set) var serverAdPresentations: [String: ShortsServerAdPresentation] = [:]
 
     struct RootFeedSnapshot {
         let cacheScope: String
@@ -394,6 +410,7 @@ final class ShortsPlaybackManager: ObservableObject {
     private let initialWarmCount = 7
     private let metricsNamespace = "shorts.preview"
     private var assetCache: [String: AVURLAsset] = [:]
+    private var assetSourceURLs: [String: URL] = [:]
     private var warmTasks: [String: Task<Void, Never>] = [:]
     private var initialPrewarmTask: Task<Void, Never>?
     private var initialPrewarmPayload: PreparedInitialShortsFeed?
@@ -401,6 +418,21 @@ final class ShortsPlaybackManager: ObservableObject {
     private var failedWarmIDs: [String: Date] = [:]
     private var memoryWarningObserver: NSObjectProtocol?
     private var endObservers: [String: NSObjectProtocol] = [:]
+    private var failureObservers: [String: NSObjectProtocol] = [:]
+    private var statusObservers: [String: NSKeyValueObservation] = [:]
+    private var fallbackSourceURLs: [String: URL] = [:]
+    // One stable session for the whole Shorts feed. A per-Short session resets
+    // server pacing/caps and can produce a preroll on every swipe.
+    private var playbackSessionID = UUID().uuidString
+    private var serverAdEligibleShortIDs = Set<String>()
+    private var serverAdContexts: [String: SGAIPlaybackContext] = [:]
+    private var serverAdPolicies: [String: EffectiveAdPolicy] = [:]
+    private var serverAdAssets: [String: [SGAIAsset]] = [:]
+    private var interstitialMonitors: [String: AVPlayerInterstitialEventMonitor] = [:]
+    private var interstitialObservers: [String: [NSObjectProtocol]] = [:]
+    private var interstitialTimeObservers: [String: Any] = [:]
+    private var firedServerAdEvents: [String: Set<String>] = [:]
+    private var shortsAdsEnabled = false
     private var activeID: String?
     private var rootFeedSnapshot: RootFeedSnapshot?
 
@@ -426,6 +458,10 @@ final class ShortsPlaybackManager: ObservableObject {
 
     func player(for id: String) -> AVPlayer? {
         players[id]
+    }
+
+    func setShortsAdsEnabled(_ enabled: Bool) {
+        shortsAdsEnabled = enabled
     }
 
     func prewarmInitialFeed(isMuted: Bool, userId: String?, context: String?) {
@@ -548,16 +584,24 @@ final class ShortsPlaybackManager: ObservableObject {
         return payload
     }
 
-    fileprivate func configure(feedItems: [ShortsFeedItem], currentID: String?, isMuted: Bool) {
+    fileprivate func configure(feedItems: [ShortsFeedItem], currentID: String?, isMuted: Bool, userId: String?) {
         var shortsByID = [String: Short]()
         feedItems.forEach { item in
-            if case .short(_, let short) = item {
+            if case .short(let index, let short) = item {
                 shortsByID[short.id] = short
+                if let policy = short.adPolicy,
+                   ShortsServerAdSchedule.isEligible(shortIndex: index, policy: policy) {
+                    serverAdEligibleShortIDs.insert(short.id)
+                } else {
+                    serverAdEligibleShortIDs.remove(short.id)
+                }
             }
         }
 
         let preparedIDs = preparedShortIDs(feedItems: feedItems, currentID: currentID)
-        preparedIDs.compactMap { shortsByID[$0] }.forEach { prepare($0, isMuted: isMuted) }
+        preparedIDs.compactMap { shortsByID[$0] }.forEach {
+            prepare($0, isMuted: isMuted, userId: userId)
+        }
 
         Set(players.keys).subtracting(preparedIDs).forEach(releasePlayer)
         Set(assetCache.keys).subtracting(preparedIDs).forEach(releaseWarmState)
@@ -570,12 +614,21 @@ final class ShortsPlaybackManager: ObservableObject {
         }
     }
 
-    func prepare(_ short: Short, isMuted: Bool) {
-        guard let url = C.mediaURL(short.videoUrl), !hasRecentWarmFailure(for: short.id) else { return }
+    func prepare(_ short: Short, isMuted: Bool, userId: String? = nil) {
+        guard let sourceURL = C.mediaURL(short.videoUrl), !hasRecentWarmFailure(for: short.id) else { return }
+        let url = playbackURL(for: short, sourceURL: sourceURL, userId: userId)
+        if url != sourceURL {
+            fallbackSourceURLs[short.id] = sourceURL
+        } else {
+            fallbackSourceURLs[short.id] = nil
+        }
         let asset = cachedAsset(for: short.id, url: url)
         warmAsset(asset, id: short.id)
         guard players[short.id] == nil else { return }
+        installPlayer(asset: asset, id: short.id, isMuted: isMuted)
+    }
 
+    private func installPlayer(asset: AVURLAsset, id: String, isMuted: Bool) {
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = 3
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
@@ -586,11 +639,12 @@ final class ShortsPlaybackManager: ObservableObject {
         player.volume = 1
         player.actionAtItemEnd = .none
         var updatedPlayers = players
-        updatedPlayers[short.id] = player
+        updatedPlayers[id] = player
         players = updatedPlayers
         CacheMetrics.shared.recordStore(metricsNamespace)
+        installInterstitialLifecycleIfNeeded(player: player, id: id)
 
-        endObservers[short.id] = NotificationCenter.default.addObserver(
+        endObservers[id] = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
             queue: .main
@@ -599,12 +653,47 @@ final class ShortsPlaybackManager: ObservableObject {
                 guard let player, let self else { return }
                 player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
                     Task { @MainActor in
-                        if self.activeID == short.id {
+                        if self.activeID == id {
                             player.playImmediately(atRate: 1)
                         }
                     }
                 }
             }
+        }
+
+        failureObservers[id] = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.fallbackToDirectPlaybackIfAvailable(id: id, isMuted: isMuted)
+            }
+        }
+        statusObservers[id] = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
+            guard item.status == .failed else { return }
+            Task { @MainActor in
+                self?.fallbackToDirectPlaybackIfAvailable(id: id, isMuted: isMuted)
+            }
+        }
+    }
+
+    private func fallbackToDirectPlaybackIfAvailable(id: String, isMuted: Bool) {
+        guard let sourceURL = fallbackSourceURLs.removeValue(forKey: id) else { return }
+        let shouldResume = activeID == id
+        releasePlayer(id)
+        releaseWarmState(id)
+        serverAdContexts[id] = nil
+        serverAdPolicies[id] = nil
+
+        let asset = AVURLAsset(url: sourceURL)
+        assetCache[id] = asset
+        assetSourceURLs[id] = sourceURL
+        warmAsset(asset, id: id)
+        installPlayer(asset: asset, id: id, isMuted: isMuted)
+        if shouldResume {
+            activeID = id
+            players[id]?.playImmediately(atRate: 1)
         }
     }
 
@@ -647,6 +736,12 @@ final class ShortsPlaybackManager: ObservableObject {
         activeID = nil
         Array(players.keys).forEach(releasePlayer)
         Array(assetCache.keys).forEach(releaseWarmState)
+        playbackSessionID = UUID().uuidString
+        serverAdEligibleShortIDs.removeAll()
+        serverAdContexts.removeAll()
+        serverAdPolicies.removeAll()
+        serverAdAssets.removeAll()
+        firedServerAdEvents.removeAll()
     }
 
     func resetForIdentityChange() {
@@ -709,7 +804,7 @@ final class ShortsPlaybackManager: ObservableObject {
         }
         let preparedIDs = preparedShortIDs(feedItems: feedItems, currentID: nil)
         preparedIDs.compactMap { id in response.shorts.first { $0.id == id } }
-            .forEach { prepare($0, isMuted: isMuted) }
+            .forEach { prepare($0, isMuted: isMuted, userId: userId) }
         players.values.forEach {
             $0.isMuted = isMuted
             $0.pause()
@@ -722,15 +817,300 @@ final class ShortsPlaybackManager: ObservableObject {
     }
 
     private func cachedAsset(for id: String, url: URL) -> AVURLAsset {
-        if let asset = assetCache[id] {
+        if let asset = assetCache[id], assetSourceURLs[id] == url {
             CacheMetrics.shared.recordHit(metricsNamespace)
             return asset
+        }
+        if assetCache[id] != nil {
+            releasePlayer(id)
+            releaseWarmState(id)
         }
         CacheMetrics.shared.recordMiss(metricsNamespace)
         let asset = AVURLAsset(url: url)
         assetCache[id] = asset
+        assetSourceURLs[id] = url
         CacheMetrics.shared.recordStore(metricsNamespace)
         return asset
+    }
+
+    private func playbackURL(for short: Short, sourceURL: URL, userId: String?) -> URL {
+        guard let policy = short.adPolicy else {
+            serverAdContexts[short.id] = nil
+            serverAdPolicies[short.id] = nil
+            return sourceURL
+        }
+        let plan = ShortsAdDeliveryPlan.resolve(policy: policy, mediaURL: sourceURL)
+        guard plan.inStream == .sgai || plan.inStream == .ssai else {
+            serverAdContexts[short.id] = nil
+            serverAdPolicies[short.id] = nil
+            return sourceURL
+        }
+        guard serverAdEligibleShortIDs.contains(short.id) else {
+            serverAdContexts[short.id] = nil
+            serverAdPolicies[short.id] = nil
+            return sourceURL
+        }
+
+        let context = SGAIPlaybackContext(
+            contentId: short.id,
+            contentType: "short",
+            sessionId: playbackSessionID,
+            userId: userId,
+            deviceId: shortsAdDeviceId,
+            country: nil,
+            orientation: "VERTICAL",
+            entry: PlaybackEntryContext(
+                surface: .shortsFeed,
+                mode: .userPlay,
+                contentStartSec: 0,
+                previewSessionId: nil
+            )
+        )
+        serverAdContexts[short.id] = context
+        serverAdPolicies[short.id] = policy
+        return SGAIPlaybackURLBuilder.makeURL(
+            streamMaster: sourceURL,
+            mode: plan.inStream,
+            context: context,
+            skippable: policy.skippable,
+            maxDurationSec: policy.maxAdDurationSec
+                ?? policy.maxDurationSec
+                ?? policy.pods?.maxAdDurationSec
+        )
+    }
+
+    private var shortsAdDeviceId: String {
+        AdPlaybackDevice.stableId
+    }
+
+    func skipServerAd(for id: String) {
+        guard serverAdPresentations[id]?.canSkip == true,
+              let monitor = interstitialMonitors[id] else { return }
+        trackServerAdEvent("skip", id: id)
+        monitor.interstitialPlayer.advanceToNextItem()
+    }
+
+    func openServerAd(for id: String) {
+        guard let url = serverAdPresentations[id]?.clickThroughURL else { return }
+        trackServerAdEvent("click", id: id)
+        UIApplication.shared.open(url, options: [:])
+    }
+
+    func toggleServerAdPause(for id: String) {
+        guard let player = interstitialMonitors[id]?.interstitialPlayer else { return }
+        if player.timeControlStatus == .playing {
+            player.pause()
+        } else {
+            player.play()
+        }
+    }
+
+    func serverAdIsPaused(for id: String) -> Bool {
+        interstitialMonitors[id]?.interstitialPlayer.timeControlStatus == .paused
+    }
+
+    func setServerAdMuted(_ muted: Bool, for id: String) {
+        interstitialMonitors[id]?.interstitialPlayer.isMuted = muted
+        players[id]?.isMuted = muted
+    }
+
+    private func installInterstitialLifecycleIfNeeded(player: AVPlayer, id: String) {
+        guard let context = serverAdContexts[id] else { return }
+        removeInterstitialLifecycle(for: id)
+
+        let monitor = AVPlayerInterstitialEventMonitor(primaryPlayer: player)
+        interstitialMonitors[id] = monitor
+        let center = NotificationCenter.default
+        interstitialObservers[id] = [
+            center.addObserver(
+                forName: AVPlayerInterstitialEventMonitor.currentEventDidChangeNotification,
+                object: monitor,
+                queue: .main
+            ) { [weak self, weak monitor] _ in
+                Task { @MainActor in
+                    self?.handleInterstitialChange(id: id, monitor: monitor, context: context)
+                }
+            },
+            center.addObserver(
+                forName: AVPlayerInterstitialEventMonitor.assetListResponseStatusDidChangeNotification,
+                object: monitor,
+                queue: .main
+            ) { [weak self] notification in
+                guard notification.userInfo?[AVPlayerInterstitialEventMonitor.assetListResponseStatusDidChangeErrorKey] != nil else {
+                    return
+                }
+                Task { @MainActor in
+                    self?.fallbackToDirectPlaybackIfAvailable(id: id, isMuted: player.isMuted)
+                }
+            }
+        ]
+        interstitialTimeObservers[id] = monitor.interstitialPlayer.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.2, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self, weak monitor] time in
+            Task { @MainActor in
+                self?.updateInterstitialProgress(id: id, monitor: monitor, elapsed: time.seconds)
+            }
+        }
+    }
+
+    private func handleInterstitialChange(
+        id: String,
+        monitor: AVPlayerInterstitialEventMonitor?,
+        context: SGAIPlaybackContext
+    ) {
+        guard let monitor else { return }
+        guard let event = monitor.currentEvent else {
+            if serverAdPresentations[id] != nil {
+                trackServerAdEvent("complete", id: id)
+            }
+            serverAdPresentations[id] = nil
+            firedServerAdEvents[id] = nil
+            return
+        }
+
+        let breakId = SGAIBreakIdentifier.breakId(from: event.identifier)
+        serverAdPresentations[id] = ShortsServerAdPresentation(
+            breakId: breakId,
+            asset: nil,
+            remainingSec: 0,
+            progress: 0,
+            canSkip: false
+        )
+        serverAdAssets[id] = []
+        firedServerAdEvents[id] = []
+
+        guard let url = SGAIPlaybackURLBuilder.assetListURL(breakId: breakId, context: context) else { return }
+        Task {
+            do {
+                let (data, response) = try await URLSession.shared.data(from: url)
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+                let list = try JSONDecoder().decode(SGAIAssetList.self, from: data)
+                guard let asset = list.assets.first else { return }
+                await MainActor.run {
+                    guard self.interstitialMonitors[id]?.currentEvent?.identifier == event.identifier else { return }
+                    self.serverAdAssets[id] = list.assets
+                    let duration = max(0, asset.duration ?? 0)
+                    self.serverAdPresentations[id] = ShortsServerAdPresentation(
+                        breakId: breakId,
+                        asset: asset,
+                        remainingSec: duration,
+                        progress: 0,
+                        canSkip: false
+                    )
+                    self.trackServerAdEvent("impression", id: id)
+                }
+            } catch {
+                // AVFoundation can still finish the server-guided break when optional
+                // companion metadata is unavailable, so keep playback running.
+            }
+        }
+    }
+
+    private func updateInterstitialProgress(
+        id: String,
+        monitor: AVPlayerInterstitialEventMonitor?,
+        elapsed: Double
+    ) {
+        guard monitor?.currentEvent != nil,
+              let current = serverAdPresentations[id] else { return }
+        let currentItemURL = (monitor?.interstitialPlayer.currentItem?.asset as? AVURLAsset)?.url
+        let matchedAsset = serverAdAssets[id]?.first(where: {
+            guard let assetURL = URL(string: $0.uri), let currentItemURL else { return false }
+            return assetURL.absoluteString == currentItemURL.absoluteString
+        })
+        let activeAsset = matchedAsset ?? current.asset
+        if activeAsset?.impressionId != current.asset?.impressionId {
+            trackServerAdEvent("complete", id: id)
+            serverAdPresentations[id] = ShortsServerAdPresentation(
+                breakId: current.breakId,
+                asset: activeAsset,
+                remainingSec: max(0, activeAsset?.duration ?? 0),
+                progress: 0,
+                canSkip: false
+            )
+            trackServerAdEvent("impression", id: id)
+        }
+        guard let refreshed = serverAdPresentations[id] else { return }
+        let itemDuration = monitor?.interstitialPlayer.currentItem?.duration.seconds
+        let duration = (itemDuration?.isFinite == true ? itemDuration : nil) ?? refreshed.asset?.duration ?? 0
+        let safeElapsed = elapsed.isFinite ? max(0, elapsed) : 0
+        let progress = duration > 0 ? min(1, safeElapsed / duration) : 0
+        let remaining = duration > 0 ? max(0, duration - safeElapsed) : 0
+        let policy = serverAdPolicies[id]
+        let isSkippable = policy?.skippable ?? (refreshed.asset?.skippable == 1)
+        let rawSkipOffset = policy?.skipAfterSec.map(Double.init)
+            ?? refreshed.asset?.skipOffsetSec
+            ?? 0
+        let skipOffset = min(max(0, rawSkipOffset), duration > 0 ? duration : .greatestFiniteMagnitude)
+        serverAdPresentations[id] = ShortsServerAdPresentation(
+            breakId: refreshed.breakId,
+            asset: refreshed.asset,
+            remainingSec: remaining,
+            progress: progress,
+            canSkip: isSkippable && safeElapsed >= skipOffset,
+            isSkippable: isSkippable,
+            skipCountdown: Int(ceil(max(0, skipOffset - safeElapsed)))
+        )
+        if progress >= 0.25 { trackServerAdEvent("firstQuartile", id: id) }
+        if progress >= 0.50 { trackServerAdEvent("midpoint", id: id) }
+        if progress >= 0.75 { trackServerAdEvent("thirdQuartile", id: id) }
+    }
+
+    private func trackServerAdEvent(_ event: String, id: String) {
+        guard let presentation = serverAdPresentations[id],
+              let asset = presentation.asset,
+              let impressionId = asset.impressionId,
+              !impressionId.isEmpty,
+              let context = serverAdContexts[id] else { return }
+        var fired = firedServerAdEvents[id] ?? []
+        guard fired.insert("\(impressionId):\(event)").inserted else { return }
+        firedServerAdEvents[id] = fired
+        let creative = AdCreative(
+            impressionId: impressionId,
+            lineItemId: asset.lineItemId,
+            campaignId: asset.campaignId,
+            creativeId: asset.creativeId,
+            advertiserId: nil,
+            demandOwner: nil,
+            name: asset.brandTitle,
+            durationSec: asset.duration,
+            mediaUrl: asset.uri,
+            mediaType: "application/vnd.apple.mpegurl",
+            width: nil,
+            height: nil,
+            skippable: asset.skippable == 1,
+            skipOffsetSec: asset.skipOffsetSec,
+            clickThroughUrl: asset.clickThroughURL,
+            brandLogoUrl: asset.brandLogoURL,
+            brandLabel: asset.brandLabel,
+            brandTitle: asset.brandTitle,
+            brandDescription: asset.brandDescription,
+            ctaText: asset.ctaText
+        )
+        Task {
+            await AdServerClient.shared.track(
+                event: event,
+                ad: creative,
+                decisionId: asset.decisionId,
+                contentId: context.contentId,
+                placement: "preroll",
+                breakId: presentation.breakId,
+                userId: context.userId
+            )
+        }
+    }
+
+    private func removeInterstitialLifecycle(for id: String) {
+        if let monitor = interstitialMonitors[id],
+           let token = interstitialTimeObservers.removeValue(forKey: id) {
+            monitor.interstitialPlayer.removeTimeObserver(token)
+        }
+        interstitialObservers.removeValue(forKey: id)?.forEach(NotificationCenter.default.removeObserver)
+        interstitialMonitors[id] = nil
+        serverAdPresentations[id] = nil
+        serverAdAssets[id] = nil
+        firedServerAdEvents[id] = nil
     }
 
     private func warmAsset(_ asset: AVURLAsset, id: String) {
@@ -770,9 +1150,14 @@ final class ShortsPlaybackManager: ObservableObject {
         if activeID == id {
             activeID = nil
         }
+        removeInterstitialLifecycle(for: id)
         if let observer = endObservers.removeValue(forKey: id) {
             NotificationCenter.default.removeObserver(observer)
         }
+        if let observer = failureObservers.removeValue(forKey: id) {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        statusObservers.removeValue(forKey: id)?.invalidate()
         players[id]?.pause()
         var updatedPlayers = players
         if updatedPlayers.removeValue(forKey: id) != nil {
@@ -787,6 +1172,7 @@ final class ShortsPlaybackManager: ObservableObject {
         if assetCache.removeValue(forKey: id) != nil {
             CacheMetrics.shared.recordEviction(metricsNamespace)
         }
+        assetSourceURLs[id] = nil
     }
 
     private func preparedShortIDs(feedItems: [ShortsFeedItem], currentID: String?) -> Set<String> {
@@ -1211,7 +1597,12 @@ struct ShortsView: View {
         if currentID == nil {
             currentID = playbackID
         }
-        playbackManager.configure(feedItems: feedItems, currentID: playbackID, isMuted: isMuted)
+        playbackManager.configure(
+            feedItems: feedItems,
+            currentID: playbackID,
+            isMuted: isMuted,
+            userId: auth.currentUser?.id
+        )
         guard ensureAutoplay, let playbackID else { return }
         activateSelectedShortWhenReady(playbackID)
     }
@@ -1501,11 +1892,20 @@ struct ShortsView: View {
         guard adLockedItemId == nil || adLockedItemId == itemId,
               let index = feedItems.firstIndex(where: { $0.id == itemId }) else { return }
 
+        let nextItemID = feedItems.indices.contains(index + 1) ? feedItems[index + 1].id : nil
         adLockedItemId = nil
         postShortsAdPlaybackVisibility(false)
 
-        if feedItems.indices.contains(index + 1) {
-            currentID = feedItems[index + 1].id
+        // A completed feed ad is a consumed feed item. Removing its decision
+        // prevents a back swipe or view reconstruction from replaying it and
+        // recording another impression against the same decision.
+        skippedShortsAdItemIds.insert(itemId)
+        pendingShortsAdItemIds.remove(itemId)
+        filledShortsAdDecisions[itemId] = nil
+        filledShortsAdPolicies[itemId] = nil
+
+        if let nextItemID {
+            currentID = nextItemID
         } else {
             Task { await loadMore() }
         }
@@ -1689,6 +2089,7 @@ struct ShortsView: View {
 
     private func loadShortsAdConfig() {
         shortsAdConfig = platformConfig.isLoaded ? platformConfig.config.ads.shorts : .disabled
+        playbackManager.setShortsAdsEnabled(shortsAdConfig.enabled)
     }
 
     private func handleShortsAdConfigChange() {
@@ -2464,6 +2865,10 @@ private struct ShortCardView: View {
         player != nil
     }
 
+    private var serverAdPresentation: ShortsServerAdPresentation? {
+        playbackManager.serverAdPresentations[short.id]
+    }
+
     private var tabBarClearance: CGFloat { C.bottomMenuClearance }
     private var playerHorizontalInset: CGFloat { 24 }
     private var progressControlHeight: CGFloat { 16 }
@@ -2566,10 +2971,12 @@ private struct ShortCardView: View {
             }
 
             // ── Tap gesture layer ──────────────────────────────────────────
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture(count: 2) { handleDoubleTap() }
-                .onTapGesture(count: 1) { handleSingleTap() }
+            if serverAdPresentation == nil {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { handleDoubleTap() }
+                    .onTapGesture(count: 1) { handleSingleTap() }
+            }
 
             // ── Heart bursts ───────────────────────────────────────────────
             ForEach(heartBursts) { _ in
@@ -2578,7 +2985,7 @@ private struct ShortCardView: View {
             }
 
             // ── Center pause icon ──────────────────────────────────────────
-            if isPaused || showPauseIcon {
+            if serverAdPresentation == nil && (isPaused || showPauseIcon) {
                 shortsIcon(
                     name: isPaused ? "play" : "pause",
                     fallback: isPaused ? "play.fill" : "pause.fill"
@@ -2610,21 +3017,41 @@ private struct ShortCardView: View {
             .padding(.top, 26)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
 
-            actionColumn
-                .padding(.trailing, playerHorizontalInset)
-                .padding(.bottom, metadataBottomClearance + 30)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            if serverAdPresentation == nil {
+                actionColumn
+                    .padding(.trailing, playerHorizontalInset)
+                    .padding(.bottom, metadataBottomClearance + 30)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
 
-            bottomInfo
-                .padding(.leading, playerHorizontalInset)
-                .padding(.bottom, metadataBottomClearance)
-                .padding(.trailing, playerHorizontalInset + metadataTrailingInset)
-                .frame(maxWidth: .infinity, alignment: .bottomLeading)
+                bottomInfo
+                    .padding(.leading, playerHorizontalInset)
+                    .padding(.bottom, metadataBottomClearance)
+                    .padding(.trailing, playerHorizontalInset + metadataTrailingInset)
+                    .frame(maxWidth: .infinity, alignment: .bottomLeading)
 
-            shortsProgressBar
-                .padding(.horizontal, progressBarHorizontalInset)
+                shortsProgressBar
+                    .padding(.horizontal, progressBarHorizontalInset)
+                    .padding(.bottom, tabBarClearance)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            }
+
+            if let presentation = serverAdPresentation {
+                ServerAdOverlay(
+                    presentation: presentation,
+                    vertical: true,
+                    isPaused: playbackManager.serverAdIsPaused(for: short.id),
+                    isMuted: isMuted,
+                    onTogglePause: { playbackManager.toggleServerAdPause(for: short.id) },
+                    onToggleMute: {
+                        isMuted.toggle()
+                        playbackManager.setServerAdMuted(isMuted, for: short.id)
+                    },
+                    onSkip: { playbackManager.skipServerAd(for: short.id) },
+                    onOpen: { playbackManager.openServerAd(for: short.id) }
+                )
                 .padding(.bottom, tabBarClearance)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .zIndex(35)
+            }
 
             if showPlaylistPage, let playlist {
                 ShortsPlaylistPage(
@@ -3003,7 +3430,7 @@ private struct ShortCardView: View {
     @MainActor
     private func setupPlayer(autoplay: Bool) {
         guard shouldPrepare || isActive else { return }
-        playbackManager.prepare(short, isMuted: isMuted)
+        playbackManager.prepare(short, isMuted: isMuted, userId: auth.currentUser?.id)
         if autoplay && isActive {
             resumePlay()
         }
@@ -3388,7 +3815,6 @@ private struct ShortsAdCardView: View {
 
     @State private var didRecordImpression = false
 
-    private var adBottomClearance: CGFloat { 96 }
     private var progressBarHorizontalInset: CGFloat { 12 }
     private var policyAdConfig: PlatformShortsAdsConfig {
         policy.applying(to: adConfig)

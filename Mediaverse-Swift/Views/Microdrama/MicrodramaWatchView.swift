@@ -2,6 +2,227 @@ import SwiftUI
 import AVKit
 import UIKit
 
+private enum MicrodramaPlaybackState: Equatable {
+    case idle, loading, buffering, playing, paused, failed(String)
+}
+
+@MainActor
+private final class MicrodramaPlaybackManager: ObservableObject {
+    @Published private(set) var players: [String: AVPlayer] = [:]
+    @Published private(set) var progressByEpisode: [String: Double] = [:]
+    @Published private(set) var stateByEpisode: [String: MicrodramaPlaybackState] = [:]
+
+    private let backwardWarmCount = 2
+    private let forwardWarmCount = 4
+    private var assets: [String: AVURLAsset] = [:]
+    private var knownDurations: [String: Double] = [:]
+    private var warmTasks: [String: Task<Void, Never>] = [:]
+    private var activeID: String?
+    private var activeTimeObserver: Any?
+    private weak var activeObserverPlayer: AVPlayer?
+    private var waitingSince: Date?
+    private var recoveryAttempts = 0
+    private var memoryWarningObserver: NSObjectProtocol?
+
+    init() {
+        memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.trimForMemoryPressure() }
+        }
+    }
+
+    deinit {
+        if let memoryWarningObserver { NotificationCenter.default.removeObserver(memoryWarningObserver) }
+        warmTasks.values.forEach { $0.cancel() }
+    }
+
+    func player(for episodeID: String) -> AVPlayer? { players[episodeID] }
+    func state(for episodeID: String) -> MicrodramaPlaybackState { stateByEpisode[episodeID] ?? .idle }
+
+    func configure(episodes: [MicrodramaEpisode], currentID: String?, muted: Bool) {
+        guard !episodes.isEmpty else { reset(); return }
+        let currentIndex = currentID.flatMap { id in episodes.firstIndex { $0.id == id } } ?? 0
+        let lower = max(0, currentIndex - backwardWarmCount)
+        let upper = min(episodes.count - 1, currentIndex + forwardWarmCount)
+        let preparedIDs = Set(episodes[lower...upper].filter { $0.videoUrl != nil }.map(\.id))
+
+        for episode in episodes[lower...upper] {
+            prepare(episode, muted: muted)
+        }
+        Set(players.keys).subtracting(preparedIDs).forEach(release)
+        Set(assets.keys).subtracting(preparedIDs).forEach(releaseAsset)
+        players.values.forEach { $0.isMuted = muted }
+
+        if let currentID, players[currentID] != nil {
+            activate(currentID)
+        } else {
+            pause()
+        }
+    }
+
+    func prepare(_ episode: MicrodramaEpisode, muted: Bool) {
+        guard let url = C.mediaURL(episode.videoUrl) else { return }
+        if let duration = episode.duration, duration.isFinite, duration > 0 {
+            knownDurations[episode.id] = duration
+        }
+        let asset = assets[episode.id] ?? AVURLAsset(url: url)
+        assets[episode.id] = asset
+        if warmTasks[episode.id] == nil {
+            warmTasks[episode.id] = Task(priority: .utility) {
+                _ = try? await asset.load(.isPlayable)
+                _ = try? await asset.load(.duration)
+                _ = try? await asset.load(.tracks)
+            }
+        }
+        guard players[episode.id] == nil else { return }
+        stateByEpisode[episode.id] = .loading
+        let item = AVPlayerItem(asset: asset)
+        item.preferredForwardBufferDuration = 3
+        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        let player = AVPlayer(playerItem: item)
+        player.automaticallyWaitsToMinimizeStalling = false
+        player.isMuted = muted
+        var updated = players
+        updated[episode.id] = player
+        players = updated
+    }
+
+    func activate(_ id: String) {
+        activeID = id
+        players.forEach { episodeID, player in
+            episodeID == id ? player.playImmediately(atRate: 1) : player.pause()
+        }
+        guard let player = players[id] else { return }
+        recoveryAttempts = 0
+        waitingSince = nil
+        installProgressObserver(for: player, episodeID: id)
+    }
+
+    func togglePlayback(_ id: String) {
+        guard let player = players[id] else { return }
+        if player.rate > 0 {
+            player.pause()
+            stateByEpisode[id] = .paused
+        } else {
+            activeID = id
+            player.playImmediately(atRate: 1)
+            installProgressObserver(for: player, episodeID: id)
+        }
+    }
+
+    func retry(_ episode: MicrodramaEpisode, muted: Bool) {
+        let wasActive = activeID == episode.id
+        release(episode.id)
+        releaseAsset(episode.id)
+        prepare(episode, muted: muted)
+        if wasActive || activeID == nil { activate(episode.id) }
+    }
+
+    func resume(_ episodeID: String, at seconds: Double) {
+        guard seconds.isFinite, seconds > 0, let player = players[episodeID] else { return }
+        player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    func pause() {
+        activeID = nil
+        players.values.forEach { $0.pause() }
+        removeProgressObserver()
+    }
+
+    func reset() {
+        pause()
+        Array(players.keys).forEach(release)
+        Array(assets.keys).forEach(releaseAsset)
+    }
+
+    private func release(_ id: String) {
+        if activeID == id { removeProgressObserver() }
+        players[id]?.pause()
+        var updated = players
+        updated.removeValue(forKey: id)
+        players = updated
+        stateByEpisode[id] = .idle
+    }
+
+    private func releaseAsset(_ id: String) {
+        warmTasks[id]?.cancel()
+        warmTasks[id] = nil
+        assets[id] = nil
+        knownDurations[id] = nil
+    }
+
+    private func installProgressObserver(for player: AVPlayer, episodeID: String) {
+        if activeObserverPlayer === player, activeTimeObserver != nil { return }
+        removeProgressObserver()
+        activeObserverPlayer = player
+        let interval = CMTime(seconds: 0.1, preferredTimescale: 600)
+        activeTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self, weak player] time in
+            Task { @MainActor in
+                guard let self, let player, self.activeID == episodeID, let item = player.currentItem else { return }
+                let duration = item.duration.seconds
+                let seekableEnd = item.seekableTimeRanges.last
+                    .map { CMTimeGetSeconds(CMTimeRangeGetEnd($0.timeRangeValue)) } ?? 0
+                let knownDuration = self.knownDurations[episodeID] ?? 0
+                let total = duration.isFinite && duration > 0
+                    ? duration
+                    : (seekableEnd.isFinite && seekableEnd > 0 ? seekableEnd : knownDuration)
+                let current = time.seconds
+                self.updatePlaybackHealth(player: player, item: item, episodeID: episodeID)
+                guard current.isFinite, total.isFinite, total > 0 else { return }
+                var updated = self.progressByEpisode
+                updated[episodeID] = min(max(current / total, 0), 1)
+                self.progressByEpisode = updated
+            }
+        }
+    }
+
+    private func updatePlaybackHealth(player: AVPlayer, item: AVPlayerItem, episodeID: String) {
+        if item.status == .failed {
+            stateByEpisode[episodeID] = .failed(item.error?.localizedDescription ?? "Video could not be played.")
+            return
+        }
+        switch player.timeControlStatus {
+        case .playing:
+            waitingSince = nil
+            recoveryAttempts = 0
+            stateByEpisode[episodeID] = .playing
+        case .paused:
+            stateByEpisode[episodeID] = player.rate == 0 ? .paused : .loading
+        case .waitingToPlayAtSpecifiedRate:
+            stateByEpisode[episodeID] = .buffering
+            let began = waitingSince ?? Date()
+            waitingSince = began
+            if Date().timeIntervalSince(began) > 6, recoveryAttempts < 2 {
+                recoveryAttempts += 1
+                waitingSince = Date()
+                let current = player.currentTime()
+                player.seek(to: current, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                    player.playImmediately(atRate: 1)
+                }
+            }
+        @unknown default:
+            stateByEpisode[episodeID] = .loading
+        }
+    }
+
+    private func trimForMemoryPressure() {
+        let keep = Set([activeID].compactMap { $0 })
+        Set(players.keys).subtracting(keep).forEach(release)
+        Set(assets.keys).subtracting(keep).forEach(releaseAsset)
+    }
+
+    private func removeProgressObserver() {
+        if let activeTimeObserver, let activeObserverPlayer {
+            activeObserverPlayer.removeTimeObserver(activeTimeObserver)
+        }
+        activeTimeObserver = nil
+        activeObserverPlayer = nil
+    }
+}
+
 /// Full-screen vertical microdrama player.
 /// Episodes are swiped vertically (like TikTok/Reels).
 /// Mirrors /src/app/microdramas/watch/[showId]/page.tsx + MicrodramaPlayer component.
@@ -14,14 +235,29 @@ struct MicrodramaWatchView: View {
     @State private var show: MicrodramaShowDetail?
     @State private var config: MicrodramaConfig?
     @State private var offers: MicrodramaOffers?
+    @State private var remainingAdUnlocks: Int?
+    @State private var adUnlockPlacement: String?
+    @State private var adUnlockPolicy: MicrodramaAdUnlockPolicy?
     @State private var currentIdx = 0
     @State private var isLoading  = true
     @State private var errorMsg: String?
-    @State private var playerItems = [Int: AVPlayerItem]()
     @State private var showEpisodeDrawer = false
     @State private var currentEpisodeID: String?
+    @State private var rewardedAdDecision: AdDecision?
+    @State private var rewardedEpisodeID: String?
+    @State private var rewardedAdCompleted = false
+    @State private var unlockMessage: String?
+    @State private var isRequestingUnlockAd = false
+    @State private var followStatus: FollowStatus?
+    @State private var isUpdatingFollow = false
+    @State private var resumedEpisodeIDs = Set<String>()
+    @State private var lastProgressReportAt = [String: Date]()
+    @StateObject private var playbackManager = MicrodramaPlaybackManager()
+    @AppStorage("playerMuted") private var playerMuted = false
 
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var auth: AuthManager
+    @Environment(\.scenePhase) private var scenePhase
     private var currentEp: MicrodramaEpisode? { episodes.indices.contains(currentIdx) ? episodes[currentIdx] : nil }
 
     var body: some View {
@@ -37,11 +273,24 @@ struct MicrodramaWatchView: View {
             } else {
                 playerStack
             }
+
+            if let decision = rewardedAdDecision, let episodeID = rewardedEpisodeID {
+                rewardedAdOverlay(decision: decision, episodeID: episodeID)
+                    .zIndex(100)
+            }
         }
         .navigationBarHidden(true)
         .navigationBarBackButtonHidden(true)
         .disablesInteractiveSwipeBack()
         .task { await load() }
+        .alert("Unlock unavailable", isPresented: Binding(
+            get: { unlockMessage != nil },
+            set: { if !$0 { unlockMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { unlockMessage = nil }
+        } message: {
+            Text(unlockMessage ?? "Please try again.")
+        }
         .sheet(isPresented: $showEpisodeDrawer) {
             MicrodramaEpisodesDrawer(
                 episodes: episodes,
@@ -58,6 +307,18 @@ struct MicrodramaWatchView: View {
             .presentationDragIndicator(.visible)
             .presentationBackground(.black.opacity(0.92))
         }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                playbackManager.configure(episodes: episodes, currentID: currentEpisodeID, muted: playerMuted)
+                Task { await resumeCurrentEpisodeIfNeeded() }
+            } else {
+                Task { await reportCurrentProgress(force: true) }
+                playbackManager.pause()
+            }
+        }
+        .onChange(of: playbackManager.progressByEpisode[currentEpisodeID ?? ""] ?? 0) { _, _ in
+            Task { await reportCurrentProgress(force: false) }
+        }
     }
 
     // MARK: - Player stack (vertical swipe)
@@ -66,7 +327,7 @@ struct MicrodramaWatchView: View {
         GeometryReader { geo in
             ZStack(alignment: .bottom) {
                 ScrollView(.vertical) {
-                    LazyVStack(spacing: 0) {
+                    VStack(spacing: 0) {
                         ForEach(Array(episodes.enumerated()), id: \.element.id) { idx, ep in
                             EpisodePlayerSlide(
                                 episode: ep,
@@ -78,14 +339,26 @@ struct MicrodramaWatchView: View {
                                 onBack: { dismiss() },
                                 onPrev: idx > 0 ? { selectEpisode(at: idx - 1) } : nil,
                                 onNext: idx < episodes.count - 1 ? { selectEpisode(at: idx + 1) } : nil,
-                                offers: offers
+                                offers: offers,
+                                isAuthenticated: auth.isAuthenticated,
+                                remainingAdUnlocks: remainingAdUnlocks,
+                                isRequestingUnlockAd: isRequestingUnlockAd && rewardedEpisodeID == ep.id,
+                                onWatchAd: { Task { await requestRewardedUnlockAd(for: ep) } },
+                                playbackManager: playbackManager,
+                                userID: auth.currentUser?.id,
+                                isFollowing: followStatus?.subscribed == true,
+                                isUpdatingFollow: isUpdatingFollow,
+                                onToggleFollow: { Task { await toggleFollow() } }
                             )
                             .frame(width: geo.size.width, height: geo.size.height)
                             .id(ep.id)
                         }
                     }
+                    .frame(width: geo.size.width, alignment: .top)
                     .scrollTargetLayout()
                 }
+                .frame(width: geo.size.width, height: geo.size.height)
+                .clipped()
                 .scrollTargetBehavior(.paging)
                 .scrollPosition(id: $currentEpisodeID)
                 .ignoresSafeArea()
@@ -98,27 +371,39 @@ struct MicrodramaWatchView: View {
                     guard let id,
                           let idx = episodes.firstIndex(where: { $0.id == id }) else { return }
                     currentIdx = idx
+                    playbackManager.configure(episodes: episodes, currentID: id, muted: playerMuted)
+                    Task { await resumeCurrentEpisodeIfNeeded() }
                 }
                 .onChange(of: currentIdx) { _, idx in
                     guard episodes.indices.contains(idx), currentEpisodeID != episodes[idx].id else { return }
                     currentEpisodeID = episodes[idx].id
                 }
 
-                if let currentEp {
+                if let currentEp, currentEp.videoUrl != nil {
                     episodesBottomBar(currentEp)
                         .padding(.horizontal, 24)
                         .padding(.bottom, max(geo.safeAreaInsets.bottom + 12, 24))
                 }
             }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .clipped()
         }
         .ignoresSafeArea()
         .onAppear {
             // Jump to start episode
-            if let idx = episodes.firstIndex(where: { $0.episodeNumber == startEpisodeNumber }) {
+            if currentEpisodeID == nil, let idx = episodes.firstIndex(where: { $0.episodeNumber == startEpisodeNumber }) {
                 selectEpisode(at: idx)
             } else if currentEpisodeID == nil {
                 selectEpisode(at: 0)
             }
+            playbackManager.configure(episodes: episodes, currentID: currentEpisodeID, muted: playerMuted)
+        }
+        .onDisappear {
+            Task { await reportCurrentProgress(force: true) }
+            playbackManager.pause()
+        }
+        .onChange(of: playerMuted) { _, muted in
+            playbackManager.configure(episodes: episodes, currentID: currentEpisodeID, muted: muted)
         }
     }
 
@@ -159,23 +444,51 @@ struct MicrodramaWatchView: View {
 
     private func load() async {
         isLoading = true
+        let cacheKey = "microdrama.watch.v2.\(showId)"
+
+        if let cached: MicrodramaEpisodesResponse = try? await DiskJSONCache.shared.value(forKey: cacheKey) {
+            apply(cached, preserveSelection: true)
+            isLoading = false
+        } else if let stale: MicrodramaEpisodesResponse = try? await DiskJSONCache.shared.staleValue(forKey: cacheKey) {
+            apply(stale, preserveSelection: true)
+            isLoading = false
+        }
+
         do {
             let resp = try await APIClient.shared.fetchMicrodramaEpisodes(showId: showId)
-            show     = resp.show
-            config   = resp.config
-            episodes = resp.episodes
-            offers = resp.offers
-            if let idx = resp.episodes.firstIndex(where: { $0.episodeNumber == startEpisodeNumber }) {
-                currentIdx = idx
-                currentEpisodeID = resp.episodes[idx].id
-            } else if let first = resp.episodes.first {
-                currentIdx = 0
-                currentEpisodeID = first.id
+            apply(resp, preserveSelection: true)
+            try? await DiskJSONCache.shared.store(resp, forKey: cacheKey, ttl: 300)
+            if auth.isAuthenticated {
+                followStatus = try? await APIClient.shared.fetchShowFollowStatus(id: showId)
             }
         } catch {
-            errorMsg = error.localizedDescription
+            if episodes.isEmpty { errorMsg = error.localizedDescription }
         }
         isLoading = false
+    }
+
+    @MainActor
+    private func apply(_ response: MicrodramaEpisodesResponse, preserveSelection: Bool) {
+        let previousID = preserveSelection ? currentEpisodeID : nil
+        show = response.show
+        config = response.config
+        episodes = response.episodes
+        offers = response.offers
+        remainingAdUnlocks = response.remainingAdUnlocks
+        adUnlockPlacement = response.adUnlockPlacement
+        adUnlockPolicy = response.adUnlockPolicy
+
+        if let previousID, let idx = response.episodes.firstIndex(where: { $0.id == previousID }) {
+            currentIdx = idx
+            currentEpisodeID = previousID
+        } else if let idx = response.episodes.firstIndex(where: { $0.episodeNumber == startEpisodeNumber }) {
+            currentIdx = idx
+            currentEpisodeID = response.episodes[idx].id
+        } else if let first = response.episodes.first {
+            currentIdx = 0
+            currentEpisodeID = first.id
+        }
+        playbackManager.configure(episodes: response.episodes, currentID: currentEpisodeID, muted: playerMuted)
     }
 
     private func episodesBottomBar(_ episode: MicrodramaEpisode) -> some View {
@@ -215,6 +528,136 @@ struct MicrodramaWatchView: View {
         currentEpisodeID = episodes[index].id
     }
 
+    @MainActor
+    private func resumeCurrentEpisodeIfNeeded() async {
+        guard auth.isAuthenticated,
+              let episodeID = currentEpisodeID,
+              !resumedEpisodeIDs.contains(episodeID) else { return }
+        resumedEpisodeIDs.insert(episodeID)
+        guard let saved = try? await APIClient.shared.fetchProgress(episodeId: episodeID),
+              let seconds = saved.seconds,
+              saved.percent < 0.95 else { return }
+        playbackManager.resume(episodeID, at: Double(seconds))
+    }
+
+    @MainActor
+    private func reportCurrentProgress(force: Bool) async {
+        guard auth.isAuthenticated,
+              let episodeID = currentEpisodeID,
+              let player = playbackManager.player(for: episodeID) else { return }
+        let now = Date()
+        if !force, let last = lastProgressReportAt[episodeID], now.timeIntervalSince(last) < 10 { return }
+        let seconds = player.currentTime().seconds
+        let percent = playbackManager.progressByEpisode[episodeID] ?? 0
+        guard seconds.isFinite, seconds >= 1, percent > 0 else { return }
+        lastProgressReportAt[episodeID] = now
+        try? await APIClient.shared.recordProgress(episodeId: episodeID, seconds: Int(seconds), percent: percent)
+    }
+
+    @MainActor
+    private func toggleFollow() async {
+        guard auth.isAuthenticated, !isUpdatingFollow else { return }
+        isUpdatingFollow = true
+        defer { isUpdatingFollow = false }
+        followStatus = try? await APIClient.shared.toggleShowFollow(id: showId)
+    }
+
+    @MainActor
+    private func requestRewardedUnlockAd(for episode: MicrodramaEpisode) async {
+        guard auth.isAuthenticated,
+              episode.accessState == "ad_unlock",
+              episode.videoUrl == nil,
+              episode.adUnlockAvailable == true,
+              !isRequestingUnlockAd else { return }
+
+        isRequestingUnlockAd = true
+        unlockMessage = nil
+        rewardedEpisodeID = episode.id
+        rewardedAdCompleted = false
+        defer { isRequestingUnlockAd = false }
+
+        let placement = adUnlockPolicy?.placement ?? adUnlockPlacement ?? "microdrama_unlock"
+        do {
+            let decision = try await AdServerClient.shared.requestAd(
+                AdRequestContext(
+                    contentId: episode.id,
+                    contentType: "short",
+                    placement: placement,
+                    maxAds: 1,
+                    maxDurationSec: adUnlockPolicy?.maxAdDurationSec,
+                    skippable: adUnlockPolicy?.skippable,
+                    skipAfterSec: adUnlockPolicy?.skipAfterSec,
+                    orientation: "VERTICAL",
+                    userId: auth.currentUser?.id
+                )
+            )
+            guard decision.filled, !decision.ads.isEmpty else {
+                rewardedEpisodeID = nil
+                return
+            }
+            rewardedAdDecision = decision
+        } catch {
+            rewardedEpisodeID = nil
+            unlockMessage = error.localizedDescription
+        }
+    }
+
+    private func rewardedAdOverlay(decision: AdDecision, episodeID: String) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+            NativeAdPlayerView(
+                decision: decision,
+                contentId: episodeID,
+                placement: adUnlockPolicy?.placement ?? adUnlockPlacement ?? "microdrama_unlock",
+                userId: auth.currentUser?.id,
+                aspectRatio: 9 / 16,
+                fillVerticalContainer: true,
+                overrideSkippable: adUnlockPolicy?.skippable,
+                overrideSkipAfterSec: adUnlockPolicy?.skipAfterSec,
+                onSkip: {
+                    rewardedAdCompleted = false
+                },
+                onComplete: {
+                    rewardedAdCompleted = true
+                }
+            ) {
+                Task { await finishRewardedAd(for: episodeID) }
+            }
+            .ignoresSafeArea()
+
+            Button {
+                rewardedAdCompleted = false
+                rewardedAdDecision = nil
+                rewardedEpisodeID = nil
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(.black.opacity(0.55), in: Circle())
+                    .overlay { Circle().stroke(.white.opacity(0.20), lineWidth: 1) }
+            }
+            .padding(.top, 12)
+            .padding(.trailing, 56)
+        }
+    }
+
+    @MainActor
+    private func finishRewardedAd(for episodeID: String) async {
+        let completed = rewardedAdCompleted
+        rewardedAdDecision = nil
+        rewardedEpisodeID = nil
+        guard completed else { return }
+        do {
+            let grant = try await APIClient.shared.grantMicrodramaAdUnlock(episodeId: episodeID)
+            guard grant.granted else { return }
+            remainingAdUnlocks = grant.remainingToday ?? remainingAdUnlocks
+            await load()
+        } catch {
+            unlockMessage = error.localizedDescription
+        }
+    }
+
 }
 
 // MARK: - Single episode slide
@@ -231,21 +674,53 @@ private struct EpisodePlayerSlide: View {
     let onPrev: (() -> Void)?
     let onNext: (() -> Void)?
     let offers: MicrodramaOffers?
+    let isAuthenticated: Bool
+    let remainingAdUnlocks: Int?
+    let isRequestingUnlockAd: Bool
+    let onWatchAd: () -> Void
+    @ObservedObject var playbackManager: MicrodramaPlaybackManager
+    let userID: String?
+    let isFollowing: Bool
+    let isUpdatingFollow: Bool
+    let onToggleFollow: () -> Void
 
-    @State private var player: AVPlayer?
-    @State private var progress: Double = 0
-    @State private var progressTask: Task<Void, Never>?
+    @State private var scrubProgress: Double = 0
+    @State private var isSeeking = false
     @State private var showComments = false
-    @State private var isLiked = false
-    @State private var isSaved = false
-    @State private var endObserver: NSObjectProtocol?
+    @State private var showSaveSheet = false
+    @State private var likeCount = 0
+    @State private var commentCount = 0
+    @State private var userLike: String?
+    @State private var isUpdatingLike = false
     @AppStorage("playerMuted") private var playerMuted = false
+    @Environment(\.openURL) private var openURL
+
+    private var player: AVPlayer? {
+        playbackManager.player(for: episode.id)
+    }
 
     private var canPlay: Bool {
         episode.videoUrl != nil
     }
 
+    private var playbackState: MicrodramaPlaybackState {
+        playbackManager.state(for: episode.id)
+    }
+
+    private var displayedProgress: Double {
+        isSeeking ? scrubProgress.clampedProgress : (playbackManager.progressByEpisode[episode.id] ?? 0).clampedProgress
+    }
+
     private var paywallMessage: String {
+        if episode.accessState == "ad_unlock" {
+            if !isAuthenticated {
+                return "Sign in to unlock this episode. Unlocks are saved to your account and follow you across devices."
+            }
+            if episode.adUnlockAvailable == true {
+                return "This episode can be unlocked by watching a short ad, or with a subscription or rental."
+            }
+            return "You’ve hit today’s free-unlock limit. Subscribe or rent to keep watching."
+        }
         if offers?.canSubscribe == true || offers?.canRent == true {
             return "Subscribe or rent this episode to continue watching."
         }
@@ -301,16 +776,32 @@ private struct EpisodePlayerSlide: View {
                     .ignoresSafeArea()
             } else {
                 // Poster / locked state
-                CachedRemoteImage(
-                    url: C.mediaURL(episode.thumbnailUrl),
-                    targetSize: CGSize(width: 390, height: 844)
-                ) { img in
-                    img.resizable().scaledToFill()
-                } placeholder: {
-                    LinearGradient(
-                        colors: [Color(hex: "#4C1D95"), Color(hex: "#1E1B4B")],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    )
+                GeometryReader { artworkGeo in
+                    ZStack {
+                        CachedRemoteImage(
+                            url: C.mediaURL(episode.thumbnailUrl),
+                            targetSize: artworkGeo.size
+                        ) { img in
+                            img.resizable().scaledToFill().blur(radius: 24)
+                        } placeholder: {
+                            LinearGradient(
+                                colors: [Color(hex: "#4C1D95"), Color(hex: "#1E1B4B")],
+                                startPoint: .topLeading, endPoint: .bottomTrailing
+                            )
+                        }
+                        .frame(width: artworkGeo.size.width, height: artworkGeo.size.height)
+                        .clipped()
+
+                        CachedRemoteImage(
+                            url: C.mediaURL(episode.thumbnailUrl),
+                            targetSize: artworkGeo.size
+                        ) { img in
+                            img.resizable().scaledToFit()
+                        } placeholder: { Color.clear }
+                        .frame(width: artworkGeo.size.width, height: artworkGeo.size.height)
+                    }
+                    .frame(width: artworkGeo.size.width, height: artworkGeo.size.height)
+                    .clipped()
                 }
                 .ignoresSafeArea()
 
@@ -319,14 +810,13 @@ private struct EpisodePlayerSlide: View {
                 }
             }
 
-            // Prev / next hit zones
-            HStack {
-                Color.clear.frame(maxWidth: .infinity).contentShape(Rectangle())
-                    .onTapGesture { onPrev?() }
-                Color.clear.frame(maxWidth: .infinity).contentShape(Rectangle())
-                    .onTapGesture { onNext?() }
+            if canPlay {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { playbackManager.togglePlayback(episode.id) }
+
+                playbackStatusOverlay
             }
-            .allowsHitTesting(canPlay)
 
             GeometryReader { geo in
                 let safeTop = max(geo.safeAreaInsets.top, 44)
@@ -336,26 +826,31 @@ private struct EpisodePlayerSlide: View {
                 let horizontalInset: CGFloat = 24
                 let rightRailInset: CGFloat = 94
 
-                // HUD overlay
-                VStack {
+                if canPlay {
+                    VStack {
+                        topBar(topInset: safeTop)
+                        Spacer()
+                        bottomInfo(
+                            bottomInset: reservedBottom,
+                            horizontalInset: horizontalInset,
+                            trailingInset: rightRailInset
+                        )
+                    }
+
+                    rightRail
+                        .padding(.trailing, horizontalInset)
+                        .padding(.bottom, reservedBottom + 36)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+
+                    microdramaProgressBar(width: geo.size.width)
+                        .padding(.horizontal, horizontalInset)
+                        .padding(.bottom, bottomChromeHeight)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .zIndex(20)
+                } else {
                     topBar(topInset: safeTop)
-                    Spacer()
-                    bottomInfo(
-                        bottomInset: reservedBottom,
-                        horizontalInset: horizontalInset,
-                        trailingInset: rightRailInset
-                    )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
-
-                rightRail
-                    .padding(.trailing, horizontalInset)
-                    .padding(.bottom, reservedBottom + 36)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-
-                microdramaProgressBar(width: geo.size.width)
-                    .padding(.horizontal, horizontalInset)
-                    .padding(.bottom, bottomChromeHeight)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             }
         }
         .sheet(isPresented: $showComments) {
@@ -366,146 +861,167 @@ private struct EpisodePlayerSlide: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
+        .sheet(isPresented: $showSaveSheet) {
+            if let showID = show?.id {
+                SaveToCollectionSheet(showId: showID)
+            }
+        }
         .task(id: episode.id + "_\(shouldPrepare)") {
             if shouldPrepare {
-                await setupPlayerIfNeeded(autoplay: isActive)
+                playbackManager.prepare(episode, muted: playerMuted)
+                if isActive {
+                    playbackManager.activate(episode.id)
+                    await loadEngagement()
+                }
             }
         }
         .onChange(of: isActive) { _, active in
             if active {
                 if let player {
-                    player.seek(to: .zero)
                     player.isMuted = playerMuted
-                    player.play()
-                    startProgressTracking(for: player)
+                    playbackManager.activate(episode.id)
                 } else {
-                    Task { await setupPlayerIfNeeded(autoplay: true) }
+                    playbackManager.prepare(episode, muted: playerMuted)
+                    playbackManager.activate(episode.id)
                 }
-            } else {
-                stopPlayback()
             }
         }
         .onChange(of: shouldPrepare) { _, prepare in
             if prepare {
-                Task { await setupPlayerIfNeeded(autoplay: isActive) }
-            } else if !isActive {
-                stopPlayback(resetPlayer: true)
+                playbackManager.prepare(episode, muted: playerMuted)
+                if isActive {
+                    playbackManager.activate(episode.id)
+                }
             }
         }
-        .onDisappear {
-            stopPlayback(resetPlayer: true)
+        .onChange(of: player != nil) { _, isAvailable in
+            guard isAvailable, isActive, let player else { return }
+            player.isMuted = playerMuted
+            playbackManager.activate(episode.id)
         }
-    }
-
-    @MainActor
-    private func setupPlayerIfNeeded(autoplay: Bool) async {
-        guard shouldPrepare,
-              canPlay,
-              player == nil,
-              let url = C.mediaURL(episode.videoUrl) else { return }
-        let item = AVPlayerItem(url: url)
-        item.preferredForwardBufferDuration = 1
-        let newPlayer = AVPlayer(playerItem: item)
-        newPlayer.automaticallyWaitsToMinimizeStalling = false
-        newPlayer.isMuted = playerMuted
-        newPlayer.volume = 1
-        player = newPlayer
-        if autoplay {
-            newPlayer.play()
-            startProgressTracking(for: newPlayer)
-        }
-        endObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: newPlayer.currentItem,
-            queue: .main
-        ) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
+            guard isActive,
+                  let player,
+                  notification.object as? AVPlayerItem === player.currentItem else { return }
             onNext?()
         }
     }
 
-    @MainActor
-    private func startProgressTracking(for player: AVPlayer) {
-        progressTask?.cancel()
-        progressTask = Task {
-            while !Task.isCancelled, isActive {
-                if let item = player.currentItem {
-                    let current = player.currentTime().seconds
-                    let total = item.duration.seconds
-                    if current.isFinite, total.isFinite, total > 0 {
-                        await MainActor.run {
-                            progress = (current / total).clampedProgress
-                        }
-                    }
+    @ViewBuilder
+    private var playbackStatusOverlay: some View {
+        switch playbackState {
+        case .idle, .loading, .buffering:
+            ProgressView()
+                .controlSize(.large)
+                .tint(.white)
+                .padding(18)
+                .background(.black.opacity(0.42), in: Circle())
+                .allowsHitTesting(false)
+        case .paused:
+            Image(systemName: "play.fill")
+                .font(.system(size: 28, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 72, height: 72)
+                .background(.black.opacity(0.52), in: Circle())
+                .allowsHitTesting(false)
+        case .failed(let message):
+            VStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.title2)
+                Text(message)
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                Button("Try Again") {
+                    playbackManager.retry(episode, muted: playerMuted)
                 }
-                try? await Task.sleep(nanoseconds: 100_000_000)
+                .buttonStyle(.borderedProminent)
+                .tint(C.watch)
             }
+            .foregroundStyle(.white)
+            .padding(18)
+            .frame(maxWidth: 260)
+            .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 16))
+        case .playing:
+            EmptyView()
         }
+    }
+
+    private func playableDuration(for item: AVPlayerItem) -> Double {
+        let duration = item.duration.seconds
+        if duration.isFinite, duration > 0 { return duration }
+        if let range = item.seekableTimeRanges.last?.timeRangeValue {
+            let end = CMTimeGetSeconds(CMTimeRangeGetEnd(range))
+            if end.isFinite, end > 0 { return end }
+        }
+        return episode.duration ?? 0
     }
 
     private func microdramaProgressBar(width: CGFloat) -> some View {
         let safeWidth = max(1, width - 48)
-        return ZStack(alignment: .leading) {
-            Capsule().fill(Color.white.opacity(0.18))
-                .frame(height: 4)
-            Capsule().fill(C.watch)
-                .frame(width: safeWidth * CGFloat(progress.clampedProgress), height: 4)
-            Circle()
-                .fill(C.watch)
-                .frame(width: 12, height: 12)
-                .shadow(color: .black.opacity(0.35), radius: 4, y: 2)
-                .offset(x: max(0, safeWidth * CGFloat(progress.clampedProgress) - 6))
+        return ZStack {
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.white.opacity(0.18))
+                    .frame(height: 4)
+                Capsule()
+                    .fill(C.watch)
+                    .frame(width: safeWidth * CGFloat(displayedProgress), height: 4)
+                Circle()
+                    .fill(C.watch)
+                    .frame(width: 12, height: 12)
+                    .shadow(color: .black.opacity(0.35), radius: 4, y: 2)
+                    .offset(x: max(0, safeWidth * CGFloat(displayedProgress) - 6))
+            }
+            .allowsHitTesting(false)
+
+            Slider(
+                value: Binding(
+                    get: { displayedProgress },
+                    set: { value in
+                        scrubProgress = value.clampedProgress
+                        seekMicrodrama(to: value, resumePlayback: false)
+                    }
+                ),
+                in: 0...1,
+                onEditingChanged: { editing in
+                    if editing { scrubProgress = displayedProgress }
+                    isSeeking = editing
+                    if !editing {
+                        seekMicrodrama(to: scrubProgress, resumePlayback: true)
+                    }
+                }
+            )
+            .opacity(0.02)
+            .frame(height: 44)
+            .contentShape(Rectangle())
         }
-        .frame(height: 16)
-        .contentShape(Rectangle())
-        .highPriorityGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    seekMicrodrama(to: Double(value.location.x / safeWidth), commit: false)
-                }
-                .onEnded { value in
-                    seekMicrodrama(to: Double(value.location.x / safeWidth), commit: true)
-                }
-        )
+        .frame(height: 44)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Playback position")
-        .accessibilityValue("\(Int(progress.clampedProgress * 100)) percent")
+        .accessibilityValue("\(Int(displayedProgress * 100)) percent")
         .accessibilityAdjustableAction { direction in
             switch direction {
             case .increment:
-                seekMicrodrama(to: progress + 0.05, commit: true)
+                seekMicrodrama(to: displayedProgress + 0.05, resumePlayback: true)
             case .decrement:
-                seekMicrodrama(to: progress - 0.05, commit: true)
+                seekMicrodrama(to: displayedProgress - 0.05, resumePlayback: true)
             default:
                 break
             }
         }
     }
 
-    private func seekMicrodrama(to rawProgress: Double, commit: Bool) {
+    private func seekMicrodrama(to rawProgress: Double, resumePlayback: Bool) {
         let targetProgress = rawProgress.clampedProgress
-        progress = targetProgress
-        guard commit, let player, let item = player.currentItem else { return }
-        let total = item.duration.seconds
+        scrubProgress = targetProgress
+        guard let player, let item = player.currentItem else { return }
+        let total = playableDuration(for: item)
         guard total.isFinite, total > 0 else { return }
         let target = CMTime(seconds: total * targetProgress, preferredTimescale: 600)
-        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
-        if isActive {
-            player.play()
-        }
-    }
-
-    @MainActor
-    private func stopPlayback(resetPlayer: Bool = false) {
-        progressTask?.cancel()
-        progressTask = nil
-        if let endObserver {
-            NotificationCenter.default.removeObserver(endObserver)
-            self.endObserver = nil
-        }
-        player?.pause()
-        if resetPlayer {
-            player = nil
-            progress = 0
+        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+            guard resumePlayback, isActive else { return }
+            player.playImmediately(atRate: 1)
         }
     }
 
@@ -568,15 +1084,17 @@ private struct EpisodePlayerSlide: View {
                     }
                 }
 
-                Button {} label: {
-                    Text("Follow")
+                Button(action: onToggleFollow) {
+                    Text(isFollowing ? "Following" : "Follow")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(C.watch)
+                        .foregroundStyle(isFollowing ? .white : C.watch)
                         .padding(.horizontal, 11)
                         .frame(height: 27)
-                        .overlay { Capsule().stroke(C.watch, lineWidth: 1) }
+                        .background(isFollowing ? .white.opacity(0.16) : .clear, in: Capsule())
+                        .overlay { Capsule().stroke(isFollowing ? .white.opacity(0.30) : C.watch, lineWidth: 1) }
                 }
                 .buttonStyle(.plain)
+                .disabled(isUpdatingFollow)
 
                 Spacer(minLength: 0)
             }
@@ -637,15 +1155,15 @@ private struct EpisodePlayerSlide: View {
     private var rightRail: some View {
         VStack(alignment: .center, spacing: 18) {
             railButton(
-                icon: isLiked ? "heart-filled" : "heart",
-                fallback: isLiked ? "heart.fill" : "heart",
-                color: isLiked ? Color(red: 1, green: 0.28, blue: 0.34) : .white,
-                background: isLiked ? Color(red: 1, green: 0.28, blue: 0.34).opacity(0.35) : .black.opacity(0.35),
-                label: "Like",
-                labelColor: isLiked ? Color(red: 1, green: 0.28, blue: 0.34) : .white.opacity(0.85)
-            ) { isLiked.toggle() }
+                icon: userLike == "like" ? "heart-filled" : "heart",
+                fallback: userLike == "like" ? "heart.fill" : "heart",
+                color: userLike == "like" ? Color(red: 1, green: 0.28, blue: 0.34) : .white,
+                background: userLike == "like" ? Color(red: 1, green: 0.28, blue: 0.34).opacity(0.35) : .black.opacity(0.35),
+                label: likeCount > 0 ? formatCount(likeCount) : "Like",
+                labelColor: userLike == "like" ? Color(red: 1, green: 0.28, blue: 0.34) : .white.opacity(0.85)
+            ) { Task { await toggleEpisodeLike() } }
 
-            railButton(icon: "message-square", fallback: "bubble.left", label: "Comment") {
+            railButton(icon: "message-square", fallback: "bubble.left", label: commentCount > 0 ? formatCount(commentCount) : "Comment") {
                 showComments = true
             }
 
@@ -655,12 +1173,12 @@ private struct EpisodePlayerSlide: View {
 
             railButton(
                 icon: "bookmark",
-                fallback: isSaved ? "bookmark.fill" : "bookmark",
-                color: isSaved ? C.watch : .white,
-                background: isSaved ? C.watch.opacity(0.30) : .black.opacity(0.35),
+                fallback: "bookmark",
+                color: .white,
+                background: .black.opacity(0.35),
                 label: "Save",
-                labelColor: isSaved ? C.watch : .white.opacity(0.85)
-            ) { isSaved.toggle() }
+                labelColor: .white.opacity(0.85)
+            ) { showSaveSheet = true }
         }
     }
 
@@ -700,6 +1218,41 @@ private struct EpisodePlayerSlide: View {
         activity.presentFromRoot()
     }
 
+    @MainActor
+    private func loadEngagement() async {
+        guard isActive else { return }
+        guard let detail = try? await APIClient.shared.fetchEpisode(id: episode.id) else { return }
+        likeCount = detail.likes.filter { $0.type == "like" }.count
+        commentCount = detail.comments.count
+        userLike = userID.flatMap { id in detail.likes.first(where: { $0.userId == id })?.type }
+    }
+
+    @MainActor
+    private func toggleEpisodeLike() async {
+        guard userID != nil, !isUpdatingLike else { return }
+        isUpdatingLike = true
+        let oldLike = userLike
+        let oldCount = likeCount
+        let requestType = userLike == "like" ? "remove" : "like"
+        userLike = requestType == "like" ? "like" : nil
+        likeCount = max(0, likeCount + (requestType == "like" ? 1 : -1))
+        do {
+            let response = try await APIClient.shared.likeEpisode(episodeId: episode.id, type: requestType)
+            userLike = response.userLike
+            likeCount = response.likes
+        } catch {
+            userLike = oldLike
+            likeCount = oldCount
+        }
+        isUpdatingLike = false
+    }
+
+    private func formatCount(_ count: Int) -> String {
+        if count >= 1_000_000 { return String(format: "%.1fM", Double(count) / 1_000_000) }
+        if count >= 1_000 { return String(format: "%.1fK", Double(count) / 1_000) }
+        return "\(count)"
+    }
+
     // MARK: - Locked overlay
 
     private var lockedOverlay: some View {
@@ -709,7 +1262,16 @@ private struct EpisodePlayerSlide: View {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 40))
                     .foregroundStyle(.white.opacity(0.6))
-                Text("Episode \(episode.episodeNumber) is locked")
+                if episode.accessState == "ad_unlock" {
+                    Text("WATCH TO UNLOCK")
+                        .font(.system(size: 11, weight: .black))
+                        .tracking(0.8)
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 9)
+                        .frame(height: 24)
+                        .background(Color(hex: "#FACC15"), in: RoundedRectangle(cornerRadius: 6))
+                }
+                Text(episode.accessState == "ad_unlock" ? "Episode \(episode.episodeNumber)" : "Episode \(episode.episodeNumber) is locked")
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(.white)
                 Text(paywallMessage)
@@ -718,11 +1280,46 @@ private struct EpisodePlayerSlide: View {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 280)
 
+                if episode.accessState == "ad_unlock",
+                   isAuthenticated,
+                   episode.adUnlockAvailable == true,
+                   let remainingAdUnlocks,
+                   remainingAdUnlocks > 0 {
+                    Text("\(remainingAdUnlocks) free \(remainingAdUnlocks == 1 ? "unlock" : "unlocks") left today")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Color(hex: "#FACC15"))
+                }
+
+                if episode.accessState == "ad_unlock",
+                   isAuthenticated,
+                   episode.adUnlockAvailable == true {
+                    Button(action: onWatchAd) {
+                        HStack(spacing: 8) {
+                            if isRequestingUnlockAd {
+                                ProgressView().tint(.black)
+                            } else {
+                                Image(systemName: "play.rectangle.fill")
+                            }
+                            Text(isRequestingUnlockAd ? "Finding an ad…" : "Watch a short ad to unlock")
+                        }
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.black)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .background(Color(hex: "#FACC15"), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isRequestingUnlockAd)
+                    .frame(maxWidth: 330)
+                }
+
                 VStack(spacing: 10) {
                     if showSubscribeButton || showRentButton {
                         HStack(spacing: 10) {
                             if showSubscribeButton {
-                                Button {} label: {
+                                Button {
+                                    if let url = URL(string: C.baseURL + "/subscribe") { openURL(url) }
+                                } label: {
                                     Text("Subscribe")
                                         .font(.subheadline.bold())
                                         .foregroundStyle(.black)
@@ -733,7 +1330,10 @@ private struct EpisodePlayerSlide: View {
                             }
 
                             if showRentButton {
-                                Button {} label: {
+                                Button {
+                                    if let showID = show?.id,
+                                       let url = URL(string: C.baseURL + "/microdramas/\(showID)") { openURL(url) }
+                                } label: {
                                     Text("Rent episode")
                                         .font(.subheadline.bold())
                                         .foregroundStyle(.white)
@@ -767,7 +1367,6 @@ private struct AVPlayerViewRepresentable: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = AVPlayerUIView()
         view.player = player
-        player.play()
         return view
     }
 
@@ -775,7 +1374,6 @@ private struct AVPlayerViewRepresentable: UIViewRepresentable {
         if let playerView = uiView as? AVPlayerUIView {
             if playerView.player !== player {
                 playerView.player = player
-                player.play()
             }
         }
     }
