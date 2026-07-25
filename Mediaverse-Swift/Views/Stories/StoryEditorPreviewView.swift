@@ -33,6 +33,7 @@ private enum StoryEditorTool: String, Identifiable, Equatable {
     case clip
     case transform
     case look
+    case beauty
     case audio
     case stickers
     case music
@@ -807,14 +808,19 @@ struct StoryEditorPreviewView: View {
                     creationToolbarButton("Look", systemImage: "camera.filters") {
                         openTool(.look)
                     }
+                    creationToolbarButton("Beauty", systemImage: "wand.and.stars") {
+                        openTool(.beauty)
+                    }
                     creationToolbarButton("Music", systemImage: "music.note") {
                         openTool(.music)
                     }
-                    creationToolbarButton("Draw", systemImage: "pencil.tip") {
-                        beginDrawing()
-                    }
 
                     Menu {
+                        Button {
+                            beginDrawing()
+                        } label: {
+                            Label("Draw", systemImage: "pencil.tip")
+                        }
                         Button {
                             openTool(.transform)
                         } label: {
@@ -1877,6 +1883,10 @@ struct StoryEditorPreviewView: View {
             if let clip = editor.selectedClip {
                 lookControls(for: clip)
             }
+        case .beauty:
+            if let clip = editor.selectedClip {
+                beautyToolControls(for: clip)
+            }
         case .audio:
             if let clip = editor.selectedClip, clip.assetRef.kind == .video {
                 audioControls(for: clip)
@@ -1900,6 +1910,8 @@ struct StoryEditorPreviewView: View {
             return 210
         case .look:
             return 300
+        case .beauty:
+            return 300
         case .audio, .music:
             return 260
         case .stickers:
@@ -1914,6 +1926,7 @@ struct StoryEditorPreviewView: View {
         case .clip: return "Clip"
         case .transform: return "Move & Resize"
         case .look: return "Look"
+        case .beauty: return "Beauty"
         case .audio: return "Audio"
         case .stickers: return "Stickers"
         case .music: return "Music"
@@ -2085,6 +2098,26 @@ struct StoryEditorPreviewView: View {
             case .adjust:
                 adjustmentControls(for: clip)
             }
+        }
+    }
+
+    private func beautyToolControls(for clip: VideoClip) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Retouch the selected photo or video.")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(C.textTertiary)
+                Spacer()
+                Button(isComparingOriginal ? "Show edit" : "Compare") {
+                    isComparingOriginal.toggle()
+                }
+                .font(.system(size: 11, weight: .semibold))
+                .buttonStyle(.plain)
+                .foregroundStyle(C.watch)
+                .accessibilityLabel(isComparingOriginal ? "Show edited media" : "Show original media")
+            }
+
+            beautyControls(for: clip)
         }
     }
 
@@ -4431,7 +4464,8 @@ struct StoryEditorPreviewView: View {
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in
-                    guard activeTool == .look, editor.selectedOverlayID == nil else { return }
+                    guard activeTool == .look || activeTool == .beauty,
+                          editor.selectedOverlayID == nil else { return }
                     if !isComparingOriginal {
                         isComparingOriginal = true
                     }
