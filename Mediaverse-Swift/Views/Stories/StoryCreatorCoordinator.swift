@@ -92,7 +92,9 @@ struct StoryCreatorCoordinator: View {
     @State private var draftMedia: StoryDraftMedia?
     @State private var currentProject: Project?
     @State private var savedDrafts: [Project] = []
+    @State private var savedDraftThumbnails: [UUID: UIImage] = [:]
     @State private var isLoadingDrafts = true
+    @State private var isShowingClearDraftsConfirmation = false
     @State private var isPreparingMedia = false
 
     @State private var caption = ""
@@ -191,6 +193,18 @@ struct StoryCreatorCoordinator: View {
             Button("Continue Editing", role: .cancel) {}
         } message: {
             Text("Your changes are saved automatically. You can keep the draft or discard it permanently.")
+        }
+        .confirmationDialog(
+            "Clear all drafts?",
+            isPresented: $isShowingClearDraftsConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Clear All Drafts", role: .destructive) {
+                Task { await clearAllSavedDrafts() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently removes every saved story draft and its local media.")
         }
         .task {
             await loadPublishers()
@@ -331,9 +345,19 @@ struct StoryCreatorCoordinator: View {
             loadingRow("Loading drafts...")
         } else if !savedDrafts.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Drafts")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(C.text)
+                HStack {
+                    Text("Drafts")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(C.text)
+                    Spacer()
+                    Button("Clear All", role: .destructive) {
+                        isShowingClearDraftsConfirmation = true
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red)
+                    .accessibilityLabel("Clear all story drafts")
+                }
 
                 ForEach(savedDrafts) { draft in
                     HStack(spacing: 10) {
@@ -341,14 +365,7 @@ struct StoryCreatorCoordinator: View {
                             Task { await resumeSavedDraft(draft) }
                         } label: {
                             HStack(spacing: 11) {
-                                Image(systemName: draft.tracks.videoClips.first?.assetRef.kind == .video
-                                    ? "play.rectangle.fill"
-                                    : "photo.fill")
-                                    .font(.system(size: 18, weight: .semibold))
-                                    .foregroundStyle(C.watch)
-                                    .frame(width: 42, height: 42)
-                                    .background(C.watch.opacity(0.12))
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                draftThumbnail(for: draft)
 
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text("Story draft")
@@ -395,10 +412,69 @@ struct StoryCreatorCoordinator: View {
         do {
             savedDrafts = try await ProjectStore.shared.list()
                 .filter { !$0.tracks.videoClips.isEmpty }
+            await loadSavedDraftThumbnails(for: savedDrafts)
         } catch {
             savedDrafts = []
+            savedDraftThumbnails = [:]
             errorText = "Could not load saved story drafts."
         }
+    }
+
+    @ViewBuilder
+    private func draftThumbnail(for draft: Project) -> some View {
+        ZStack {
+            if let thumbnail = savedDraftThumbnails[draft.id] {
+                Image(uiImage: thumbnail)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                C.elevated
+                Image(systemName: draft.tracks.videoClips.first?.assetRef.kind == .video
+                    ? "play.rectangle.fill"
+                    : "photo.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(C.watch)
+            }
+
+            if draft.tracks.videoClips.first?.assetRef.kind == .video {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 22, height: 22)
+                    .background(Color.black.opacity(0.58))
+                    .clipShape(Circle())
+            }
+        }
+        .frame(width: 48, height: 64)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
+        .clipped()
+        .accessibilityHidden(true)
+    }
+
+    @MainActor
+    private func loadSavedDraftThumbnails(for drafts: [Project]) async {
+        var thumbnails: [UUID: UIImage] = [:]
+        for draft in drafts {
+            guard let clip = draft.tracks.videoClips.first else { continue }
+            let store = await ProjectStore.shared.assetStore(for: draft.id)
+            let url = store.absoluteURL(for: clip.assetRef.relativePath)
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+
+            switch clip.assetRef.kind {
+            case .image:
+                if let image = UIImage(contentsOfFile: url.path) {
+                    thumbnails[draft.id] = image
+                }
+            case .video:
+                if let image = await makeVideoThumbnail(url: url) {
+                    thumbnails[draft.id] = image
+                }
+            case .audio:
+                break
+            }
+        }
+        savedDraftThumbnails = thumbnails
     }
 
     @MainActor
@@ -444,8 +520,29 @@ struct StoryCreatorCoordinator: View {
         do {
             try await ProjectStore.shared.delete(id: draft.id)
             savedDrafts.removeAll { $0.id == draft.id }
+            savedDraftThumbnails[draft.id] = nil
         } catch {
             errorText = "Could not delete this story draft."
+        }
+    }
+
+    @MainActor
+    private func clearAllSavedDrafts() async {
+        let drafts = savedDrafts
+        var failedCount = 0
+        for draft in drafts {
+            do {
+                try await ProjectStore.shared.delete(id: draft.id)
+                savedDrafts.removeAll { $0.id == draft.id }
+                savedDraftThumbnails[draft.id] = nil
+            } catch {
+                failedCount += 1
+            }
+        }
+        if failedCount > 0 {
+            errorText = failedCount == 1
+                ? "One story draft could not be deleted."
+                : "\(failedCount) story drafts could not be deleted."
         }
     }
 
