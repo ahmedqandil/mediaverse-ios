@@ -2463,6 +2463,24 @@ struct StoryEditorPreviewView: View {
                     ),
                     current: beauty
                 )
+                beautyPresetButton(
+                    "Studio",
+                    settings: StoryBeautySettings(
+                        intensity: 1,
+                        skinSmoothing: 1,
+                        wrinkleReduction: 0.95,
+                        skinGlow: 0.62,
+                        faceClarity: 0.36,
+                        skinTone: 0.16,
+                        brightness: 0.15,
+                        eyeBrightening: 0.30,
+                        underEye: 0.32,
+                        teethWhitening: 0.22,
+                        lipColor: 0.10,
+                        contour: 0.08
+                    ),
+                    current: beauty
+                )
             }
 
             ScrollView(.horizontal, showsIndicators: false) {

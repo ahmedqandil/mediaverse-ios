@@ -867,32 +867,36 @@ private enum StoryCoreImageEffects {
         guard amount > 0.001 else { return image }
         let clamped = min(max(amount, 0), 1)
         let denoised = image.applyingFilter("CINoiseReduction", parameters: [
-            "inputNoiseLevel": 0.035 + clamped * 0.14,
-            "inputSharpness": max(0.48 - clamped * 0.30, 0.12)
+            "inputNoiseLevel": 0.045 + clamped * 0.19,
+            "inputSharpness": max(0.44 - clamped * 0.34, 0.06)
         ]).cropped(to: image.extent)
-        let median = denoised
-            .applyingFilter("CIMedianFilter")
-            .cropped(to: image.extent)
+        var median = denoised
+        let medianPasses = clamped > 0.82 ? 3 : (clamped > 0.46 ? 2 : 1)
+        for _ in 0..<medianPasses {
+            median = median
+                .applyingFilter("CIMedianFilter")
+                .cropped(to: image.extent)
+        }
         let textureReduced = mix(
             base: denoised,
             target: median,
-            amount: min(0.18 + clamped * 0.44, 0.62)
+            amount: min(0.28 + clamped * 0.62, 0.90)
         )
         let lowFrequency = textureReduced
             .applyingFilter("CIGaussianBlur", parameters: [
-                kCIInputRadiusKey: 0.55 + clamped * 2.65
+                kCIInputRadiusKey: 0.85 + clamped * 4.15
             ])
             .cropped(to: image.extent)
         let restoredTexture = lowFrequency
             .applyingFilter("CIUnsharpMask", parameters: [
-                kCIInputRadiusKey: 0.65 + clamped * 0.55,
-                kCIInputIntensityKey: 0.08 + (1 - clamped) * 0.16
+                kCIInputRadiusKey: 0.55 + clamped * 0.35,
+                kCIInputIntensityKey: 0.035 + (1 - clamped) * 0.13
             ])
             .cropped(to: image.extent)
         return mix(
             base: image,
             target: restoredTexture,
-            amount: min(0.38 + clamped * 0.57, 0.95)
+            amount: min(0.46 + clamped * 0.53, 0.99)
         )
     }
 
@@ -992,24 +996,26 @@ private enum StoryCoreImageEffects {
             if clarityAmount > 0.001 {
                 let target = result
                     .applyingFilter("CISharpenLuminance", parameters: [
-                        kCIInputSharpnessKey: 0.20 + clarityAmount * 0.62
+                        kCIInputSharpnessKey: 0.16 + clarityAmount * 0.38
                     ])
                     .applyingFilter("CIUnsharpMask", parameters: [
-                        kCIInputRadiusKey: 0.9 + clarityAmount * 1.35,
-                        kCIInputIntensityKey: 0.25 + clarityAmount * 0.72
+                        kCIInputRadiusKey: 0.7 + clarityAmount * 0.75,
+                        kCIInputIntensityKey: 0.18 + clarityAmount * 0.42
                     ])
                     .applyingFilter("CIColorControls", parameters: [
-                        kCIInputContrastKey: 1 + clarityAmount * 0.07,
-                        kCIInputSaturationKey: 1 + clarityAmount * 0.035
+                        kCIInputContrastKey: 1 + clarityAmount * 0.045,
+                        kCIInputSaturationKey: 1 + clarityAmount * 0.025
                     ])
-                if let faceRegion = contourMask(for: face, extent: image.extent) {
-                    let maskAmount = CGFloat(min(clarityAmount * 0.88, 0.88))
-                    let mask = faceRegion.applyingFilter("CIColorMatrix", parameters: [
-                        "inputRVector": CIVector(x: maskAmount, y: 0, z: 0, w: 0),
-                        "inputGVector": CIVector(x: 0, y: maskAmount, z: 0, w: 0),
-                        "inputBVector": CIVector(x: 0, y: 0, z: maskAmount, w: 0),
-                        "inputAVector": CIVector(x: 0, y: 0, z: 0, w: maskAmount)
-                    ]).cropped(to: image.extent)
+                let featurePoints = face.eyePoints
+                    + face.eyebrowPoints
+                    + face.lipPoints
+                    + face.nosePoints
+                if let mask = featureMask(
+                    points: featurePoints,
+                    radius: max(unit * 0.032, 1.5),
+                    extent: image.extent,
+                    intensity: min(clarityAmount * 0.82, 0.82)
+                ) {
                     result = blend(base: result, target: target, mask: mask)
                 }
             }
