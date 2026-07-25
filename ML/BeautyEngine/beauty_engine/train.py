@@ -58,7 +58,7 @@ def save_checkpoint(
     )
 
 
-def run(config_path: Path) -> None:
+def run(config_path: Path, resume_path: Path | None = None) -> None:
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     seed = int(config["seed"])
     random.seed(seed)
@@ -110,8 +110,17 @@ def run(config_path: Path) -> None:
         weight_decay=float(training["weight_decay"]),
     )
     best_validation = float("inf")
+    first_epoch = 1
+    if resume_path is not None:
+        checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
+        checkpoint_metadata = checkpoint.get("artifact_metadata", {})
+        if checkpoint_metadata.get("usage_scope") != usage_scope:
+            raise ValueError("resume checkpoint usage_scope does not match config")
+        model.load_state_dict(checkpoint["model"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        first_epoch = int(checkpoint["epoch"]) + 1
 
-    for epoch in range(1, int(training["epochs"]) + 1):
+    for epoch in range(first_epoch, int(training["epochs"]) + 1):
         model.train()
         training_total = 0.0
         for batch in train_loader:
@@ -189,8 +198,9 @@ def run(config_path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--resume", type=Path)
     args = parser.parse_args()
-    run(args.config)
+    run(args.config, resume_path=args.resume)
 
 
 if __name__ == "__main__":

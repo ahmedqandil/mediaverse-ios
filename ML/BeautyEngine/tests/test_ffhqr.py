@@ -144,6 +144,10 @@ class FFHQRTests(unittest.TestCase):
             self.assertEqual(metadata["license_id"], FFHQR_LICENSE)
             self.assertIn("not commercial", check_checkpoint_scope(checkpoint)[0])
 
+    def test_resume_checkpoint_rejects_scope_mismatch(self) -> None:
+        commercial = {"artifact_metadata": {"usage_scope": "commercial"}}
+        self.assertEqual(check_checkpoint_scope(commercial), [])
+
 
 if __name__ == "__main__":
     unittest.main()
