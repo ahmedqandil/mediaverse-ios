@@ -1777,6 +1777,25 @@ final class StoryLookEditingTests: XCTestCase {
         )
     }
 
+    func testBeautyMaskKeepsVisibleContourCoverageWithSemanticRefinement() {
+        XCTAssertEqual(
+            StoryBeautyMaskCoverage.safetyAmount(hasSemanticMask: true, intensity: 0),
+            0
+        )
+        XCTAssertGreaterThan(
+            StoryBeautyMaskCoverage.safetyAmount(hasSemanticMask: true, intensity: 0.78),
+            0.15
+        )
+        XCTAssertEqual(
+            StoryBeautyMaskCoverage.safetyAmount(hasSemanticMask: true, intensity: 1),
+            0.38
+        )
+        XCTAssertEqual(
+            StoryBeautyMaskCoverage.safetyAmount(hasSemanticMask: false, intensity: 1),
+            0.62
+        )
+    }
+
     func testMasterBeautyPreservesExistingCustomControls() {
         var beauty = StoryBeautySettings.off
         beauty.skinSmoothing = 0.2

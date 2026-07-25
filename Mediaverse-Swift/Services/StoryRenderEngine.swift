@@ -513,6 +513,16 @@ enum StoryBeautyMaskCacheKey {
     }
 }
 
+enum StoryBeautyMaskCoverage {
+    static func safetyAmount(hasSemanticMask: Bool, intensity: Float) -> Float {
+        let master = min(max(intensity, 0), 1)
+        let highEndPosition = min(max((master - 0.52) / 0.48, 0), 1)
+        let highEnd = highEndPosition * highEndPosition * (3 - 2 * highEndPosition)
+        let baseStrength: Float = hasSemanticMask ? 0.38 : 0.62
+        return highEnd * baseStrength
+    }
+}
+
 private final class StoryBeautyMaskCache: @unchecked Sendable {
     static let shared = StoryBeautyMaskCache()
 
@@ -1263,8 +1273,12 @@ private enum StoryCoreImageEffects {
         var semanticSkin = combined.applyingFilter("CIMultiplyCompositing", parameters: [
             kCIInputBackgroundImageKey: skinLikelihood
         ]).cropped(to: extent)
-        let safetyStrength: Float = semanticMask == nil ? 0.46 : 0.08
-        let safetyAmount = CGFloat(highEndMasterAmount(intensity) * safetyStrength)
+        let safetyAmount = CGFloat(
+            StoryBeautyMaskCoverage.safetyAmount(
+                hasSemanticMask: semanticMask != nil,
+                intensity: intensity
+            )
+        )
         if safetyAmount > 0.001 {
             let safetyMask = combined.applyingFilter("CIColorMatrix", parameters: [
                 "inputRVector": CIVector(x: safetyAmount, y: 0, z: 0, w: 0),
