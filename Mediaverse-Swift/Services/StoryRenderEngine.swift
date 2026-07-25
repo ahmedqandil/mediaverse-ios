@@ -500,6 +500,37 @@ enum StoryBeautyLuminosity {
     }
 }
 
+enum StoryBeautyMaskCacheKey {
+    static func make(
+        trackingKey: String?,
+        time: Double?,
+        extent: CGRect,
+        intensity: Float
+    ) -> String? {
+        guard let trackingKey else { return nil }
+        let timeBucket = Int(((time ?? 0) * 15).rounded(.down))
+        return "\(trackingKey):\(timeBucket):\(Int(extent.width))x\(Int(extent.height)):\(Int(intensity * 100))"
+    }
+}
+
+private final class StoryBeautyMaskCache: @unchecked Sendable {
+    static let shared = StoryBeautyMaskCache()
+
+    private let cache = NSCache<NSString, CIImage>()
+
+    private init() {
+        cache.countLimit = 64
+    }
+
+    func value(for key: String) -> CIImage? {
+        cache.object(forKey: key as NSString)
+    }
+
+    func insert(_ image: CIImage, for key: String) {
+        cache.setObject(image, forKey: key as NSString)
+    }
+}
+
 private final class StorySemanticFaceParser: @unchecked Sendable {
     static let shared = StorySemanticFaceParser()
 
@@ -944,15 +975,19 @@ private enum StoryCoreImageEffects {
     ) -> CIImage {
         var result = image
         let master = settings.intensity
+        let highEnd = highEndMasterAmount(master)
+        let units = faces.map { max(min($0.bounds.width, $0.bounds.height), 1) }
 
-        for face in faces {
-            let unit = max(min(face.bounds.width, face.bounds.height), 1)
-
-            let eyeAmount = max(
-                settings.eyeBrightening * master,
-                highEndMasterAmount(master) * 0.42
-            )
-            if eyeAmount > 0.001 {
+        let eyeAmount = max(settings.eyeBrightening * master, highEnd * 0.42)
+        if eyeAmount > 0.001 {
+            let specs = zip(faces, units).flatMap { face, unit in
+                eyePositions(face).map { ($0, unit * 0.115) }
+            }
+            if let mask = combinedRadialMask(
+                specs: specs,
+                extent: image.extent,
+                intensity: eyeAmount
+            ) {
                 let target = result
                     .applyingFilter("CIColorControls", parameters: [
                         kCIInputBrightnessKey: 0.10 * eyeAmount,
@@ -961,76 +996,95 @@ private enum StoryCoreImageEffects {
                     .applyingFilter("CISharpenLuminance", parameters: [
                         kCIInputSharpnessKey: 0.22 * eyeAmount
                     ])
-                for position in eyePositions(face) {
-                    let mask = radialMask(
-                        center: position,
-                        radius: unit * 0.115,
-                        extent: image.extent,
-                        intensity: eyeAmount
-                    )
-                    result = blend(base: result, target: target, mask: mask)
-                }
-            }
-
-            let underEyeAmount = max(
-                settings.underEye * master,
-                highEndMasterAmount(master) * 0.68
-            )
-            if underEyeAmount > 0.001 {
-                let softened = strongSkinSmoothing(result, amount: min(underEyeAmount * 0.74, 0.74))
-                    .applyingFilter("CIColorControls", parameters: [
-                        kCIInputBrightnessKey: 0.105 * underEyeAmount,
-                        kCIInputContrastKey: 1 - 0.08 * underEyeAmount,
-                        kCIInputSaturationKey: 1 - 0.10 * underEyeAmount
-                    ])
-                for position in eyePositions(face) {
-                    let underEyeCenter = CGPoint(x: position.x, y: position.y - unit * 0.055)
-                    let mask = radialMask(
-                        center: underEyeCenter,
-                        radius: unit * 0.145,
-                        extent: image.extent,
-                        intensity: min(underEyeAmount * 0.82, 0.82)
-                    )
-                    result = blend(base: result, target: softened, mask: mask)
-                }
-            }
-
-            if let mouthPosition = face.mouthPosition, settings.teethWhitening > 0.001 {
-                let target = result.applyingFilter("CIColorControls", parameters: [
-                    kCIInputBrightnessKey: 0.12 * settings.teethWhitening * master,
-                    kCIInputSaturationKey: max(1 - 0.72 * settings.teethWhitening * master, 0)
-                ])
-                let center = CGPoint(x: mouthPosition.x, y: mouthPosition.y + unit * 0.012)
-                let mask = radialMask(
-                    center: center,
-                    radius: unit * 0.085,
-                    extent: image.extent,
-                    intensity: settings.teethWhitening * master
-                )
                 result = blend(base: result, target: target, mask: mask)
             }
+        }
 
-            if let mouthPosition = face.mouthPosition, abs(settings.lipColor) > 0.001 {
-                let amount = settings.lipColor * master
+        let underEyeAmount = max(settings.underEye * master, highEnd * 0.68)
+        if underEyeAmount > 0.001 {
+            let specs = zip(faces, units).flatMap { face, unit in
+                eyePositions(face).map {
+                    (CGPoint(x: $0.x, y: $0.y - unit * 0.055), unit * 0.145)
+                }
+            }
+            if let mask = combinedRadialMask(
+                specs: specs,
+                extent: image.extent,
+                intensity: min(underEyeAmount * 0.82, 0.82)
+            ) {
+                let softened = strongSkinSmoothing(
+                    result,
+                    amount: min(underEyeAmount * 0.74, 0.74)
+                ).applyingFilter("CIColorControls", parameters: [
+                    kCIInputBrightnessKey: 0.105 * underEyeAmount,
+                    kCIInputContrastKey: 1 - 0.08 * underEyeAmount,
+                    kCIInputSaturationKey: 1 - 0.10 * underEyeAmount
+                ])
+                result = blend(base: result, target: softened, mask: mask)
+            }
+        }
+
+        let teethAmount = settings.teethWhitening * master
+        if teethAmount > 0.001 {
+            let specs = zip(faces, units).compactMap { face, unit -> (CGPoint, CGFloat)? in
+                guard let mouth = face.mouthPosition else { return nil }
+                return (CGPoint(x: mouth.x, y: mouth.y + unit * 0.012), unit * 0.085)
+            }
+            if let mask = combinedRadialMask(
+                specs: specs,
+                extent: image.extent,
+                intensity: teethAmount
+            ) {
+                let target = result.applyingFilter("CIColorControls", parameters: [
+                    kCIInputBrightnessKey: 0.12 * teethAmount,
+                    kCIInputSaturationKey: max(1 - 0.72 * teethAmount, 0)
+                ])
+                result = blend(base: result, target: target, mask: mask)
+            }
+        }
+
+        let lipAmount = settings.lipColor * master
+        if abs(lipAmount) > 0.001 {
+            let specs = zip(faces, units).compactMap { face, unit -> (CGPoint, CGFloat)? in
+                guard let mouth = face.mouthPosition else { return nil }
+                return (mouth, unit * 0.105)
+            }
+            if let mask = combinedRadialMask(
+                specs: specs,
+                extent: image.extent,
+                intensity: abs(lipAmount)
+            ) {
                 let target = result
                     .applyingFilter("CIColorControls", parameters: [
-                        kCIInputSaturationKey: 1 + abs(amount) * 0.38
+                        kCIInputSaturationKey: 1 + abs(lipAmount) * 0.38
                     ])
                     .applyingFilter("CITemperatureAndTint", parameters: [
                         "inputNeutral": CIVector(x: 6500, y: 0),
-                        "inputTargetNeutral": CIVector(x: 6500 + CGFloat(amount) * 900, y: 0)
+                        "inputTargetNeutral": CIVector(
+                            x: 6500 + CGFloat(lipAmount) * 900,
+                            y: 0
+                        )
                     ])
-                let mask = radialMask(
-                    center: mouthPosition,
-                    radius: unit * 0.105,
-                    extent: image.extent,
-                    intensity: abs(amount)
-                )
                 result = blend(base: result, target: target, mask: mask)
             }
+        }
 
-            let clarityAmount = boostedAmount(settings.faceClarity, master: master)
-            if clarityAmount > 0.001 {
+        let clarityAmount = boostedAmount(settings.faceClarity, master: master)
+        if clarityAmount > 0.001 {
+            var specs: [(center: CGPoint, radius: CGFloat)] = []
+            for (face, unit) in zip(faces, units) {
+                let radius = max(unit * 0.032, 1.5)
+                let points = face.eyePoints
+                    + face.eyebrowPoints
+                    + face.lipPoints
+                    + face.nosePoints
+                specs.append(contentsOf: points.map { (center: $0, radius: radius) })
+            }
+            if let mask = combinedRadialMask(
+                specs: specs,
+                extent: image.extent,
+                intensity: min(clarityAmount * 0.82, 0.82)
+            ) {
                 let target = result
                     .applyingFilter("CISharpenLuminance", parameters: [
                         kCIInputSharpnessKey: 0.16 + clarityAmount * 0.38
@@ -1043,20 +1097,11 @@ private enum StoryCoreImageEffects {
                         kCIInputContrastKey: 1 + clarityAmount * 0.045,
                         kCIInputSaturationKey: 1 + clarityAmount * 0.025
                     ])
-                let featurePoints = face.eyePoints
-                    + face.eyebrowPoints
-                    + face.lipPoints
-                    + face.nosePoints
-                if let mask = featureMask(
-                    points: featurePoints,
-                    radius: max(unit * 0.032, 1.5),
-                    extent: image.extent,
-                    intensity: min(clarityAmount * 0.82, 0.82)
-                ) {
-                    result = blend(base: result, target: target, mask: mask)
-                }
+                result = blend(base: result, target: target, mask: mask)
             }
+        }
 
+        for (face, unit) in zip(faces, units) {
             if settings.contour > 0.001 {
                 let amount = settings.contour * master
                 let uncontoured = result
@@ -1128,6 +1173,27 @@ private enum StoryCoreImageEffects {
         }
     }
 
+    private static func combinedRadialMask(
+        specs: [(center: CGPoint, radius: CGFloat)],
+        extent: CGRect,
+        intensity: Float
+    ) -> CIImage? {
+        guard !specs.isEmpty else { return nil }
+        return specs.reduce(nil as CIImage?) { combined, spec in
+            let mask = radialMask(
+                center: spec.center,
+                radius: spec.radius,
+                extent: extent,
+                intensity: intensity
+            )
+            return combined.map {
+                mask.applyingFilter("CIMaximumCompositing", parameters: [
+                    kCIInputBackgroundImageKey: $0
+                ])
+            } ?? mask
+        }
+    }
+
     private static func blend(base: CIImage, target: CIImage, mask: CIImage) -> CIImage {
         target.applyingFilter("CIBlendWithMask", parameters: [
             kCIInputBackgroundImageKey: base,
@@ -1143,6 +1209,15 @@ private enum StoryCoreImageEffects {
         trackingKey: String?,
         time: Double?
     ) -> CIImage? {
+        let cacheKey = StoryBeautyMaskCacheKey.make(
+            trackingKey: trackingKey,
+            time: time,
+            extent: extent,
+            intensity: intensity
+        )
+        if let cacheKey, let cached = StoryBeautyMaskCache.shared.value(for: cacheKey) {
+            return cached
+        }
         var combined: CIImage?
         for face in faces {
             guard let faceRegion = contourMask(for: face, extent: extent) else { continue }
@@ -1227,12 +1302,16 @@ private enum StoryCoreImageEffects {
         }
 
         let amount = CGFloat(min(max(intensity, 0), 1))
-        return skinOnly.applyingFilter("CIColorMatrix", parameters: [
+        let finalMask = skinOnly.applyingFilter("CIColorMatrix", parameters: [
             "inputRVector": CIVector(x: amount, y: 0, z: 0, w: 0),
             "inputGVector": CIVector(x: 0, y: amount, z: 0, w: 0),
             "inputBVector": CIVector(x: 0, y: 0, z: amount, w: 0),
             "inputAVector": CIVector(x: 0, y: 0, z: 0, w: amount)
         ]).cropped(to: extent)
+        if let cacheKey {
+            StoryBeautyMaskCache.shared.insert(finalMask, for: cacheKey)
+        }
+        return finalMask
     }
 
     private static func makeSkinMaskCube() -> Data {

@@ -1714,6 +1714,53 @@ final class StoryLookEditingTests: XCTestCase {
         XCTAssertEqual(StoryBeautyLuminosity.gammaPower(for: studio), 0.75)
     }
 
+    func testBeautyMaskCacheKeySeparatesFrameSizeAndIntensity() {
+        let extent = CGRect(x: 0, y: 0, width: 1_080, height: 1_920)
+        let baseline = StoryBeautyMaskCacheKey.make(
+            trackingKey: "clip-a",
+            time: 1,
+            extent: extent,
+            intensity: 0.78
+        )
+
+        XCTAssertNotNil(baseline)
+        XCTAssertNil(
+            StoryBeautyMaskCacheKey.make(
+                trackingKey: nil,
+                time: 1,
+                extent: extent,
+                intensity: 0.78
+            )
+        )
+        XCTAssertNotEqual(
+            baseline,
+            StoryBeautyMaskCacheKey.make(
+                trackingKey: "clip-a",
+                time: 1.1,
+                extent: extent,
+                intensity: 0.78
+            )
+        )
+        XCTAssertNotEqual(
+            baseline,
+            StoryBeautyMaskCacheKey.make(
+                trackingKey: "clip-a",
+                time: 1,
+                extent: CGRect(x: 0, y: 0, width: 720, height: 1_280),
+                intensity: 0.78
+            )
+        )
+        XCTAssertNotEqual(
+            baseline,
+            StoryBeautyMaskCacheKey.make(
+                trackingKey: "clip-a",
+                time: 1,
+                extent: extent,
+                intensity: 1
+            )
+        )
+    }
+
     func testMasterBeautyPreservesExistingCustomControls() {
         var beauty = StoryBeautySettings.off
         beauty.skinSmoothing = 0.2
