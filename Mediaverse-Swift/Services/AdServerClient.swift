@@ -659,6 +659,7 @@ struct NativeAdPlayerView: View {
     var userId: String? = nil
     var breakId: String?
     var aspectRatio: CGFloat = 16 / 9
+    var topContentInset: CGFloat = 0
     var bottomContentInset: CGFloat = 0
     var progressHorizontalInset: CGFloat = 0
     var fillVerticalContainer: Bool = false
@@ -899,6 +900,7 @@ struct NativeAdPlayerView: View {
                     .frame(height: 3)
                     .padding(.horizontal, progressHorizontalInset)
             }
+            .padding(.top, aspectRatio < 1 ? topContentInset : 0)
             .padding(.bottom, aspectRatio < 1 ? bottomContentInset : 0)
         }
         .contentShape(Rectangle())

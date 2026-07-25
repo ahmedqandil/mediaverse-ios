@@ -32,6 +32,14 @@ private struct ShortsAdCandidate {
     let adPolicy: EffectiveAdPolicy
 }
 
+private struct ShortsAdRequestGuard {
+    let identityGeneration: UUID
+    let feedGeneration: UUID
+    let configGeneration: UUID
+    let feedSeed: String
+    let shortsIDs: [String]
+}
+
 private enum ShortsFeedAssembler {
     static func makeItems(
         shorts: [Short],
@@ -222,6 +230,51 @@ private struct InitialShortsPrewarm: Codable {
     let response: ShortsResponse
 }
 
+enum InitialShortsFeedProvenance: Equatable {
+    case fresh
+    case cacheFallback
+}
+
+struct PreparedInitialShortsFeed {
+    let seed: String
+    let response: ShortsResponse
+    let provenance: InitialShortsFeedProvenance
+}
+
+enum ShortsAdSchedule {
+    static func isEligible(
+        afterShortAt index: Int,
+        placement: String,
+        config: PlatformShortsAdsConfig
+    ) -> Bool {
+        guard index >= 0, config.enabled, config.placementConfig(for: placement).enabled else {
+            return false
+        }
+        if placement == "shorts_first_view" {
+            return index == 0
+        }
+        guard placement == "shorts_feed",
+              config.cadenceKind.lowercased() == "count",
+              config.cadenceValue > 0 else {
+            return false
+        }
+        let viewedCount = index + 1
+        let firstBreak = max(1, config.firstAfter)
+        guard viewedCount >= firstBreak else { return false }
+        return (viewedCount - firstBreak).isMultiple(of: config.cadenceValue)
+    }
+}
+
+enum ShortsAdLayoutClearance {
+    static func top(safeAreaTop: CGFloat) -> CGFloat {
+        max(8, safeAreaTop + 8)
+    }
+
+    static func bottom(safeAreaBottom: CGFloat, controlClearance: CGFloat) -> CGFloat {
+        max(12, safeAreaBottom + controlClearance)
+    }
+}
+
 enum ShortsFeedCacheScope {
     static func identityScope(userId: String?) -> String {
         guard let userId = userId?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -343,7 +396,7 @@ final class ShortsPlaybackManager: ObservableObject {
     private var assetCache: [String: AVURLAsset] = [:]
     private var warmTasks: [String: Task<Void, Never>] = [:]
     private var initialPrewarmTask: Task<Void, Never>?
-    private var initialPrewarmPayload: (seed: String, response: ShortsResponse)?
+    private var initialPrewarmPayload: PreparedInitialShortsFeed?
     private var initialPrewarmScope: String?
     private var failedWarmIDs: [String: Date] = [:]
     private var memoryWarningObserver: NSObjectProtocol?
@@ -389,23 +442,13 @@ final class ShortsPlaybackManager: ObservableObject {
         guard initialPrewarmPayload == nil, initialPrewarmTask == nil else { return }
 
         initialPrewarmTask = Task { [weak self] in
-            if let cached: InitialShortsPrewarm = try? await DiskJSONCache.shared.value(forKey: cacheKey) {
-                self?.storeInitialPrewarm(
-                    seed: cached.seed,
-                    response: cached.response,
-                    isMuted: isMuted,
-                    cacheKey: cacheKey,
-                    userId: userId
-                )
-                return
-            }
-
             let seed = UUID().uuidString
             do {
                 let response = try await APIClient.shared.fetchShorts(
                     feed: ShortsFeed.forYou.rawValue,
                     limit: 10,
-                    seed: seed
+                    seed: seed,
+                    forceRefresh: true
                 )
                 try? await DiskJSONCache.shared.store(
                     InitialShortsPrewarm(seed: seed, response: response),
@@ -417,7 +460,8 @@ final class ShortsPlaybackManager: ObservableObject {
                     response: response,
                     isMuted: isMuted,
                     cacheKey: cacheKey,
-                    userId: userId
+                    userId: userId,
+                    provenance: .fresh
                 )
             } catch {
                 if let stale: InitialShortsPrewarm = try? await DiskJSONCache.shared.staleValue(forKey: cacheKey) {
@@ -426,7 +470,8 @@ final class ShortsPlaybackManager: ObservableObject {
                         response: stale.response,
                         isMuted: isMuted,
                         cacheKey: cacheKey,
-                        userId: userId
+                        userId: userId,
+                        provenance: .cacheFallback
                     )
                 } else {
                     self?.clearInitialPrewarmTask(cacheKey: cacheKey)
@@ -439,7 +484,7 @@ final class ShortsPlaybackManager: ObservableObject {
         isMuted: Bool,
         userId: String?,
         context: String?
-    ) async -> (seed: String, response: ShortsResponse)? {
+    ) async -> PreparedInitialShortsFeed? {
         await preparedInitialFeedPayload(isMuted: isMuted, userId: userId, context: context)
     }
 
@@ -469,7 +514,7 @@ final class ShortsPlaybackManager: ObservableObject {
         isMuted: Bool,
         userId: String?,
         context: String?
-    ) async -> (seed: String, response: ShortsResponse)? {
+    ) async -> PreparedInitialShortsFeed? {
         let cacheKey = ShortsFeedCacheScope.initialFeedKey(userId: userId, context: context)
         prewarmInitialFeed(isMuted: isMuted, userId: userId, context: context)
         if let payload = takeReadyInitialFeed() {
@@ -483,7 +528,7 @@ final class ShortsPlaybackManager: ObservableObject {
             }
         }
 
-        guard let cached: InitialShortsPrewarm = try? await DiskJSONCache.shared.value(forKey: cacheKey) else {
+        guard let cached: InitialShortsPrewarm = try? await DiskJSONCache.shared.staleValue(forKey: cacheKey) else {
             return nil
         }
         storeInitialPrewarm(
@@ -491,12 +536,13 @@ final class ShortsPlaybackManager: ObservableObject {
             response: cached.response,
             isMuted: isMuted,
             cacheKey: cacheKey,
-            userId: userId
+            userId: userId,
+            provenance: .cacheFallback
         )
         return takeReadyInitialFeed()
     }
 
-    private func takeReadyInitialFeed() -> (seed: String, response: ShortsResponse)? {
+    private func takeReadyInitialFeed() -> PreparedInitialShortsFeed? {
         let payload = initialPrewarmPayload
         initialPrewarmPayload = nil
         return payload
@@ -648,10 +694,15 @@ final class ShortsPlaybackManager: ObservableObject {
         response: ShortsResponse,
         isMuted: Bool,
         cacheKey: String,
-        userId: String?
+        userId: String?,
+        provenance: InitialShortsFeedProvenance
     ) {
         guard initialPrewarmScope == cacheKey else { return }
-        initialPrewarmPayload = (seed, response)
+        initialPrewarmPayload = PreparedInitialShortsFeed(
+            seed: seed,
+            response: response,
+            provenance: provenance
+        )
         initialPrewarmTask = nil
         let feedItems = response.shorts.enumerated().map { index, short in
             ShortsFeedItem.short(index: index, short: short)
@@ -798,7 +849,8 @@ struct ShortsView: View {
     @State private var filledShortsAdDecisions = [String: AdDecision]()
     @State private var filledShortsAdPolicies = [String: EffectiveAdPolicy]()
     @State private var shortsAdIdentityGeneration = UUID()
-    @State private var shortsAdConfig: PlatformShortsAdsConfig = .default
+    @State private var shortsAdConfigGeneration = UUID()
+    @State private var shortsAdConfig: PlatformShortsAdsConfig = .disabled
     @State private var shortsFeedListings = [AssembledListing]()
     @StateObject private var playbackManager: ShortsPlaybackManager
     @EnvironmentObject private var auth: AuthManager
@@ -808,6 +860,29 @@ struct ShortsView: View {
 
     private var shouldLoadInitialShorts: Bool {
         isRootActive || initialShortId != nil || contextShowId != nil || contextChannelId != nil || showsDismissControls
+    }
+
+    private var shortsAdConfigVersion: String {
+        let config = platformConfig.config.ads.shorts
+        let placements = config.placements.keys.sorted().map { key in
+            let placement = config.placementConfig(for: key)
+            return [
+                key,
+                String(placement.enabled),
+                String(describing: placement.skippable),
+                String(describing: placement.skipAfterSec),
+                String(describing: placement.maxDurationSec),
+                String(describing: placement.frequencyPerUserPerDay)
+            ].joined(separator: ":")
+        }.joined(separator: "|")
+        return [
+            String(platformConfig.isLoaded),
+            String(config.enabled),
+            config.cadenceKind,
+            String(config.cadenceValue),
+            String(config.firstAfter),
+            placements
+        ].joined(separator: ";")
     }
 
     @MainActor
@@ -872,8 +947,8 @@ struct ShortsView: View {
                 postRoutedShortsVisibility(false)
             }
         }
-        .onChange(of: platformConfig.isLoaded) { _, _ in
-            loadShortsAdConfig()
+        .onChange(of: shortsAdConfigVersion) { _, _ in
+            handleShortsAdConfigChange()
         }
         .onChange(of: auth.currentUser?.id) { _, _ in
             handleIdentityChange()
@@ -1322,6 +1397,7 @@ struct ShortsView: View {
     }
 
     private func prefetchUpcomingShortsAds() {
+        guard platformConfig.isLoaded, shortsAdConfig.enabled else { return }
         guard let currentShortIndex = currentShortIndexForAdPrefetch() else { return }
         let candidates = ShortsFeedAssembler.adCandidates(
             shorts: shorts,
@@ -1337,15 +1413,21 @@ struct ShortsView: View {
                   !pendingShortsAdItemIds.contains(candidate.id) else { continue }
 
             pendingShortsAdItemIds.insert(candidate.id)
-            Task { await prefetchShortsAd(candidate) }
+            let request = ShortsAdRequestGuard(
+                identityGeneration: shortsAdIdentityGeneration,
+                feedGeneration: feedGeneration,
+                configGeneration: shortsAdConfigGeneration,
+                feedSeed: feedSessionSeed,
+                shortsIDs: shorts.map(\.id)
+            )
+            Task { await prefetchShortsAd(candidate, request: request) }
         }
     }
 
     @MainActor
-    private func prefetchShortsAd(_ candidate: ShortsAdCandidate) async {
-        let identityGeneration = shortsAdIdentityGeneration
+    private func prefetchShortsAd(_ candidate: ShortsAdCandidate, request: ShortsAdRequestGuard) async {
         defer {
-            if identityGeneration == shortsAdIdentityGeneration {
+            if request.identityGeneration == shortsAdIdentityGeneration {
                 pendingShortsAdItemIds.remove(candidate.id)
             }
         }
@@ -1387,8 +1469,25 @@ struct ShortsView: View {
             decision = nil
         }
 
-        guard identityGeneration == shortsAdIdentityGeneration,
-              requestUserId == auth.currentUser?.id else { return }
+        guard request.identityGeneration == shortsAdIdentityGeneration,
+              request.feedGeneration == feedGeneration,
+              request.configGeneration == shortsAdConfigGeneration,
+              request.feedSeed == feedSessionSeed,
+              request.shortsIDs == shorts.map(\.id),
+              requestUserId == auth.currentUser?.id,
+              platformConfig.isLoaded,
+              shouldRequestShortsAd(
+                  at: candidate.afterIndex,
+                  placement: candidate.placement,
+                  adConfig: candidate.adConfig
+              ),
+              shorts.indices.contains(candidate.afterIndex),
+              shorts[candidate.afterIndex].id == candidate.contentId else { return }
+        if let currentShortIndex = currentShortIndexForAdPrefetch(),
+           currentShortIndex > candidate.afterIndex {
+            skippedShortsAdItemIds.insert(candidate.id)
+            return
+        }
         guard let decision, decision.filled, !decision.ads.isEmpty else {
             skippedShortsAdItemIds.insert(candidate.id)
             return
@@ -1463,9 +1562,10 @@ struct ShortsView: View {
 
     private func shouldRequestShortsAd(at index: Int, placement: String, adConfig: PlatformShortsAdsConfig) -> Bool {
         let config = adConfig
-        guard config.enabled else { return false }
+        guard platformConfig.isLoaded,
+              ShortsAdSchedule.isEligible(afterShortAt: index, placement: placement, config: config)
+        else { return false }
         let placementConfig = config.placementConfig(for: placement)
-        guard placementConfig.enabled else { return false }
         guard ShortsAdFrequencyStore.canShow(
             placement: placement,
             userId: auth.currentUser?.id,
@@ -1474,15 +1574,7 @@ struct ShortsView: View {
             return false
         }
 
-        if placement == "shorts_first_view" {
-            return index == 0
-        }
-
-        guard config.cadenceKind == "count", config.cadenceValue > 0 else { return false }
-        let viewedCount = index + 1
-        guard viewedCount > config.firstAfter else { return false }
-        let firstAdPosition = config.firstAfter + 1
-        return viewedCount == firstAdPosition || (viewedCount - firstAdPosition).isMultiple(of: config.cadenceValue)
+        return true
     }
 
     private var edgeDismissGesture: some Gesture {
@@ -1596,7 +1688,22 @@ struct ShortsView: View {
     }
 
     private func loadShortsAdConfig() {
-        shortsAdConfig = platformConfig.config.ads.shorts
+        shortsAdConfig = platformConfig.isLoaded ? platformConfig.config.ads.shorts : .disabled
+    }
+
+    private func handleShortsAdConfigChange() {
+        loadShortsAdConfig()
+        shortsAdConfigGeneration = UUID()
+        pendingShortsAdItemIds.removeAll()
+        filledShortsAdDecisions.removeAll()
+        filledShortsAdPolicies.removeAll()
+        if shortsAdConfig.enabled {
+            configurePlayback()
+            prefetchUpcomingShortsAds()
+        } else {
+            skippedShortsAdItemIds.removeAll()
+            configurePlayback()
+        }
     }
 
     private func restoreRootFeedSessionIfNeeded() -> Bool {
@@ -1651,14 +1758,10 @@ struct ShortsView: View {
     private func loadInitial(replacingExisting: Bool = false) async {
         guard !isLoading else { return }
         let generation = feedGeneration
-        let restoredCachedSession = !replacingExisting && restoreRootFeedSessionIfNeeded()
-        if restoredCachedSession || (!replacingExisting && !shorts.isEmpty) {
+        if !replacingExisting && !shorts.isEmpty {
             ensureInitialShortSelection()
             configurePlayback(ensureAutoplay: true)
             recordShortViewIfNeeded(itemID: currentID)
-            if restoredCachedSession {
-                scheduleCachedFeedRevalidation()
-            }
             return
         }
 
@@ -1703,6 +1806,7 @@ struct ShortsView: View {
         if let prewarmedFeed {
             feedSessionSeed = prewarmedFeed.seed
         }
+        let initialFeedProvenance = prewarmedFeed?.provenance ?? .fresh
         feedSessionIDs = requestedShortIds
         let seededShort = resolvedSourceContext == nil && requestedShortIds == nil ? ShortNavigationCache.shared.take(id: initialShortId) : nil
         if let seededShort {
@@ -1722,7 +1826,8 @@ struct ShortsView: View {
                     seed: feedSessionSeed,
                     source: resolvedSourceContext?.source,
                     sourceId: resolvedSourceContext?.sourceId,
-                    ids: requestedShortIds
+                    ids: requestedShortIds,
+                    forceRefresh: true
                 )
             }
             let resolved = try await resolveInitialShorts(
@@ -1750,14 +1855,23 @@ struct ShortsView: View {
                 uniqueShorts.contains(where: { $0.id == id }) ? id : nil
             } ?? uniqueShorts.first?.id
             saveRootFeedSessionIfNeeded()
+            if canUsePrewarmedFeed, initialFeedProvenance == .fresh {
+                await playbackManager.cacheInitialFeedForNextSession(
+                    seed: feedSessionSeed,
+                    response: resp,
+                    userId: auth.currentUser?.id,
+                    context: SessionStorage.activeContextCookieValue
+                )
+            }
             configurePlayback(ensureAutoplay: true)
             recordShortViewIfNeeded(itemID: currentID)
-            if prewarmedFeed != nil {
-                scheduleCachedFeedRevalidation()
-            }
         } catch {
             guard feedGeneration == generation, !Task.isCancelled else { return }
-            if replacingExisting {
+            if !replacingExisting && restoreRootFeedSessionIfNeeded() {
+                ensureInitialShortSelection()
+                configurePlayback(ensureAutoplay: true)
+                recordShortViewIfNeeded(itemID: currentID)
+            } else if replacingExisting {
                 paginationError = error.localizedDescription
             } else {
                 loadError = error.localizedDescription
@@ -3293,35 +3407,44 @@ private struct ShortsAdCardView: View {
     }
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
+        GeometryReader { proxy in
+            let topInset = ShortsAdLayoutClearance.top(safeAreaTop: proxy.safeAreaInsets.top)
+            let bottomInset = ShortsAdLayoutClearance.bottom(
+                safeAreaBottom: proxy.safeAreaInsets.bottom,
+                controlClearance: C.bottomMenuClearance
+            )
 
-            if isActive {
-                NativeAdPlayerView(
-                    decision: decision,
-                    contentId: contentId,
-                    placement: placement,
-                    userId: userId,
-                    aspectRatio: 9 / 16,
-                    bottomContentInset: adBottomClearance,
-                    progressHorizontalInset: progressBarHorizontalInset,
-                    fillVerticalContainer: true,
-                    adPolicy: policy,
-                    adRemoval: policy.adRemoval,
-                    overrideSkippable: effectiveSkippable,
-                    overrideSkipAfterSec: effectiveSkipAfterSec,
-                    onImpression: {
-                        recordImpressionIfNeeded()
-                    },
-                    onCanSkipChanged: { canSkip in
-                        if canSkip {
-                            onSwipeUnlocked()
+            ZStack {
+                Color.black.ignoresSafeArea()
+
+                if isActive {
+                    NativeAdPlayerView(
+                        decision: decision,
+                        contentId: contentId,
+                        placement: placement,
+                        userId: userId,
+                        aspectRatio: 9 / 16,
+                        topContentInset: topInset,
+                        bottomContentInset: bottomInset,
+                        progressHorizontalInset: progressBarHorizontalInset,
+                        fillVerticalContainer: true,
+                        adPolicy: policy,
+                        adRemoval: policy.adRemoval,
+                        overrideSkippable: effectiveSkippable,
+                        overrideSkipAfterSec: effectiveSkipAfterSec,
+                        onImpression: {
+                            recordImpressionIfNeeded()
+                        },
+                        onCanSkipChanged: { canSkip in
+                            if canSkip {
+                                onSwipeUnlocked()
+                            }
                         }
+                    ) {
+                        finishAd()
                     }
-                ) {
-                    finishAd()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .onChange(of: isActive) { _, active in

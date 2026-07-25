@@ -99,6 +99,18 @@ struct PlatformShortsAdsConfig: Decodable {
         ]
     )
 
+    static let disabled = PlatformShortsAdsConfig(
+        enabled: false,
+        cadenceKind: "count",
+        cadenceValue: 0,
+        firstAfter: 0,
+        skippable: false,
+        skipAfterSec: 0,
+        maxAds: 0,
+        maxDurationSec: nil,
+        placements: [:]
+    )
+
     static let videoDefault = PlatformShortsAdsConfig.longformDefault()
     static let episodeDefault = PlatformShortsAdsConfig.longformDefault()
     static let longformDefaultPlacements: [String: PlatformAdPlacementConfig] = [

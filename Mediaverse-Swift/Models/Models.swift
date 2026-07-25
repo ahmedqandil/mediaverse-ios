@@ -735,7 +735,7 @@ struct EffectiveAdPolicy: Codable {
 
     func applying(to base: PlatformShortsAdsConfig) -> PlatformShortsAdsConfig {
         PlatformShortsAdsConfig(
-            enabled: adsEnabled,
+            enabled: base.enabled && adsEnabled,
             cadenceKind: cadenceKind ?? base.cadenceKind,
             cadenceValue: cadenceValue ?? frequencySec ?? base.cadenceValue,
             firstAfter: firstAfter ?? base.firstAfter,

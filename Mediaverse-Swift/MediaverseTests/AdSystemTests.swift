@@ -686,6 +686,113 @@ final class DiskJSONCacheTests: XCTestCase {
     }
 }
 
+final class ShortsAdAuthorityAndScheduleTests: XCTestCase {
+    func testPolicyCannotReenableGloballyDisabledConfig() {
+        let policy = makePolicy(adsEnabled: true)
+        XCTAssertFalse(policy.applying(to: .disabled).enabled)
+    }
+
+    func testDisabledPolicyDisablesEnabledBaseConfig() {
+        XCTAssertFalse(makePolicy(adsEnabled: false).applying(to: .default).enabled)
+    }
+
+    func testCountCadenceStartsAfterExactlyFirstAfterShorts() {
+        let config = makeConfig(firstAfter: 3, cadenceValue: 5)
+        XCTAssertFalse(ShortsAdSchedule.isEligible(afterShortAt: 1, placement: "shorts_feed", config: config))
+        XCTAssertTrue(ShortsAdSchedule.isEligible(afterShortAt: 2, placement: "shorts_feed", config: config))
+        XCTAssertTrue(ShortsAdSchedule.isEligible(afterShortAt: 7, placement: "shorts_feed", config: config))
+        XCTAssertFalse(ShortsAdSchedule.isEligible(afterShortAt: 3, placement: "shorts_feed", config: config))
+    }
+
+    func testCadenceEdgeCasesAndFirstViewIndependence() {
+        XCTAssertTrue(
+            ShortsAdSchedule.isEligible(
+                afterShortAt: 0,
+                placement: "shorts_first_view",
+                config: makeConfig(firstAfter: 99, cadenceValue: 0)
+            )
+        )
+        XCTAssertTrue(
+            ShortsAdSchedule.isEligible(
+                afterShortAt: 0,
+                placement: "shorts_feed",
+                config: makeConfig(firstAfter: 0, cadenceValue: 2)
+            )
+        )
+        XCTAssertFalse(
+            ShortsAdSchedule.isEligible(
+                afterShortAt: 0,
+                placement: "shorts_feed",
+                config: makeConfig(firstAfter: 0, cadenceValue: 0)
+            )
+        )
+        XCTAssertFalse(
+            ShortsAdSchedule.isEligible(
+                afterShortAt: 2,
+                placement: "shorts_feed",
+                config: makeConfig(firstAfter: 3, cadenceValue: 5, cadenceKind: "time")
+            )
+        )
+        XCTAssertFalse(
+            ShortsAdSchedule.isEligible(
+                afterShortAt: 0,
+                placement: "shorts_first_view",
+                config: .disabled
+            )
+        )
+    }
+
+    func testAdLayoutClearanceIncludesSafeAreasAndControls() {
+        XCTAssertEqual(ShortsAdLayoutClearance.top(safeAreaTop: 47), 55)
+        XCTAssertEqual(
+            ShortsAdLayoutClearance.bottom(safeAreaBottom: 34, controlClearance: 62),
+            96
+        )
+    }
+
+    private func makeConfig(
+        firstAfter: Int,
+        cadenceValue: Int,
+        cadenceKind: String = "count"
+    ) -> PlatformShortsAdsConfig {
+        PlatformShortsAdsConfig(
+            enabled: true,
+            cadenceKind: cadenceKind,
+            cadenceValue: cadenceValue,
+            firstAfter: firstAfter,
+            skippable: false,
+            skipAfterSec: 0,
+            maxAds: 1,
+            maxDurationSec: 15,
+            placements: [
+                "shorts_first_view": .shortsFirstViewDefault,
+                "shorts_feed": .shortsFeedDefault
+            ]
+        )
+    }
+
+    private func makePolicy(adsEnabled: Bool) -> EffectiveAdPolicy {
+        EffectiveAdPolicy(
+            adsEnabled: adsEnabled,
+            reason: nil,
+            deliveryMode: nil,
+            deliveryByDevice: nil,
+            adLoad: nil,
+            cadenceKind: nil,
+            cadenceValue: nil,
+            frequencySec: nil,
+            firstAfter: nil,
+            skippable: nil,
+            skipAfterSec: nil,
+            minGapSec: nil,
+            maxDurationSec: nil,
+            maxAdDurationSec: nil,
+            pods: nil,
+            adRemoval: nil
+        )
+    }
+}
+
 final class StoryOverlayLayoutTests: XCTestCase {
     private let canvas = CanvasSpec.storyDefault
 
