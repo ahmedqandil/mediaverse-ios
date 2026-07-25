@@ -32,6 +32,7 @@ struct EpisodeWatchView: View {
     @State private var serverInterstitialMonitor: AVPlayerInterstitialEventMonitor?
     @StateObject private var serverAdCoordinator = ServerAdPlaybackCoordinator()
     @State private var serverFallbackSourceURL: URL?
+    @State private var serverPlaybackWatchdogTask: Task<Void, Never>?
     @State private var playbackLoadGeneration = UUID()
     @State private var playbackSessionId = UUID().uuidString
     @State private var playbackEntryContext: PlaybackEntryContext = .direct
@@ -1564,6 +1565,15 @@ struct EpisodeWatchView: View {
                 )
                 adDeliveryMode = deliveryPlan.mode
                 serverFallbackSourceURL = deliveryPlan.usesServerDelivery ? originalURL : nil
+                let bootstrapTask = deliveryPlan.mode == .sgai
+                    ? Task {
+                        await SGAIBootstrapClient.load(
+                            streamMaster: originalURL,
+                            context: playbackContext,
+                            policy: policy
+                        )
+                    }
+                    : nil
                 let url = deliveryPlan.playbackURL
                 let (asset, item) = makeStartupOptimizedPlayerItem(url: url)
                 let shouldReuseFullscreenPlayer = reuseCurrentPlayerForFullscreenSelection
@@ -1583,13 +1593,22 @@ struct EpisodeWatchView: View {
                     playbackPlayer = p
                 }
                 if deliveryPlan.mode == .sgai {
+                    let bootstrap = await bootstrapTask?.value
+                    guard playbackLoadGeneration == loadGeneration,
+                          loadId == currentEpisodeId,
+                          auth.currentUser?.id == loadUserId else { return }
+                    debugAd(
+                        "sgai bootstrap ready=\(bootstrap?.ready == true) "
+                        + "assets=\(bootstrap?.assets.count ?? 0)"
+                    )
                     let monitor = AVPlayerInterstitialEventMonitor(primaryPlayer: playbackPlayer)
                     serverInterstitialMonitor = monitor
                     serverAdCoordinator.configure(
                         player: playbackPlayer,
                         monitor: monitor,
                         context: playbackContext,
-                        policy: policy
+                        policy: policy,
+                        bootstrap: bootstrap
                     )
                 } else if deliveryPlan.mode == .ssai {
                     serverInterstitialMonitor = nil
@@ -1714,12 +1733,18 @@ struct EpisodeWatchView: View {
         guard adDeliveryMode == .sgai || adDeliveryMode == .ssai,
               let originalURL = serverFallbackSourceURL,
               let player else { return }
+        let failedMode = adDeliveryMode
+        let failedPlaybackTime = max(0, player.currentTime().seconds.validTime ?? 0)
+        let resumeTime = failedMode == .ssai
+            ? serverAdCoordinator.contentTime(forStitchedTime: failedPlaybackTime)
+            : failedPlaybackTime
+        serverPlaybackWatchdogTask?.cancel()
+        serverPlaybackWatchdogTask = nil
         serverFallbackSourceURL = nil
         serverInterstitialMonitor = nil
         serverAdCoordinator.reset()
-        adDeliveryMode = .csai
+        adDeliveryMode = .none
         adBreaks = []
-        let resumeTime = max(0, player.currentTime().seconds.validTime ?? 0)
         let (_, item) = makeStartupOptimizedPlayerItem(url: originalURL)
         player.replaceCurrentItem(with: item)
         if resumeTime > 0 {
@@ -1729,12 +1754,8 @@ struct EpisodeWatchView: View {
                 toleranceAfter: .zero
             )
         }
-        let preroll = resumeTime < 1
-            ? await prerollDecision(contentId: currentEpisodeId, duration: episode?.duration)
-            : nil
-        prerollAdDecision = preroll
-        attachPlayer(player, episodeId: currentEpisodeId, autoplay: preroll == nil)
-        Task { await loadEpisodeAdBreaks(contentId: currentEpisodeId, duration: episode?.duration) }
+        prerollAdDecision = nil
+        attachPlayer(player, episodeId: currentEpisodeId, autoplay: true)
     }
 
     private func configureFullPlaybackBuffering(for player: AVPlayer) {
@@ -1772,6 +1793,36 @@ struct EpisodeWatchView: View {
             player.playImmediately(atRate: 1)
             startProgress(episodeId: episodeId, player: player)
             recordPPVPlaybackStartIfNeeded(episodeId: episodeId)
+            scheduleServerPlaybackWatchdog(player)
+        }
+    }
+
+    private func scheduleServerPlaybackWatchdog(_ watchedPlayer: AVPlayer) {
+        serverPlaybackWatchdogTask?.cancel()
+        guard serverFallbackSourceURL != nil,
+              adDeliveryMode == .sgai || adDeliveryMode == .ssai else { return }
+        let watchedItem = watchedPlayer.currentItem
+        serverPlaybackWatchdogTask = Task { @MainActor in
+            for _ in 0..<14 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled,
+                      player === watchedPlayer,
+                      watchedPlayer.currentItem === watchedItem,
+                      serverFallbackSourceURL != nil else { return }
+                if serverAdCoordinator.presentation != nil
+                    || watchedPlayer.currentTime().seconds > 0.05 {
+                    serverPlaybackWatchdogTask = nil
+                    return
+                }
+                if watchedItem?.status == .failed { break }
+            }
+            debugAd(
+                "server playback stalled mode=\(adDeliveryMode.rawValue) "
+                + "status=\(String(describing: watchedItem?.status)) "
+                + "waiting=\(watchedPlayer.reasonForWaitingToPlay?.rawValue ?? "none"); failing open"
+            )
+            serverPlaybackWatchdogTask = nil
+            await fallbackFromServerDelivery()
         }
     }
 

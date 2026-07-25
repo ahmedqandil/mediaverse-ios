@@ -252,6 +252,38 @@ enum SGAIPlaybackURLBuilder {
         return components?.url
     }
 
+    static func bootstrapURL(
+        streamMaster: URL,
+        context: SGAIPlaybackContext,
+        policy: EffectiveAdPolicy,
+        worker: URL = productionWorker
+    ) -> URL? {
+        let wrapped = makeURL(
+            streamMaster: streamMaster,
+            mode: .sgai,
+            context: context,
+            skippable: policy.skippable,
+            maxDurationSec: policy.maxAdDurationSec
+                ?? policy.maxDurationSec
+                ?? policy.pods?.maxAdDurationSec,
+            worker: worker
+        )
+        guard var components = URLComponents(url: wrapped, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        components.path = "/v1/bootstrap"
+        components.queryItems = (components.queryItems ?? [])
+            .filter { $0.name != "u" && $0.name != "mode" }
+            + [
+                URLQueryItem(name: "breakId", value: "preroll"),
+                URLQueryItem(
+                    name: "maxAds",
+                    value: String(max(1, policy.pods?.prerollMaxAds ?? policy.adLoad ?? 1))
+                )
+            ]
+        return components.url
+    }
+
     static func scheduleURL(
         context: SGAIPlaybackContext,
         durationSec: Double?,
@@ -332,6 +364,39 @@ struct SGAIAssetList: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case assets = "ASSETS"
+    }
+}
+
+struct SGAIBootstrapResponse: Decodable {
+    let ready: Bool
+    let breakId: String
+    let assets: [SGAIAsset]
+
+    enum CodingKeys: String, CodingKey {
+        case ready
+        case breakId
+        case assets = "ASSETS"
+    }
+}
+
+enum SGAIBootstrapClient {
+    static func load(
+        streamMaster: URL,
+        context: SGAIPlaybackContext,
+        policy: EffectiveAdPolicy
+    ) async -> SGAIBootstrapResponse? {
+        guard let url = SGAIPlaybackURLBuilder.bootstrapURL(
+            streamMaster: streamMaster,
+            context: context,
+            policy: policy
+        ) else { return nil }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+            return try JSONDecoder().decode(SGAIBootstrapResponse.self, from: data)
+        } catch {
+            return nil
+        }
     }
 }
 
@@ -430,6 +495,7 @@ final class ServerAdPlaybackCoordinator: ObservableObject {
     fileprivate var context: SGAIPlaybackContext?
     fileprivate var policy: EffectiveAdPolicy?
     private var assets: [SGAIAsset] = []
+    private var bootstrapAssetsByBreak: [String: [SGAIAsset]] = [:]
     private var ssaiSchedule: [SSAIScheduleBreak] = []
     private var activeSSAIWindow: SSAIScheduleBreak?
     private var lastSSAIPlaybackTime: Double?
@@ -529,7 +595,8 @@ final class ServerAdPlaybackCoordinator: ObservableObject {
         player: AVPlayer,
         monitor: AVPlayerInterstitialEventMonitor,
         context: SGAIPlaybackContext,
-        policy: EffectiveAdPolicy
+        policy: EffectiveAdPolicy,
+        bootstrap: SGAIBootstrapResponse? = nil
     ) {
         reset()
         primaryPlayer = player
@@ -537,6 +604,9 @@ final class ServerAdPlaybackCoordinator: ObservableObject {
         self.monitor = monitor
         self.context = context
         self.policy = policy
+        if let bootstrap, !bootstrap.assets.isEmpty {
+            bootstrapAssetsByBreak[bootstrap.breakId] = bootstrap.assets
+        }
         let center = NotificationCenter.default
         observers = [
             center.addObserver(
@@ -686,6 +756,7 @@ final class ServerAdPlaybackCoordinator: ObservableObject {
         context = nil
         policy = nil
         assets = []
+        bootstrapAssetsByBreak = [:]
         ssaiSchedule = []
         activeSSAIWindow = nil
         lastSSAIPlaybackTime = nil
@@ -773,6 +844,21 @@ final class ServerAdPlaybackCoordinator: ObservableObject {
         }
 
         let breakId = SGAIBreakIdentifier.breakId(from: event.identifier)
+        if let bootstrapAssets = bootstrapAssetsByBreak.removeValue(forKey: breakId),
+           let first = bootstrapAssets.first {
+            assets = bootstrapAssets
+            presentation = ShortsServerAdPresentation(
+                breakId: breakId,
+                asset: first,
+                remainingSec: max(0, first.duration ?? 0),
+                progress: 0,
+                canSkip: false,
+                isSkippable: policy?.skippable ?? (first.skippable == 1),
+                skipCountdown: Int(ceil(policy?.skipAfterSec.map(Double.init) ?? first.skipOffsetSec ?? 0))
+            )
+            track("start")
+            return
+        }
         presentation = ShortsServerAdPresentation(
             breakId: breakId,
             asset: nil,
@@ -919,38 +1005,27 @@ struct ServerGuidedAdPlayerView: View {
     var onFullscreen: (() -> Void)?
 
     var body: some View {
-        if let decision = coordinator.activeDecision,
-           let player = coordinator.interstitialPlayer,
+        if let player = coordinator.interstitialPlayer,
            let presentation = coordinator.presentation {
-            NativeAdPlayerView(
-                decision: decision,
-                contentId: coordinator.context?.contentId ?? "",
-                placement: coordinator.placement(for: presentation.breakId),
-                userId: coordinator.context?.userId,
-                breakId: presentation.breakId,
-                aspectRatio: vertical ? 9 / 16 : 16 / 9,
-                fillVerticalContainer: vertical,
-                onFullscreen: onFullscreen,
-                preservePlaybackOnDisappear: true,
-                externalPlayer: player,
-                isPresentationOnly: true,
-                brandCardPlacement: brandCardPlacement,
-                initialImpressionTracked: true,
-                initialStartTracked: true,
-                presentationElapsed: max(
-                    0,
-                    (presentation.asset?.duration ?? presentation.remainingSec)
-                        - presentation.remainingSec
-                ),
-                adPolicy: coordinator.policy,
-                adRemoval: coordinator.policy?.adRemoval,
-                overrideSkippable: coordinator.policy?.skippable,
-                overrideSkipAfterSec: coordinator.policy?.skipAfterSec,
-                onSkip: { coordinator.skip() },
-                onClick: { coordinator.track("click") },
-                suppressTracking: true,
-                observeExternalCompletion: false
-            ) {}
+            ZStack {
+                Color.black
+                WatchPlayerSurface(player: player)
+                ServerAdOverlay(
+                    presentation: presentation,
+                    vertical: vertical,
+                    isPaused: coordinator.isPaused,
+                    isMuted: coordinator.isMuted,
+                    showBrandCard: brandCardPlacement != .hidden,
+                    onTogglePause: { coordinator.togglePause() },
+                    onToggleMute: { coordinator.toggleMute() },
+                    onFullscreen: onFullscreen,
+                    onSkip: { coordinator.skip() },
+                    onOpen: { coordinator.openAdvertiser() }
+                )
+            }
+            .frame(maxWidth: .infinity, maxHeight: vertical ? .infinity : nil)
+            .aspectRatio(vertical ? nil : 16 / 9, contentMode: .fit)
+            .clipped()
         }
     }
 }
@@ -960,8 +1035,10 @@ struct ServerAdOverlay: View {
     var vertical = false
     var isPaused = false
     var isMuted = false
+    var showBrandCard = true
     var onTogglePause: (() -> Void)?
     var onToggleMute: (() -> Void)?
+    var onFullscreen: (() -> Void)?
     let onSkip: () -> Void
     let onOpen: () -> Void
 
@@ -1014,6 +1091,12 @@ struct ServerAdOverlay: View {
                             action: onToggleMute
                         )
                     }
+                    if let onFullscreen, !vertical {
+                        controlButton(
+                            systemName: "arrow.up.left.and.arrow.down.right",
+                            action: onFullscreen
+                        )
+                    }
                 }
                 .padding(.horizontal, vertical ? 12 : 8)
                 .frame(height: 44)
@@ -1050,56 +1133,58 @@ struct ServerAdOverlay: View {
                 .padding(.trailing, 12)
                 .padding(.bottom, 10)
 
-                HStack(spacing: 12) {
-                    if let rawLogo = presentation.asset?.brandLogoURL,
-                       let logoURL = URL(string: rawLogo) {
-                        AsyncImage(url: logoURL) { image in
-                            image.resizable().scaledToFit()
-                        } placeholder: {
-                            Color.white.opacity(0.08)
+                if showBrandCard {
+                    HStack(spacing: 12) {
+                        if let rawLogo = presentation.asset?.brandLogoURL,
+                           let logoURL = URL(string: rawLogo) {
+                            AsyncImage(url: logoURL) { image in
+                                image.resizable().scaledToFit()
+                            } placeholder: {
+                                Color.white.opacity(0.08)
+                            }
+                            .frame(width: vertical ? 40 : 48, height: vertical ? 40 : 48)
+                            .clipShape(RoundedRectangle(cornerRadius: vertical ? 10 : 8))
                         }
-                        .frame(width: vertical ? 40 : 48, height: vertical ? 40 : 48)
-                        .clipShape(RoundedRectangle(cornerRadius: vertical ? 10 : 8))
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        if let label = presentation.asset?.brandLabel, !label.isEmpty {
-                            Text(vertical ? label : label.uppercased())
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.white.opacity(vertical ? 0.60 : 0.50))
+                        VStack(alignment: .leading, spacing: 2) {
+                            if let label = presentation.asset?.brandLabel, !label.isEmpty {
+                                Text(vertical ? label : label.uppercased())
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(vertical ? 0.60 : 0.50))
+                                    .lineLimit(1)
+                            }
+                            Text(title)
+                                .font(.system(size: vertical ? 14 : 15, weight: vertical ? .bold : .semibold))
+                                .foregroundStyle(.white)
                                 .lineLimit(1)
+                            if let description = presentation.asset?.brandDescription,
+                               !description.isEmpty {
+                                Text(description)
+                                    .font(.system(size: vertical ? 12 : 13))
+                                    .foregroundStyle(.white.opacity(0.72))
+                                    .lineLimit(1)
+                            }
                         }
-                        Text(title)
-                            .font(.system(size: vertical ? 14 : 15, weight: vertical ? .bold : .semibold))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                        if let description = presentation.asset?.brandDescription,
-                           !description.isEmpty {
-                            Text(description)
-                            .font(.system(size: vertical ? 12 : 13))
-                                .foregroundStyle(.white.opacity(0.72))
-                                .lineLimit(1)
+                        Spacer()
+                        if presentation.clickThroughURL != nil {
+                            Button(presentation.asset?.ctaText ?? "Learn more", action: onOpen)
+                                .font(.system(size: 13, weight: vertical ? .bold : .semibold))
+                                .foregroundStyle(.black)
+                                .padding(.horizontal, vertical ? 14 : 16)
+                                .padding(.vertical, 8)
+                                .background(vertical ? Color.yellow : C.watch, in: Capsule())
                         }
                     }
-                    Spacer()
-                    if presentation.clickThroughURL != nil {
-                        Button(presentation.asset?.ctaText ?? "Learn more", action: onOpen)
-                            .font(.system(size: 13, weight: vertical ? .bold : .semibold))
-                            .foregroundStyle(.black)
-                            .padding(.horizontal, vertical ? 14 : 16)
-                            .padding(.vertical, 8)
-                            .background(vertical ? Color.yellow : C.watch, in: Capsule())
+                    .padding(vertical ? 12 : 0)
+                    .padding(.horizontal, vertical ? 0 : 16)
+                    .padding(.vertical, vertical ? 0 : 12)
+                    .background(vertical ? Color.black.opacity(0.55) : Color(red: 0.071, green: 0.071, blue: 0.102), in: RoundedRectangle(cornerRadius: vertical ? 14 : 12))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: vertical ? 14 : 12)
+                            .stroke(.white.opacity(vertical ? 0.15 : 0.08), lineWidth: 1)
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 10)
                 }
-                .padding(vertical ? 12 : 0)
-                .padding(.horizontal, vertical ? 0 : 16)
-                .padding(.vertical, vertical ? 0 : 12)
-                .background(vertical ? Color.black.opacity(0.55) : Color(red: 0.071, green: 0.071, blue: 0.102), in: RoundedRectangle(cornerRadius: vertical ? 14 : 12))
-                .overlay {
-                    RoundedRectangle(cornerRadius: vertical ? 14 : 12)
-                        .stroke(.white.opacity(vertical ? 0.15 : 0.08), lineWidth: 1)
-                }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 10)
 
                 GeometryReader { geo in
                     Color.yellow
