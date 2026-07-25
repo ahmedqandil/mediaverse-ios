@@ -2580,6 +2580,7 @@ struct StoryEditorPreviewView: View {
             guard let clip = editor.selectedClip else { return }
             beginLookPreview(from: clip)
             editor.previewSelectedClipBeauty(settings)
+            schedulePreviewRender(after: 0)
         } label: {
             Text(title)
                 .font(.system(size: 11, weight: .semibold))
@@ -2601,6 +2602,7 @@ struct StoryEditorPreviewView: View {
         update(&beauty)
         beauty.activateForConfiguredControls()
         editor.previewSelectedClipBeauty(beauty)
+        schedulePreviewRender(after: 0)
     }
 
     private func adjustmentSlider(
