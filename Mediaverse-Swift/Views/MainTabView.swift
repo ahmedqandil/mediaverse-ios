@@ -275,7 +275,7 @@ struct MainTabView: View {
                     if socialFeatures.atmosphereEnabled {
                         AtmosphereView()
                     } else {
-                        HomeView()
+                        HomeView(headerStyle: .home)
                     }
                 }
                 .navigationDestination(for: AppRoute.self) { route in
@@ -293,7 +293,7 @@ struct MainTabView: View {
             .tag(AppTab.home)
 
             NavigationStack(path: $videosPath) {
-                HomeView()
+                HomeView(headerStyle: .videos)
                     .navigationDestination(for: AppRoute.self) { route in
                         routeDestination(route)
                     }

@@ -3,6 +3,7 @@ import AVKit
 
 struct AtmosphereView: View {
     @AppStorage("playerMuted") private var playerMuted = false
+    @EnvironmentObject private var auth: AuthManager
     @EnvironmentObject private var miniPlayer: MiniPlayerManager
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @StateObject private var model = AtmosphereViewModel()
@@ -13,6 +14,10 @@ struct AtmosphereView: View {
     @State private var suppressedPreviewVideoId: String?
     @State private var isPreservingPreviewHandoff = false
     @State private var showsCreateVibe = false
+    @State private var searchPresented = false
+    @State private var notificationsPresented = false
+    @State private var unreadNotificationCount = 0
+    @State private var isUploadEligible = false
     private let socialFeatures = SocialFeatureConfiguration.runtime()
 
     private var isCompactWidth: Bool { horizontalSizeClass == .compact }
@@ -54,19 +59,168 @@ struct AtmosphereView: View {
                 Task { await model.reload(.myVibes) }
             }
         }
+        .sheet(isPresented: $searchPresented) { SearchView() }
+        .sheet(isPresented: $notificationsPresented) {
+            NotificationsView { unreadCount in
+                unreadNotificationCount = unreadCount
+            }
+        }
+        .onAppear {
+            updateUploadEligibility()
+            Task { await loadNotificationCount() }
+        }
+        .onChange(of: notificationsPresented) { _, isPresented in
+            if !isPresented {
+                Task { await loadNotificationCount() }
+            }
+        }
+        .onChange(of: auth.isAuthenticated) { _, _ in
+            updateUploadEligibility()
+            Task { await loadNotificationCount() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .uploadEligibilityChanged)) { notification in
+            isUploadEligible = (notification.object as? Bool) == true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .notificationCountsDidChange)) { notification in
+            if let count = notification.object as? Int {
+                unreadNotificationCount = count
+            } else {
+                Task { await loadNotificationCount() }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            Task { await loadNotificationCount() }
+        }
     }
 
     private var header: some View {
-        HStack {
-            Text("The Atmosphere")
-                .font(.title2.bold())
-                .foregroundStyle(C.text)
-            Spacer()
+        ZStack {
+            HStack(spacing: 12) {
+                uploadButton
+                Spacer()
+                headerActions
+            }
+
+            brandTitle
+                .allowsHitTesting(false)
         }
         .padding(.horizontal, C.pagePad)
-        .padding(.top, 8)
-        .padding(.bottom, 12)
-        .background(C.bg)
+        .padding(.top, 2)
+        .padding(.bottom, 10)
+        .background(
+            LinearGradient(
+                colors: [C.bg.opacity(0.92), C.bg.opacity(0.68), .clear],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+    }
+
+    private var brandTitle: some View {
+        HStack(spacing: 7) {
+            HStack(spacing: 0) {
+                Text("We").foregroundStyle(C.text)
+                Text("Streem").foregroundStyle(C.watch)
+            }
+            .font(.system(size: 19, weight: .black))
+            .fontDesign(.rounded)
+
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .stroke(C.watch, lineWidth: 2)
+                .frame(width: 18, height: 13)
+                .overlay(alignment: .bottom) {
+                    Capsule()
+                        .fill(C.watch)
+                        .frame(width: 9, height: 2)
+                        .offset(y: 5)
+                }
+        }
+    }
+
+    @ViewBuilder
+    private var uploadButton: some View {
+        if auth.isAuthenticated && isUploadEligible {
+            Button {
+                NotificationCenter.default.post(name: .uploadRequested, object: nil)
+            } label: {
+                headerIcon("upload", fallback: "plus.circle")
+            }
+            .accessibilityLabel("Upload")
+        }
+    }
+
+    private var headerActions: some View {
+        HStack(spacing: 6) {
+            Button { notificationsPresented = true } label: {
+                notificationBell
+            }
+            .disabled(!auth.isAuthenticated)
+            .opacity(auth.isAuthenticated ? 1 : 0.45)
+            .accessibilityLabel("Notifications")
+
+            Button { searchPresented = true } label: {
+                headerIcon("search", fallback: "magnifyingglass")
+            }
+            .accessibilityLabel("Search")
+        }
+    }
+
+    private func headerIcon(_ iconName: String, fallback: String) -> some View {
+        MediaverseIcon(name: iconName, fallbackSystemName: fallback)
+            .frame(width: 20, height: 20)
+            .foregroundStyle(C.text)
+            .frame(width: 34, height: 34)
+    }
+
+    private var notificationBell: some View {
+        headerIcon("notification", fallback: "bell")
+            .overlay(alignment: .topTrailing) {
+                if unreadNotificationCount > 0 {
+                    Text(unreadNotificationCount > 9 ? "9+" : "\(unreadNotificationCount)")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .frame(minWidth: 18, minHeight: 18)
+                        .background(Color.red)
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(C.bg, lineWidth: 1.5))
+                        .offset(x: 4, y: 1)
+                        .zIndex(2)
+                }
+            }
+            .frame(width: 44, height: 38)
+    }
+
+    @MainActor
+    private func updateUploadEligibility() {
+        guard auth.isAuthenticated, let contexts = UploadOptionsCache.contexts else {
+            isUploadEligible = false
+            return
+        }
+        isUploadEligible = !contexts.channels.isEmpty || !contexts.shows.isEmpty
+    }
+
+    @MainActor
+    private func loadNotificationCount() async {
+        guard auth.isAuthenticated else {
+            unreadNotificationCount = 0
+            return
+        }
+        if let counts = try? await APIClient.shared.fetchNotificationCounts(),
+           let unread = notificationUnreadCount(from: counts) {
+            unreadNotificationCount = unread
+            return
+        }
+        if let notifications = try? await APIClient.shared.fetchNotifications() {
+            unreadNotificationCount = notifications.filter { !$0.read }.count
+        }
+    }
+
+    private func notificationUnreadCount(from counts: [String: Int]) -> Int? {
+        for key in ["unread", "unreadCount", "unread_count", "totalUnread", "total_unread", "notificationsUnread", "notifications_unread"] {
+            if let value = counts[key] { return value }
+        }
+        return nil
     }
 
     @ViewBuilder

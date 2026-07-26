@@ -526,6 +526,12 @@ private struct CardPressStyle: ButtonStyle {
 /// Mirrors the web homepage: hero → continue watching → feed with interleaved
 /// carousels (Shows every 3 videos, then Shorts, then Microdramas).
 struct HomeView: View {
+    enum HeaderStyle {
+        case home
+        case videos
+    }
+
+    var headerStyle: HeaderStyle = .home
 
     // MARK: State
 
@@ -844,7 +850,11 @@ struct HomeView: View {
                     .id("home-feed")
             }
 
-            homeFloatingHeader
+            if headerStyle == .home {
+                homeFloatingHeader
+            } else {
+                videosHeader
+            }
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
@@ -1032,6 +1042,19 @@ struct HomeView: View {
             )
             .ignoresSafeArea(edges: .top)
         )
+    }
+
+    private var videosHeader: some View {
+        HStack {
+            Text("Videos")
+                .font(.title2.bold())
+                .foregroundStyle(C.text)
+            Spacer()
+        }
+        .padding(.horizontal, C.pagePad)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
+        .background(C.bg)
     }
 
     private func toolbarIcon(_ iconName: String, fallback: String) -> some View {
