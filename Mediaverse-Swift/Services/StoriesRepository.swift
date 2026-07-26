@@ -163,6 +163,23 @@ final class StoriesRepository: ObservableObject {
         }
     }
 
+    func applyEnergy(storyId: String, aggregate: StoryEnergyAggregate) {
+        for groupIndex in groups.indices {
+            guard let storyIndex = groups[groupIndex].stories.firstIndex(where: { $0.id == storyId }) else { continue }
+            groups[groupIndex].stories[storyIndex].energyCount = max(0, aggregate.count)
+            groups[groupIndex].stories[storyIndex].energyTotal = Int(
+                ((aggregate.avg ?? 0) * Double(max(0, aggregate.count))).rounded()
+            )
+            groups[groupIndex].stories[storyIndex].energyTags = aggregate.topTags
+                .enumerated()
+                .reduce(into: [String: Int]()) { result, item in
+                    result[item.element] = 3 - min(item.offset, 2)
+                }
+            saveCachedGroups()
+            return
+        }
+    }
+
     func deleteStory(id: String) async throws {
         do {
             try await client.deleteStory(id: id)

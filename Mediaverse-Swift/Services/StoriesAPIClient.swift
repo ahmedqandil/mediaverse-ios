@@ -85,6 +85,39 @@ actor StoriesAPIClient {
         try await send("/api/stories/\(C.pathSegment(storyId))/like", method: "POST", body: Data(), authenticated: true)
     }
 
+    func fetchEnergy(storyId: String) async throws -> StoryEnergyResponse {
+        try await send(
+            "/api/stories/\(C.pathSegment(storyId))/rating",
+            method: "GET",
+            body: Optional<Data>.none,
+            authenticated: true
+        )
+    }
+
+    func submitEnergy(storyId: String, overall: Int, tags: [String]) async throws -> StoryEnergyUserRating {
+        struct Body: Encodable {
+            let overall: Int
+            let tags: [String]
+        }
+        let data = try encoder.encode(Body(overall: min(max(overall, 1), 5), tags: Array(tags.prefix(6))))
+        return try await send(
+            "/api/stories/\(C.pathSegment(storyId))/rating",
+            method: "POST",
+            body: data,
+            authenticated: true
+        )
+    }
+
+    func removeEnergy(storyId: String) async throws {
+        struct Response: Decodable { let ok: Bool }
+        let _: Response = try await send(
+            "/api/stories/\(C.pathSegment(storyId))/rating",
+            method: "DELETE",
+            body: Optional<Data>.none,
+            authenticated: true
+        )
+    }
+
     func getUploadUrl(mimeType: String) async throws -> UploadUrlResponse {
         let data = try encoder.encode(UploadUrlRequest(mimeType: mimeType))
         return try await send("/api/stories/upload-url", method: "POST", body: data, authenticated: true)
@@ -309,6 +342,24 @@ struct StoryLikeResponse: Decodable {
             ?? source.decodeIfPresent(Int.self, forKey: .likes)
             ?? source.decodeIfPresent(Int.self, forKey: .count)
     }
+}
+
+struct StoryEnergyUserRating: Decodable {
+    let overall: Int
+    let tags: [String]
+    let review: String?
+}
+
+struct StoryEnergyAggregate: Decodable {
+    let avg: Double?
+    let count: Int
+    let distribution: [String: Int]
+    let topTags: [String]
+}
+
+struct StoryEnergyResponse: Decodable {
+    let userRating: StoryEnergyUserRating?
+    let aggregate: StoryEnergyAggregate
 }
 
 struct PollVoteResponse: Decodable {

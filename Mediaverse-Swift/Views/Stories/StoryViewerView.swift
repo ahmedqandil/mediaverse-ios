@@ -55,7 +55,7 @@ struct StoryViewerView: View {
     @State private var viewerPreviewResponses = [String: StoryViewersResponse]()
     @State private var viewerPreviewAvatars = [String: [ViewerUser]]()
     @State private var viewerAccessDeniedStoryIds = Set<String>()
-    @State private var likingStoryIds = Set<String>()
+    @State private var energySheetStory: StoryItem?
 
     private let videoPrewarmLimit = 3
 
@@ -131,6 +131,16 @@ struct StoryViewerView: View {
             setPaused(false)
         }) { story in
             viewersSheet(for: story)
+        }
+        .sheet(item: $energySheetStory, onDismiss: {
+            energySheetStory = nil
+            setPaused(false)
+        }) { story in
+            StoryEnergySheet(story: story) { aggregate in
+                repository.applyEnergy(storyId: story.id, aggregate: aggregate)
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .accessibilityElement(children: .contain)
     }
@@ -406,7 +416,7 @@ struct StoryViewerView: View {
             }
 
             HStack(spacing: 10) {
-                storyLikeButton(story)
+                storyEnergyButton(story)
 
                 if canShowViewersChip(for: story, group: group) {
                     ViewerCountChip(
@@ -415,6 +425,19 @@ struct StoryViewerView: View {
                         onTap: { presentViewersSheet(for: story) }
                     )
                 }
+            }
+
+            if story.energyCount > 0 {
+                SocialEnergyMeter(
+                    total: story.energyTotal,
+                    count: story.energyCount,
+                    tags: story.energyTags
+                        .sorted { lhs, rhs in
+                            lhs.value == rhs.value ? lhs.key < rhs.key : lhs.value > rhs.value
+                        }
+                        .map(\.key)
+                )
+                .padding(.top, 2)
             }
 
             if let label = story.ctaLabel, !label.isEmpty {
@@ -438,17 +461,21 @@ struct StoryViewerView: View {
         }
     }
 
-    private func storyLikeButton(_ story: StoryItem) -> some View {
+    private func storyEnergyButton(_ story: StoryItem) -> some View {
         Button {
-            Task { await toggleLike(story) }
+            setPaused(true)
+            energySheetStory = story
         } label: {
             HStack(spacing: 7) {
-                Image(systemName: story.userLiked ? "heart.fill" : "heart")
+                Image(systemName: "bolt.fill")
                     .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(story.userLiked ? .red : .white)
-                    .scaleEffect(story.userLiked ? 1.08 : 1)
-                Text(story.likeCount > 0 ? compactCount(story.likeCount) : "Like")
+                    .foregroundStyle(C.watch)
+                Text("Add Energy")
                     .font(.system(size: 12, weight: .bold))
+                if story.energyCount > 0 {
+                    Text(compactCount(story.energyCount))
+                        .font(.system(size: 12, weight: .bold))
+                }
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 11)
@@ -458,11 +485,8 @@ struct StoryViewerView: View {
             .overlay { Capsule().stroke(.white.opacity(0.16), lineWidth: 1) }
         }
         .buttonStyle(.plain)
-        .disabled(likingStoryIds.contains(story.id))
-        .opacity(likingStoryIds.contains(story.id) ? 0.7 : 1)
-        .animation(.spring(response: 0.22, dampingFraction: 0.72), value: story.userLiked)
-        .accessibilityLabel(story.userLiked ? "Unlike story" : "Like story")
-        .accessibilityValue(story.likeCount > 0 ? "\(story.likeCount) likes" : "No likes")
+        .accessibilityLabel("Add Energy")
+        .accessibilityValue(story.energyCount > 0 ? "\(story.energyCount) Energy" : "No Energy yet")
     }
 
     // MARK: - Overlay sticker layer
@@ -1133,13 +1157,6 @@ struct StoryViewerView: View {
         return "\(hours / 24)d"
     }
 
-    private func toggleLike(_ story: StoryItem) async {
-        guard !likingStoryIds.contains(story.id) else { return }
-        likingStoryIds.insert(story.id)
-        defer { likingStoryIds.remove(story.id) }
-        await repository.toggleLike(storyId: story.id)
-    }
-
     private func compactCount(_ value: Int) -> String {
         guard value >= 1_000 else { return "\(value)" }
         let divisor = value >= 1_000_000 ? 1_000_000.0 : 1_000.0
@@ -1152,6 +1169,192 @@ struct StoryViewerView: View {
     private func openCTA(_ value: String?) {
         guard let value, let url = URL(string: value) else { return }
         inAppBrowser.open(url)
+    }
+}
+
+private struct StoryEnergySheet: View {
+    let story: StoryItem
+    let onSaved: (StoryEnergyAggregate) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var overall = 3
+    @State private var selectedTags = Set<String>()
+    @State private var existingRating: StoryEnergyUserRating?
+    @State private var isLoading = true
+    @State private var isSaving = false
+    @State private var errorMessage: String?
+
+    private let tags = ["HITS", "INSPIRED", "REAL", "DEEP", "CHILL", "CLUTCH"]
+    private let columns = [GridItem(.adaptive(minimum: 105), spacing: 8)]
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView().tint(C.watch)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    VStack(alignment: .leading, spacing: 20) {
+                        Text("How much Energy?")
+                            .font(.headline)
+                        HStack(spacing: 7) {
+                            ForEach(1...5, id: \.self) { value in
+                                Button {
+                                    overall = value
+                                } label: {
+                                    Text("\(value)")
+                                        .font(.headline)
+                                        .foregroundStyle(value == overall ? C.bg : C.text)
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: 42)
+                                        .background(
+                                            value == overall ? C.watch : C.elevated,
+                                            in: RoundedRectangle(cornerRadius: 9)
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+
+                        Text("What kind?")
+                            .font(.headline)
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+                            ForEach(tags, id: \.self) { tag in
+                                Button {
+                                    if selectedTags.contains(tag) {
+                                        selectedTags.remove(tag)
+                                    } else {
+                                        selectedTags.insert(tag)
+                                    }
+                                } label: {
+                                    Label(flashEnergyLabel(tag), systemImage: flashEnergySymbol(tag))
+                                        .font(.caption.bold())
+                                        .foregroundStyle(selectedTags.contains(tag) ? C.bg : C.text)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 9)
+                                        .background(
+                                            selectedTags.contains(tag) ? C.watch : C.elevated,
+                                            in: Capsule()
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+
+                        if existingRating != nil {
+                            Button("Remove my Energy", role: .destructive) {
+                                Task { await removeEnergy() }
+                            }
+                            .font(.subheadline.weight(.semibold))
+                            .disabled(isSaving)
+                        }
+                        Spacer()
+                    }
+                    .padding(C.pagePad)
+                }
+            }
+            .background(C.bg.ignoresSafeArea())
+            .foregroundStyle(C.text)
+            .navigationTitle("Add Energy")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        Task { await save() }
+                    }
+                    .disabled(isLoading || isSaving)
+                }
+            }
+            .task { await load() }
+            .alert(
+                "Energy update failed",
+                isPresented: Binding(
+                    get: { errorMessage != nil },
+                    set: { if !$0 { errorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "")
+            }
+        }
+    }
+
+    @MainActor
+    private func load() async {
+        do {
+            let response = try await StoriesAPIClient.shared.fetchEnergy(storyId: story.id)
+            existingRating = response.userRating
+            if let rating = response.userRating {
+                overall = rating.overall
+                selectedTags = Set(rating.tags)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
+    }
+
+    @MainActor
+    private func save() async {
+        guard !isSaving else { return }
+        isSaving = true
+        do {
+            _ = try await StoriesAPIClient.shared.submitEnergy(
+                storyId: story.id,
+                overall: overall,
+                tags: Array(selectedTags)
+            )
+            let refreshed = try await StoriesAPIClient.shared.fetchEnergy(storyId: story.id)
+            onSaved(refreshed.aggregate)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isSaving = false
+    }
+
+    @MainActor
+    private func removeEnergy() async {
+        guard !isSaving else { return }
+        isSaving = true
+        do {
+            try await StoriesAPIClient.shared.removeEnergy(storyId: story.id)
+            let refreshed = try await StoriesAPIClient.shared.fetchEnergy(storyId: story.id)
+            onSaved(refreshed.aggregate)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isSaving = false
+    }
+}
+
+private func flashEnergyLabel(_ value: String) -> String {
+    switch value.uppercased() {
+    case "HITS": "Hits"
+    case "INSPIRED": "Inspired"
+    case "REAL": "Real"
+    case "DEEP": "Deep"
+    case "CHILL": "Chill"
+    case "CLUTCH": "Clutch"
+    default: value.capitalized
+    }
+}
+
+private func flashEnergySymbol(_ value: String) -> String {
+    switch value.uppercased() {
+    case "HITS": "waveform.path"
+    case "INSPIRED": "star.fill"
+    case "REAL": "lightbulb.fill"
+    case "DEEP": "brain.head.profile"
+    case "CHILL": "face.smiling"
+    case "CLUTCH": "bolt.fill"
+    default: "sparkles"
     }
 }
 
