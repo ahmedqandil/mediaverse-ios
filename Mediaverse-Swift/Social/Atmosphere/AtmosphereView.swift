@@ -1,6 +1,9 @@
 import SwiftUI
+import AVKit
 
 struct AtmosphereView: View {
+    @AppStorage("playerMuted") private var playerMuted = false
+    @EnvironmentObject private var miniPlayer: MiniPlayerManager
     @StateObject private var model = AtmosphereViewModel()
     @StateObject private var previewManager = FeedPreviewPlayerManager()
     @State private var activePreviewVideoId: String?
@@ -162,7 +165,7 @@ struct AtmosphereView: View {
             sourceRoute: sourceRoute,
             activePreviewVideoId: $activePreviewVideoId,
             previewManager: previewManager,
-            isAutoplayBlocked: false,
+            isAutoplayBlocked: isAutoplayBlocked,
             isPreservingPreviewHandoff: isPreservingPreviewHandoff,
             onPreviewPaused: {
                 suppressedPreviewVideoId = video.id
@@ -174,9 +177,34 @@ struct AtmosphereView: View {
                     object: mediaRoute
                 )
             },
-            replaceMediaAction: nil
+            replaceMediaAction: canHandoff(feedVideo) ? { sourceFrame in
+                handoffToWatch(feedVideo, sourceFrame: sourceFrame)
+            } : nil
         )
         .padding(.bottom, C.sectionSpacing)
+    }
+
+    private var isAutoplayBlocked: Bool {
+        miniPlayer.item != nil || miniPlayer.isExpansionHandoffActive
+    }
+
+    private func canHandoff(_ video: FeedVideo) -> Bool {
+        C.mediaURL(video.videoUrl) != nil
+    }
+
+    private func handoffToWatch(_ video: FeedVideo, sourceFrame: CGRect?) {
+        guard let url = C.mediaURL(video.videoUrl) else { return }
+        let player = previewManager.handoffActivePlayer(for: video.id, muted: playerMuted)
+            ?? AVPlayer(url: url)
+        player.isMuted = playerMuted
+        player.volume = 1
+        miniPlayer.replaceAndExpand(
+            player: player,
+            title: video.title,
+            route: .video(video.id),
+            sourceFrame: sourceFrame,
+            entrySurface: .atmosphere
+        )
     }
 
     private func feedVideos(from items: [AtmosphereFeedItem]) -> [FeedVideo] {
@@ -190,6 +218,12 @@ struct AtmosphereView: View {
         previewFrames = frames
         previewIdleTask?.cancel()
         previewManager.warm(videos: videos, currentID: activePreviewVideoId)
+        guard !isAutoplayBlocked else {
+            isPreservingPreviewHandoff = false
+            activePreviewVideoId = nil
+            previewManager.pause()
+            return
+        }
         if activePreviewVideoId != nil {
             isPreservingPreviewHandoff = true
             activePreviewVideoId = nil

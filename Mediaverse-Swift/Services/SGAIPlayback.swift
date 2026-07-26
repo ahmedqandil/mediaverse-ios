@@ -142,6 +142,7 @@ struct ShortsAdDeliveryPlan: Equatable {
 enum PlaybackEntrySurface: String, Codable {
     case direct
     case homeFeed = "home_feed"
+    case atmosphere
     case videosFeed = "videos_feed"
     case shortsFeed = "shorts_feed"
     case upNext = "up_next"
