@@ -132,7 +132,18 @@ struct AtmosphereView: View {
                     case .ripple(let ripple):
                         RippleCard(
                             ripple: ripple,
-                            allowsEngagement: socialFeatures.rippleEngagementEnabled
+                            allowsEngagement: socialFeatures.rippleEngagementEnabled,
+                            activePreviewVideoId: $activePreviewVideoId,
+                            previewManager: previewManager,
+                            isAutoplayBlocked: isAutoplayBlocked,
+                            isPreservingPreviewHandoff: isPreservingPreviewHandoff,
+                            onPreviewPaused: { videoID in
+                                suppressedPreviewVideoId = videoID
+                                updatePreview(videos: feedVideos(from: model.atmosphereItems))
+                            },
+                            onVideoHandoff: { video, frame in
+                                handoffToWatch(video, sourceFrame: frame)
+                            }
                         )
                         .padding(.horizontal, C.pagePad)
                     case .video(let video):
@@ -205,6 +216,16 @@ struct AtmosphereView: View {
     }
 
     private func handoffToWatch(_ video: FeedVideo, sourceFrame: CGRect?) {
+        let route = AppRoute.media(id: video.id, type: video.type)
+        if case .short = route {
+            previewManager.pauseIfActive(videoId: video.id)
+            activePreviewVideoId = nil
+            NotificationCenter.default.post(
+                name: .mentionNavigationRequested,
+                object: route
+            )
+            return
+        }
         guard let url = C.mediaURL(video.videoUrl) else { return }
         let player = previewManager.handoffActivePlayer(for: video.id, muted: playerMuted)
             ?? AVPlayer(url: url)
@@ -213,16 +234,22 @@ struct AtmosphereView: View {
         miniPlayer.replaceAndExpand(
             player: player,
             title: video.title,
-            route: .video(video.id),
+            route: route,
             sourceFrame: sourceFrame,
             entrySurface: .atmosphere
         )
     }
 
     private func feedVideos(from items: [AtmosphereFeedItem]) -> [FeedVideo] {
-        items.compactMap {
-            guard case .video(let video) = $0 else { return nil }
-            return video.feedVideo
+        items.flatMap { item -> [FeedVideo] in
+            switch item {
+            case .video(let video):
+                return [video.feedVideo]
+            case .ripple(let ripple):
+                return ripple.attachments.compactMap { $0.video?.feedVideo }
+            case .excludedEpisode, .excludedShort, .unsupported:
+                return []
+            }
         }
     }
 

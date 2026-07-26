@@ -21,6 +21,12 @@ struct RippleCard: View {
     let ripple: Ripple
     let actions: RippleCardActions
     let allowsEngagement: Bool
+    @Binding private var activePreviewVideoId: String?
+    private let previewManager: FeedPreviewPlayerManager?
+    private let isAutoplayBlocked: Bool
+    private let isPreservingPreviewHandoff: Bool
+    private let onPreviewPaused: (String) -> Void
+    private let onVideoHandoff: (FeedVideo, CGRect?) -> Void
     @EnvironmentObject private var auth: AuthManager
     @StateObject private var engagement: RippleEngagementController
     @State private var showsEnergy = false
@@ -39,11 +45,23 @@ struct RippleCard: View {
     init(
         ripple: Ripple,
         actions: RippleCardActions = .readOnly,
-        allowsEngagement: Bool = false
+        allowsEngagement: Bool = false,
+        activePreviewVideoId: Binding<String?> = .constant(nil),
+        previewManager: FeedPreviewPlayerManager? = nil,
+        isAutoplayBlocked: Bool = true,
+        isPreservingPreviewHandoff: Bool = false,
+        onPreviewPaused: @escaping (String) -> Void = { _ in },
+        onVideoHandoff: @escaping (FeedVideo, CGRect?) -> Void = { _, _ in }
     ) {
         self.ripple = ripple
         self.actions = actions
         self.allowsEngagement = allowsEngagement
+        _activePreviewVideoId = activePreviewVideoId
+        self.previewManager = previewManager
+        self.isAutoplayBlocked = isAutoplayBlocked
+        self.isPreservingPreviewHandoff = isPreservingPreviewHandoff
+        self.onPreviewPaused = onPreviewPaused
+        self.onVideoHandoff = onVideoHandoff
         _engagement = StateObject(wrappedValue: RippleEngagementController(ripple: ripple))
         _displayedCommentCount = State(initialValue: ripple.commentCount)
     }
@@ -79,7 +97,15 @@ struct RippleCard: View {
             }
 
             if !ripple.attachments.isEmpty {
-                RippleAttachmentsView(attachments: ripple.attachments)
+                RippleAttachmentsView(
+                    attachments: ripple.attachments,
+                    activePreviewVideoId: $activePreviewVideoId,
+                    previewManager: previewManager,
+                    isAutoplayBlocked: isAutoplayBlocked,
+                    isPreservingPreviewHandoff: isPreservingPreviewHandoff,
+                    onPreviewPaused: onPreviewPaused,
+                    onVideoHandoff: onVideoHandoff
+                )
                     .padding(.top, 12)
             }
 
@@ -575,6 +601,12 @@ private struct RippleReportSheet: View {
 
 private struct RippleAttachmentsView: View {
     let attachments: [RippleAttachment]
+    @Binding var activePreviewVideoId: String?
+    let previewManager: FeedPreviewPlayerManager?
+    let isAutoplayBlocked: Bool
+    let isPreservingPreviewHandoff: Bool
+    let onPreviewPaused: (String) -> Void
+    let onVideoHandoff: (FeedVideo, CGRect?) -> Void
 
     private var photos: [RippleAttachment] {
         attachments.filter { $0.type == .photo && $0.imageURL != nil }
@@ -603,7 +635,15 @@ private struct RippleAttachmentsView: View {
                 .padding(.horizontal, 14)
         case .westreemVideo:
             if let video = attachment.video {
-                RippleVideoAttachmentView(video: video)
+                RippleVideoAttachmentView(
+                    video: video,
+                    activePreviewVideoId: $activePreviewVideoId,
+                    previewManager: previewManager,
+                    isAutoplayBlocked: isAutoplayBlocked,
+                    isPreservingPreviewHandoff: isPreservingPreviewHandoff,
+                    onPreviewPaused: onPreviewPaused,
+                    onVideoHandoff: onVideoHandoff
+                )
             }
         case .westreemCollection:
             if let collection = attachment.collection {
@@ -1056,9 +1096,37 @@ private struct RippleLinkAttachment: View {
 
 private struct RippleVideoAttachmentView: View {
     let video: RippleVideoAttachment
+    @Binding var activePreviewVideoId: String?
+    let previewManager: FeedPreviewPlayerManager?
+    let isAutoplayBlocked: Bool
+    let isPreservingPreviewHandoff: Bool
+    let onPreviewPaused: (String) -> Void
+    let onVideoHandoff: (FeedVideo, CGRect?) -> Void
 
+    @ViewBuilder
     var body: some View {
-        NavigationLink(value: AppRoute.media(id: video.id, type: video.type)) {
+        if let previewManager {
+            HomeVideoCard(
+                video: video.feedVideo,
+                mediaRoute: video.appRoute,
+                sourceRoute: nil,
+                activePreviewVideoId: $activePreviewVideoId,
+                previewManager: previewManager,
+                isAutoplayBlocked: isAutoplayBlocked,
+                isPreservingPreviewHandoff: isPreservingPreviewHandoff,
+                onPreviewPaused: { onPreviewPaused(video.id) },
+                openMediaAction: {
+                    NotificationCenter.default.post(
+                        name: .mentionNavigationRequested,
+                        object: video.appRoute
+                    )
+                },
+                replaceMediaAction: video.videoURL == nil
+                    ? nil
+                    : { frame in onVideoHandoff(video.feedVideo, frame) }
+            )
+        } else {
+            NavigationLink(value: video.appRoute) {
             ZStack(alignment: .bottomTrailing) {
                 CachedRemoteImage(
                     url: C.mediaURL(video.thumbnailURL),
@@ -1097,8 +1165,9 @@ private struct RippleVideoAttachmentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.linearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .top, endPoint: .bottom))
             }
+            }
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
     }
 }
 
@@ -1733,7 +1802,32 @@ private func formatDuration(_ seconds: Double) -> String {
         : String(format: "%d:%02d", minutes, remaining)
 }
 
-private extension RippleVideoAttachment {
+extension RippleVideoAttachment {
+    var appRoute: AppRoute {
+        AppRoute.media(id: id, type: type)
+    }
+
+    var feedVideo: FeedVideo {
+        FeedVideo(
+            id: id,
+            title: title,
+            thumbnailUrl: thumbnailURL,
+            videoUrl: videoURL,
+            duration: duration,
+            aspectRatio: width.flatMap { width in
+                height.flatMap { height in height > 0 ? Double(width) / Double(height) : nil }
+            },
+            width: width,
+            height: height,
+            views: views ?? 0,
+            type: type,
+            publishedAt: nil,
+            createdAt: "",
+            channel: nil,
+            show: nil
+        )
+    }
+
     init(
         id: String,
         title: String,
