@@ -95,7 +95,7 @@ struct AtmosphereView: View {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     switch item {
                     case .ripple(let ripple):
-                        RippleReadOnlyPlaceholder(ripple: ripple)
+                        RippleCard(ripple: ripple)
                     case .video(let video):
                         AtmosphereVideoPlaceholder(video: video)
                     case .excludedEpisode, .excludedShort, .unsupported:
@@ -121,7 +121,7 @@ struct AtmosphereView: View {
     private func simpleRipples(_ ripples: [Ripple]) -> some View {
         ScrollView {
             LazyVStack(spacing: 12) {
-                ForEach(ripples) { RippleReadOnlyPlaceholder(ripple: $0) }
+                ForEach(ripples) { RippleCard(ripple: $0) }
             }
             .padding(C.pagePad)
             .padding(.bottom, C.bottomMenuClearance)
@@ -154,35 +154,6 @@ struct AtmosphereView: View {
             .padding(.bottom, C.bottomMenuClearance)
         }
         .refreshable { await model.reload(.myVibes) }
-    }
-}
-
-private struct RippleReadOnlyPlaceholder: View {
-    let ripple: Ripple
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(ripple.author.name ?? ripple.author.handle.map { "@\($0)" } ?? "Westreem user")
-                .font(.subheadline.bold())
-            if let body = ripple.body, !body.isEmpty {
-                Text(body)
-                    .font(.body)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            HStack(spacing: 14) {
-                if ripple.energyCount > 0 { Label("\(ripple.energyCount)", systemImage: "bolt.fill") }
-                if ripple.commentCount > 0 { Label("\(ripple.commentCount)", systemImage: "bubble.left") }
-                if ripple.echoCount > 0 { Label("\(ripple.echoCount)", systemImage: "dot.radiowaves.left.and.right") }
-            }
-            .font(.caption)
-            .foregroundStyle(C.textMuted)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(C.surface, in: RoundedRectangle(cornerRadius: C.cardRadius))
-        .overlay {
-            RoundedRectangle(cornerRadius: C.cardRadius).stroke(C.borderSubtle)
-        }
     }
 }
 

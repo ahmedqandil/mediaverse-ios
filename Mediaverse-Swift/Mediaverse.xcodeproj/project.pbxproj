@@ -49,6 +49,7 @@
 		A4C0C003301A000100000001 /* LegacySocialAPIAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C013301A000100000001 /* LegacySocialAPIAdapter.swift */; };
 		A4C0C004301A000100000001 /* AtmosphereViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C014301A000100000001 /* AtmosphereViewModel.swift */; };
 		A4C0C005301A000100000001 /* AtmosphereView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C015301A000100000001 /* AtmosphereView.swift */; };
+		A4C0C006301A000100000001 /* RippleCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C016301A000100000001 /* RippleCard.swift */; };
 		846788EC2FFC2BD700DED05E /* StoriesAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846788EB2FFC2BD700DED05E /* StoriesAPIClient.swift */; };
 		846788EE2FFC2BF700DED05E /* StoriesModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846788ED2FFC2BF700DED05E /* StoriesModels.swift */; };
 		846788F02FFC2C0200DED05E /* StoriesRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846788EF2FFC2C0200DED05E /* StoriesRepository.swift */; };
@@ -167,6 +168,7 @@
 		A4C0C013301A000100000001 /* LegacySocialAPIAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacySocialAPIAdapter.swift; sourceTree = "<group>"; };
 		A4C0C014301A000100000001 /* AtmosphereViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtmosphereViewModel.swift; sourceTree = "<group>"; };
 		A4C0C015301A000100000001 /* AtmosphereView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtmosphereView.swift; sourceTree = "<group>"; };
+		A4C0C016301A000100000001 /* RippleCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleCard.swift; sourceTree = "<group>"; };
 		846788EB2FFC2BD700DED05E /* StoriesAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoriesAPIClient.swift; sourceTree = "<group>"; };
 		846788ED2FFC2BF700DED05E /* StoriesModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoriesModels.swift; sourceTree = "<group>"; };
 		846788EF2FFC2C0200DED05E /* StoriesRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoriesRepository.swift; sourceTree = "<group>"; };
@@ -466,6 +468,7 @@
 				33A49384FA011542146DC570 /* Navigation */,
 				A4C0C020301A000100000001 /* Social Contracts */,
 				A4C0C021301A000100000001 /* Social Atmosphere */,
+				A4C0C022301A000100000001 /* Social Ripples */,
 				71BEE56A7AB2A21372CEF785 /* Services */,
 				E31173AD82616B8E70C41238 /* Utilities */,
 				CD024875B3057A968077CEE8 /* Views */,
@@ -502,6 +505,15 @@
 			);
 			name = "Social Atmosphere";
 			path = Social/Atmosphere;
+			sourceTree = "<group>";
+		};
+		A4C0C022301A000100000001 /* Social Ripples */ = {
+			isa = PBXGroup;
+			children = (
+				A4C0C016301A000100000001 /* RippleCard.swift */,
+			);
+			name = "Social Ripples";
+			path = Social/Ripples;
 			sourceTree = "<group>";
 		};
 		CD024875B3057A968077CEE8 /* Views */ = {
@@ -696,6 +708,7 @@
 				A4C0C003301A000100000001 /* LegacySocialAPIAdapter.swift in Sources */,
 				A4C0C004301A000100000001 /* AtmosphereViewModel.swift in Sources */,
 				A4C0C005301A000100000001 /* AtmosphereView.swift in Sources */,
+				A4C0C006301A000100000001 /* RippleCard.swift in Sources */,
 				8467891E2FFD942100DED05E /* ViewerCountChip.swift in Sources */,
 				846788FD2FFC316000DED05E /* StoryProjectModel.swift in Sources */,
 				846788FF2FFC318000DED05E /* ProjectStore.swift in Sources */,

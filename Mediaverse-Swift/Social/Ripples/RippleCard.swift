@@ -1,0 +1,713 @@
+import SwiftUI
+
+struct RippleCardActions {
+    var addEnergy: (() -> Void)?
+    var comment: (() -> Void)?
+    var echo: (() -> Void)?
+    var share: (() -> Void)?
+    var openAuthor: (() -> Void)?
+    var openVibe: (() -> Void)?
+    var edit: (() -> Void)?
+    var delete: (() -> Void)?
+    var report: (() -> Void)?
+
+    static let readOnly = RippleCardActions()
+}
+
+struct RippleCard: View {
+    let ripple: Ripple
+    var actions: RippleCardActions = .readOnly
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            identityHeader
+                .padding(.horizontal, 14)
+                .padding(.top, 14)
+
+            if let body = ripple.body?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !body.isEmpty {
+                Text(body)
+                    .font(bodyFont(hasAttachments: !ripple.attachments.isEmpty || ripple.poll != nil))
+                    .foregroundStyle(C.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 12)
+            }
+
+            if let poll = ripple.poll {
+                RipplePollCard(poll: poll)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 12)
+            }
+
+            if !ripple.attachments.isEmpty {
+                RippleAttachmentsView(attachments: ripple.attachments)
+                    .padding(.top, 12)
+            }
+
+            if ripple.energyCount > 0 {
+                SocialEnergyMeter(
+                    total: ripple.energyTotal,
+                    count: ripple.energyCount,
+                    tags: ripple.energyTags
+                )
+                .padding(.horizontal, 14)
+                .padding(.top, 12)
+            }
+
+            actionBar
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(C.surface)
+        .overlay {
+            RoundedRectangle(cornerRadius: C.cardRadius)
+                .stroke(C.borderSubtle, lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: C.cardRadius))
+        .accessibilityElement(children: .contain)
+    }
+
+    private var identityHeader: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Button(action: { actions.openAuthor?() }) {
+                SocialIdentityAvatar(
+                    image: ripple.author.image,
+                    name: ripple.author.name ?? ripple.author.handle,
+                    size: 40
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(actions.openAuthor == nil)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Button(action: { actions.openAuthor?() }) {
+                    Text(ripple.author.name ?? ripple.author.handle.map { "@\($0)" } ?? "Westreem user")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(C.text)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .disabled(actions.openAuthor == nil)
+
+                HStack(spacing: 5) {
+                    if let handle = ripple.author.handle, ripple.author.name != nil {
+                        Text("@\(handle)")
+                    }
+                    if let club = ripple.club {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .bold))
+                        Button(club.name) { actions.openVibe?() }
+                            .buttonStyle(.plain)
+                            .disabled(actions.openVibe == nil)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(C.textMuted)
+                .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            if actions.edit != nil || actions.delete != nil || actions.report != nil {
+                Menu {
+                    if let edit = actions.edit {
+                        Button("Edit", systemImage: "pencil", action: edit)
+                    }
+                    if let delete = actions.delete {
+                        Button("Delete", systemImage: "trash", role: .destructive, action: delete)
+                    }
+                    if let report = actions.report {
+                        Button("Report", systemImage: "flag", action: report)
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(C.textMuted)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+            }
+        }
+    }
+
+    private var actionBar: some View {
+        HStack(spacing: 0) {
+            action(
+                title: "Add Energy",
+                systemImage: "bolt.fill",
+                count: ripple.energyCount,
+                handler: actions.addEnergy
+            )
+            action(
+                title: "Comment",
+                systemImage: "bubble.left",
+                count: ripple.commentCount,
+                handler: actions.comment
+            )
+            action(
+                title: "Echo",
+                systemImage: "dot.radiowaves.left.and.right",
+                count: ripple.echoCount,
+                handler: actions.echo
+            )
+            action(
+                title: "Share",
+                systemImage: "square.and.arrow.up",
+                count: ripple.shareCount,
+                handler: actions.share
+            )
+        }
+        .overlay(alignment: .top) {
+            Rectangle().fill(C.borderSubtle).frame(height: 1)
+        }
+    }
+
+    private func action(
+        title: String,
+        systemImage: String,
+        count: Int,
+        handler: (() -> Void)?
+    ) -> some View {
+        Button(action: { handler?() }) {
+            VStack(spacing: 3) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 14, weight: .semibold))
+                Text(count > 0 ? "\(title) · \(count)" : title)
+                    .font(.system(size: 9, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .foregroundStyle(handler == nil ? C.textTertiary : C.textMuted)
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(handler == nil)
+        .accessibilityLabel(count > 0 ? "\(title), \(count)" : title)
+    }
+
+    private func bodyFont(hasAttachments: Bool) -> Font {
+        hasAttachments ? .body : .system(size: 20, weight: .medium, design: .rounded)
+    }
+}
+
+struct SocialIdentityAvatar: View {
+    let image: String?
+    let name: String?
+    let size: CGFloat
+
+    var body: some View {
+        Circle()
+            .fill(C.elevated)
+            .frame(width: size, height: size)
+            .overlay {
+                if let url = C.mediaURL(image) {
+                    CachedRemoteImage(
+                        url: url,
+                        targetSize: CGSize(width: size, height: size)
+                    ) { loaded in
+                        loaded.resizable().scaledToFill()
+                    } placeholder: {
+                        initials
+                    }
+                } else {
+                    initials
+                }
+            }
+            .clipShape(Circle())
+            .overlay(Circle().stroke(C.border, lineWidth: 1))
+    }
+
+    private var initials: some View {
+        Text(String((name?.trimmingCharacters(in: .whitespacesAndNewlines).first ?? "W")).uppercased())
+            .font(.system(size: size * 0.36, weight: .bold))
+            .foregroundStyle(C.textMuted)
+    }
+}
+
+private struct RippleAttachmentsView: View {
+    let attachments: [RippleAttachment]
+
+    private var photos: [RippleAttachment] {
+        attachments.filter { $0.type == .photo && $0.imageURL != nil }
+    }
+
+    private var other: [RippleAttachment] {
+        attachments.filter { $0.type != .photo || $0.imageURL == nil }
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if !photos.isEmpty {
+                RipplePhotoGrid(photos: photos)
+            }
+            ForEach(other) { attachment in
+                attachmentView(attachment)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func attachmentView(_ attachment: RippleAttachment) -> some View {
+        switch attachment.type {
+        case .link:
+            RippleLinkAttachment(attachment: attachment)
+                .padding(.horizontal, 14)
+        case .westreemVideo:
+            if let video = attachment.video {
+                RippleVideoAttachmentView(video: video)
+            }
+        case .westreemCollection:
+            if let collection = attachment.collection {
+                RippleCollectionAttachmentView(collection: collection)
+                    .padding(.horizontal, 14)
+            }
+        case .westreemClip:
+            if let clip = attachment.userPost {
+                RippleClipAttachmentView(clip: clip)
+                    .padding(.horizontal, 14)
+            }
+        case .westreemRipple:
+            if let echoed = attachment.fanClubPost {
+                EmbeddedRippleView(ripple: echoed)
+                    .padding(.horizontal, 14)
+            }
+        case .photo, .unknown:
+            EmptyView()
+        }
+    }
+}
+
+private struct RipplePhotoGrid: View {
+    let photos: [RippleAttachment]
+
+    var body: some View {
+        GeometryReader { proxy in
+            let spacing: CGFloat = 2
+            let columns = photos.count == 1 ? 1 : 2
+            let width = (proxy.size.width - CGFloat(columns - 1) * spacing) / CGFloat(columns)
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.fixed(width), spacing: spacing), count: columns),
+                spacing: spacing
+            ) {
+                ForEach(Array(photos.prefix(4).enumerated()), id: \.element.id) { index, photo in
+                    CachedRemoteImage(
+                        url: C.mediaURL(photo.imageURL),
+                        targetSize: CGSize(width: width, height: photos.count == 1 ? width : width * 0.9)
+                    ) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        C.elevated
+                    }
+                    .frame(width: width, height: photos.count == 1 ? width : width * 0.9)
+                    .clipped()
+                    .overlay {
+                        if index == 3, photos.count > 4 {
+                            Color.black.opacity(0.55)
+                            Text("+\(photos.count - 3)")
+                                .font(.title.bold())
+                                .foregroundStyle(.white)
+                        }
+                    }
+                }
+            }
+        }
+        .aspectRatio(photos.count == 1 ? 1 : (photos.count == 2 ? 1.7 : 1.1), contentMode: .fit)
+    }
+}
+
+private struct RippleLinkAttachment: View {
+    let attachment: RippleAttachment
+
+    var body: some View {
+        Group {
+            if let url = secureExternalURL {
+                Link(destination: url) { card }
+            } else {
+                card
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var card: some View {
+        HStack(spacing: 10) {
+            if let image = attachment.linkImageURL ?? attachment.linkFaviconURL {
+                CachedRemoteImage(
+                    url: C.mediaURL(image),
+                    targetSize: CGSize(width: 84, height: 64)
+                ) { loaded in
+                    loaded.resizable().scaledToFill()
+                } placeholder: {
+                    C.elevated
+                }
+                .frame(width: 84, height: 64)
+                .clipped()
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(attachment.linkTitle ?? attachment.linkDomain ?? "Open link")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(C.text)
+                    .lineLimit(1)
+                if let description = attachment.linkDescription {
+                    Text(description)
+                        .font(.caption)
+                        .foregroundStyle(C.textMuted)
+                        .lineLimit(2)
+                }
+                if let domain = attachment.linkDomain {
+                    Text(domain.uppercased())
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(C.textTertiary)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(minHeight: 64)
+        .background(C.elevated, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(C.borderSubtle))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var secureExternalURL: URL? {
+        guard let value = attachment.externalURL,
+              let url = URL(string: value),
+              url.scheme?.lowercased() == "https"
+        else { return nil }
+        return url
+    }
+}
+
+private struct RippleVideoAttachmentView: View {
+    let video: RippleVideoAttachment
+
+    var body: some View {
+        NavigationLink(value: AppRoute.media(id: video.id, type: video.type)) {
+            ZStack(alignment: .bottomTrailing) {
+                CachedRemoteImage(
+                    url: C.mediaURL(video.thumbnailURL),
+                    targetSize: CGSize(width: UIScreen.main.bounds.width, height: 240)
+                ) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    C.elevated
+                }
+                .frame(maxWidth: .infinity)
+                .aspectRatio(C.mediaAspectRatio(forContentType: video.type), contentMode: .fit)
+                .clipped()
+
+                Circle()
+                    .fill(.black.opacity(0.66))
+                    .frame(width: 48, height: 48)
+                    .overlay(Image(systemName: "play.fill").foregroundStyle(.white))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if let duration = video.duration {
+                    Text(formatDuration(duration))
+                        .font(.caption2.monospacedDigit().bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 4))
+                        .padding(8)
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                Text(video.title)
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.linearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .top, endPoint: .bottom))
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct RippleCollectionAttachmentView: View {
+    let collection: RippleCollectionAttachment
+
+    var body: some View {
+        NavigationLink(value: AppRoute.collection(collection.id)) {
+            HStack(spacing: 12) {
+                Image(systemName: "rectangle.stack.fill")
+                    .font(.title2)
+                    .foregroundStyle(C.watch)
+                    .frame(width: 48, height: 48)
+                    .background(C.watch.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(collection.title).font(.subheadline.bold()).foregroundStyle(C.text)
+                    if let description = collection.description {
+                        Text(description).font(.caption).foregroundStyle(C.textMuted).lineLimit(2)
+                    }
+                }
+                Spacer()
+                Image(systemName: "chevron.right").foregroundStyle(C.textTertiary)
+            }
+            .padding(12)
+            .background(C.elevated, in: RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct RippleClipAttachmentView: View {
+    let clip: RippleClippingAttachment
+
+    private var source: RippleVideoAttachment? {
+        clip.video ?? clip.episode.map {
+            RippleVideoAttachment(
+                id: $0.id,
+                title: $0.title,
+                thumbnailURL: $0.thumbnailUrl,
+                videoURL: $0.videoUrl,
+                duration: $0.duration
+            )
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            if let source {
+                ZStack {
+                    CachedRemoteImage(
+                        url: C.mediaURL(source.thumbnailURL),
+                        targetSize: CGSize(width: 480, height: 270)
+                    ) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        C.elevated
+                    }
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .clipped()
+                    Image(systemName: "play.fill")
+                        .foregroundStyle(.white)
+                        .padding(14)
+                        .background(.black.opacity(0.65), in: Circle())
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 9))
+            }
+            if let markIn = clip.markIn, let markOut = clip.markOut, markOut > markIn {
+                ClipRangeBar(markIn: markIn, markOut: markOut, duration: source?.duration)
+            }
+            if let caption = clip.caption, !caption.isEmpty {
+                Text(caption).font(.caption).foregroundStyle(C.textMuted)
+            }
+        }
+        .padding(10)
+        .background(C.elevated, in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+private struct ClipRangeBar: View {
+    let markIn: Double
+    let markOut: Double
+    let duration: Double?
+
+    var body: some View {
+        VStack(spacing: 5) {
+            GeometryReader { proxy in
+                let total = max(duration ?? markOut, markOut, 1)
+                let start = min(max(markIn / total, 0), 1)
+                let end = min(max(markOut / total, start), 1)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(C.border)
+                    Capsule()
+                        .fill(C.watch)
+                        .frame(width: max(4, proxy.size.width * CGFloat(end - start)))
+                        .offset(x: proxy.size.width * CGFloat(start))
+                }
+            }
+            .frame(height: 5)
+            HStack {
+                Text(formatDuration(markIn))
+                Spacer()
+                Text(formatDuration(markOut))
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(C.textMuted)
+        }
+    }
+}
+
+private struct EmbeddedRippleView: View {
+    let ripple: EmbeddedRipple
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                SocialIdentityAvatar(
+                    image: ripple.author.image,
+                    name: ripple.author.name ?? ripple.author.handle,
+                    size: 30
+                )
+                Text(ripple.author.name ?? ripple.author.handle.map { "@\($0)" } ?? "Westreem user")
+                    .font(.caption.bold())
+                Spacer()
+                if ripple.energyCount > 0 {
+                    Label("\(ripple.energyCount)", systemImage: "bolt.fill")
+                        .font(.caption2)
+                        .foregroundStyle(C.textMuted)
+                }
+            }
+            if let body = ripple.body, !body.isEmpty {
+                Text(body).font(.subheadline).foregroundStyle(C.text).lineLimit(5)
+            }
+        }
+        .padding(12)
+        .background(C.bg.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(C.border))
+    }
+}
+
+private struct RipplePollCard: View {
+    let poll: RipplePoll
+
+    private var totalVotes: Int { poll.options.reduce(0) { $0 + $1.voteCount } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(poll.question).font(.headline).foregroundStyle(C.text)
+                Spacer()
+                Image(systemName: "chart.bar.fill").foregroundStyle(C.watch)
+            }
+            ForEach(poll.options) { option in
+                let fraction = totalVotes > 0 ? Double(option.voteCount) / Double(totalVotes) : 0
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack {
+                        Text(option.label).font(.subheadline)
+                        Spacer()
+                        Text("\(Int((fraction * 100).rounded()))%").font(.caption.bold())
+                    }
+                    GeometryReader { proxy in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(C.border)
+                            Capsule()
+                                .fill(C.watch)
+                                .frame(width: proxy.size.width * CGFloat(fraction))
+                        }
+                    }
+                    .frame(height: 7)
+                }
+            }
+            Text(totalVotes == 1 ? "1 vote" : "\(totalVotes) votes")
+                .font(.caption)
+                .foregroundStyle(C.textMuted)
+        }
+        .padding(12)
+        .background(C.elevated, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+struct SocialEnergyMeter: View {
+    let total: Int
+    let count: Int
+    let tags: [String]
+
+    private var average: Double {
+        count > 0 ? min(max(Double(total) / Double(count), 0), 5) : 0
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Text(String(format: "%.1f", average))
+                    .font(.caption.bold().monospacedDigit())
+                Text(count == 1 ? "1 Energy" : "\(count) Energy")
+                    .font(.caption)
+                    .foregroundStyle(C.textMuted)
+                Spacer()
+                ForEach(Array(tags.prefix(3)), id: \.self) { tag in
+                    Label(energyLabel(tag), systemImage: energySymbol(tag))
+                        .labelStyle(.iconOnly)
+                        .foregroundStyle(C.textMuted)
+                        .accessibilityLabel(energyLabel(tag))
+                }
+            }
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(C.borderSubtle)
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color(hex: "#6AE383"),
+                                    Color(hex: "#B7E875"),
+                                    Color(hex: "#F2D36B"),
+                                    Color(hex: "#E8A15F"),
+                                    Color(hex: "#A780D7"),
+                                    Color(hex: "#5967C9")
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: proxy.size.width * CGFloat(average / 5))
+                }
+            }
+            .frame(height: 7)
+        }
+    }
+}
+
+private func energyLabel(_ value: String) -> String {
+    switch value.uppercased() {
+    case "HITS": "Hits"
+    case "INSPIRED": "Inspired"
+    case "REAL": "Real"
+    case "DEEP": "Deep"
+    case "CHILL": "Chill"
+    case "CLUTCH": "Clutch"
+    default: value.capitalized
+    }
+}
+
+private func energySymbol(_ value: String) -> String {
+    switch value.uppercased() {
+    case "HITS": "waveform.path"
+    case "INSPIRED": "star.fill"
+    case "REAL": "lightbulb.fill"
+    case "DEEP": "brain.head.profile"
+    case "CHILL": "face.smiling"
+    case "CLUTCH": "bolt.fill"
+    default: "sparkles"
+    }
+}
+
+private func formatDuration(_ seconds: Double) -> String {
+    let value = max(0, Int(seconds.rounded(.down)))
+    let hours = value / 3600
+    let minutes = (value % 3600) / 60
+    let remaining = value % 60
+    return hours > 0
+        ? String(format: "%d:%02d:%02d", hours, minutes, remaining)
+        : String(format: "%d:%02d", minutes, remaining)
+}
+
+private extension RippleVideoAttachment {
+    init(
+        id: String,
+        title: String,
+        thumbnailURL: String?,
+        videoURL: String?,
+        duration: Double?
+    ) {
+        self.id = id
+        self.title = title
+        self.thumbnailURL = thumbnailURL
+        self.thumbnailFocus = nil
+        self.videoURL = videoURL
+        self.duration = duration
+        self.type = nil
+        self.width = nil
+        self.height = nil
+        self.views = nil
+    }
+}
