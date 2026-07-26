@@ -1,5 +1,166 @@
 import SwiftUI
 
+struct NotificationPreferences: Decodable, Equatable {
+    var notifyComments: Bool
+    var notifyLikes: Bool
+    var notifyReplies: Bool
+    var notifyNewContent: Bool
+    var notifyMentions: Bool
+    var emailNewContent: Bool
+    var emailComments: Bool
+    var emailMarketing: Bool
+}
+
+private struct NotificationPreferencesView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var preferences: NotificationPreferences?
+    @State private var saving = Set<NotificationPreferenceField>()
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let preferences {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 22) {
+                            preferenceSection(
+                                "IN-APP NOTIFICATIONS",
+                                fields: [
+                                    (.notifyComments, "Comments on my content", "When someone comments on your videos or Ripples"),
+                                    (.notifyLikes, "Energy and comment likes", "When someone adds Energy or likes your comment"),
+                                    (.notifyReplies, "Replies to my comments", "When someone replies to a comment you left"),
+                                    (.notifyNewContent, "New content from follows", "Uploads and Ripples from people, Shows, Channels, and Vibes you follow"),
+                                    (.notifyMentions, "Mentions", "When someone mentions you in a Ripple or comment")
+                                ],
+                                preferences: preferences
+                            )
+                            preferenceSection(
+                                "EMAIL NOTIFICATIONS",
+                                fields: [
+                                    (.emailNewContent, "New content digest", "A summary of new content from your follows"),
+                                    (.emailComments, "Comments and replies", "Email when someone engages with your content"),
+                                    (.emailMarketing, "Westreem updates", "Product news and announcements")
+                                ],
+                                preferences: preferences
+                            )
+                            if let errorMessage {
+                                Text(errorMessage)
+                                    .font(.footnote)
+                                    .foregroundStyle(.red)
+                            }
+                        }
+                        .padding(C.pagePad)
+                    }
+                } else {
+                    ProgressView("Loading preferences…")
+                        .tint(C.watch)
+                }
+            }
+            .background(C.bg.ignoresSafeArea())
+            .navigationTitle("Notification Preferences")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(C.watch)
+                }
+            }
+            .task { await load() }
+        }
+    }
+
+    private func preferenceSection(
+        _ title: String,
+        fields: [(NotificationPreferenceField, String, String)],
+        preferences: NotificationPreferences
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(C.textMuted)
+            VStack(spacing: 0) {
+                ForEach(Array(fields.enumerated()), id: \.element.0) { index, field in
+                    Toggle(
+                        isOn: Binding(
+                            get: { value(of: field.0, in: preferences) },
+                            set: { enabled in
+                                Task { await update(field.0, enabled: enabled) }
+                            }
+                        )
+                    ) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(field.1)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(C.text)
+                            Text(field.2)
+                                .font(.caption)
+                                .foregroundStyle(C.textMuted)
+                        }
+                    }
+                    .tint(C.watch)
+                    .disabled(saving.contains(field.0))
+                    .padding(.vertical, 12)
+                    if index < fields.count - 1 {
+                        Divider().overlay(C.borderSubtle)
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .background(C.surface, in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(C.borderSubtle))
+        }
+    }
+
+    @MainActor
+    private func load() async {
+        do {
+            preferences = try await APIClient.shared.fetchNotificationPreferences()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func update(_ field: NotificationPreferenceField, enabled: Bool) async {
+        guard !saving.contains(field) else { return }
+        saving.insert(field)
+        errorMessage = nil
+        do {
+            preferences = try await APIClient.shared.updateNotificationPreference(field, enabled: enabled)
+        } catch {
+            errorMessage = "Could not save notification preferences."
+        }
+        saving.remove(field)
+    }
+
+    private func value(
+        of field: NotificationPreferenceField,
+        in preferences: NotificationPreferences
+    ) -> Bool {
+        switch field {
+        case .notifyComments: preferences.notifyComments
+        case .notifyLikes: preferences.notifyLikes
+        case .notifyReplies: preferences.notifyReplies
+        case .notifyNewContent: preferences.notifyNewContent
+        case .notifyMentions: preferences.notifyMentions
+        case .emailNewContent: preferences.emailNewContent
+        case .emailComments: preferences.emailComments
+        case .emailMarketing: preferences.emailMarketing
+        }
+    }
+}
+
+enum NotificationPreferenceField: String, CaseIterable {
+    case notifyComments
+    case notifyLikes
+    case notifyReplies
+    case notifyNewContent
+    case notifyMentions
+    case emailNewContent
+    case emailComments
+    case emailMarketing
+}
+
 /// Notifications inbox scoped to the active context.
 struct NotificationsView: View {
 
@@ -13,6 +174,7 @@ struct NotificationsView: View {
     @State private var isLoading = true
     @State private var isMarkingRead = false
     @State private var route: AppRoute?
+    @State private var showsPreferences = false
     @State private var notificationMutationGeneration = 0
 
     init(onUnreadCountChange: ((Int) -> Void)? = nil) {
@@ -48,7 +210,15 @@ struct NotificationsView: View {
                         .foregroundStyle(C.watch)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    if hasUnreadNotifications {
+                    HStack(spacing: 14) {
+                        Button {
+                            showsPreferences = true
+                        } label: {
+                            Image(systemName: "slider.horizontal.3")
+                        }
+                        .accessibilityLabel("Notification preferences")
+
+                        if hasUnreadNotifications {
                         Button {
                             Task { await markAllAsRead() }
                         } label: {
@@ -62,6 +232,7 @@ struct NotificationsView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(C.watch)
                         .disabled(isMarkingRead)
+                        }
                     }
                 }
             }
@@ -69,6 +240,9 @@ struct NotificationsView: View {
                 routeDestination(route)
             }
             .task { await load() }
+            .sheet(isPresented: $showsPreferences) {
+                NotificationPreferencesView()
+            }
         }
     }
 

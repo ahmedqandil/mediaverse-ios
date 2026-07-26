@@ -1790,6 +1790,22 @@ actor APIClient: LegacySocialTransport {
         let _: Resp = try decoder.decode(Resp.self, from: data)
     }
 
+    func fetchNotificationPreferences() async throws -> NotificationPreferences {
+        let data = try await socialData(path: "/api/me/notification-preferences")
+        return try decoder.decode(NotificationPreferences.self, from: data)
+    }
+
+    func updateNotificationPreference(
+        _ field: NotificationPreferenceField,
+        enabled: Bool
+    ) async throws -> NotificationPreferences {
+        let data = try await socialPatchData(
+            path: "/api/me/notification-preferences",
+            body: try JSONEncoder().encode([field.rawValue: enabled])
+        )
+        return try decoder.decode(NotificationPreferences.self, from: data)
+    }
+
     func fetchNotificationCounts() async throws -> [String: Int] {
         return try await get("/api/notifications/counts")
     }
