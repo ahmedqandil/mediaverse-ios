@@ -16,6 +16,7 @@ struct VibeDetailView: View {
     @State private var showsSettings = false
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
     private let features = SocialFeatureConfiguration.runtime()
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
         ScrollView {
@@ -39,7 +40,7 @@ struct VibeDetailView: View {
                         ) { ripple in
                             ripples.insert(ripple, at: 0)
                         }
-                        .padding(.horizontal, C.pagePad)
+                        .padding(.horizontal, horizontalSizeClass == .compact ? 8 : C.pagePad)
                     }
                     ForEach(ripples) {
                         RippleCard(
@@ -301,6 +302,7 @@ struct AtmoProfileView: View {
 
     let handle: String
     @EnvironmentObject private var auth: AuthManager
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selectedTab: Tab = .atmosphere
     @State private var ripples: [Ripple] = []
     @State private var vibes: [VibeSummary] = []
@@ -338,6 +340,7 @@ struct AtmoProfileView: View {
                             RippleComposer(destination: .personal) { ripple in
                                 ripples.insert(ripple, at: 0)
                             }
+                            .padding(.horizontal, horizontalSizeClass == .compact ? 8 : 0)
                         }
                         ForEach(ripples) {
                             RippleCard(
@@ -354,7 +357,11 @@ struct AtmoProfileView: View {
                         }
                     }
                 }
-                .padding(C.pagePad)
+                .padding(.vertical, C.pagePad)
+                .padding(
+                    .horizontal,
+                    horizontalSizeClass == .compact && selectedTab.feedTab != nil ? 0 : C.pagePad
+                )
                 .padding(.bottom, C.bottomMenuClearance)
             }
             .refreshable { await load() }

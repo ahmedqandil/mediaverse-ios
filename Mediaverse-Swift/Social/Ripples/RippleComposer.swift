@@ -12,6 +12,7 @@ struct RippleComposer: View {
     let onCreated: (Ripple) -> Void
 
     @EnvironmentObject private var auth: AuthManager
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var bodyText = ""
     @State private var isSpoiler = false
     @State private var commentsDisabled = false
@@ -31,20 +32,21 @@ struct RippleComposer: View {
     @State private var uploadProgress = 0
 
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+    private var isCompactWidth: Bool { horizontalSizeClass == .compact }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 10) {
+        VStack(alignment: .leading, spacing: isCompactWidth ? 8 : 12) {
+            HStack(alignment: .top, spacing: isCompactWidth ? 8 : 10) {
                 SocialIdentityAvatar(
                     image: auth.currentUser?.image,
                     name: auth.currentUser?.name,
-                    size: 40
+                    size: isCompactWidth ? 34 : 40
                 )
                 VStack(alignment: .leading, spacing: 6) {
                     TextField(placeholder, text: $bodyText, axis: .vertical)
-                        .lineLimit(3...8)
+                        .lineLimit(isCompactWidth ? 2...6 : 3...8)
                         .textInputAutocapitalization(.sentences)
-                        .padding(11)
+                        .padding(isCompactWidth ? 9 : 11)
                         .background(C.elevated)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .onChange(of: bodyText) { _, value in
@@ -76,7 +78,7 @@ struct RippleComposer: View {
                     maxSelectionCount: max(0, 10 - photos.count),
                     matching: .images
                 ) {
-                    Label("Photos", systemImage: "photo.on.rectangle.angled")
+                    composerToolLabel("Photos", systemImage: "photo.on.rectangle.angled")
                 }
                 .onChange(of: photoSelections) { _, items in
                     Task { await upload(items) }
@@ -88,7 +90,7 @@ struct RippleComposer: View {
                         pollOptions = ["", "", "", ""]
                     }
                 } label: {
-                    Label(pollOpen ? "Remove Poll" : "Poll", systemImage: "chart.bar")
+                    composerToolLabel(pollOpen ? "Remove Poll" : "Poll", systemImage: "chart.bar")
                 }
                 optionToggle("Spoiler", systemImage: "eye.slash", isOn: $isSpoiler)
                 optionToggle("Close comments", systemImage: "bubble.left.and.exclamationmark", isOn: $commentsDisabled)
@@ -99,9 +101,10 @@ struct RippleComposer: View {
                     if isPublishing {
                         ProgressView().tint(.black)
                     } else {
-                        Text("Create Ripple")
+                        Text(isCompactWidth ? "Post" : "Create Ripple")
                     }
                 }
+                .controlSize(isCompactWidth ? .small : .regular)
                 .buttonStyle(.borderedProminent)
                 .tint(C.watch)
                 .disabled(!canPublish || isPublishing || isResolving || isUploadingPhotos)
@@ -115,10 +118,22 @@ struct RippleComposer: View {
                 Text(notice).font(.caption.weight(.semibold)).foregroundStyle(C.watch)
             }
         }
-        .padding(14)
+        .padding(isCompactWidth ? 10 : 14)
         .background(C.surface)
         .overlay(RoundedRectangle(cornerRadius: C.cardRadius).stroke(C.borderSubtle))
         .clipShape(RoundedRectangle(cornerRadius: C.cardRadius))
+    }
+
+    @ViewBuilder
+    private func composerToolLabel(_ title: String, systemImage: String) -> some View {
+        if isCompactWidth {
+            Image(systemName: systemImage)
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+                .accessibilityLabel(title)
+        } else {
+            Label(title, systemImage: systemImage)
+        }
     }
 
     private var placeholder: String {
@@ -253,10 +268,10 @@ struct RippleComposer: View {
         Button {
             isOn.wrappedValue.toggle()
         } label: {
-            Label(title, systemImage: systemImage)
+            composerToolLabel(title, systemImage: systemImage)
                 .foregroundStyle(isOn.wrappedValue ? C.watch : C.textMuted)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 7)
+                .padding(.horizontal, isCompactWidth ? 2 : 8)
+                .padding(.vertical, isCompactWidth ? 2 : 7)
                 .background(isOn.wrappedValue ? C.watch.opacity(0.12) : .clear)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         }

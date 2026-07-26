@@ -4,6 +4,7 @@ import AVKit
 struct AtmosphereView: View {
     @AppStorage("playerMuted") private var playerMuted = false
     @EnvironmentObject private var miniPlayer: MiniPlayerManager
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @StateObject private var model = AtmosphereViewModel()
     @StateObject private var previewManager = FeedPreviewPlayerManager()
     @State private var activePreviewVideoId: String?
@@ -13,6 +14,10 @@ struct AtmosphereView: View {
     @State private var isPreservingPreviewHandoff = false
     @State private var showsCreateVibe = false
     private let socialFeatures = SocialFeatureConfiguration.runtime()
+
+    private var isCompactWidth: Bool { horizontalSizeClass == .compact }
+    private var feedCardInset: CGFloat { isCompactWidth ? 0 : C.pagePad }
+    private var composerInset: CGFloat { isCompactWidth ? 8 : C.pagePad }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -125,7 +130,7 @@ struct AtmosphereView: View {
                     RippleComposer(destination: .personal) {
                         model.prepend($0)
                     }
-                    .padding(.horizontal, C.pagePad)
+                    .padding(.horizontal, composerInset)
                 }
                 ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                     switch item {
@@ -145,7 +150,7 @@ struct AtmosphereView: View {
                                 handoffToWatch(video, sourceFrame: frame)
                             }
                         )
-                        .padding(.horizontal, C.pagePad)
+                        .padding(.horizontal, feedCardInset)
                     case .video(let video):
                         atmosphereVideoCard(video)
                     case .excludedEpisode, .excludedShort, .unsupported:
@@ -317,7 +322,8 @@ struct AtmosphereView: View {
                 }
                 atmosphereBoundaryListings(model.afterFeedListings)
             }
-            .padding(C.pagePad)
+            .padding(.vertical, C.pagePad)
+            .padding(.horizontal, feedCardInset)
             .padding(.bottom, C.bottomMenuClearance)
         }
         .refreshable { await model.reload(.discover) }
