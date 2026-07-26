@@ -2464,6 +2464,7 @@ struct VideoWatchView: View {
         case .episode(let id): EpisodeWatchView(episodeId: id).id(id)
         case .channel(let id): ChannelView(handle: id)
         case .show(let id): ShowView(showId: id)
+        case .showSeason(let showId, let seasonId): ShowView(showId: showId, initialSeasonId: seasonId)
         case .showAccess(let showId, let productId, let intent, let handoffId):
             ShowView(showId: showId, handoffProductId: productId, handoffIntent: intent, handoffPublicId: handoffId)
         case .handoff(let id): HandoffResolverView(publicId: id)

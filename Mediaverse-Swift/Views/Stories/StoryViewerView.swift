@@ -58,6 +58,9 @@ struct StoryViewerView: View {
     @State private var energySheetStory: StoryItem?
 
     private let videoPrewarmLimit = 3
+    private var isFlashEnergyEnabled: Bool {
+        SocialFeatureConfiguration.runtime().flashesEnergyEnabled
+    }
 
     private var groups: [StoryGroup] { repository.groups.filter { !$0.stories.isEmpty } }
     private var currentGroup: StoryGroup? { groups.indices.contains(groupIndex) ? groups[groupIndex] : nil }
@@ -416,7 +419,9 @@ struct StoryViewerView: View {
             }
 
             HStack(spacing: 10) {
-                storyEnergyButton(story)
+                if isFlashEnergyEnabled {
+                    storyEnergyButton(story)
+                }
 
                 if canShowViewersChip(for: story, group: group) {
                     ViewerCountChip(
@@ -427,7 +432,7 @@ struct StoryViewerView: View {
                 }
             }
 
-            if story.energyCount > 0 {
+            if isFlashEnergyEnabled, story.energyCount > 0 {
                 SocialEnergyMeter(
                     total: story.energyTotal,
                     count: story.energyCount,
@@ -1242,13 +1247,6 @@ private struct StoryEnergySheet: View {
                             }
                         }
 
-                        if existingRating != nil {
-                            Button("Remove my Energy", role: .destructive) {
-                                Task { await removeEnergy() }
-                            }
-                            .font(.subheadline.weight(.semibold))
-                            .disabled(isSaving)
-                        }
                         Spacer()
                     }
                     .padding(C.pagePad)
@@ -1318,20 +1316,6 @@ private struct StoryEnergySheet: View {
         isSaving = false
     }
 
-    @MainActor
-    private func removeEnergy() async {
-        guard !isSaving else { return }
-        isSaving = true
-        do {
-            try await StoriesAPIClient.shared.removeEnergy(storyId: story.id)
-            let refreshed = try await StoriesAPIClient.shared.fetchEnergy(storyId: story.id)
-            onSaved(refreshed.aggregate)
-            dismiss()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-        isSaving = false
-    }
 }
 
 private func flashEnergyLabel(_ value: String) -> String {

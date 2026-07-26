@@ -27,7 +27,9 @@ struct NativeCurationListingView: View {
                 NativeCurationCarousel(listing: listing)
             case "ripples":
                 NativeCurationRippleList(listing: listing)
-            case "stories", "continue_watching", "video_feed", "shorts_feed", "atmosphere_feed":
+            case "stories":
+                NativeCurationCarousel(listing: listing)
+            case "continue_watching", "video_feed", "shorts_feed", "atmosphere_feed":
                 EmptyView()
             default:
                 NativeCurationCarousel(listing: listing)

@@ -91,6 +91,13 @@ final class AppRouteContractTests: XCTestCase {
         )
     }
 
+    func testSeasonRoutesPreserveShowAndSeasonIdentity() {
+        XCTAssertNotEqual(
+            AppRoute.showSeason(showId: "show-1", seasonId: "season-1").id,
+            AppRoute.showSeason(showId: "show-1", seasonId: "season-2").id
+        )
+    }
+
     func testUnknownAndEmptyLinksDoNotInventDestinations() {
         XCTAssertNil(AppRoute.route(link: ""))
         XCTAssertNil(AppRoute.route(link: "https://westreem.com/settings/account"))

@@ -9,6 +9,7 @@ private let NON_SERIES_TYPES: Set<String> = ["movie", "film", "special", "event"
 struct ShowView: View {
 
     let showId: String
+    var initialSeasonId: String? = nil
     var handoffProductId: String? = nil
     var handoffIntent: String? = nil
     var handoffPublicId: String? = nil
@@ -189,6 +190,14 @@ struct ShowView: View {
                     .refreshable {
                         C.lightHaptic()
                         await load(showSpinner: false)
+                    }
+                    .task(id: "\(sh.id):\(initialSeasonId ?? "")") {
+                        guard let initialSeasonId,
+                              sh.seasons.contains(where: { $0.id == initialSeasonId })
+                        else { return }
+                        activeTab = .episodes
+                        await Task.yield()
+                        pageScrollProxy.scrollTo(seasonAnchorId(initialSeasonId), anchor: .top)
                     }
                 }
 

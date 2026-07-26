@@ -11,6 +11,7 @@ public enum AppRoute: Hashable, Identifiable {
         case .episode(let s):          return "episode_\(s)"
         case .channel(let s):          return "channel_\(s)"
         case .show(let s):             return "show_\(s)"
+        case .showSeason(let showId, let seasonId): return "showSeason_\(showId)_\(seasonId)"
         case .showAccess(let showId, let productId, let intent, let handoffId):
             return "showAccess_\(showId)_\(productId ?? "any")_\(intent ?? "access")_\(handoffId ?? "direct")"
         case .handoff(let s):          return "handoff_\(s)"
@@ -31,6 +32,7 @@ public enum AppRoute: Hashable, Identifiable {
     case episode(String)            // episode id
     case channel(String)            // handle or id
     case show(String)               // show id
+    case showSeason(showId: String, seasonId: String) // show id + selected season
     case showAccess(showId: String, productId: String?, intent: String?, handoffId: String?)
     case handoff(String)            // opaque public handoff id
     case microdramaShow(String)     // show id

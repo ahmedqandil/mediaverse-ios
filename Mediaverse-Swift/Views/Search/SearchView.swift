@@ -925,6 +925,8 @@ struct SearchView: View {
             normalizedType = "channel"; targetId = id; showId = nil; channelId = nil
         case .show(let id):
             normalizedType = "show"; targetId = id; showId = nil; channelId = nil
+        case .showSeason(let routeShowId, _):
+            normalizedType = "show"; targetId = routeShowId; showId = nil; channelId = nil
         default:
             normalizedType = type; targetId = route.id; showId = nil; channelId = nil
         }
@@ -982,6 +984,7 @@ struct SearchView: View {
         case .episode(let id): EpisodeWatchView(episodeId: id)
         case .channel(let id): ChannelView(handle: id)
         case .show(let id): ShowView(showId: id)
+        case .showSeason(let showId, let seasonId): ShowView(showId: showId, initialSeasonId: seasonId)
         case .showAccess(let showId, let productId, let intent, let handoffId):
             ShowView(showId: showId, handoffProductId: productId, handoffIntent: intent, handoffPublicId: handoffId)
         case .handoff(let id): HandoffResolverView(publicId: id)

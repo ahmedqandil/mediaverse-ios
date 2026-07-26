@@ -2226,7 +2226,7 @@ extension ContentItem {
         case "show":
             return .show(entityId)
         case "season":
-            return .show(metaString("showId") ?? entityId)
+            return .showSeason(showId: metaString("showId") ?? entityId, seasonId: entityId)
         case "short":
             return .short(entityId, showId: metaString("showId"), channelId: metaString("channelId"))
         case "episode":

@@ -828,6 +828,8 @@ struct MainTabView: View {
             ChannelView(handle: handleOrId)
         case .show(let id):
             ShowView(showId: id)
+        case .showSeason(let showId, let seasonId):
+            ShowView(showId: showId, initialSeasonId: seasonId)
         case .showAccess(let showId, let productId, let intent, let handoffId):
             ShowView(
                 showId: showId,
@@ -900,7 +902,7 @@ private extension AppRoute {
         switch self {
         case .video, .episode, .microdramaWatch, .microdramaWatchEp:
             return true
-        case .short, .channel, .show, .showAccess, .handoff, .microdramaShow, .playlist, .collection,
+        case .short, .channel, .show, .showSeason, .showAccess, .handoff, .microdramaShow, .playlist, .collection,
              .vibe, .vibeInvite, .ripple, .atmo, .search:
             return false
         }
