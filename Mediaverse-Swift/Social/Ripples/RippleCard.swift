@@ -34,6 +34,7 @@ struct RippleCard: View {
     @State private var editedBody: String?
     @State private var editedSpoiler: Bool?
     @State private var editedCommentsDisabled: Bool?
+    @State private var displayedCommentCount: Int
 
     init(
         ripple: Ripple,
@@ -44,6 +45,7 @@ struct RippleCard: View {
         self.actions = actions
         self.allowsEngagement = allowsEngagement
         _engagement = StateObject(wrappedValue: RippleEngagementController(ripple: ripple))
+        _displayedCommentCount = State(initialValue: ripple.commentCount)
     }
 
     var body: some View {
@@ -94,6 +96,19 @@ struct RippleCard: View {
             actionBar
                 .padding(.horizontal, 8)
                 .padding(.vertical, 8)
+
+            if showsComments {
+                Divider().background(C.borderSubtle)
+                CommentThreadView(
+                    target: .ripple(ripple.id),
+                    inputPosition: .top,
+                    showsHeader: true,
+                    autoFocusComposer: true,
+                    onCountChange: { displayedCommentCount = $0 }
+                )
+                .padding(14)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(C.surface)
@@ -119,14 +134,6 @@ struct RippleCard: View {
                         Task { await engagement.recordNativeShare() }
                     }
             }
-        }
-        .sheet(isPresented: $showsComments) {
-            StandardCommentsSheet(
-                target: .ripple(ripple.id),
-                initialCount: ripple.commentCount,
-                autoFocusComposer: true,
-                onClose: { showsComments = false }
-            )
         }
         .sheet(isPresented: $showsEcho) {
             EchoVibeSheet(ripple: ripple) { added in
@@ -291,10 +298,10 @@ struct RippleCard: View {
             action(
                 title: "Comment",
                 systemImage: "bubble.left",
-                count: ripple.commentCount,
+                count: displayedCommentCount,
                 handler: actions.comment ?? (
                     allowsEngagement && !(editedCommentsDisabled ?? ripple.commentsDisabled)
-                        ? { showsComments = true }
+                        ? { withAnimation(.easeInOut(duration: 0.2)) { showsComments.toggle() } }
                         : nil
                 )
             )
@@ -1270,6 +1277,7 @@ private struct RipplePollCard: View {
     let allowsVoting: Bool
     let onVote: ([String]) -> Void
     @State private var selections: Set<String>
+    private let initialSelections: Set<String>
 
     init(
         poll: RipplePoll,
@@ -1279,7 +1287,9 @@ private struct RipplePollCard: View {
         self.poll = poll
         self.allowsVoting = allowsVoting
         self.onVote = onVote
-        _selections = State(initialValue: Set(poll.votes.map(\.optionId)))
+        let selected = Set(poll.votes.map(\.optionId))
+        initialSelections = selected
+        _selections = State(initialValue: selected)
     }
 
     private var totalVotes: Int { poll.options.reduce(0) { $0 + $1.voteCount } }
@@ -1327,7 +1337,10 @@ private struct RipplePollCard: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
                 .background(C.watch, in: Capsule())
-                .disabled(selections.isEmpty || selections.count > poll.maxSelections)
+                .disabled(
+                    selections.count > poll.maxSelections
+                    || (selections.isEmpty && initialSelections.isEmpty)
+                )
             }
             Text(totalVotes == 1 ? "1 vote" : "\(totalVotes) votes")
                 .font(.caption)
@@ -1346,8 +1359,13 @@ private struct RipplePollCard: View {
                 selections.insert(id)
             }
         } else {
-            selections = [id]
-            onVote([id])
+            if selections.contains(id) {
+                selections = []
+                onVote([])
+            } else {
+                selections = [id]
+                onVote([id])
+            }
         }
     }
 }
