@@ -28,6 +28,14 @@ struct VibeDetailView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, C.pagePad)
                     }
+                    if features.rippleComposerEnabled && detail.capabilities.canPost {
+                        RippleComposer(
+                            destination: .vibe(slug: detail.club.slug, name: detail.club.name)
+                        ) { ripple in
+                            ripples.insert(ripple, at: 0)
+                        }
+                        .padding(.horizontal, C.pagePad)
+                    }
                     ForEach(ripples) {
                         RippleCard(
                             ripple: $0,

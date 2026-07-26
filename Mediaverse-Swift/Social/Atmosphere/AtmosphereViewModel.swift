@@ -52,6 +52,10 @@ final class AtmosphereViewModel: ObservableObject {
         await load(tab ?? selectedTab)
     }
 
+    func prepend(_ ripple: Ripple) {
+        atmosphereItems.insert(.ripple(ripple), at: 0)
+    }
+
     private func load(_ tab: Tab) async {
         stateByTab[tab] = .loading
         do {

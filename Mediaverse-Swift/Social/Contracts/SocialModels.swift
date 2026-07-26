@@ -529,6 +529,86 @@ public enum RippleCreateAttachment: Encodable, Equatable, Sendable {
     }
 }
 
+public struct RipplePollDraft: Encodable, Equatable, Sendable {
+    public let question: String
+    public let options: [String]
+    public let allowsMultiple: Bool
+    public let maxSelections: Int
+    public let allowsVoteChanges: Bool
+    public let resultsVisibility: String
+
+    public init(
+        question: String,
+        options: [String],
+        allowsMultiple: Bool = false,
+        maxSelections: Int = 1,
+        allowsVoteChanges: Bool = true,
+        resultsVisibility: String = "AFTER_VOTE"
+    ) {
+        self.question = question
+        self.options = options
+        self.allowsMultiple = allowsMultiple
+        self.maxSelections = maxSelections
+        self.allowsVoteChanges = allowsVoteChanges
+        self.resultsVisibility = resultsVisibility
+    }
+}
+
+public struct ResolvedRippleAttachmentResponse: Decodable, Sendable {
+    public let attachment: ResolvedRippleAttachment
+    public let preview: RippleAttachmentPreview?
+}
+
+public struct ResolvedRippleAttachment: Decodable, Sendable {
+    public let type: String
+    public let imageURL: String?
+    public let externalURL: String?
+    public let videoId: String?
+    public let collectionId: String?
+    public let userPostId: String?
+    public let fanClubPostId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type, videoId, collectionId, userPostId, fanClubPostId
+        case imageURL = "imageUrl"
+        case externalURL = "externalUrl"
+    }
+
+    public var createAttachment: RippleCreateAttachment? {
+        switch type {
+        case "PHOTO":
+            imageURL.map(RippleCreateAttachment.photo)
+        case "LINK":
+            externalURL.map(RippleCreateAttachment.link)
+        case "WESTREEM_VIDEO":
+            videoId.map(RippleCreateAttachment.video)
+        case "WESTREEM_COLLECTION":
+            collectionId.map(RippleCreateAttachment.collection)
+        case "WESTREEM_CLIP":
+            userPostId.map(RippleCreateAttachment.clip)
+        case "WESTREEM_RIPPLE":
+            fanClubPostId.map(RippleCreateAttachment.ripple)
+        default:
+            nil
+        }
+    }
+}
+
+public struct RippleAttachmentPreview: Decodable, Sendable {
+    public let kind: String?
+    public let title: String?
+    public let subtitle: String?
+    public let thumbnailURL: String?
+    public let faviconURL: String?
+    public let domain: String?
+
+    enum CodingKeys: String, CodingKey {
+        case kind, title, subtitle, domain
+        case thumbnailURL = "thumbnailUrl"
+        case faviconURL = "faviconUrl"
+    }
+}
+
 public struct DiscoverRipplePageResponse: Decodable, Sendable {
     public let version: Int
     public let mode: String

@@ -93,6 +93,11 @@ struct AtmosphereView: View {
     private func simpleFeed(_ items: [AtmosphereFeedItem]) -> some View {
         ScrollView {
             LazyVStack(spacing: 12) {
+                if socialFeatures.rippleComposerEnabled {
+                    RippleComposer(destination: .personal) {
+                        model.prepend($0)
+                    }
+                }
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     switch item {
                     case .ripple(let ripple):

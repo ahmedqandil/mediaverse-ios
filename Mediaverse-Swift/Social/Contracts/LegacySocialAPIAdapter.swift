@@ -155,6 +155,7 @@ public actor LegacySocialAPIAdapter {
         inVibe slug: String,
         body: String?,
         attachments: [RippleCreateAttachment],
+        poll: RipplePollDraft? = nil,
         isSpoiler: Bool = false,
         commentsDisabled: Bool = false
     ) async throws -> Ripple {
@@ -163,13 +164,22 @@ public actor LegacySocialAPIAdapter {
             body: trimmedBody?.isEmpty == false ? trimmedBody : nil,
             isSpoiler: isSpoiler,
             commentsDisabled: commentsDisabled,
-            attachments: attachments
+            attachments: attachments,
+            poll: poll
         )
         return try await post(
             CreateRippleResponse.self,
             path: "/api/fan-clubs/\(try segment(slug))/posts",
             body: try JSONEncoder().encode(request)
         ).post
+    }
+
+    public func resolveAttachment(url: String) async throws -> ResolvedRippleAttachmentResponse {
+        try await post(
+            ResolvedRippleAttachmentResponse.self,
+            path: "/api/fan-clubs/resolve-attachment",
+            body: try JSONEncoder().encode(ResolveAttachmentRequest(url: url))
+        )
     }
 
     public func followVibe(slug: String) async throws -> VibeFollowResponse {
@@ -349,6 +359,11 @@ private struct CreateRippleRequest: Encodable {
     let isSpoiler: Bool
     let commentsDisabled: Bool
     let attachments: [RippleCreateAttachment]
+    let poll: RipplePollDraft?
+}
+
+private struct ResolveAttachmentRequest: Encodable {
+    let url: String
 }
 
 private struct VibeJoinRequest: Encodable {

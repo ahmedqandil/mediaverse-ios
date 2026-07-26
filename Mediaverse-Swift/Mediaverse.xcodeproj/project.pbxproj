@@ -53,6 +53,7 @@
 		A4C0C007301A000100000001 /* RippleEngagementController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C017301A000100000001 /* RippleEngagementController.swift */; };
 		A4C0C008301A000100000001 /* SocialDestinationViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C018301A000100000001 /* SocialDestinationViews.swift */; };
 		A4C0C009301A000100000001 /* EchoVibeSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C019301A000100000001 /* EchoVibeSheet.swift */; };
+		A4C0C00A301A000100000001 /* RippleComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C01A301A000100000001 /* RippleComposer.swift */; };
 		846788EC2FFC2BD700DED05E /* StoriesAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846788EB2FFC2BD700DED05E /* StoriesAPIClient.swift */; };
 		846788EE2FFC2BF700DED05E /* StoriesModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846788ED2FFC2BF700DED05E /* StoriesModels.swift */; };
 		846788F02FFC2C0200DED05E /* StoriesRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846788EF2FFC2C0200DED05E /* StoriesRepository.swift */; };
@@ -175,6 +176,7 @@
 		A4C0C017301A000100000001 /* RippleEngagementController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleEngagementController.swift; sourceTree = "<group>"; };
 		A4C0C018301A000100000001 /* SocialDestinationViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocialDestinationViews.swift; sourceTree = "<group>"; };
 		A4C0C019301A000100000001 /* EchoVibeSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoVibeSheet.swift; sourceTree = "<group>"; };
+		A4C0C01A301A000100000001 /* RippleComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleComposer.swift; sourceTree = "<group>"; };
 		846788EB2FFC2BD700DED05E /* StoriesAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoriesAPIClient.swift; sourceTree = "<group>"; };
 		846788ED2FFC2BF700DED05E /* StoriesModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoriesModels.swift; sourceTree = "<group>"; };
 		846788EF2FFC2C0200DED05E /* StoriesRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoriesRepository.swift; sourceTree = "<group>"; };
@@ -520,6 +522,7 @@
 				A4C0C016301A000100000001 /* RippleCard.swift */,
 				A4C0C017301A000100000001 /* RippleEngagementController.swift */,
 				A4C0C019301A000100000001 /* EchoVibeSheet.swift */,
+				A4C0C01A301A000100000001 /* RippleComposer.swift */,
 			);
 			name = "Social Ripples";
 			path = Social/Ripples;
@@ -730,6 +733,7 @@
 				A4C0C007301A000100000001 /* RippleEngagementController.swift in Sources */,
 				A4C0C008301A000100000001 /* SocialDestinationViews.swift in Sources */,
 				A4C0C009301A000100000001 /* EchoVibeSheet.swift in Sources */,
+				A4C0C00A301A000100000001 /* RippleComposer.swift in Sources */,
 				8467891E2FFD942100DED05E /* ViewerCountChip.swift in Sources */,
 				846788FD2FFC316000DED05E /* StoryProjectModel.swift in Sources */,
 				846788FF2FFC318000DED05E /* ProjectStore.swift in Sources */,

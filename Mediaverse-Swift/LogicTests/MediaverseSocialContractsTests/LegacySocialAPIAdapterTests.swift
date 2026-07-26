@@ -241,6 +241,44 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         let deletePaths = await transport.deletePaths
         XCTAssertEqual(deletePaths, [followPath, joinPath])
     }
+
+    func testComposerResolvesWestreemLinkAndPublishesPollWithoutChangingServerShape() async throws {
+        let resolvePath = "/api/fan-clubs/resolve-attachment"
+        let createPath = "/api/fan-clubs/cinema/posts"
+        let transport = SocialTransportStub(responses: [
+            resolvePath: """
+            {"attachment":{"type":"WESTREEM_VIDEO","videoId":"video-1"},
+            "preview":{"kind":"video","title":"Feature","subtitle":"WeStreem video"}}
+            """,
+            createPath: """
+            {"post":{"id":"ripple-1","clubId":"v1","createdAt":"2026-07-26T10:00:00Z",
+            "author":{"id":"u1"}}}
+            """
+        ])
+        let adapter = LegacySocialAPIAdapter(transport: transport)
+
+        let resolved = try await adapter.resolveAttachment(
+            url: "https://www.westreem.com/watch/video-1"
+        )
+        XCTAssertEqual(resolved.attachment.createAttachment, .video(id: "video-1"))
+        XCTAssertEqual(resolved.preview?.title, "Feature")
+
+        _ = try await adapter.createRipple(
+            inVibe: "cinema",
+            body: nil,
+            attachments: [.video(id: "video-1")],
+            poll: RipplePollDraft(question: "Watch?", options: ["Yes", "Later"])
+        )
+        let postBodies = await transport.postBodies
+        let createBody = try XCTUnwrap(postBodies.last)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: createBody) as? [String: Any]
+        )
+        let poll = try XCTUnwrap(object["poll"] as? [String: Any])
+        XCTAssertEqual(poll["question"] as? String, "Watch?")
+        XCTAssertEqual(poll["options"] as? [String], ["Yes", "Later"])
+        XCTAssertEqual(poll["resultsVisibility"] as? String, "AFTER_VOTE")
+    }
 }
 
 private actor SocialTransportStub: LegacySocialTransport {
