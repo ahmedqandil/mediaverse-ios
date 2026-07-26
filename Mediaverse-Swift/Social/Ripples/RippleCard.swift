@@ -722,6 +722,8 @@ private struct RipplePhotoViewer: View {
     let photos: [RippleAttachment]
     let onClose: () -> Void
     @State private var selectedPhotoID: String
+    @State private var dismissOffset: CGFloat = 0
+    @State private var didCrossDismissThreshold = false
 
     init(photos: [RippleAttachment], initialPhotoID: String, onClose: @escaping () -> Void) {
         self.photos = photos
@@ -730,17 +732,58 @@ private struct RipplePhotoViewer: View {
     }
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            TabView(selection: $selectedPhotoID) {
-                ForEach(photos) { photo in
-                    RipplePhotoViewerPage(photo: photo)
-                        .tag(photo.id)
+        GeometryReader { proxy in
+            ZStack {
+                Color.black
+                    .opacity(backgroundOpacity)
+                    .ignoresSafeArea()
+
+                TabView(selection: $selectedPhotoID) {
+                    ForEach(photos) { photo in
+                        RipplePhotoViewerPage(photo: photo)
+                            .tag(photo.id)
+                    }
                 }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .offset(y: dismissOffset)
+                .scaleEffect(dismissScale)
+                .simultaneousGesture(dragToDismissGesture)
+
+                viewerHeader(topInset: proxy.safeAreaInsets.top)
             }
-            .tabViewStyle(.page(indexDisplayMode: photos.count > 1 ? .automatic : .never))
+            .ignoresSafeArea()
         }
-        .overlay(alignment: .topTrailing) {
+    }
+
+    private var selectedIndex: Int {
+        (photos.firstIndex { $0.id == selectedPhotoID } ?? 0) + 1
+    }
+
+    private var dismissProgress: CGFloat {
+        min(max(dismissOffset / 280, 0), 1)
+    }
+
+    private var dismissScale: CGFloat {
+        1 - dismissProgress * 0.08
+    }
+
+    private var backgroundOpacity: Double {
+        Double(1 - dismissProgress * 0.55)
+    }
+
+    private func viewerHeader(topInset: CGFloat) -> some View {
+        HStack {
+            if photos.count > 1 {
+                Text("\(selectedIndex) / \(photos.count)")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.82))
+                    .padding(.horizontal, 12)
+                    .frame(height: 38)
+                    .background(.black.opacity(0.62), in: Capsule())
+            }
+
+            Spacer()
+
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 14, weight: .bold))
@@ -749,9 +792,48 @@ private struct RipplePhotoViewer: View {
                     .background(.black.opacity(0.62), in: Circle())
             }
             .buttonStyle(.plain)
-            .padding(16)
             .accessibilityLabel("Close photo viewer")
         }
+        .padding(.horizontal, 16)
+        .padding(.top, topInset + 8)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .opacity(1 - Double(dismissProgress))
+        .zIndex(10)
+    }
+
+    private var dragToDismissGesture: some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .global)
+            .onChanged { value in
+                guard value.translation.height > 0,
+                      abs(value.translation.height) > abs(value.translation.width) else { return }
+
+                dismissOffset = value.translation.height
+                let crossed = dismissOffset >= 110
+                if crossed && !didCrossDismissThreshold {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                }
+                didCrossDismissThreshold = crossed
+            }
+            .onEnded { value in
+                let isDownward = value.translation.height > 0
+                    && abs(value.translation.height) > abs(value.translation.width)
+                let shouldDismiss = isDownward
+                    && (value.translation.height >= 110 || value.predictedEndTranslation.height >= 220)
+
+                if shouldDismiss {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        dismissOffset = max(value.predictedEndTranslation.height, 700)
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                        onClose()
+                    }
+                } else {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                        dismissOffset = 0
+                    }
+                    didCrossDismissThreshold = false
+                }
+            }
     }
 }
 
@@ -772,7 +854,6 @@ private struct RipplePhotoViewerPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Spacer(minLength: 60)
             CachedRemoteImage(
                 url: C.mediaURL(photo.imageURL),
                 targetSize: UIScreen.main.bounds.size
@@ -820,6 +901,8 @@ private struct RipplePhotoViewerPage: View {
             .padding(.vertical, 16)
             .background(.black.opacity(0.82))
         }
+        .safeAreaPadding(.top, 58)
+        .safeAreaPadding(.bottom, 8)
         .task { await loadEnergy() }
         .sheet(isPresented: $showsEnergy) {
             RipplePhotoEnergySheet(attachmentId: photo.id) { aggregate in
