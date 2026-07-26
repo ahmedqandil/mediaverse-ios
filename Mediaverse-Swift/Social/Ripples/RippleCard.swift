@@ -346,13 +346,11 @@ struct RippleCard: View {
         HStack(spacing: 0) {
             action(
                 title: "Add Energy",
-                systemImage: "bolt.fill",
                 count: engagement.energyCount,
                 handler: actions.addEnergy ?? (allowsEngagement ? { showsEnergy = true } : nil)
             )
             action(
                 title: "Comment",
-                systemImage: "bubble.left",
                 count: displayedCommentCount,
                 handler: actions.comment ?? (
                     allowsEngagement && !(editedCommentsDisabled ?? ripple.commentsDisabled)
@@ -362,13 +360,11 @@ struct RippleCard: View {
             )
             action(
                 title: "Echo",
-                systemImage: "dot.radiowaves.left.and.right",
                 count: engagement.echoCount,
                 handler: actions.echo ?? (allowsEngagement ? { showsEcho = true } : nil)
             )
             action(
                 title: "Share",
-                systemImage: "square.and.arrow.up",
                 count: engagement.shareCount,
                 handler: actions.share ?? (allowsEngagement && shareURL != nil ? { showsShare = true } : nil)
             )
@@ -380,18 +376,15 @@ struct RippleCard: View {
 
     private func action(
         title: String,
-        systemImage: String,
         count: Int,
         handler: (() -> Void)?
     ) -> some View {
         Button(action: { handler?() }) {
-            HStack(spacing: 5) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 13, weight: .semibold))
+            HStack(spacing: 4) {
                 Text(count > 0 ? "\(title) · \(count)" : title)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                    .minimumScaleFactor(0.78)
             }
             .foregroundStyle(handler == nil ? C.textTertiary : C.textMuted)
             .frame(maxWidth: .infinity)
@@ -1984,13 +1977,14 @@ struct SocialEnergyMeter: View {
                         .frame(width: proxy.size.width * CGFloat(average / 5))
                 }
             }
-            .frame(height: 7)
+            .frame(height: 3)
         }
     }
 }
 
 struct SocialEnergyLevelPicker: View {
     @Binding var value: Int
+    @State private var lastHapticValue: Int?
 
     private let colors = [
         Color(hex: "#6AE383"),
@@ -2017,29 +2011,34 @@ struct SocialEnergyLevelPicker: View {
 
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.10))
+                    Capsule()
+                        .fill(Color.white.opacity(0.10))
+                        .frame(height: 4)
                     Capsule()
                         .fill(LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing))
                         .frame(width: proxy.size.width * CGFloat(value) / 5)
-                        .shadow(color: Color(hex: "#5967C9").opacity(0.32), radius: 7)
+                        .frame(height: 4)
+                        .shadow(color: Color(hex: "#5967C9").opacity(0.26), radius: 4)
                     Circle()
                         .fill(.white)
-                        .frame(width: 18, height: 18)
+                        .frame(width: 16, height: 16)
                         .overlay { Circle().stroke(C.bg.opacity(0.35), lineWidth: 1) }
                         .shadow(color: .black.opacity(0.28), radius: 4, y: 1)
-                        .offset(x: max(0, min(proxy.size.width - 18, proxy.size.width * CGFloat(value - 1) / 4)))
-                    Slider(
-                        value: Binding(
-                            get: { Double(value) },
-                            set: { value = Int($0.rounded()) }
-                        ),
-                        in: 1...5,
-                        step: 1
-                    )
-                    .opacity(0.015)
+                        .offset(x: max(0, min(proxy.size.width - 16, proxy.size.width * CGFloat(value - 1) / 4)))
                 }
+                .frame(maxHeight: .infinity, alignment: .center)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                        .onChanged { gesture in
+                            updateValue(at: gesture.location.x, width: proxy.size.width)
+                        }
+                        .onEnded { _ in
+                            lastHapticValue = nil
+                        }
+                )
             }
-            .frame(height: 18)
+            .frame(height: 28)
             .accessibilityElement()
             .accessibilityLabel("Energy")
             .accessibilityValue("\(value) of 5")
@@ -2078,6 +2077,18 @@ struct SocialEnergyLevelPicker: View {
                     .accessibilityLabel("Energy \(level)")
                 }
             }
+        }
+    }
+
+    private func updateValue(at x: CGFloat, width: CGFloat) {
+        guard width > 0 else { return }
+        let progress = min(max(x / width, 0), 1)
+        let nextValue = min(max(Int((progress * 4).rounded()) + 1, 1), 5)
+        guard nextValue != value else { return }
+        value = nextValue
+        if lastHapticValue != nextValue {
+            UISelectionFeedbackGenerator().selectionChanged()
+            lastHapticValue = nextValue
         }
     }
 }
