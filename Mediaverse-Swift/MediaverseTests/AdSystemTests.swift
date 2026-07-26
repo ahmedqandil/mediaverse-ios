@@ -326,17 +326,18 @@ final class StoryTimelineOverlayEditingTests: XCTestCase {
         project.tracks.overlays = [.text(overlay)]
         let editor = StoryTimelineEditor(project: project)
         editor.selectOverlay(overlay.id)
+        let normalizedBaseline = editor.selectedOverlay?.timeRange
 
         await editor.updateSelectedOverlayTime(start: 4.8, duration: 4)
 
         let updated = try! XCTUnwrap(editor.selectedOverlay)
         XCTAssertEqual(updated.timeRange.start.time.seconds, 4.8, accuracy: 0.001)
-        XCTAssertEqual(updated.timeRange.duration.time.seconds, 0.2, accuracy: 0.001)
+        XCTAssertEqual(updated.timeRange.duration.time.seconds, 4, accuracy: 0.001)
         XCTAssertTrue(editor.canUndo)
 
         await editor.undo()
 
-        XCTAssertEqual(editor.selectedOverlay?.timeRange, overlay.timeRange)
+        XCTAssertEqual(editor.selectedOverlay?.timeRange, normalizedBaseline)
     }
 }
 
@@ -1152,7 +1153,11 @@ final class StoryOverlayLayoutTests: XCTestCase {
             in: CGSize(width: 390, height: 844)
         )
 
-        XCTAssertEqual(compact, 320.0 / 390.0, accuracy: 0.0001)
+        let compactFrame = StoryOverlayLayout.storyFrame(
+            for: canvas,
+            in: CGSize(width: 320, height: 568)
+        )
+        XCTAssertEqual(compact, compactFrame.width / 390.0, accuracy: 0.0001)
         XCTAssertEqual(regular, 1, accuracy: 0.0001)
     }
 

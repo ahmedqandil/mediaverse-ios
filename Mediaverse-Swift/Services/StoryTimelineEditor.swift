@@ -800,6 +800,7 @@ final class StoryTimelineEditor: ObservableObject {
         let value = min(max(intensity, 0), 1)
         project.tracks.videoClips[index].filterIntensity = value
         var stack = project.tracks.videoClips[index].resolvedEffectStack
+        stack.version = StoryEffectStack.currentVersion
         stack.lookIntensity = value
         project.tracks.videoClips[index].effectStack = stack
         selectedClipID = project.tracks.videoClips[index].id
@@ -809,6 +810,7 @@ final class StoryTimelineEditor: ObservableObject {
     func previewSelectedClipBeauty(_ beauty: StoryBeautySettings) {
         guard let index = selectedClipIndex else { return }
         var stack = project.tracks.videoClips[index].resolvedEffectStack
+        stack.version = StoryEffectStack.currentVersion
         stack.beauty = beauty.clamped()
         project.tracks.videoClips[index].effectStack = stack
         selectedClipID = project.tracks.videoClips[index].id
@@ -818,6 +820,7 @@ final class StoryTimelineEditor: ObservableObject {
     func previewSelectedClipCreativeEffect(_ effect: StoryRenderEffect, intensity: Float? = nil) {
         guard let index = selectedClipIndex else { return }
         var stack = project.tracks.videoClips[index].resolvedEffectStack
+        stack.version = StoryEffectStack.currentVersion
         stack.creativeEffects = effect == .none ? [] : [effect]
         if let intensity {
             stack.creativeEffectIntensity = min(max(intensity, 0), 1)
