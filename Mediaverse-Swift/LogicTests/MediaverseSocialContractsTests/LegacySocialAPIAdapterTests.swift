@@ -128,6 +128,58 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         let sharePostPaths = await shareTransport.postPaths
         XCTAssertEqual(sharePostPaths, [sharePath])
     }
+
+    func testRippleCommentsReuseFrozenCommentEndpointsAndPreserveReplies() async throws {
+        let listPath = "/api/fan-club-posts/ripple-1/comments"
+        let createPath = listPath
+        let likePath = "/api/fan-club-comments/comment-1/like"
+        let payload = """
+        {"comments":[{
+          "id":"comment-1","userId":"user-1","content":"Top level",
+          "contentHtml":"Top level","parentId":null,"likeCount":2,
+          "createdAt":"2026-07-26T10:00:00Z",
+          "user":{"id":"user-1","name":"Ahmed","handle":"ahmed"},
+          "likes":[{"id":"like-1"}],
+          "replies":[{
+            "id":"reply-1","userId":"user-2","content":"Reply",
+            "parentId":"comment-1","createdAt":"2026-07-26T10:01:00Z",
+            "user":{"id":"user-2","handle":"viewer"}
+          }]
+        }]}
+        """
+        let transport = SocialTransportStub(responses: [
+            listPath: payload,
+            likePath: #"{"liked":false,"likeCount":1}"#
+        ])
+        let adapter = LegacySocialAPIAdapter(transport: transport)
+
+        let comments = try await adapter.rippleComments(postId: "ripple-1")
+        XCTAssertEqual(comments.first?.replies.first?.content, "Reply")
+        XCTAssertTrue(comments.first?.viewerLiked ?? false)
+
+        let createTransport = SocialTransportStub(responses: [
+            createPath: """
+            {"comment":{"id":"new-1","userId":"user-1","content":"New",
+            "parentId":null,"createdAt":"2026-07-26T10:02:00Z",
+            "user":{"id":"user-1","handle":"ahmed"}}}
+            """
+        ])
+        let createAdapter = LegacySocialAPIAdapter(transport: createTransport)
+        let created = try await createAdapter.createRippleComment(
+            postId: "ripple-1",
+            content: "New",
+            parentId: nil
+        )
+        XCTAssertEqual(created.content, "New")
+        let createBodies = await createTransport.postBodies
+        let body = try XCTUnwrap(createBodies.last)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(object["content"] as? String, "New")
+
+        let like = try await adapter.toggleRippleCommentLike(commentId: "comment-1")
+        XCTAssertFalse(like.liked)
+        XCTAssertEqual(like.likeCount, 1)
+    }
 }
 
 private actor SocialTransportStub: LegacySocialTransport {

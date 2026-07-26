@@ -184,6 +184,27 @@ final class SocialContractDecodingTests: XCTestCase {
         XCTAssertEqual(poll.votes.first?.optionId, "two")
     }
 
+    func testRippleCommentDefaultsMissingReplyAndLikeCollections() throws {
+        let data = Data(
+            """
+            {"comments":[{
+              "id":"comment-1",
+              "userId":"user-1",
+              "content":"Hello @viewer",
+              "createdAt":"2026-07-26T10:00:00Z",
+              "user":{"id":"user-1","handle":"author"}
+            }]}
+            """.utf8
+        )
+
+        let response = try decoder.decode(RippleCommentsResponse.self, from: data)
+
+        XCTAssertEqual(response.comments.first?.content, "Hello @viewer")
+        XCTAssertEqual(response.comments.first?.likeCount, 0)
+        XCTAssertEqual(response.comments.first?.replies.count, 0)
+        XCTAssertFalse(response.comments.first?.viewerLiked ?? true)
+    }
+
     func testSocialFeaturesDefaultOffToPreserveExistingAppBehavior() {
         let configuration = SocialFeatureConfiguration()
 

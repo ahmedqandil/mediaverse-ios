@@ -7,10 +7,12 @@ enum CommentThreadTarget: Equatable {
     case episode(String)
     case collection(String)
     case post(String)
+    case ripple(String)
 
     var id: String {
         switch self {
-        case .video(let id), .episode(let id), .collection(let id), .post(let id): return id
+        case .video(let id), .episode(let id), .collection(let id), .post(let id), .ripple(let id):
+            return id
         }
     }
 }
@@ -199,11 +201,13 @@ struct CommentThreadView: View {
 
     private var supportsCommentManagement: Bool {
         if case .post = target { return false }
+        if case .ripple = target { return false }
         return true
     }
 
     private var supportsCommentFlags: Bool {
         if case .post = target { return false }
+        if case .ripple = target { return false }
         return true
     }
 
@@ -470,6 +474,11 @@ struct CommentThreadView: View {
         case .post(let id):
             let postComments = try await APIClient.shared.fetchPostComments(postId: id)
             return postComments.map { $0.asSharedComment }
+        case .ripple(let id):
+            let comments = try await LegacySocialAPIAdapter(
+                transport: APIClient.shared
+            ).rippleComments(postId: id)
+            return comments.map(\.asSharedComment)
         }
     }
 
@@ -546,6 +555,11 @@ struct CommentThreadView: View {
         case .post(let id):
             let comment = try await APIClient.shared.createPostComment(postId: id, content: content, parentId: parentId)
             return comment.asSharedComment
+        case .ripple(let id):
+            let comment = try await LegacySocialAPIAdapter(
+                transport: APIClient.shared
+            ).createRippleComment(postId: id, content: content, parentId: parentId)
+            return comment.asSharedComment
         }
     }
 
@@ -559,6 +573,10 @@ struct CommentThreadView: View {
         Task {
             if case .post(let postId) = target {
                 _ = try? await APIClient.shared.likePostComment(postId: postId, commentId: commentId, liked: !wasLiked)
+            } else if case .ripple = target {
+                _ = try? await LegacySocialAPIAdapter(
+                    transport: APIClient.shared
+                ).toggleRippleCommentLike(commentId: commentId)
             } else {
                 _ = try? await APIClient.shared.likeComment(commentId: commentId, liked: !wasLiked)
             }
@@ -1093,6 +1111,25 @@ private extension PostComment {
             actorShow: nil,
             replies: replies?.map(\.asSharedComment),
             replyCount: replies?.count
+        )
+    }
+}
+
+private extension RippleComment {
+    var asSharedComment: Comment {
+        Comment(
+            id: id,
+            content: content,
+            contentHtml: contentHTML,
+            isRemoved: false,
+            likes: likeCount,
+            createdAt: createdAt,
+            parentId: parentId,
+            user: CommentUser(id: user.id, name: user.name ?? user.handle, image: user.image),
+            actorChannel: nil,
+            actorShow: nil,
+            replies: replies.map(\.asSharedComment),
+            replyCount: replies.count
         )
     }
 }

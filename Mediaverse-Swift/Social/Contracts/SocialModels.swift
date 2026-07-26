@@ -387,6 +387,53 @@ public struct RippleDetailResponse: Decodable, Sendable {
     public let post: Ripple
 }
 
+public struct RippleComment: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let userId: String
+    public let content: String
+    public let contentHTML: String?
+    public let parentId: String?
+    public let likeCount: Int
+    public let createdAt: String
+    public let editedAt: String?
+    public let user: SocialIdentity
+    public let replies: [RippleComment]
+    public let viewerLiked: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id, userId, content, parentId, likeCount, createdAt, editedAt, user, replies, likes
+        case contentHTML = "contentHtml"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        userId = try values.decode(String.self, forKey: .userId)
+        content = try values.decode(String.self, forKey: .content)
+        contentHTML = try values.decodeIfPresent(String.self, forKey: .contentHTML)
+        parentId = try values.decodeIfPresent(String.self, forKey: .parentId)
+        likeCount = try values.decodeIfPresent(Int.self, forKey: .likeCount) ?? 0
+        createdAt = try values.decode(String.self, forKey: .createdAt)
+        editedAt = try values.decodeIfPresent(String.self, forKey: .editedAt)
+        user = try values.decode(SocialIdentity.self, forKey: .user)
+        replies = try values.decodeIfPresent([RippleComment].self, forKey: .replies) ?? []
+        viewerLiked = (try? values.decodeIfPresent([IdentifierOnly].self, forKey: .likes))??.isEmpty == false
+    }
+}
+
+public struct RippleCommentsResponse: Decodable, Sendable {
+    public let comments: [RippleComment]
+}
+
+public struct RippleCommentResponse: Decodable, Sendable {
+    public let comment: RippleComment
+}
+
+public struct RippleCommentLikeResponse: Decodable, Equatable, Sendable {
+    public let liked: Bool
+    public let likeCount: Int
+}
+
 public struct DiscoverRipplePageResponse: Decodable, Sendable {
     public let version: Int
     public let mode: String

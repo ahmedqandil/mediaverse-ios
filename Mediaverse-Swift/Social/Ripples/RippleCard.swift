@@ -22,6 +22,7 @@ struct RippleCard: View {
     @StateObject private var engagement: RippleEngagementController
     @State private var showsEnergy = false
     @State private var showsShare = false
+    @State private var showsComments = false
 
     init(
         ripple: Ripple,
@@ -101,6 +102,14 @@ struct RippleCard: View {
                         Task { await engagement.recordNativeShare() }
                     }
             }
+        }
+        .sheet(isPresented: $showsComments) {
+            StandardCommentsSheet(
+                target: .ripple(ripple.id),
+                initialCount: ripple.commentCount,
+                autoFocusComposer: true,
+                onClose: { showsComments = false }
+            )
         }
         .alert(
             "Ripple update failed",
@@ -186,7 +195,11 @@ struct RippleCard: View {
                 title: "Comment",
                 systemImage: "bubble.left",
                 count: ripple.commentCount,
-                handler: actions.comment
+                handler: actions.comment ?? (
+                    allowsEngagement && !ripple.commentsDisabled
+                        ? { showsComments = true }
+                        : nil
+                )
             )
             action(
                 title: "Echo",
