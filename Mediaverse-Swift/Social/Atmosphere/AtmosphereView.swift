@@ -17,12 +17,10 @@ struct AtmosphereView: View {
     @State private var searchPresented = false
     @State private var notificationsPresented = false
     @State private var unreadNotificationCount = 0
-    @State private var isUploadEligible = false
     private let socialFeatures = SocialFeatureConfiguration.runtime()
 
     private var isCompactWidth: Bool { horizontalSizeClass == .compact }
     private var feedCardInset: CGFloat { isCompactWidth ? 0 : C.pagePad }
-    private var composerInset: CGFloat { isCompactWidth ? 8 : C.pagePad }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -66,7 +64,6 @@ struct AtmosphereView: View {
             }
         }
         .onAppear {
-            updateUploadEligibility()
             Task { await loadNotificationCount() }
         }
         .onChange(of: notificationsPresented) { _, isPresented in
@@ -75,11 +72,11 @@ struct AtmosphereView: View {
             }
         }
         .onChange(of: auth.isAuthenticated) { _, _ in
-            updateUploadEligibility()
             Task { await loadNotificationCount() }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .uploadEligibilityChanged)) { notification in
-            isUploadEligible = (notification.object as? Bool) == true
+        .onReceive(NotificationCenter.default.publisher(for: .rippleCreated)) { notification in
+            guard let ripple = notification.object as? Ripple else { return }
+            model.prepend(ripple)
         }
         .onReceive(NotificationCenter.default.publisher(for: .notificationCountsDidChange)) { notification in
             if let count = notification.object as? Int {
@@ -139,7 +136,7 @@ struct AtmosphereView: View {
 
     @ViewBuilder
     private var uploadButton: some View {
-        if auth.isAuthenticated && isUploadEligible {
+        if auth.isAuthenticated {
             Button {
                 NotificationCenter.default.post(name: .uploadRequested, object: nil)
             } label: {
@@ -189,15 +186,6 @@ struct AtmosphereView: View {
                 }
             }
             .frame(width: 44, height: 38)
-    }
-
-    @MainActor
-    private func updateUploadEligibility() {
-        guard auth.isAuthenticated, let contexts = UploadOptionsCache.contexts else {
-            isUploadEligible = false
-            return
-        }
-        isUploadEligible = !contexts.channels.isEmpty || !contexts.shows.isEmpty
     }
 
     @MainActor
@@ -280,12 +268,6 @@ struct AtmosphereView: View {
         ScrollView {
             LazyVStack(spacing: 12) {
                 atmosphereBoundaryListings(model.beforeFeedListings)
-                if socialFeatures.rippleComposerEnabled {
-                    RippleComposer(destination: .personal) {
-                        model.prepend($0)
-                    }
-                    .padding(.horizontal, composerInset)
-                }
                 ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                     switch item {
                     case .ripple(let ripple):

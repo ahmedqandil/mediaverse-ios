@@ -53,6 +53,7 @@ struct UploadView: View {
 
     private let presentationStyle: PresentationStyle
     private let onOptionSelected: () -> Void
+    private let socialFeatures = SocialFeatureConfiguration.runtime()
 
     @State private var contexts: UploadContextsResponse?
     @State private var selectedDestination: UploadContext?
@@ -88,6 +89,7 @@ struct UploadView: View {
     @State private var isPickingThumbnail = false
     @State private var isRecordingVideo = false
     @State private var isCreatingStory = false
+    @State private var isCreatingRipple = false
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var selectedThumbnailPhotoItem: PhotosPickerItem?
     @State private var isUploading = false
@@ -177,6 +179,29 @@ struct UploadView: View {
         .fullScreenCover(isPresented: $isCreatingStory) {
             StoryCreatorCoordinator(preselectedPublisher: selectedDestination) {
                 isCreatingStory = false
+            }
+        }
+        .fullScreenCover(isPresented: $isCreatingRipple) {
+            NavigationStack {
+                ScrollView {
+                    RippleComposer(destination: .personal) { ripple in
+                        NotificationCenter.default.post(name: .rippleCreated, object: ripple)
+                        isCreatingRipple = false
+                        onOptionSelected()
+                    }
+                    .padding(C.pagePad)
+                }
+                .background(C.bg.ignoresSafeArea())
+                .navigationTitle("Create Ripple")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            isCreatingRipple = false
+                        }
+                        .foregroundStyle(C.text)
+                    }
+                }
             }
         }
         .sheet(isPresented: $showDestinationLookup) {
@@ -364,6 +389,17 @@ struct UploadView: View {
                 VStack(spacing: 10) {
                     if isImportingVideo {
                         drawerMessage(text: "Importing selected video...", icon: "arrow.down.circle")
+                    }
+
+                    if socialFeatures.rippleComposerEnabled {
+                        uploadSourceButton(
+                            icon: "wave.3.right",
+                            title: "Create Ripple",
+                            subtitle: "Share text, photos, links, media, or a poll"
+                        ) {
+                            C.lightHaptic()
+                            isCreatingRipple = true
+                        }
                     }
 
                     if platformConfig.storiesFeedEnabled {
@@ -886,6 +922,17 @@ struct UploadView: View {
             VStack(spacing: 9) {
                 if isImportingVideo {
                     drawerMessage(text: "Importing selected video...", icon: "arrow.down.circle")
+                }
+
+                if socialFeatures.rippleComposerEnabled {
+                    uploadSourceButton(
+                        icon: "wave.3.right",
+                        title: "Create Ripple",
+                        subtitle: "Share text, photos, links, media, or a poll"
+                    ) {
+                        C.lightHaptic()
+                        isCreatingRipple = true
+                    }
                 }
 
                 if platformConfig.storiesFeedEnabled {

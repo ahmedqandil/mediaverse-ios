@@ -172,6 +172,7 @@ extension Notification.Name {
     static let userFollowChanged = Notification.Name("userFollowChanged")
     static let uploadRequested = Notification.Name("uploadRequested")
     static let uploadEligibilityChanged = Notification.Name("uploadEligibilityChanged")
+    static let rippleCreated = Notification.Name("rippleCreated")
     static let profileTabRequested = Notification.Name("profileTabRequested")
     static let exploreSectionRequested = Notification.Name("exploreSectionRequested")
     static let shortsTabRequested = Notification.Name("shortsTabRequested")
