@@ -121,7 +121,6 @@ final class CurationManager {
         case "videos": return "videos"
         case "movies": return "movies"
         case "microdramas": return "microdramas"
-        case "channels": return "channels"
         default: return nil
         }
     }

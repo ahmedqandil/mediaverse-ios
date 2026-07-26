@@ -28,7 +28,7 @@ struct NativeCurationListingView: View {
             case "ripples":
                 NativeCurationRippleList(listing: listing)
             case "stories":
-                NativeCurationCarousel(listing: listing)
+                NativeCurationFlashesTray(listing: listing)
             case "continue_watching", "video_feed", "shorts_feed", "atmosphere_feed":
                 EmptyView()
             default:
@@ -38,6 +38,37 @@ struct NativeCurationListingView: View {
         .environment(\.curationListingId, listing.listingId)
         .task(id: listing.listingId) {
             await CurationEventTracker.shared.impression(listingId: listing.listingId)
+        }
+    }
+}
+
+/// `stories` is the frozen Backstage template key. Flashes are the existing
+/// Stories product, so this renderer delegates to the established Stories
+/// repository and viewer rather than inventing a separate content contract.
+private struct NativeCurationFlashesTray: View {
+    let listing: AssembledListing
+
+    @StateObject private var repository = StoriesRepository()
+    @State private var viewerGroupID: String?
+
+    var body: some View {
+        StoryTrayView(
+            repository: repository,
+            activeChannel: nil,
+            title: listing.listingTitle?.uppercased() ?? "FLASHES",
+            onAddStory: {}
+        ) { group in
+            viewerGroupID = group.id
+        }
+        .fullScreenCover(
+            isPresented: Binding(
+                get: { viewerGroupID != nil },
+                set: { if !$0 { viewerGroupID = nil } }
+            )
+        ) {
+            if let viewerGroupID {
+                StoryViewerView(repository: repository, initialGroupId: viewerGroupID)
+            }
         }
     }
 }

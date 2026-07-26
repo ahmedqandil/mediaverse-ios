@@ -1801,7 +1801,7 @@ struct HomeView: View {
         }
 
         do {
-            async let pageTask = CurationManager.shared.fetchPage(key: "home")
+            async let pageTask = CurationManager.shared.fetchPage(key: "videos")
             async let feedTask = APIClient.shared.fetchFeed()
 
             let page = try await pageTask

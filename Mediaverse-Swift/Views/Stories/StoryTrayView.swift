@@ -23,6 +23,7 @@ private extension StoryGroup {
 struct StoryTrayView: View {
     @ObservedObject var repository: StoriesRepository
     let activeChannel: UploadContext?
+    var title = "FLASHES"
     let onAddStory: () -> Void
     let onSelect: (StoryGroup) -> Void
 
@@ -48,7 +49,7 @@ struct StoryTrayView: View {
         Group {
             if hasVisibleContent {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("STORIES")
+                    Text(title)
                         .font(.system(size: 10, weight: .semibold))
                         .tracking(3)
                         .foregroundStyle(C.textMuted)

@@ -47,7 +47,7 @@ actor MainPageWarmupService {
 
         await runBatch([
             { _ = try await APIClient.shared.fetchPlatformConfig() },
-            { _ = try await CurationManager.shared.fetchPage(key: "home") },
+            { _ = try await CurationManager.shared.fetchPage(key: "atmosphere") },
             { _ = try await CurationManager.shared.fetchPage(key: "shorts") },
             { _ = try await APIClient.shared.fetchFeed() }
         ])
@@ -65,7 +65,6 @@ actor MainPageWarmupService {
         await Task.yield()
 
         await runBatch([
-            { _ = try await CurationManager.shared.fetchPage(key: "channels") },
             { _ = try await CurationManager.shared.fetchPage(key: "microdramas") },
             { _ = try await APIClient.shared.fetchPublicCollections() },
             { _ = try await APIClient.shared.fetchPlaylists() }
