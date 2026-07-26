@@ -119,6 +119,48 @@ public struct VibeDetailResponse: Decodable, Sendable {
     public let following: Bool
 }
 
+public enum VibeInviteRole: String, Codable, Sendable, CaseIterable {
+    case member = "MEMBER"
+    case moderator = "MODERATOR"
+    case admin = "ADMIN"
+
+    public var label: String {
+        switch self {
+        case .member: "Member"
+        case .moderator: "Moderator"
+        case .admin: "Administrator"
+        }
+    }
+}
+
+public struct VibeInvite: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let invitedEmail: String?
+    public let role: VibeInviteRole
+    public let maxUses: Int
+    public let useCount: Int
+    public let expiresAt: String?
+    public let revokedAt: String?
+    public let acceptedAt: String?
+    public let createdAt: String
+    public let invitedUser: SocialIdentity?
+    public let invitedBy: SocialIdentity
+}
+
+public struct VibeInvitesResponse: Decodable, Sendable {
+    public let invites: [VibeInvite]
+}
+
+public struct VibeInviteCreatedResponse: Decodable, Sendable {
+    public let invite: VibeInvite
+    public let token: String
+}
+
+public struct VibeInviteAcceptanceResponse: Decodable, Sendable {
+    public let membership: VibeMembership
+    public let slug: String
+}
+
 public enum VibeAffiliationEntityType: String, Codable, Sendable, CaseIterable {
     case show = "SHOW"
     case channel = "CHANNEL"

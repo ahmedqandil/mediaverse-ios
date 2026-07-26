@@ -48,6 +48,10 @@ final class AppRouteContractTests: XCTestCase {
     func testSocialWebLinksResolveToNativeDestinations() {
         XCTAssertEqual(AppRoute.route(link: "/vibes/cinema"), .vibe("cinema"))
         XCTAssertEqual(
+            AppRoute.route(link: "https://www.westreem.com/vibes/invite/opaque%20token"),
+            .vibeInvite("opaque token")
+        )
+        XCTAssertEqual(
             AppRoute.route(link: "https://www.westreem.com/vibes/cinema/posts/ripple-7"),
             .ripple("ripple-7")
         )

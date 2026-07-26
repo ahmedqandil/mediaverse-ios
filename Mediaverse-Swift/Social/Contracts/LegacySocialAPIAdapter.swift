@@ -91,6 +91,50 @@ public actor LegacySocialAPIAdapter {
         return try await decode(RipplePageResponse.self, path: try path(base, query: query))
     }
 
+    public func vibeInvites(slug: String) async throws -> [VibeInvite] {
+        try await decode(
+            VibeInvitesResponse.self,
+            path: "/api/fan-clubs/\(try segment(slug))/invites"
+        ).invites
+    }
+
+    public func createVibeInvite(
+        slug: String,
+        invitedEmail: String? = nil,
+        role: VibeInviteRole = .member,
+        expiresInDays: Int = 7,
+        maxUses: Int = 1
+    ) async throws -> VibeInviteCreatedResponse {
+        let normalizedEmail = invitedEmail?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = try JSONEncoder().encode(
+            VibeInviteCreateRequest(
+                invitedEmail: normalizedEmail?.isEmpty == false ? normalizedEmail : nil,
+                role: role,
+                expiresInDays: min(max(expiresInDays, 1), 30),
+                maxUses: min(max(maxUses, 1), 100)
+            )
+        )
+        return try await post(
+            VibeInviteCreatedResponse.self,
+            path: "/api/fan-clubs/\(try segment(slug))/invites",
+            body: body
+        )
+    }
+
+    public func revokeVibeInvite(slug: String, inviteID: String) async throws {
+        _ = try await transport.socialDeleteData(
+            path: "/api/fan-clubs/\(try segment(slug))/invites/\(try segment(inviteID))"
+        )
+    }
+
+    public func acceptVibeInvite(token: String) async throws -> VibeInviteAcceptanceResponse {
+        try await post(
+            VibeInviteAcceptanceResponse.self,
+            path: "/api/fan-club-invites/\(try segment(token))/accept",
+            body: Data("{}".utf8)
+        )
+    }
+
     public func vibeAffiliations(slug: String) async throws -> [VibeAffiliation] {
         try await decode(
             VibeAffiliationsResponse.self,
@@ -747,6 +791,13 @@ private struct VibeAffiliationRequest: Encodable {
     let entityId: String
     let requestMessage: String?
     let isPrimary: Bool
+}
+
+private struct VibeInviteCreateRequest: Encodable {
+    let invitedEmail: String?
+    let role: VibeInviteRole
+    let expiresInDays: Int
+    let maxUses: Int
 }
 
 private struct AffiliationReviewRequest: Encodable {

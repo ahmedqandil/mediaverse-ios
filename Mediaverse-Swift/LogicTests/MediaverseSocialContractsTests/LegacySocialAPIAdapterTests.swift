@@ -601,6 +601,56 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         let writes = await transport.postPaths
         XCTAssertEqual(writes, ["PATCH /api/fan-clubs/cinema/members/u-1"])
     }
+
+    func testVibeInvitationsUseExactFrozenManagementAndAcceptanceContracts() async throws {
+        let invite = """
+        {"id":"invite-1","invitedEmail":null,"role":"MEMBER","maxUses":5,"useCount":0,
+        "expiresAt":"2026-08-02T00:00:00.000Z","revokedAt":null,"acceptedAt":null,
+        "createdAt":"2026-07-26T00:00:00.000Z","invitedUser":null,
+        "invitedBy":{"id":"owner-1","name":"Owner","handle":"owner","image":null}}
+        """
+        let listPath = "/api/fan-clubs/cinema/invites"
+        let revokePath = "/api/fan-clubs/cinema/invites/invite-1"
+        let acceptPath = "/api/fan-club-invites/opaque%2Ftoken/accept"
+        let transport = SocialTransportStub(responses: [
+            listPath: #"{"invites":[\#(invite)]}"#,
+            revokePath: #"{"ok":true}"#,
+            acceptPath: #"{"membership":{"role":"MEMBER","status":"ACTIVE","muted":false},"slug":"cinema"}"#
+        ])
+        let api = LegacySocialAPIAdapter(transport: transport)
+
+        let rows = try await api.vibeInvites(slug: "cinema")
+        XCTAssertEqual(rows.first?.id, "invite-1")
+        try await api.revokeVibeInvite(slug: "cinema", inviteID: "invite-1")
+        let accepted = try await api.acceptVibeInvite(token: "opaque/token")
+        XCTAssertEqual(accepted.slug, "cinema")
+
+        let readPaths = await transport.paths
+        let deletePaths = await transport.deletePaths
+        let postPaths = await transport.postPaths
+        XCTAssertEqual(readPaths, [listPath])
+        XCTAssertEqual(deletePaths, [revokePath])
+        XCTAssertEqual(postPaths, [acceptPath])
+
+        let createTransport = SocialTransportStub(responses: [
+            listPath: #"{"invite":\#(invite),"token":"new-token"}"#
+        ])
+        let createAPI = LegacySocialAPIAdapter(transport: createTransport)
+        _ = try await createAPI.createVibeInvite(
+            slug: "cinema",
+            invitedEmail: " member@example.com ",
+            role: .moderator,
+            expiresInDays: 99,
+            maxUses: 300
+        )
+        let createBodies = await createTransport.postBodies
+        let body = try XCTUnwrap(createBodies.last)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(object["invitedEmail"] as? String, "member@example.com")
+        XCTAssertEqual(object["role"] as? String, "MODERATOR")
+        XCTAssertEqual(object["expiresInDays"] as? Int, 30)
+        XCTAssertEqual(object["maxUses"] as? Int, 100)
+    }
 }
 
 private actor SocialTransportStub: LegacySocialTransport {

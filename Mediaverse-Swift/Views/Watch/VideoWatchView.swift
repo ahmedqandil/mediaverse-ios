@@ -2466,6 +2466,7 @@ struct VideoWatchView: View {
         case .microdramaWatch(let id): MicrodramaWatchView(showId: id)
         case .microdramaWatchEp(let id, let episodeNumber): MicrodramaWatchView(showId: id, startEpisodeNumber: episodeNumber)
         case .vibe(let slug): VibeDetailView(slug: slug)
+        case .vibeInvite(let token): VibeInviteAcceptView(token: token)
         case .ripple(let postId): RippleDetailView(postId: postId)
         case .atmo(let handle): AtmoProfileView(handle: handle)
         case .search(let query): SearchView(initialQuery: query)
