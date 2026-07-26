@@ -1540,13 +1540,18 @@ private struct RipplePollCard: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(.white.opacity(0.15))
 
-                if showResults {
-                    GeometryReader { proxy in
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(selected ? C.watch : .white.opacity(0.20))
-                            .frame(width: proxy.size.width * CGFloat(fraction))
-                    }
+                GeometryReader { proxy in
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(selected ? C.watch : .white.opacity(0.20))
+                        .frame(
+                            width: proxy.size.width
+                                * CGFloat(showResults ? fraction : 0)
+                        )
+                        .opacity(showResults ? 1 : 0)
                 }
+                .animation(.easeOut(duration: 0.55), value: showResults)
+                .animation(.easeOut(duration: 0.55), value: fraction)
+                .animation(.easeInOut(duration: 0.22), value: selected)
 
                 HStack(spacing: 12) {
                     Text(option.label)
@@ -1556,12 +1561,14 @@ private struct RipplePollCard: View {
                         Text("\(Int((fraction * 100).rounded()))%")
                             .font(.system(size: 11, weight: .semibold))
                             .monospacedDigit()
+                            .contentTransition(.numericText())
                             .opacity(0.75)
                     }
                 }
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(selected && showResults ? C.bg : C.text)
                 .padding(.horizontal, 12)
+                .animation(.easeInOut(duration: 0.22), value: selected)
             }
             .frame(height: 40)
             .overlay {
