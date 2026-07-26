@@ -461,7 +461,7 @@ enum ProjectModelError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .storyDurationLimitExceeded:
-            return "Stories can be up to 10 seconds."
+            return "Flashes can be up to 10 seconds."
         }
     }
 }

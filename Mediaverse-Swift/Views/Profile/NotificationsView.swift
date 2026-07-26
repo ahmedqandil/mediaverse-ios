@@ -638,7 +638,7 @@ private struct NotifRow: View {
         case "comment_reply", "post_comment_reply", "ripple_reply": return "Reply"
         case "comment_like", "post_comment_liked":     return "Like"
         case "post_liked":                             return "Post Like"
-        case "story_like":                             return "Story Like"
+        case "story_like":                             return "Flash Like"
         case "ripple_energy":                          return "Ripple Energy"
         case "ripple_photo_energy":                    return "Photo Energy"
         case "flash_energy":                           return "Flash Energy"

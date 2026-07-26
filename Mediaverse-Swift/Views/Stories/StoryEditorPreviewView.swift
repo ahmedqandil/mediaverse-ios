@@ -158,11 +158,11 @@ private enum StoryStickerComposerKind: Identifiable, Equatable {
 
     var guideText: String {
         switch self {
-        case .link: return "Add a tappable link sticker to your story."
-        case .location: return "Add a place sticker that viewers can see on your story."
+        case .link: return "Add a tappable link sticker to your flash."
+        case .location: return "Add a place sticker that viewers can see on your flash."
         case .poll: return "Add a poll question with two to four choices."
         case .quiz: return "Add a quiz question, choices, and the correct answer."
-        case .question: return "Ask viewers to send a reply to your story."
+        case .question: return "Ask viewers to send a reply to your flash."
         case .countdown: return "Add a countdown sticker with a future end time."
         }
     }
@@ -849,7 +849,7 @@ struct StoryEditorPreviewView: View {
                             stopPlayback()
                             onBack()
                         } label: {
-                            Label("Retake story", systemImage: "camera.rotate")
+                            Label("Retake flash", systemImage: "camera.rotate")
                         }
                     } label: {
                         creationToolbarLabel("More", systemImage: "ellipsis")
@@ -922,7 +922,7 @@ struct StoryEditorPreviewView: View {
 
     private func shareStory() {
         guard canShareStory else {
-            renderError = "Stories can be up to 10 seconds. Delete or adjust a clip before sharing."
+            renderError = "Flashes can be up to 10 seconds. Delete or adjust a clip before sharing."
             return
         }
         stopPlayback()
@@ -1993,7 +1993,7 @@ struct StoryEditorPreviewView: View {
 
     private var overlayTimingControls: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Choose when this item appears in the story.")
+            Text("Choose when this item appears in the flash.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(C.textMuted)
 
@@ -2054,7 +2054,7 @@ struct StoryEditorPreviewView: View {
                 .tint(C.watch)
             }
 
-            Button("Show for full story") {
+            Button("Show for full flash") {
                 overlayTimingStart = 0
                 overlayTimingDuration = duration
             }
@@ -2525,7 +2525,7 @@ struct StoryEditorPreviewView: View {
         let stack = clip.resolvedEffectStack
         let selected = stack.creativeEffects.first ?? .none
         return VStack(alignment: .leading, spacing: 12) {
-            Text("Creative effects are rendered identically in this preview and the published story.")
+            Text("Creative effects are rendered identically in this preview and the published flash.")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(C.textTertiary)
 
@@ -2955,7 +2955,7 @@ struct StoryEditorPreviewView: View {
             }
 
             if !editor.project.tracks.overlays.isEmpty {
-                Text("On this story")
+                Text("On this flash")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(C.textMuted)
                 overlayStrip
@@ -3629,7 +3629,7 @@ struct StoryEditorPreviewView: View {
                     .scaleEffect(state.transform.scale * interactiveStickerScale)
                     .rotationEffect(.radians(state.transform.rotation))
                     .allowsHitTesting(false)
-                    .accessibilityLabel("Story overlay")
+                    .accessibilityLabel("Flash overlay")
             )
         }
 
@@ -3643,7 +3643,7 @@ struct StoryEditorPreviewView: View {
                 .rotationEffect(.radians(state.transform.rotation))
                 .offset(x: CGFloat(state.transform.tx) * previewScale, y: -CGFloat(state.transform.ty) * previewScale)
                 .allowsHitTesting(false)
-                .accessibilityLabel("Story overlay")
+                .accessibilityLabel("Flash overlay")
         )
     }
 
@@ -4508,7 +4508,7 @@ struct StoryEditorPreviewView: View {
                     .allowsHitTesting(false)
             }
         }
-        .accessibilityLabel("Story editor preview")
+        .accessibilityLabel("Flash editor preview")
     }
 
     private func previewRenderProject(from project: Project) -> Project {
@@ -6074,7 +6074,7 @@ private enum StoryEditorPreviewError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .imageConversionFailed:
-            return "Could not display the rendered story frame."
+            return "Could not display the rendered flash frame."
         case .mediaOverlayImportFailed:
             return "Could not add that photo or video overlay. Choose another item."
         }

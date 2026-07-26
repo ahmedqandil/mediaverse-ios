@@ -180,7 +180,7 @@ final class StoryTimelineEditor: ObservableObject {
 
     func deleteSelectedClip() async {
         guard let index = selectedClipIndex, project.tracks.videoClips.count > 1 else {
-            errorMessage = "A story needs at least one clip."
+            errorMessage = "A flash needs at least one clip."
             return
         }
         var updated = project
@@ -200,7 +200,7 @@ final class StoryTimelineEditor: ObservableObject {
         var updated = project
         updated.tracks.videoClips.insert(duplicate, at: index + 1)
         guard validateStoryDuration(updated) else {
-            errorMessage = "Duplicating this clip would exceed the 10 second story limit."
+            errorMessage = "Duplicating this clip would exceed the 10 second flash limit."
             return
         }
         await commit(
@@ -215,7 +215,7 @@ final class StoryTimelineEditor: ObservableObject {
         var updated = project
         updateClipTrim(in: &updated, at: index, timelineDurationSeconds: durationSeconds)
         guard validateStoryDuration(updated) else {
-            errorMessage = "Trim would exceed the 10 second story limit."
+            errorMessage = "Trim would exceed the 10 second flash limit."
             return
         }
         project = updated
@@ -232,7 +232,7 @@ final class StoryTimelineEditor: ObservableObject {
         var updated = project
         updateClipTrim(in: &updated, at: index, timelineDurationSeconds: durationSeconds)
         guard validateStoryDuration(updated) else {
-            errorMessage = "Trim would exceed the 10 second story limit."
+            errorMessage = "Trim would exceed the 10 second flash limit."
             return
         }
         await commit(updated, label: "Trim", before: before)
@@ -248,7 +248,7 @@ final class StoryTimelineEditor: ObservableObject {
         var updated = project
         updateClipRange(in: &updated, at: index, startSeconds: startSeconds, endSeconds: endSeconds)
         guard validateStoryDuration(updated) else {
-            errorMessage = "Trim would exceed the 10 second story limit."
+            errorMessage = "Trim would exceed the 10 second flash limit."
             return
         }
         project = updated
@@ -265,7 +265,7 @@ final class StoryTimelineEditor: ObservableObject {
         var updated = project
         updateClipRange(in: &updated, at: index, startSeconds: startSeconds, endSeconds: endSeconds)
         guard validateStoryDuration(updated) else {
-            errorMessage = "Trim would exceed the 10 second story limit."
+            errorMessage = "Trim would exceed the 10 second flash limit."
             return
         }
         await commit(updated, label: "Trim Clip", before: before)
@@ -914,7 +914,7 @@ final class StoryTimelineEditor: ObservableObject {
         var updated = project
         updated.tracks.videoClips[index].speed = min(max(speed, 0.25), 4)
         guard validateStoryDuration(updated) else {
-            errorMessage = "This speed would exceed the 10 second story limit."
+            errorMessage = "This speed would exceed the 10 second flash limit."
             return
         }
         project = updated
@@ -931,7 +931,7 @@ final class StoryTimelineEditor: ObservableObject {
         var updated = project
         updated.tracks.videoClips[index].speed = min(max(speed, 0.25), 4)
         guard validateStoryDuration(updated) else {
-            errorMessage = "This speed would exceed the 10 second story limit."
+            errorMessage = "This speed would exceed the 10 second flash limit."
             return
         }
         await commit(updated, label: "Speed", before: before)

@@ -338,7 +338,7 @@ struct UploadView: View {
                             Text("Create")
                                 .font(.system(size: 22, weight: .bold))
                                 .foregroundStyle(C.text)
-                            Text("Open the camera for a story, record a new video, or upload from your library.")
+                            Text("Open the camera for a flash, record a new video, or upload from your library.")
                                 .font(.system(size: 13))
                                 .foregroundStyle(C.textMuted)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -369,8 +369,8 @@ struct UploadView: View {
                     if platformConfig.storiesFeedEnabled {
                         uploadSourceButton(
                             icon: "circle.dashed.inset.filled",
-                        title: "Add story",
-                        subtitle: "Open the story camera for photo or portrait video"
+                        title: "Add flash",
+                        subtitle: "Open the flash camera for photo or portrait video"
                     ) {
                         C.lightHaptic()
                         isCreatingStory = true
@@ -855,7 +855,7 @@ struct UploadView: View {
             Text("Choose what to create")
                 .font(.system(size: 18, weight: .bold))
                 .foregroundStyle(C.text)
-            Text("Use the drawer below to start a story, record a video, or choose an existing video.")
+            Text("Use the drawer below to start a flash, record a video, or choose an existing video.")
                 .font(.system(size: 13))
                 .foregroundStyle(C.textMuted)
                 .multilineTextAlignment(.center)
@@ -891,7 +891,7 @@ struct UploadView: View {
                 if platformConfig.storiesFeedEnabled {
                     uploadSourceButton(
                         icon: "circle.dashed.inset.filled",
-                        title: "Story",
+                        title: "Flash",
                         subtitle: "Capture a 24-hour photo or portrait video"
                     ) {
                         C.lightHaptic()

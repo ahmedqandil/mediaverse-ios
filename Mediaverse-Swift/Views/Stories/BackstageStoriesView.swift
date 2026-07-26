@@ -43,7 +43,7 @@ struct BackstageStoriesView: View {
                 }
                 .padding(C.pagePad)
             }
-            .navigationTitle("Stories")
+            .navigationTitle("Flashes")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -62,12 +62,12 @@ struct BackstageStoriesView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(C.watch)
                     .disabled(publishers.isEmpty)
-                    .accessibilityLabel("Create story")
+                    .accessibilityLabel("Create flash")
                 }
             }
         }
         .task { await repository.refresh(force: true) }
-        .alert("Delete story?", isPresented: Binding(
+        .alert("Delete flash?", isPresented: Binding(
             get: { storyPendingDelete != nil },
             set: { if !$0 { storyPendingDelete = nil } }
         )) {
@@ -77,7 +77,7 @@ struct BackstageStoriesView: View {
             }
             Button("Cancel", role: .cancel) { storyPendingDelete = nil }
         } message: {
-            Text("This removes the story immediately for every viewer.")
+            Text("This removes the flash immediately for every viewer.")
         }
     }
 
@@ -99,7 +99,7 @@ struct BackstageStoriesView: View {
     private var headerRow: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("Active stories")
+                Text("Active flashes")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(C.text)
                 Text("\(activeStoryCount) live · expires automatically after 24 h")
@@ -116,7 +116,7 @@ struct BackstageStoriesView: View {
             }
             .buttonStyle(.bordered)
             .tint(C.watch)
-            .accessibilityLabel("Refresh stories")
+            .accessibilityLabel("Refresh flashes")
         }
     }
 
@@ -131,13 +131,13 @@ struct BackstageStoriesView: View {
                 Image(systemName: "circle.dashed.inset.filled")
                     .font(.system(size: 36, weight: .semibold))
                     .foregroundStyle(C.watch)
-                Text("No active stories")
+                Text("No active flashes")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(C.text)
                 Button {
                     onCreate(selectedPublisher)
                 } label: {
-                    Label("Create Story", systemImage: "camera.fill")
+                    Label("Create Flash", systemImage: "camera.fill")
                         .font(.system(size: 13, weight: .semibold))
                         .frame(maxWidth: .infinity)
                 }
@@ -224,7 +224,7 @@ struct BackstageStoriesView: View {
             }
             .buttonStyle(.bordered)
             .tint(.red)
-            .accessibilityLabel("Delete story")
+            .accessibilityLabel("Delete flash")
         }
         .padding(10)
         .background(C.surface)

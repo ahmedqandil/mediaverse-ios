@@ -67,8 +67,8 @@ struct StoryTrayView: View {
                                         onSelect(group)
                                     }
                                     .accessibilityAddTraits(.isButton)
-                                    .accessibilityLabel("Story from \(group.publisherName)")
-                                    .accessibilityHint(group.hasUnseen ? "Unseen stories" : "Seen stories")
+                                    .accessibilityLabel("Flash from \(group.publisherName)")
+                                    .accessibilityHint(group.hasUnseen ? "Unseen flashes" : "Seen flashes")
                             }
                         }
                         .padding(.horizontal, 12)
@@ -100,14 +100,14 @@ struct StoryTrayView: View {
                     onSelect(displayGroup)
                 }
                 .accessibilityAddTraits(.isButton)
-                .accessibilityLabel("Your channel story")
-                .accessibilityHint(activeGroup.hasUnseen ? "Unseen stories" : "Seen stories")
+                .accessibilityLabel("Your channel flash")
+                .accessibilityHint(activeGroup.hasUnseen ? "Unseen flashes" : "Seen flashes")
         } else {
             StoryAddAvatarView(channel: channel)
                 .contentShape(Rectangle())
                 .onTapGesture(perform: onAddStory)
                 .accessibilityAddTraits(.isButton)
-                .accessibilityLabel("Add story for \(channel.name)")
+                .accessibilityLabel("Add flash for \(channel.name)")
         }
     }
 }
@@ -203,7 +203,7 @@ private struct StoryAddAvatarView: View {
                     }
             }
 
-            Text("Add story")
+            Text("Add flash")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(C.text)
                 .lineLimit(1)

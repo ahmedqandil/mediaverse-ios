@@ -178,7 +178,7 @@ struct StoryCameraView: View {
             Button("Settings") { controller.openSettings() }
             Button("Cancel", role: .cancel) { onCancel() }
         } message: {
-            Text("Enable camera and microphone permissions to record a story.")
+            Text("Enable camera and microphone permissions to record a flash.")
         }
         .photosPicker(
             isPresented: $isPickingLibrary,
@@ -403,7 +403,7 @@ struct StoryCameraView: View {
                     .onChanged { _ in beginShutterPressIfNeeded() }
                     .onEnded { _ in endShutterPress() }
             )
-            .accessibilityLabel("Story shutter")
+            .accessibilityLabel("Flash shutter")
 
             Text(shutterHelpText)
                 .font(.system(size: 11, weight: .bold))

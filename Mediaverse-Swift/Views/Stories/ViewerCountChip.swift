@@ -26,7 +26,7 @@ struct ViewerCountChip: View {
             .padding(.vertical, 4)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Show story viewers")
+        .accessibilityLabel("Show flash viewers")
     }
 
     private var previewAvatarWidth: CGFloat {

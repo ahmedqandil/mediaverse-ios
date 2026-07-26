@@ -420,26 +420,26 @@ enum StoriesError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .badURL:
-            return "The story endpoint is not configured correctly."
+            return "The flash endpoint is not configured correctly."
         case .notSignedIn:
-            return "Sign in to use stories."
+            return "Sign in to use flashes."
         case .notAllowed:
-            return "You do not have permission to manage this story."
+            return "You do not have permission to manage this flash."
         case .notFound:
-            return "This story is no longer available."
+            return "This flash is no longer available."
         case .serverUnavailable(let statusCode):
             if let statusCode {
-                return "Stories are temporarily unavailable. Server returned HTTP \(statusCode)."
+                return "Flashes are temporarily unavailable. Server returned HTTP \(statusCode)."
             }
-            return "Stories are temporarily unavailable."
+            return "Flashes are temporarily unavailable."
         case .decodingFailed:
-            return "Stories returned an unexpected response."
+            return "Flashes returned an unexpected response."
         case .missingMediaUrl:
             return "Upload succeeded but no media URL was returned."
         case .videoTooLong:
-            return "Video is too long or too large. Stories can be up to 10 seconds."
+            return "Video is too long or too large. Flashes can be up to 10 seconds."
         case .http(let code):
-            return "Stories request failed with HTTP \(code)."
+            return "Flashes request failed with HTTP \(code)."
         case .serverMessage(let message):
             return message
         }

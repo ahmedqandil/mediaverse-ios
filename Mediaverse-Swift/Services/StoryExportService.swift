@@ -578,19 +578,19 @@ enum StoryExportError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .imageConversionFailed:
-            return "Could not render the story image."
+            return "Could not render the flash image."
         case .imageEncodingFailed:
-            return "Could not encode the story image."
+            return "Could not encode the flash image."
         case .sourceMediaMissing:
-            return "Could not find the story video file. Go back and capture it again."
+            return "Could not find the flash video file. Go back and capture it again."
         case .writerSetupFailed:
-            return "Could not start story video export."
+            return "Could not start flash video export."
         case .frameAppendFailed:
-            return "Could not write a story video frame."
+            return "Could not write a flash video frame."
         case .writerFinishFailed:
-            return "Could not finish story video export."
+            return "Could not finish flash video export."
         case .audioMuxFailed:
-            return "Could not add audio to the story video."
+            return "Could not add audio to the flash video."
         }
     }
 }

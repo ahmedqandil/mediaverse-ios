@@ -109,7 +109,7 @@ struct StoryViewerView: View {
         .onChange(of: inAppBrowser.item) { _, item in
             setPaused(item != nil)
         }
-        .alert("Delete story?", isPresented: Binding(
+        .alert("Delete flash?", isPresented: Binding(
             get: { storyPendingDelete != nil },
             set: {
                 if !$0 {
@@ -127,7 +127,7 @@ struct StoryViewerView: View {
                 setPaused(false)
             }
         } message: {
-            Text("This removes the story immediately for every viewer.")
+            Text("This removes the flash immediately for every viewer.")
         }
         .sheet(item: $viewersSheetStory, onDismiss: {
             viewersSheetStory = nil
@@ -306,7 +306,7 @@ struct StoryViewerView: View {
                         )
                 }
                 .frame(height: 24)
-                .accessibilityLabel("Story \(index + 1) progress")
+                .accessibilityLabel("Flash \(index + 1) progress")
                 .accessibilityValue("\(Int(progress(for: index, story: story) * 100)) percent")
                 .accessibilityAdjustableAction { direction in
                     switch direction {
@@ -352,7 +352,7 @@ struct StoryViewerView: View {
                     storyPendingDelete = story
                     setPaused(true)
                 } label: {
-                    Label("Delete story", systemImage: "trash")
+                    Label("Delete flash", systemImage: "trash")
                 }
             } label: {
                 Image(systemName: "ellipsis")
@@ -361,7 +361,7 @@ struct StoryViewerView: View {
             }
             .foregroundStyle(.white)
             .disabled(isDeletingStory)
-            .accessibilityLabel("Story options")
+            .accessibilityLabel("Flash options")
 
             Button {
                 dismiss()
@@ -371,7 +371,7 @@ struct StoryViewerView: View {
                     .frame(width: compact ? 34 : 36, height: compact ? 34 : 36)
             }
             .foregroundStyle(.white)
-            .accessibilityLabel("Close stories")
+            .accessibilityLabel("Close flashes")
         }
     }
 
@@ -533,11 +533,11 @@ struct StoryViewerView: View {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture { previousStory() }
-                    .accessibilityLabel("Previous story")
+                    .accessibilityLabel("Previous flash")
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture { nextStory() }
-                    .accessibilityLabel("Next story")
+                    .accessibilityLabel("Next flash")
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
