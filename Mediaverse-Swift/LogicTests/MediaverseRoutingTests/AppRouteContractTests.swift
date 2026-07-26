@@ -58,6 +58,14 @@ final class AppRouteContractTests: XCTestCase {
         XCTAssertEqual(AppRoute.route(link: "/atmo/ahmed"), .atmo("ahmed"))
         XCTAssertEqual(AppRoute.route(link: "/ripples/ripple-8"), .ripple("ripple-8"))
         XCTAssertEqual(AppRoute.route(link: "/discover?topic=cinema"), .search("cinema"))
+        XCTAssertEqual(
+            AppRoute.route(link: "/vibes/cinema/manage?tab=affiliations"),
+            .vibeManagement(slug: "cinema", tab: "affiliations")
+        )
+        XCTAssertEqual(
+            AppRoute.route(link: "/vibes/cinema/manage?tab=requests"),
+            .vibeManagement(slug: "cinema", tab: "requests")
+        )
     }
 
     func testNotificationPayloadPrecedence() {

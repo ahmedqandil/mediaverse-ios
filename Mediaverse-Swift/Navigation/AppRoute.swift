@@ -21,6 +21,7 @@ public enum AppRoute: Hashable, Identifiable {
         case .playlist(let s):         return "playlist_\(s)"
         case .collection(let s):       return "collection_\(s)"
         case .vibe(let s):             return "vibe_\(s)"
+        case .vibeManagement(let slug, let tab): return "vibeManagement_\(slug)_\(tab)"
         case .vibeInvite(let s):       return "vibeInvite_\(s)"
         case .ripple(let s):           return "ripple_\(s)"
         case .atmo(let s):             return "atmo_\(s)"
@@ -41,6 +42,7 @@ public enum AppRoute: Hashable, Identifiable {
     case playlist(String)           // playlist id
     case collection(String)         // collection id
     case vibe(String)               // Vibe slug
+    case vibeManagement(slug: String, tab: String) // Vibe management destination
     case vibeInvite(String)         // opaque Vibe invitation token
     case ripple(String)             // Ripple id
     case atmo(String)               // user handle
@@ -151,6 +153,10 @@ extension AppRoute {
         if parts.count >= 2, parts[0] == "collection" { return .collection(parts[1]) }
         if parts.count >= 3, parts[0] == "vibes", parts[1] == "invite" { return .vibeInvite(parts[2]) }
         if parts.count >= 4, parts[0] == "vibes", parts[2] == "posts" { return .ripple(parts[3]) }
+        if parts.count >= 3, parts[0] == "vibes", parts[2] == "manage" {
+            let tab = queryValue(["tab"], in: queryItems) ?? "settings"
+            return .vibeManagement(slug: parts[1], tab: tab)
+        }
         if parts.count >= 2, parts[0] == "vibes" { return .vibe(parts[1]) }
         if parts.count >= 2, parts[0] == "atmo" { return .atmo(parts[1]) }
         if parts.count >= 2, parts[0] == "ripples" { return .ripple(parts[1]) }

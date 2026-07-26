@@ -520,7 +520,7 @@ struct VibeModerationView: View {
     let slug: String
     let capabilities: VibeCapabilities
     @Environment(\.dismiss) private var dismiss
-    @State private var tab: VibeModerationTab = .ripples
+    @State private var tab: VibeModerationTab
     @State private var ripples: [ModerationRipple] = []
     @State private var reports: [ModerationReport] = []
     @State private var requests: [VibePendingJoinRequest] = []
@@ -532,6 +532,12 @@ struct VibeModerationView: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+
+    init(slug: String, capabilities: VibeCapabilities, initialTab: String? = nil) {
+        self.slug = slug
+        self.capabilities = capabilities
+        _tab = State(initialValue: initialTab?.lowercased() == "requests" ? .requests : .ripples)
+    }
 
     private var tabs: [VibeModerationTab] {
         var value: [VibeModerationTab] = []

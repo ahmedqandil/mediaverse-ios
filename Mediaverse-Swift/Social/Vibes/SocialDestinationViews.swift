@@ -2,6 +2,7 @@ import SwiftUI
 
 struct VibeDetailView: View {
     let slug: String
+    var initialManagementTab: String? = nil
     @State private var detail: VibeDetailResponse?
     @State private var ripples: [Ripple] = []
     @State private var nextCursor: String?
@@ -115,7 +116,11 @@ struct VibeDetailView: View {
         }
         .sheet(isPresented: $showsModeration) {
             if let capabilities = detail?.capabilities {
-                VibeModerationView(slug: slug, capabilities: capabilities)
+                VibeModerationView(
+                    slug: slug,
+                    capabilities: capabilities,
+                    initialTab: initialManagementTab
+                )
             }
         }
         .sheet(isPresented: $showsInvitations) {
@@ -153,6 +158,18 @@ struct VibeDetailView: View {
             self.detail = detail
             ripples = page.posts
             nextCursor = page.nextCursor
+            switch initialManagementTab?.lowercased() {
+            case "affiliations":
+                showsAffiliations = detail.capabilities.canManageAffiliations
+            case "requests":
+                showsModeration = detail.capabilities.canModerateMembers
+            case "invitations", "invites":
+                showsInvitations = detail.capabilities.canInvite
+            case "settings":
+                showsSettings = detail.capabilities.canManageClub
+            default:
+                break
+            }
         } catch {
             detail = nil
             ripples = []
