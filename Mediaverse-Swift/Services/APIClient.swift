@@ -1790,26 +1790,6 @@ actor APIClient: LegacySocialTransport {
         let _: Resp = try decoder.decode(Resp.self, from: data)
     }
 
-    func markNotificationRead(id: String) async throws {
-        let encodedId = C.pathSegment(id)
-        let path = "/api/notifications/\(encodedId)"
-        guard let url = URL(string: C.baseURL + path) else {
-            throw APIError.badURL(path)
-        }
-        struct Body: Encodable { let read: Bool }
-        struct Resp: Decodable { let ok: Bool? }
-        var req = URLRequest(url: url)
-        req.httpMethod = "PATCH"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.httpBody = try JSONEncoder().encode(Body(read: true))
-        attachAuth(&req)
-        let (data, resp) = try await session.data(for: req)
-        try validate(resp)
-        invalidateResponseCache()
-        let _: Resp = try decoder.decode(Resp.self, from: data)
-    }
-
     func fetchNotificationCounts() async throws -> [String: Int] {
         return try await get("/api/notifications/counts")
     }
