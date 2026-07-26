@@ -45,6 +45,15 @@ final class AppRouteContractTests: XCTestCase {
         )
     }
 
+    func testSocialWebLinksResolveToNativeDestinations() {
+        XCTAssertEqual(AppRoute.route(link: "/vibes/cinema"), .vibe("cinema"))
+        XCTAssertEqual(
+            AppRoute.route(link: "https://www.westreem.com/vibes/cinema/posts/ripple-7"),
+            .ripple("ripple-7")
+        )
+        XCTAssertEqual(AppRoute.route(link: "/atmo/ahmed"), .atmo("ahmed"))
+    }
+
     func testNotificationPayloadPrecedence() {
         let payload: [AnyHashable: Any] = [
             "type": "short",

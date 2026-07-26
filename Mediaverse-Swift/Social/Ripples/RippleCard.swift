@@ -117,25 +117,21 @@ struct RippleCard: View {
 
     private var identityHeader: some View {
         HStack(alignment: .top, spacing: 10) {
-            Button(action: { actions.openAuthor?() }) {
+            authorTarget {
                 SocialIdentityAvatar(
                     image: ripple.author.image,
                     name: ripple.author.name ?? ripple.author.handle,
                     size: 40
                 )
             }
-            .buttonStyle(.plain)
-            .disabled(actions.openAuthor == nil)
 
             VStack(alignment: .leading, spacing: 2) {
-                Button(action: { actions.openAuthor?() }) {
+                authorTarget {
                     Text(ripple.author.name ?? ripple.author.handle.map { "@\($0)" } ?? "Westreem user")
                         .font(.subheadline.bold())
                         .foregroundStyle(C.text)
                         .lineLimit(1)
                 }
-                .buttonStyle(.plain)
-                .disabled(actions.openAuthor == nil)
 
                 HStack(spacing: 5) {
                     if let handle = ripple.author.handle, ripple.author.name != nil {
@@ -144,9 +140,9 @@ struct RippleCard: View {
                     if let club = ripple.club {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 8, weight: .bold))
-                        Button(club.name) { actions.openVibe?() }
-                            .buttonStyle(.plain)
-                            .disabled(actions.openVibe == nil)
+                        vibeTarget(club) {
+                            Text(club.name)
+                        }
                     }
                 }
                 .font(.caption)
@@ -237,6 +233,29 @@ struct RippleCard: View {
 
     private func bodyFont(hasAttachments: Bool) -> Font {
         hasAttachments ? .body : .system(size: 20, weight: .medium, design: .rounded)
+    }
+
+    @ViewBuilder
+    private func authorTarget<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        if let openAuthor = actions.openAuthor {
+            Button(action: openAuthor, label: content).buttonStyle(.plain)
+        } else if let handle = ripple.author.handle {
+            NavigationLink(value: AppRoute.atmo(handle), label: content).buttonStyle(.plain)
+        } else {
+            content()
+        }
+    }
+
+    @ViewBuilder
+    private func vibeTarget<Content: View>(
+        _ club: VibeSummary,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        if let openVibe = actions.openVibe {
+            Button(action: openVibe, label: content).buttonStyle(.plain)
+        } else {
+            NavigationLink(value: AppRoute.vibe(club.slug), label: content).buttonStyle(.plain)
+        }
     }
 
     private var shareURL: URL? {

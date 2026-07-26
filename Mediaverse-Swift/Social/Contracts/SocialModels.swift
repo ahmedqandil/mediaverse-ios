@@ -383,6 +383,10 @@ public struct RipplePageResponse: Decodable, Sendable {
     }
 }
 
+public struct RippleDetailResponse: Decodable, Sendable {
+    public let post: Ripple
+}
+
 public struct DiscoverRipplePageResponse: Decodable, Sendable {
     public let version: Int
     public let mode: String

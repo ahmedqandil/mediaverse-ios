@@ -87,6 +87,13 @@ public actor LegacySocialAPIAdapter {
         return try await decode(RipplePageResponse.self, path: try path(base, query: query))
     }
 
+    public func ripple(postId: String) async throws -> Ripple {
+        try await decode(
+            RippleDetailResponse.self,
+            path: "/api/fan-club-posts/\(try segment(postId))"
+        ).post
+    }
+
     public func myVibes(cursor: String? = nil, limit: Int = 24) async throws -> VibeListResponse {
         var query = [
             URLQueryItem(name: "mine", value: "1"),

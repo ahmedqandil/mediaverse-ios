@@ -307,6 +307,9 @@ struct NotificationsView: View {
         case .microdramaShow(let id): MicrodramaShowView(showId: id)
         case .microdramaWatch(let id): MicrodramaWatchView(showId: id)
         case .microdramaWatchEp(let id, let episodeNumber): MicrodramaWatchView(showId: id, startEpisodeNumber: episodeNumber)
+        case .vibe(let slug): VibeDetailView(slug: slug)
+        case .ripple(let postId): RippleDetailView(postId: postId)
+        case .atmo(let handle): AtmoProfileView(handle: handle)
         }
     }
 }

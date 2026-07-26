@@ -836,6 +836,12 @@ struct MainTabView: View {
             PlaylistDetailView(playlistId: id)
         case .collection(let id):
             CollectionDetailView(collectionId: id)
+        case .vibe(let slug):
+            VibeDetailView(slug: slug)
+        case .ripple(let postId):
+            RippleDetailView(postId: postId)
+        case .atmo(let handle):
+            AtmoProfileView(handle: handle)
         }
     }
 
@@ -878,7 +884,8 @@ private extension AppRoute {
         switch self {
         case .video, .episode, .microdramaWatch, .microdramaWatchEp:
             return true
-        case .short, .channel, .show, .showAccess, .handoff, .microdramaShow, .playlist, .collection:
+        case .short, .channel, .show, .showAccess, .handoff, .microdramaShow, .playlist, .collection,
+             .vibe, .ripple, .atmo:
             return false
         }
     }
