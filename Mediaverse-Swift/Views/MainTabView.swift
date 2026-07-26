@@ -22,6 +22,7 @@ struct MainTabView: View {
     @State private var profilePath: [AppRoute] = []
     @State private var isUploadSheetPresented = false
     @State private var uploadDrawerDragOffset: CGFloat = 0
+    @State private var didCrossCreateSwipeThreshold = false
     @State private var expandingMiniItem: MiniPlayerManager.Item?
     @State private var isMiniExpanding = false
     @State private var expansionOverlayOpacity: Double = 1
@@ -96,7 +97,7 @@ struct MainTabView: View {
     var body: some View {
         layeredRoot
         .simultaneousGesture(mainScrollActivityGesture)
-        .simultaneousGesture(homeUploadSwipeGesture)
+        .simultaneousGesture(homeUploadSwipeGesture, including: .all)
         .animation(.spring(response: 0.26, dampingFraction: 0.88), value: isUploadSheetPresented)
         .animation(.spring(response: 0.24, dampingFraction: 0.86), value: isBottomTabBarCompressed)
         .onAppear {
@@ -340,9 +341,11 @@ struct MainTabView: View {
         .background(RootTabPagingLock(isLocked: isRootTabPagingLocked))
     }
 
-    private func openUploadOptions() {
+    private func openUploadOptions(provideHaptic: Bool = true) {
         guard canAccessCreateFlow else { return }
-        C.lightHaptic()
+        if provideHaptic {
+            C.lightHaptic()
+        }
         uploadDrawerDragOffset = 0
         isUploadSheetPresented = true
     }
@@ -508,14 +511,31 @@ struct MainTabView: View {
 
     private var homeUploadSwipeGesture: some Gesture {
         DragGesture(minimumDistance: 28, coordinateSpace: .global)
+            .onChanged { value in
+                guard canOpenUploadFromHomeSwipe else {
+                    didCrossCreateSwipeThreshold = false
+                    return
+                }
+                let translation = value.translation
+                let isMostlyHorizontal = abs(translation.width) > abs(translation.height) * 1.35
+                guard translation.width > 0, isMostlyHorizontal else {
+                    didCrossCreateSwipeThreshold = false
+                    return
+                }
+                if translation.width >= 64, !didCrossCreateSwipeThreshold {
+                    didCrossCreateSwipeThreshold = true
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                }
+            }
             .onEnded { value in
+                defer { didCrossCreateSwipeThreshold = false }
                 guard canOpenUploadFromHomeSwipe else { return }
                 let translation = value.translation
                 let predicted = value.predictedEndTranslation
                 let isRightSwipe = translation.width > 92 || predicted.width > 150
                 let isMostlyHorizontal = abs(translation.width) > abs(translation.height) * 1.65
                 guard isRightSwipe, isMostlyHorizontal else { return }
-                openUploadOptions()
+                openUploadOptions(provideHaptic: !didCrossCreateSwipeThreshold)
             }
     }
 
