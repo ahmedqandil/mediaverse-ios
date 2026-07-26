@@ -4,6 +4,7 @@ import AVKit
 struct EpisodeWatchView: View {
 
     let episodeId: String
+    let initialClipRange: ClipPlaybackRange?
 
     @State private var currentEpisodeId: String
     @State private var episode: EpisodeDetail?
@@ -105,9 +106,11 @@ struct EpisodeWatchView: View {
         episode?.season.show?.isMovie ?? false
     }
 
-    init(episodeId: String) {
+    init(episodeId: String, initialClipRange: ClipPlaybackRange? = nil) {
         self.episodeId = episodeId
+        self.initialClipRange = initialClipRange
         _currentEpisodeId = State(initialValue: episodeId)
+        _activeClipRange = State(initialValue: initialClipRange)
     }
 
     var body: some View {
@@ -1523,6 +1526,14 @@ struct EpisodeWatchView: View {
                     return
                 }
                 savedProgress = item.progress
+            }
+            if loadId == episodeId,
+               let initialClipRange,
+               initialClipRange.markOut > initialClipRange.markIn,
+               let duration = ep.duration,
+               duration > 0 {
+                activeClipRange = initialClipRange
+                savedProgress = min(max(initialClipRange.markIn / duration, 0), 0.999)
             }
 
             if let expandedItem {

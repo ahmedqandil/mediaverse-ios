@@ -20,6 +20,7 @@ struct VideoWatchView: View {
 
     let videoId: String
     let playlistId: String?
+    let initialClipRange: ClipPlaybackRange?
 
     // ── Data
     @State private var video:         VideoDetail?
@@ -125,10 +126,16 @@ struct VideoWatchView: View {
         )
     }
 
-    init(videoId: String, playlistId: String? = nil) {
+    init(
+        videoId: String,
+        playlistId: String? = nil,
+        initialClipRange: ClipPlaybackRange? = nil
+    ) {
         self.videoId = videoId
         self.playlistId = playlistId
+        self.initialClipRange = initialClipRange
         _currentVideoId = State(initialValue: videoId)
+        _activeClipRange = State(initialValue: initialClipRange)
     }
 
     // MARK: - Body
@@ -1396,6 +1403,14 @@ struct VideoWatchView: View {
                     return
                 }
                 savedProgress = item.progress
+            }
+            if loadId == videoId,
+               let initialClipRange,
+               initialClipRange.markOut > initialClipRange.markIn,
+               let duration = v.duration,
+               duration > 0 {
+                activeClipRange = initialClipRange
+                savedProgress = min(max(initialClipRange.markIn / duration, 0), 0.999)
             }
 
             if let expandedItem {

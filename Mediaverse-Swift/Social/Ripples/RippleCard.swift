@@ -1112,6 +1112,7 @@ private struct RippleCollectionAttachmentView: View {
 
 private struct RippleClipAttachmentView: View {
     let clip: RippleClippingAttachment
+    @State private var showsPlayer = false
 
     private var source: RippleVideoAttachment? {
         clip.video ?? clip.episode.map {
@@ -1126,6 +1127,10 @@ private struct RippleClipAttachmentView: View {
     }
 
     var body: some View {
+        Button {
+            guard playbackRange != nil, clip.videoId != nil || clip.episodeId != nil else { return }
+            showsPlayer = true
+        } label: {
         VStack(alignment: .leading, spacing: 9) {
             if let source {
                 ZStack {
@@ -1155,6 +1160,34 @@ private struct RippleClipAttachmentView: View {
         }
         .padding(10)
         .background(C.elevated, in: RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .fullScreenCover(isPresented: $showsPlayer) {
+            NavigationStack {
+                Group {
+                    if let videoId = clip.videoId, let playbackRange {
+                        VideoWatchView(videoId: videoId, initialClipRange: playbackRange)
+                    } else if let episodeId = clip.episodeId, let playbackRange {
+                        EpisodeWatchView(episodeId: episodeId, initialClipRange: playbackRange)
+                    } else {
+                        ContentUnavailableView("Clip unavailable", systemImage: "play.slash")
+                    }
+                }
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Close") { showsPlayer = false }
+                    }
+                }
+            }
+        }
+    }
+
+    private var playbackRange: ClipPlaybackRange? {
+        guard let markIn = clip.markIn,
+              let markOut = clip.markOut,
+              markIn >= 0,
+              markOut > markIn else { return nil }
+        return ClipPlaybackRange(markIn: markIn, markOut: markOut)
     }
 }
 
