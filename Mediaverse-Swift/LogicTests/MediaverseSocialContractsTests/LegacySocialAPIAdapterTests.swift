@@ -730,6 +730,25 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         XCTAssertEqual(writePaths, [createPath, "PATCH \(updatePath)", preparePath])
         XCTAssertEqual(uploadPaths, [uploadPath])
     }
+
+    func testProfilePinUsesFrozenRipplePatchContract() async throws {
+        let path = "/api/fan-club-posts/ripple-1"
+        let transport = SocialTransportStub(responses: [
+            "PATCH \(path)": #"{"post":{"id":"ripple-1","pinnedAt":"2026-07-26T18:00:00.000Z"}}"#
+        ])
+        let api = LegacySocialAPIAdapter(transport: transport)
+
+        let result = try await api.setRipplePinned(postId: "ripple-1", pinned: true)
+
+        XCTAssertEqual(result.id, "ripple-1")
+        XCTAssertNotNil(result.pinnedAt)
+        let paths = await transport.postPaths
+        XCTAssertEqual(paths, ["PATCH \(path)"])
+        let bodies = await transport.postBodies
+        let body = try XCTUnwrap(bodies.first)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(object["pinned"] as? Bool, true)
+    }
 }
 
 private actor SocialTransportStub: LegacySocialTransport {

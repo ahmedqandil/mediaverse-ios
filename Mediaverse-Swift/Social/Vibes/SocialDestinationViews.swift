@@ -265,9 +265,30 @@ struct RippleDetailView: View {
 }
 
 struct AtmoProfileView: View {
+    private enum Tab: String {
+        case atmosphere = "ATMO"
+        case echoed = "ECHOED"
+        case mentions = "MENTIONS"
+        case vibes = "VIBES"
+        case about = "ABOUT"
+
+        var feedTab: SocialProfileTab? {
+            switch self {
+            case .atmosphere: .atmosphere
+            case .echoed: .echoed
+            case .mentions: .mentions
+            case .vibes, .about: nil
+            }
+        }
+    }
+
     let handle: String
-    @State private var selectedTab: SocialProfileTab = .atmosphere
+    @EnvironmentObject private var auth: AuthManager
+    @State private var selectedTab: Tab = .atmosphere
     @State private var ripples: [Ripple] = []
+    @State private var vibes: [VibeSummary] = []
+    @State private var profile: FullProfile?
+    @State private var isSelf = false
     @State private var nextCursor: String?
     @State private var isLoading = true
     @State private var errorMessage: String?
@@ -278,16 +299,12 @@ struct AtmoProfileView: View {
         VStack(spacing: 0) {
             profileHeader
             MediaverseUnderlineTabStrip(
-                items: [
-                    MediaverseTabItem(id: SocialProfileTab.atmosphere.rawValue, label: "Atmo"),
-                    MediaverseTabItem(id: SocialProfileTab.echoed.rawValue, label: "Echoed"),
-                    MediaverseTabItem(id: SocialProfileTab.mentions.rawValue, label: "Mentions")
-                ],
+                items: tabItems,
                 selectedID: selectedTab.rawValue,
                 fillsWidth: true,
                 horizontalPadding: 0
             ) { value in
-                guard let tab = SocialProfileTab(rawValue: value) else { return }
+                guard let tab = Tab(rawValue: value) else { return }
                 selectedTab = tab
                 Task { await load() }
             }
@@ -295,10 +312,23 @@ struct AtmoProfileView: View {
                 LazyVStack(spacing: 12) {
                     if isLoading, ripples.isEmpty {
                         ProgressView().tint(C.watch).padding(.top, 60)
+                    } else if selectedTab == .vibes {
+                        vibeRows
+                    } else if selectedTab == .about {
+                        aboutSection
                     } else {
+                        if selectedTab == .atmosphere, isSelf {
+                            RippleComposer(destination: .personal) { ripple in
+                                ripples.insert(ripple, at: 0)
+                            }
+                        }
                         ForEach(ripples) {
                             RippleCard(
                                 ripple: $0,
+                                actions: RippleCardActions(
+                                    togglePin: isSelf ? pinAction(for: $0) : nil,
+                                    isPinned: $0.pinnedAt != nil
+                                ),
                                 allowsEngagement: features.rippleEngagementEnabled
                             )
                         }
@@ -315,7 +345,10 @@ struct AtmoProfileView: View {
         .background(C.bg.ignoresSafeArea())
         .navigationTitle("@\(handle)")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: handle) { await load() }
+        .task(id: handle) {
+            await loadIdentity()
+            await load()
+        }
         .alert(
             "Atmo unavailable",
             isPresented: Binding(
@@ -329,26 +362,79 @@ struct AtmoProfileView: View {
         }
     }
 
-    private var profileHeader: some View {
-        HStack(spacing: 12) {
-            SocialIdentityAvatar(image: nil, name: handle, size: 60)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("@\(handle)").font(.title3.bold()).foregroundStyle(C.text)
-                Text("Atmosphere").font(.caption).foregroundStyle(C.textMuted)
-            }
-            Spacer()
+    private var tabItems: [MediaverseTabItem] {
+        var rows = [
+            MediaverseTabItem(id: Tab.atmosphere.rawValue, label: "Atmo"),
+            MediaverseTabItem(id: Tab.echoed.rawValue, label: "Echoed"),
+            MediaverseTabItem(id: Tab.mentions.rawValue, label: "Mentions")
+        ]
+        if isSelf {
+            rows.append(MediaverseTabItem(id: Tab.vibes.rawValue, label: "Vibes"))
+            rows.append(MediaverseTabItem(id: Tab.about.rawValue, label: "About"))
         }
-        .padding(C.pagePad)
+        return rows
+    }
+
+    private var profileHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let bannerURL = profile?.bannerUrl {
+                CachedRemoteImage(url: C.mediaURL(bannerURL), targetSize: CGSize(width: 800, height: 240)) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Rectangle().fill(C.elevated)
+                }
+                .frame(height: 120)
+                .clipped()
+            }
+            HStack(spacing: 12) {
+                SocialIdentityAvatar(image: profile?.image, name: profile?.name ?? handle, size: 64)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(profile?.name ?? "@\(handle)")
+                        .font(.title3.bold())
+                        .foregroundStyle(C.text)
+                    Text("@\(profile?.handle ?? handle)")
+                        .font(.caption)
+                        .foregroundStyle(C.textMuted)
+                }
+                Spacer()
+                if isSelf {
+                    Text("My Atmo")
+                        .font(.caption.bold())
+                        .foregroundStyle(C.watch)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(C.watch.opacity(0.12), in: Capsule())
+                }
+            }
+            .padding(C.pagePad)
+        }
         .background(C.surface)
     }
 
     private func load() async {
         isLoading = true
         do {
+            if selectedTab == .vibes {
+                let page = try await api.myVibes()
+                vibes = page.clubs
+                ripples = []
+                nextCursor = nil
+                errorMessage = nil
+                isLoading = false
+                return
+            }
+            if selectedTab == .about {
+                ripples = []
+                nextCursor = nil
+                errorMessage = nil
+                isLoading = false
+                return
+            }
+            guard let feedTab = selectedTab.feedTab else { return }
             let page = try await api.discover(
                 mode: .latest,
                 authorHandle: handle,
-                profileTab: selectedTab
+                profileTab: feedTab
             )
             ripples = page.posts
             nextCursor = page.nextCursor
@@ -362,13 +448,13 @@ struct AtmoProfileView: View {
     }
 
     private func loadMore() async {
-        guard let cursor = nextCursor else { return }
+        guard let cursor = nextCursor, let feedTab = selectedTab.feedTab else { return }
         do {
             let page = try await api.discover(
                 mode: .latest,
                 cursor: cursor,
                 authorHandle: handle,
-                profileTab: selectedTab
+                profileTab: feedTab
             )
             let existing = Set(ripples.map(\.id))
             ripples.append(contentsOf: page.posts.filter { !existing.contains($0.id) })
@@ -376,6 +462,82 @@ struct AtmoProfileView: View {
         } catch {
             errorMessage = socialErrorMessage(error)
         }
+    }
+
+    @MainActor
+    private func loadIdentity() async {
+        guard auth.isAuthenticated,
+              let response = try? await APIClient.shared.fetchProfile(),
+              response.profile.handle?.caseInsensitiveCompare(handle) == .orderedSame else {
+            profile = nil
+            isSelf = false
+            return
+        }
+        profile = response.profile
+        isSelf = true
+    }
+
+    private func pinAction(for ripple: Ripple) -> () -> Void {
+        {
+            Task {
+                do {
+                    _ = try await api.setRipplePinned(
+                        postId: ripple.id,
+                        pinned: ripple.pinnedAt == nil
+                    )
+                    await load()
+                } catch {
+                    errorMessage = socialErrorMessage(error)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var vibeRows: some View {
+        if vibes.isEmpty {
+            SocialUnavailable(
+                title: "No Vibes yet",
+                message: "Vibes you create or join will appear here.",
+                retry: { Task { await load() } }
+            )
+        } else {
+            ForEach(vibes) { vibe in
+                NavigationLink(value: AppRoute.vibe(vibe.slug)) {
+                    HStack(spacing: 12) {
+                        SocialIdentityAvatar(image: vibe.avatarURL, name: vibe.name, size: 46)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(vibe.name).font(.subheadline.bold()).foregroundStyle(C.text)
+                            if let description = vibe.description, !description.isEmpty {
+                                Text(description).font(.caption).foregroundStyle(C.textMuted).lineLimit(2)
+                            }
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").foregroundStyle(C.textTertiary)
+                    }
+                    .padding(12)
+                    .background(C.surface, in: RoundedRectangle(cornerRadius: C.cardRadius))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var aboutSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("About").font(.headline).foregroundStyle(C.text)
+            if let bio = profile?.bio, !bio.isEmpty {
+                Text(bio).font(.body).foregroundStyle(C.text)
+            } else {
+                Text("No bio has been added yet.")
+                    .font(.subheadline)
+                    .foregroundStyle(C.textMuted)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(C.surface, in: RoundedRectangle(cornerRadius: C.cardRadius))
     }
 }
 

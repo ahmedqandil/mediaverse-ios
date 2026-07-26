@@ -550,6 +550,15 @@ public struct Ripple: Decodable, Identifiable, Sendable {
     }
 }
 
+public struct RipplePinMutation: Decodable, Sendable {
+    public struct Post: Decodable, Sendable {
+        public let id: String
+        public let pinnedAt: String?
+    }
+
+    public let post: Post
+}
+
 public enum RippleAttachmentKind: String, Decodable, Sendable {
     case photo = "PHOTO"
     case link = "LINK"

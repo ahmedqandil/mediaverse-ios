@@ -616,6 +616,15 @@ public actor LegacySocialAPIAdapter {
         ).post
     }
 
+    public func setRipplePinned(postId: String, pinned: Bool) async throws -> RipplePinMutation.Post {
+        struct Request: Encodable { let pinned: Bool }
+        let data = try await transport.socialPatchData(
+            path: "/api/fan-club-posts/\(try segment(postId))",
+            body: try JSONEncoder().encode(Request(pinned: pinned))
+        )
+        return try decoder.decode(RipplePinMutation.self, from: data).post
+    }
+
     public func resolveAttachment(url: String) async throws -> ResolvedRippleAttachmentResponse {
         try await post(
             ResolvedRippleAttachmentResponse.self,

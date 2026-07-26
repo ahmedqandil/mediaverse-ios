@@ -124,7 +124,7 @@ struct RippleComposer: View {
     private var placeholder: String {
         switch destination {
         case .personal:
-            "Create a Ripple on My Pulse…"
+            "Create a Ripple on My Atmo…"
         case .vibe(_, let name):
             "Create a Ripple in \(name)…"
         }

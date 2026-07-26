@@ -8,6 +8,8 @@ struct RippleCardActions {
     var share: (() -> Void)?
     var openAuthor: (() -> Void)?
     var openVibe: (() -> Void)?
+    var togglePin: (() -> Void)?
+    var isPinned = false
     var edit: (() -> Void)?
     var delete: (() -> Void)?
     var report: (() -> Void)?
@@ -214,6 +216,13 @@ struct RippleCard: View {
 
             if showsActionMenu {
                 Menu {
+                    if let togglePin = actions.togglePin {
+                        Button(
+                            actions.isPinned ? "Unpin from Atmo" : "Pin to Atmo",
+                            systemImage: actions.isPinned ? "pin.slash" : "pin",
+                            action: togglePin
+                        )
+                    }
                     if let editAction {
                         Button("Edit", systemImage: "pencil", action: editAction)
                     }
@@ -255,7 +264,7 @@ struct RippleCard: View {
     }
 
     private var showsActionMenu: Bool {
-        editAction != nil || deleteAction != nil || reportAction != nil
+        actions.togglePin != nil || editAction != nil || deleteAction != nil || reportAction != nil
     }
 
     @MainActor
