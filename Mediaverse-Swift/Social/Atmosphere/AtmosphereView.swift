@@ -11,6 +11,7 @@ struct AtmosphereView: View {
     @State private var previewIdleTask: Task<Void, Never>?
     @State private var suppressedPreviewVideoId: String?
     @State private var isPreservingPreviewHandoff = false
+    @State private var showsCreateVibe = false
     private let socialFeatures = SocialFeatureConfiguration.runtime()
 
     var body: some View {
@@ -42,6 +43,11 @@ struct AtmosphereView: View {
             previewIdleTask?.cancel()
             activePreviewVideoId = nil
             previewManager.pause()
+        }
+        .sheet(isPresented: $showsCreateVibe) {
+            CreateVibeView { _ in
+                Task { await model.reload(.myVibes) }
+            }
         }
     }
 
@@ -294,22 +300,39 @@ struct AtmosphereView: View {
         ScrollView {
             LazyVStack(spacing: 10) {
                 atmosphereBoundaryListings(model.beforeFeedListings)
+                Button {
+                    showsCreateVibe = true
+                } label: {
+                    Label("Create Vibe", systemImage: "plus.circle.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(C.watch)
                 ForEach(vibes) { vibe in
-                    HStack(spacing: 12) {
-                        Circle()
-                            .fill(C.elevated)
-                            .frame(width: 48, height: 48)
-                            .overlay(Text(String(vibe.name.prefix(1))).font(.headline))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(vibe.name).font(.headline)
-                            Text("\(vibe.followerCount) followers")
-                                .font(.caption)
+                    NavigationLink(value: AppRoute.vibe(vibe.slug)) {
+                        HStack(spacing: 12) {
+                            SocialIdentityAvatar(
+                                image: vibe.avatarURL,
+                                name: vibe.name,
+                                size: 48
+                            )
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(vibe.name).font(.headline)
+                                Text("\(vibe.memberCount) members · \(vibe.postCount) Ripples")
+                                    .font(.caption)
+                                    .foregroundStyle(C.textMuted)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
                                 .foregroundStyle(C.textMuted)
                         }
-                        Spacer()
+                        .padding(12)
+                        .background(C.surface, in: RoundedRectangle(cornerRadius: C.cardRadius))
                     }
-                    .padding(12)
-                    .background(C.surface, in: RoundedRectangle(cornerRadius: C.cardRadius))
+                    .buttonStyle(.plain)
                 }
                 atmosphereBoundaryListings(model.afterFeedListings)
             }

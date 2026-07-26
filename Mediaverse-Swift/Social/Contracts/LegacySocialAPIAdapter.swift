@@ -85,6 +85,49 @@ public actor LegacySocialAPIAdapter {
         )
     }
 
+    public func createVibe(
+        name: String,
+        slug: String?,
+        description: String,
+        visibility: VibeVisibility,
+        joinPolicy: VibeJoinPolicy,
+        topics: [String],
+        language: String? = nil,
+        country: String? = nil
+    ) async throws -> VibeSummary {
+        let body = VibeCreateRequest(
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            slug: slug?.trimmingCharacters(in: .whitespacesAndNewlines),
+            description: description.trimmingCharacters(in: .whitespacesAndNewlines),
+            visibility: visibility,
+            joinPolicy: joinPolicy,
+            topics: normalizedTopics(topics),
+            language: nonempty(language),
+            country: nonempty(country)?.uppercased()
+        )
+        return try await post(
+            VibeMutationResponse.self,
+            path: "/api/fan-clubs",
+            body: try JSONEncoder().encode(body)
+        ).club
+    }
+
+    public func updateVibe(slug: String, settings: VibeSettingsUpdate) async throws -> VibeSummary {
+        let data = try await transport.socialPatchData(
+            path: "/api/fan-clubs/\(try segment(slug))",
+            body: try JSONEncoder().encode(settings)
+        )
+        return try decoder.decode(VibeMutationResponse.self, from: data).club
+    }
+
+    public func uploadVibeProfileImage(
+        toVibe slug: String,
+        data: Data,
+        mimeType: String
+    ) async throws -> UploadedRipplePhoto {
+        try await uploadVibeImage(toVibe: slug, purpose: "profile", data: data, mimeType: mimeType)
+    }
+
     public func vibeRipples(slug: String, cursor: String? = nil) async throws -> RipplePageResponse {
         let base = "/api/fan-clubs/\(try segment(slug))/posts"
         let query = cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ?? []
@@ -586,12 +629,21 @@ public actor LegacySocialAPIAdapter {
         data: Data,
         mimeType: String
     ) async throws -> UploadedRipplePhoto {
+        try await uploadVibeImage(toVibe: slug, purpose: "post", data: data, mimeType: mimeType)
+    }
+
+    private func uploadVibeImage(
+        toVibe slug: String,
+        purpose: String,
+        data: Data,
+        mimeType: String
+    ) async throws -> UploadedRipplePhoto {
         guard !data.isEmpty, data.count <= 10 * 1024 * 1024 else {
             throw LegacySocialAPIError.invalidPhoto
         }
         let prepared = try await post(
             RipplePhotoUploadPreparation.self,
-            path: "/api/fan-clubs/\(try segment(slug))/images/upload-url?purpose=post",
+            path: "/api/fan-clubs/\(try segment(slug))/images/upload-url?purpose=\(purpose)",
             body: try JSONEncoder().encode(
                 RipplePhotoUploadRequest(mimeType: mimeType, size: data.count)
             )
@@ -793,6 +845,17 @@ private struct VibeAffiliationRequest: Encodable {
     let isPrimary: Bool
 }
 
+private struct VibeCreateRequest: Encodable {
+    let name: String
+    let slug: String?
+    let description: String
+    let visibility: VibeVisibility
+    let joinPolicy: VibeJoinPolicy
+    let topics: [String]
+    let language: String?
+    let country: String?
+}
+
 private struct VibeInviteCreateRequest: Encodable {
     let invitedEmail: String?
     let role: VibeInviteRole
@@ -865,8 +928,22 @@ private struct RipplePhotoUploadRequest: Encodable {
 }
 
 private func nonempty(_ value: String?) -> String? {
-    guard let value, !value.isEmpty else { return nil }
-    return value
+    guard let value else { return nil }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+}
+
+private func normalizedTopics(_ values: [String]) -> [String] {
+    Array(
+        Set(
+            values
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                .filter { !$0.isEmpty }
+        )
+    )
+    .sorted()
+    .prefix(12)
+    .map { $0 }
 }
 
 private struct VibeJoinRequest: Encodable {

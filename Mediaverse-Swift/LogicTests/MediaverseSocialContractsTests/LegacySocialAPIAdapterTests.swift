@@ -651,6 +651,85 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         XCTAssertEqual(object["expiresInDays"] as? Int, 30)
         XCTAssertEqual(object["maxUses"] as? Int, 100)
     }
+
+    func testVibeCreationSettingsAndBrandingUseFrozenContracts() async throws {
+        let club = """
+        {"id":"v-1","slug":"film-fans","name":"Film Fans","description":"Talk cinema",
+        "visibility":"INVITE_ONLY","joinPolicy":"REQUEST_APPROVAL","postingPolicy":"MEMBERS_WITH_REVIEW",
+        "topics":["cinema"],"commentsEnabled":true,"membersCanInvite":true,
+        "avatarUrl":"https://cdn.example/avatar.jpg","bannerUrl":null}
+        """
+        let createPath = "/api/fan-clubs"
+        let updatePath = "/api/fan-clubs/film-fans"
+        let preparePath = "/api/fan-clubs/film-fans/images/upload-url?purpose=profile"
+        let uploadPath = "/api/fan-clubs/film-fans/images/upload-proxy?purpose=profile&target=signed"
+        let transport = SocialTransportStub(responses: [
+            createPath: #"{"club":\#(club)}"#,
+            "PATCH \(updatePath)": #"{"club":\#(club)}"#,
+            preparePath: """
+            {"uploadUrl":"\(uploadPath)","objectKey":"stories/fan-clubs/u/profile/a.jpg",
+            "deliveryUrl":"https://cdn.example/avatar.jpg","storage":"r2-proxy"}
+            """,
+            uploadPath: #"{"uploaded":true,"mediaUrl":"https://cdn.example/avatar.jpg"}"#
+        ])
+        let api = LegacySocialAPIAdapter(transport: transport)
+
+        let created = try await api.createVibe(
+            name: " Film Fans ",
+            slug: "film-fans",
+            description: " Talk cinema ",
+            visibility: .inviteOnly,
+            joinPolicy: .requestApproval,
+            topics: [" Cinema ", "cinema", "Movies"],
+            language: " en ",
+            country: "us"
+        )
+        XCTAssertEqual(created.slug, "film-fans")
+        let createBodies = await transport.postBodies
+        let createObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: XCTUnwrap(createBodies.first)) as? [String: Any]
+        )
+        XCTAssertEqual(createObject["name"] as? String, "Film Fans")
+        XCTAssertEqual(createObject["description"] as? String, "Talk cinema")
+        XCTAssertEqual(createObject["visibility"] as? String, "INVITE_ONLY")
+        XCTAssertEqual(createObject["joinPolicy"] as? String, "REQUEST_APPROVAL")
+        XCTAssertEqual(createObject["topics"] as? [String], ["cinema", "movies"])
+        XCTAssertEqual(createObject["country"] as? String, "US")
+
+        _ = try await api.updateVibe(
+            slug: "film-fans",
+            settings: VibeSettingsUpdate(
+                name: "Film Fans",
+                description: "Talk cinema",
+                visibility: .inviteOnly,
+                joinPolicy: .requestApproval,
+                postingPolicy: .membersWithReview,
+                commentsEnabled: true,
+                followersOnly: false,
+                membersCanInvite: true,
+                moderatorsCanInvite: false,
+                moderatorsCanBan: false,
+                topics: ["cinema"],
+                language: "en",
+                country: "US",
+                avatarURL: "https://cdn.example/avatar.jpg",
+                avatarFocus: "50% 50% 1.00",
+                bannerURL: nil,
+                bannerFocus: nil
+            )
+        )
+        let uploaded = try await api.uploadVibeProfileImage(
+            toVibe: "film-fans",
+            data: Data([1, 2, 3]),
+            mimeType: "image/jpeg"
+        )
+        XCTAssertEqual(uploaded.imageURL, "https://cdn.example/avatar.jpg")
+
+        let writePaths = await transport.postPaths
+        let uploadPaths = await transport.uploadPaths
+        XCTAssertEqual(writePaths, [createPath, "PATCH \(updatePath)", preparePath])
+        XCTAssertEqual(uploadPaths, [uploadPath])
+    }
 }
 
 private actor SocialTransportStub: LegacySocialTransport {

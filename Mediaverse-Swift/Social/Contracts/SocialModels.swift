@@ -26,7 +26,18 @@ public struct VibeSummary: Decodable, Identifiable, Equatable, Sendable {
     public let description: String?
     public let avatarURL: String?
     public let bannerURL: String?
+    public let avatarFocus: String?
+    public let bannerFocus: String?
     public let visibility: String?
+    public let joinPolicy: String?
+    public let postingPolicy: String?
+    public let language: String?
+    public let country: String?
+    public let commentsEnabled: Bool
+    public let followersOnly: Bool
+    public let membersCanInvite: Bool
+    public let moderatorsCanInvite: Bool
+    public let moderatorsCanBan: Bool
     public let topics: [String]
     public let memberCount: Int
     public let followerCount: Int
@@ -38,6 +49,8 @@ public struct VibeSummary: Decodable, Identifiable, Equatable, Sendable {
         case id, slug, name, description, visibility, topics
         case avatarURL = "avatarUrl"
         case bannerURL = "bannerUrl"
+        case avatarFocus, bannerFocus, joinPolicy, postingPolicy, language, country
+        case commentsEnabled, followersOnly, membersCanInvite, moderatorsCanInvite, moderatorsCanBan
         case memberCount, followerCount, postCount, isPersonal, owner
     }
 
@@ -49,13 +62,95 @@ public struct VibeSummary: Decodable, Identifiable, Equatable, Sendable {
         description = try values.decodeIfPresent(String.self, forKey: .description)
         avatarURL = try values.decodeIfPresent(String.self, forKey: .avatarURL)
         bannerURL = try values.decodeIfPresent(String.self, forKey: .bannerURL)
+        avatarFocus = try values.decodeIfPresent(String.self, forKey: .avatarFocus)
+        bannerFocus = try values.decodeIfPresent(String.self, forKey: .bannerFocus)
         visibility = try values.decodeIfPresent(String.self, forKey: .visibility)
+        joinPolicy = try values.decodeIfPresent(String.self, forKey: .joinPolicy)
+        postingPolicy = try values.decodeIfPresent(String.self, forKey: .postingPolicy)
+        language = try values.decodeIfPresent(String.self, forKey: .language)
+        country = try values.decodeIfPresent(String.self, forKey: .country)
+        commentsEnabled = try values.decodeIfPresent(Bool.self, forKey: .commentsEnabled) ?? true
+        followersOnly = try values.decodeIfPresent(Bool.self, forKey: .followersOnly) ?? false
+        membersCanInvite = try values.decodeIfPresent(Bool.self, forKey: .membersCanInvite) ?? false
+        moderatorsCanInvite = try values.decodeIfPresent(Bool.self, forKey: .moderatorsCanInvite) ?? false
+        moderatorsCanBan = try values.decodeIfPresent(Bool.self, forKey: .moderatorsCanBan) ?? false
         topics = try values.decodeIfPresent([String].self, forKey: .topics) ?? []
         memberCount = try values.decodeIfPresent(Int.self, forKey: .memberCount) ?? 0
         followerCount = try values.decodeIfPresent(Int.self, forKey: .followerCount) ?? 0
         postCount = try values.decodeIfPresent(Int.self, forKey: .postCount) ?? 0
         isPersonal = try values.decodeIfPresent(Bool.self, forKey: .isPersonal) ?? false
         owner = try values.decodeIfPresent(SocialIdentity.self, forKey: .owner)
+    }
+}
+
+public enum VibeVisibility: String, Codable, Sendable, CaseIterable {
+    case publicVibe = "PUBLIC"
+    case inviteOnly = "INVITE_ONLY"
+
+    public var label: String { self == .publicVibe ? "Public" : "Invite only" }
+}
+
+public enum VibeJoinPolicy: String, Codable, Sendable, CaseIterable {
+    case open = "OPEN"
+    case requestApproval = "REQUEST_APPROVAL"
+    case inviteOnly = "INVITE_ONLY"
+
+    public var label: String {
+        switch self {
+        case .open: "Open"
+        case .requestApproval: "Request approval"
+        case .inviteOnly: "Invite only"
+        }
+    }
+}
+
+public enum VibePostingPolicy: String, Codable, Sendable, CaseIterable {
+    case members = "MEMBERS"
+    case membersWithReview = "MEMBERS_WITH_REVIEW"
+    case moderators = "MODERATORS"
+    case admins = "ADMINS"
+
+    public var label: String {
+        switch self {
+        case .members: "Members"
+        case .membersWithReview: "Members with review"
+        case .moderators: "Moderators"
+        case .admins: "Administrators"
+        }
+    }
+}
+
+public struct VibeMutationResponse: Decodable, Sendable {
+    public let club: VibeSummary
+}
+
+public struct VibeSettingsUpdate: Encodable, Sendable {
+    public let name: String
+    public let description: String
+    public let visibility: VibeVisibility
+    public let joinPolicy: VibeJoinPolicy
+    public let postingPolicy: VibePostingPolicy
+    public let commentsEnabled: Bool
+    public let followersOnly: Bool
+    public let membersCanInvite: Bool
+    public let moderatorsCanInvite: Bool
+    public let moderatorsCanBan: Bool
+    public let topics: [String]
+    public let language: String?
+    public let country: String?
+    public let avatarURL: String?
+    public let avatarFocus: String?
+    public let bannerURL: String?
+    public let bannerFocus: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name, description, visibility, joinPolicy, postingPolicy
+        case commentsEnabled, followersOnly, membersCanInvite
+        case moderatorsCanInvite, moderatorsCanBan, topics, language, country
+        case avatarURL = "avatarUrl"
+        case avatarFocus
+        case bannerURL = "bannerUrl"
+        case bannerFocus
     }
 }
 

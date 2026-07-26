@@ -12,6 +12,7 @@ struct VibeDetailView: View {
     @State private var showsAffiliations = false
     @State private var showsModeration = false
     @State private var showsInvitations = false
+    @State private var showsSettings = false
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
     private let features = SocialFeatureConfiguration.runtime()
 
@@ -67,6 +68,16 @@ struct VibeDetailView: View {
         .navigationTitle(detail?.club.name ?? "Vibe")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if detail?.capabilities.canManageClub == true {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showsSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Manage Vibe settings")
+                }
+            }
             if detail?.capabilities.canInvite == true {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -114,6 +125,18 @@ struct VibeDetailView: View {
                     capabilities: detail.capabilities,
                     currentRole: detail.membership?.role
                 )
+            }
+        }
+        .sheet(isPresented: $showsSettings) {
+            if let detail {
+                VibeSettingsView(detail: detail) { updatedClub in
+                    self.detail = VibeDetailResponse(
+                        club: updatedClub,
+                        capabilities: detail.capabilities,
+                        membership: detail.membership,
+                        following: detail.following
+                    )
+                }
             }
         }
         .task(id: slug) { await load() }
