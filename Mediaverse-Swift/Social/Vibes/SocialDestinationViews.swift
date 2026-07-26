@@ -7,6 +7,7 @@ struct VibeDetailView: View {
         case moderation
         case invitations
         case settings
+        case composer
 
         var id: String { rawValue }
     }
@@ -21,9 +22,9 @@ struct VibeDetailView: View {
     @State private var relationshipNotice: String?
     @State private var errorMessage: String?
     @State private var activeSheet: VibeSheet?
+    @EnvironmentObject private var auth: AuthManager
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
     private let features = SocialFeatureConfiguration.runtime()
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
         ScrollView {
@@ -42,12 +43,8 @@ struct VibeDetailView: View {
                             .padding(.horizontal, C.pagePad)
                     }
                     if features.rippleComposerEnabled && detail.capabilities.canPost {
-                        RippleComposer(
-                            destination: .vibe(slug: detail.club.slug, name: detail.club.name)
-                        ) { ripple in
-                            ripples.insert(ripple, at: 0)
-                        }
-                        .padding(.horizontal, horizontalSizeClass == .compact ? 8 : C.pagePad)
+                        rippleComposerPrompt(for: detail)
+                            .padding(.horizontal, C.pagePad)
                     }
                     ForEach(ripples) {
                         RippleCard(
@@ -127,10 +124,74 @@ struct VibeDetailView: View {
                         )
                     }
                 }
+            case .composer:
+                if let detail {
+                    NavigationStack {
+                        ScrollView {
+                            RippleComposer(
+                                destination: .vibe(
+                                    slug: detail.club.slug,
+                                    name: detail.club.name
+                                )
+                            ) { ripple in
+                                ripples.insert(ripple, at: 0)
+                                activeSheet = nil
+                            }
+                            .padding(C.pagePad)
+                        }
+                        .scrollDismissesKeyboard(.interactively)
+                        .background(C.bg.ignoresSafeArea())
+                        .navigationTitle("Create Ripple")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Cancel") {
+                                    activeSheet = nil
+                                }
+                                .foregroundStyle(C.text)
+                            }
+                        }
+                    }
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+                }
             }
         }
         .task(id: slug) { await load() }
         .refreshable { await load() }
+    }
+
+    private func rippleComposerPrompt(for detail: VibeDetailResponse) -> some View {
+        Button {
+            C.lightHaptic()
+            activeSheet = .composer
+        } label: {
+            HStack(spacing: 10) {
+                SocialIdentityAvatar(
+                    image: auth.currentUser?.image,
+                    name: auth.currentUser?.name,
+                    size: 38
+                )
+                Text("Create a Ripple in \(detail.club.name)…")
+                    .font(.subheadline)
+                    .foregroundStyle(C.textMuted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(1)
+                Image(systemName: "wave.3.right")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(C.watch)
+            }
+            .padding(12)
+            .background(C.surface)
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(C.borderSubtle, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Create a Ripple in \(detail.club.name)")
     }
 
     private func load() async {
