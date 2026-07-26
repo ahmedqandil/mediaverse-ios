@@ -114,6 +114,85 @@ public struct VibeDetailResponse: Decodable, Sendable {
     public let following: Bool
 }
 
+public enum VibeAffiliationEntityType: String, Codable, Sendable, CaseIterable {
+    case show = "SHOW"
+    case channel = "CHANNEL"
+}
+
+public enum VibeAffiliationStatus: String, Decodable, Sendable {
+    case pending = "PENDING"
+    case approved = "APPROVED"
+    case rejected = "REJECTED"
+    case revoked = "REVOKED"
+    case cancelled = "CANCELLED"
+}
+
+public enum VibeAffiliationRelationship: String, Decodable, Sendable {
+    case official = "OFFICIAL"
+    case affiliatedCommunity = "AFFILIATED_COMMUNITY"
+}
+
+public struct VibeAffiliationTarget: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let type: VibeAffiliationEntityType
+    public let name: String
+    public let handle: String?
+    public let imageURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, type, name, handle
+        case imageURL = "imageUrl"
+    }
+}
+
+public struct VibeAffiliation: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let entityType: VibeAffiliationEntityType
+    public let relationshipType: VibeAffiliationRelationship
+    public let status: VibeAffiliationStatus
+    public let requestMessage: String?
+    public let reviewNote: String?
+    public let isPrimary: Bool
+    public let show: VibeAffiliationEntity?
+    public let channel: VibeAffiliationEntity?
+
+    public var entity: VibeAffiliationEntity? { show ?? channel }
+}
+
+public struct VibeAffiliationEntity: Decodable, Sendable {
+    public let id: String
+    public let title: String?
+    public let name: String?
+    public let handle: String?
+    public let coverURL: String?
+    public let avatarURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, name, handle
+        case coverURL = "coverUrl"
+        case avatarURL = "avatarUrl"
+    }
+
+    public var displayName: String { title ?? name ?? handle ?? "Unknown" }
+    public var imageURL: String? { coverURL ?? avatarURL }
+}
+
+public struct VibeAffiliationTargetsResponse: Decodable, Sendable {
+    public let results: [VibeAffiliationTarget]
+}
+
+public struct VibeAffiliationsResponse: Decodable, Sendable {
+    public let affiliations: [VibeAffiliation]
+}
+
+public struct VibeAffiliationResponse: Decodable, Sendable {
+    public let affiliation: VibeAffiliation
+}
+
+public struct SocialOKResponse: Decodable, Sendable {
+    public let ok: Bool
+}
+
 public struct VibeListResponse: Decodable, Sendable {
     public let clubs: [VibeSummary]
     public let nextCursor: String?

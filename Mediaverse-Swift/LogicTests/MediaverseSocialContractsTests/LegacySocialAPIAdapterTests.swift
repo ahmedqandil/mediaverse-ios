@@ -343,6 +343,59 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         let postPaths = await transport.postPaths
         XCTAssertEqual(postPaths, [commentsPath, reactionPath, commentLikePath])
     }
+
+    func testAffiliationRequesterWorkflowUsesExactFrozenContracts() async throws {
+        let listPath = "/api/fan-clubs/cinema/affiliations"
+        let searchPath = "/api/fan-clubs/cinema/affiliation-targets?type=SHOW&q=Star%20Wars"
+        let cancelPath = "/api/fan-clubs/cinema/affiliations/aff%201"
+        let affiliation = """
+        {"id":"aff 1","entityType":"SHOW","relationshipType":"AFFILIATED_COMMUNITY",
+        "status":"PENDING","requestMessage":"Official community","reviewNote":null,
+        "isPrimary":true,"show":{"id":"show-1","title":"Star Wars","coverUrl":null}}
+        """
+        let transport = SocialTransportStub(responses: [
+            listPath: "{\"affiliations\":[\(affiliation)]}",
+            searchPath: """
+            {"results":[{"id":"show-1","type":"SHOW","name":"Star Wars",
+            "handle":null,"imageUrl":null}]}
+            """,
+            cancelPath: #"{"ok":true}"#
+        ])
+        let adapter = LegacySocialAPIAdapter(transport: transport)
+
+        let rows = try await adapter.vibeAffiliations(slug: "cinema")
+        XCTAssertEqual(rows.first?.status, .pending)
+        let targets = try await adapter.affiliationTargets(
+            slug: "cinema",
+            type: .show,
+            query: " Star Wars "
+        )
+        XCTAssertEqual(targets.first?.name, "Star Wars")
+
+        let requestTransport = SocialTransportStub(responses: [
+            listPath: "{\"affiliation\":\(affiliation)}"
+        ])
+        let requestAdapter = LegacySocialAPIAdapter(transport: requestTransport)
+        let created = try await requestAdapter.requestAffiliation(
+            slug: "cinema",
+            entityType: .show,
+            entityId: "show-1",
+            message: " Official community ",
+            isPrimary: true
+        )
+        XCTAssertEqual(created.entity?.displayName, "Star Wars")
+        let requestBodies = await requestTransport.postBodies
+        let body = try XCTUnwrap(requestBodies.last)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(object["entityType"] as? String, "SHOW")
+        XCTAssertEqual(object["entityId"] as? String, "show-1")
+        XCTAssertEqual(object["requestMessage"] as? String, "Official community")
+        XCTAssertEqual(object["isPrimary"] as? Bool, true)
+
+        try await adapter.cancelAffiliation(slug: "cinema", affiliationId: "aff 1")
+        let deletePaths = await transport.deletePaths
+        XCTAssertEqual(deletePaths, [cancelPath])
+    }
 }
 
 private actor SocialTransportStub: LegacySocialTransport {

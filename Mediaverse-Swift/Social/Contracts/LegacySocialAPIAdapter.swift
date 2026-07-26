@@ -90,6 +90,62 @@ public actor LegacySocialAPIAdapter {
         return try await decode(RipplePageResponse.self, path: try path(base, query: query))
     }
 
+    public func vibeAffiliations(slug: String) async throws -> [VibeAffiliation] {
+        try await decode(
+            VibeAffiliationsResponse.self,
+            path: "/api/fan-clubs/\(try segment(slug))/affiliations"
+        ).affiliations
+    }
+
+    public func affiliationTargets(
+        slug: String,
+        type: VibeAffiliationEntityType,
+        query: String
+    ) async throws -> [VibeAffiliationTarget] {
+        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try await decode(
+            VibeAffiliationTargetsResponse.self,
+            path: try path(
+                "/api/fan-clubs/\(try segment(slug))/affiliation-targets",
+                query: [
+                    URLQueryItem(name: "type", value: type.rawValue),
+                    URLQueryItem(name: "q", value: normalized)
+                ]
+            )
+        ).results
+    }
+
+    public func requestAffiliation(
+        slug: String,
+        entityType: VibeAffiliationEntityType,
+        entityId: String,
+        message: String? = nil,
+        isPrimary: Bool = false
+    ) async throws -> VibeAffiliation {
+        let normalizedMessage = message?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = try JSONEncoder().encode(
+            VibeAffiliationRequest(
+                entityType: entityType,
+                entityId: entityId,
+                requestMessage: normalizedMessage?.isEmpty == false ? normalizedMessage : nil,
+                isPrimary: isPrimary
+            )
+        )
+        return try await post(
+            VibeAffiliationResponse.self,
+            path: "/api/fan-clubs/\(try segment(slug))/affiliations",
+            body: body
+        ).affiliation
+    }
+
+    public func cancelAffiliation(slug: String, affiliationId: String) async throws {
+        let data = try await transport.socialDeleteData(
+            path: "/api/fan-clubs/\(try segment(slug))/affiliations/\(try segment(affiliationId))"
+        )
+        _ = try decoder.decode(SocialOKResponse.self, from: data)
+    }
+
     public func ripple(postId: String) async throws -> Ripple {
         try await decode(
             RippleDetailResponse.self,
@@ -425,6 +481,13 @@ private struct RippleShareRequest: Encodable {
 private struct RippleCommentRequest: Encodable {
     let content: String
     let parentId: String?
+}
+
+private struct VibeAffiliationRequest: Encodable {
+    let entityType: VibeAffiliationEntityType
+    let entityId: String
+    let requestMessage: String?
+    let isPrimary: Bool
 }
 
 private struct CreateRippleRequest: Encodable {

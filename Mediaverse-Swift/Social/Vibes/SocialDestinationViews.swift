@@ -9,6 +9,7 @@ struct VibeDetailView: View {
     @State private var isMutatingRelationship = false
     @State private var relationshipNotice: String?
     @State private var errorMessage: String?
+    @State private var showsAffiliations = false
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
     private let features = SocialFeatureConfiguration.runtime()
 
@@ -63,6 +64,21 @@ struct VibeDetailView: View {
         .background(C.bg.ignoresSafeArea())
         .navigationTitle(detail?.club.name ?? "Vibe")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if detail?.capabilities.canManageAffiliations == true {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showsAffiliations = true
+                    } label: {
+                        Image(systemName: "link")
+                    }
+                    .accessibilityLabel("Manage affiliations")
+                }
+            }
+        }
+        .sheet(isPresented: $showsAffiliations) {
+            VibeAffiliationsView(slug: slug)
+        }
         .task(id: slug) { await load() }
         .refreshable { await load() }
     }
@@ -404,7 +420,7 @@ private struct SocialUnavailable: View {
     }
 }
 
-private func socialErrorMessage(_ error: Error) -> String {
+func socialErrorMessage(_ error: Error) -> String {
     (error as? LocalizedError)?.errorDescription
         ?? "The social experience could not be loaded."
 }
