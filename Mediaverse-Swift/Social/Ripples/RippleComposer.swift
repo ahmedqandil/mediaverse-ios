@@ -1,5 +1,6 @@
 import PhotosUI
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 enum RippleComposerDestination: Equatable {
@@ -30,31 +31,55 @@ struct RippleComposer: View {
     @State private var photos: [UploadedRipplePhoto] = []
     @State private var isUploadingPhotos = false
     @State private var uploadProgress = 0
+    @FocusState private var isBodyFocused: Bool
 
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
     private var isCompactWidth: Bool { horizontalSizeClass == .compact }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: isCompactWidth ? 8 : 12) {
-            HStack(alignment: .top, spacing: isCompactWidth ? 8 : 10) {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 10) {
                 SocialIdentityAvatar(
                     image: auth.currentUser?.image,
                     name: auth.currentUser?.name,
-                    size: isCompactWidth ? 34 : 40
+                    size: 42
                 )
-                VStack(alignment: .leading, spacing: 6) {
-                    TextField(placeholder, text: $bodyText, axis: .vertical)
-                        .lineLimit(isCompactWidth ? 2...6 : 3...8)
-                        .textInputAutocapitalization(.sentences)
-                        .padding(isCompactWidth ? 9 : 11)
-                        .background(C.elevated)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .onChange(of: bodyText) { _, value in
-                            resolvePastedLinkIfNeeded(in: value)
-                        }
-                    MentionAutocompletePanel(text: $bodyText)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(auth.currentUser?.name ?? "Your Atmo")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(C.text)
+                    Label(destinationLabel, systemImage: destinationIcon)
+                        .font(.caption)
+                        .foregroundStyle(C.textMuted)
+                }
+                Spacer()
+                if isUploadingPhotos {
+                    ProgressView()
+                        .tint(C.watch)
                 }
             }
+
+            VStack(alignment: .leading, spacing: 6) {
+                TextField(placeholder, text: $bodyText, axis: .vertical)
+                    .lineLimit(5...12)
+                    .focused($isBodyFocused)
+                    .textInputAutocapitalization(.sentences)
+                    .font(.body)
+                    .frame(minHeight: isCompactWidth ? 112 : 132, alignment: .topLeading)
+                    .onChange(of: bodyText) { _, value in
+                        resolvePastedLinkIfNeeded(in: value)
+                    }
+                MentionAutocompletePanel(text: $bodyText)
+                    .zIndex(20)
+            }
+            .padding(12)
+            .background(C.elevated.opacity(0.72))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(isBodyFocused ? C.watch.opacity(0.75) : C.borderSubtle, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .zIndex(10)
 
             if isResolving || attachment != nil {
                 attachmentPreview
@@ -64,15 +89,29 @@ struct RippleComposer: View {
                 photoGrid
             }
             if isUploadingPhotos {
-                ProgressView(value: Double(uploadProgress), total: 100)
-                    .tint(C.watch)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Preparing and uploading photos")
+                        Spacer()
+                        Text("\(uploadProgress)%")
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(C.textMuted)
+                    ProgressView(value: Double(uploadProgress), total: 100)
+                        .tint(C.watch)
+                }
             }
 
             if pollOpen {
                 pollEditor
             }
 
-            HStack(spacing: 4) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Add to your Ripple")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(C.textMuted)
+
+                HStack(spacing: 10) {
                 PhotosPicker(
                     selection: $photoSelections,
                     maxSelectionCount: max(0, 10 - photos.count),
@@ -81,9 +120,10 @@ struct RippleComposer: View {
                     composerToolLabel(
                         "Photo",
                         systemImage: "photo.on.rectangle.angled",
-                        showsCompactTitle: true
+                        selected: !photos.isEmpty
                     )
                 }
+                .disabled(isUploadingPhotos || photos.count >= 10)
                 .onChange(of: photoSelections) { _, items in
                     Task { await upload(items) }
                 }
@@ -95,38 +135,61 @@ struct RippleComposer: View {
                     }
                 } label: {
                     composerToolLabel(
-                        pollOpen ? "Remove Poll" : "Poll",
+                        "Poll",
                         systemImage: "chart.bar",
-                        showsCompactTitle: true
+                        selected: pollOpen
                     )
                 }
-                optionToggle("Spoiler", systemImage: "eye.slash", isOn: $isSpoiler)
-                optionToggle("Close comments", systemImage: "bubble.left.and.exclamationmark", isOn: $commentsDisabled)
-                Spacer(minLength: 4)
-                Button {
-                    Task { await publish() }
-                } label: {
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Post options")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(C.textMuted)
+                HStack(spacing: 8) {
+                    optionToggle("Spoiler", systemImage: "eye.slash", isOn: $isSpoiler)
+                    optionToggle(
+                        "Comments off",
+                        systemImage: "bubble.left.and.exclamationmark",
+                        isOn: $commentsDisabled
+                    )
+                }
+            }
+
+            if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+            if let notice {
+                Label(notice, systemImage: "checkmark.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(C.watch)
+            }
+
+            Button {
+                isBodyFocused = false
+                Task { await publish() }
+            } label: {
+                HStack {
+                    Spacer()
                     if isPublishing {
                         ProgressView().tint(.black)
                     } else {
-                        Text(isCompactWidth ? "Post" : "Create Ripple")
+                        Image(systemName: "wave.3.right")
+                        Text("Publish Ripple")
                     }
+                    Spacer()
                 }
-                .controlSize(isCompactWidth ? .small : .regular)
-                .buttonStyle(.borderedProminent)
-                .tint(C.watch)
-                .disabled(!canPublish || isPublishing || isResolving || isUploadingPhotos)
+                .font(.headline)
+                .frame(minHeight: 48)
             }
-            .font(.caption.weight(.semibold))
-
-            if let errorMessage {
-                Text(errorMessage).font(.caption).foregroundStyle(.red)
-            }
-            if let notice {
-                Text(notice).font(.caption.weight(.semibold)).foregroundStyle(C.watch)
-            }
+            .buttonStyle(.borderedProminent)
+            .tint(C.watch)
+            .disabled(!canPublish || isPublishing || isResolving || isUploadingPhotos)
         }
-        .padding(isCompactWidth ? 10 : 14)
+        .padding(isCompactWidth ? 14 : 18)
         .background(C.surface)
         .overlay(RoundedRectangle(cornerRadius: C.cardRadius).stroke(C.borderSubtle))
         .clipShape(RoundedRectangle(cornerRadius: C.cardRadius))
@@ -136,15 +199,37 @@ struct RippleComposer: View {
     private func composerToolLabel(
         _ title: String,
         systemImage: String,
-        showsCompactTitle: Bool = false
+        selected: Bool
     ) -> some View {
-        if isCompactWidth && !showsCompactTitle {
+        HStack(spacing: 8) {
             Image(systemName: systemImage)
-                .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
-                .accessibilityLabel(title)
-        } else {
-            Label(title, systemImage: systemImage)
+            Text(title)
+        }
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(selected ? C.watch : C.text)
+        .frame(maxWidth: .infinity)
+        .frame(height: 44)
+        .background(selected ? C.watch.opacity(0.13) : C.elevated)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(selected ? C.watch.opacity(0.55) : C.borderSubtle)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var destinationLabel: String {
+        switch destination {
+        case .personal:
+            "Posting to My Atmo"
+        case .vibe(_, let name):
+            "Posting to \(name)"
+        }
+    }
+
+    private var destinationIcon: String {
+        switch destination {
+        case .personal: "person.crop.circle"
+        case .vibe: "person.3"
         }
     }
 
@@ -220,18 +305,40 @@ struct RippleComposer: View {
     }
 
     private var pollEditor: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Poll").font(.caption.bold()).foregroundStyle(C.textMuted)
-            TextField("Poll question", text: $pollQuestion)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Poll", systemImage: "chart.bar.fill")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(C.text)
+                Spacer()
+                Button {
+                    pollOpen = false
+                    pollQuestion = ""
+                    pollOptions = ["", "", "", ""]
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(C.textMuted)
+                }
+                .accessibilityLabel("Remove poll")
+            }
+            TextField("Ask a question", text: $pollQuestion)
+                .font(.body.weight(.semibold))
             ForEach(pollOptions.indices, id: \.self) { index in
-                TextField(
-                    "Option \(index + 1)\(index > 1 ? " (optional)" : "")",
-                    text: $pollOptions[index]
-                )
+                HStack(spacing: 8) {
+                    Text("\(index + 1)")
+                        .font(.caption.bold())
+                        .foregroundStyle(C.textMuted)
+                        .frame(width: 22, height: 22)
+                        .background(C.surface, in: Circle())
+                    TextField(
+                        "Option \(index + 1)\(index > 1 ? " (optional)" : "")",
+                        text: $pollOptions[index]
+                    )
+                }
             }
         }
         .textFieldStyle(.roundedBorder)
-        .padding(10)
+        .padding(12)
         .background(C.elevated.opacity(0.55))
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
@@ -280,12 +387,17 @@ struct RippleComposer: View {
         Button {
             isOn.wrappedValue.toggle()
         } label: {
-            composerToolLabel(title, systemImage: systemImage)
+            Label(title, systemImage: systemImage)
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(isOn.wrappedValue ? C.watch : C.textMuted)
-                .padding(.horizontal, isCompactWidth ? 2 : 8)
-                .padding(.vertical, isCompactWidth ? 2 : 7)
-                .background(isOn.wrappedValue ? C.watch.opacity(0.12) : .clear)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 10)
+                .frame(height: 34)
+                .background(isOn.wrappedValue ? C.watch.opacity(0.12) : C.elevated)
+                .overlay(
+                    Capsule()
+                        .stroke(isOn.wrappedValue ? C.watch.opacity(0.5) : C.borderSubtle)
+                )
+                .clipShape(Capsule())
         }
         .buttonStyle(.plain)
     }
@@ -338,22 +450,58 @@ struct RippleComposer: View {
             }
             let available = Array(items.prefix(max(0, 10 - photos.count)))
             for (index, item) in available.enumerated() {
-                guard let data = try await item.loadTransferable(type: Data.self) else {
+                guard let originalData = try await item.loadTransferable(type: Data.self),
+                      let data = preparedPhotoData(from: originalData)
+                else {
                     throw LegacySocialAPIError.invalidPhoto
                 }
-                let contentType = item.supportedContentTypes.first ?? .jpeg
-                let mimeType = contentType.preferredMIMEType ?? "image/jpeg"
                 let photo = try await api.uploadRipplePhoto(
                     toVibe: slug,
                     data: data,
-                    mimeType: mimeType
+                    mimeType: "image/jpeg"
                 )
                 photos.append(photo)
                 uploadProgress = Int((Double(index + 1) / Double(available.count)) * 100)
             }
         } catch {
-            errorMessage = error.localizedDescription
+            if case APIError.http(413) = error {
+                errorMessage = "This photo is still too large to upload. Try a smaller image."
+            } else {
+                errorMessage = socialErrorMessage(error)
+            }
         }
+    }
+
+    /// Keeps the existing R2 upload contract while staying below the web proxy's
+    /// request-body ceiling. Rendering also normalizes camera orientation and HEIC.
+    private func preparedPhotoData(from originalData: Data) -> Data? {
+        guard let source = UIImage(data: originalData) else { return nil }
+        let maxBytes = 3_750_000
+        var maxPixel: CGFloat = 2048
+        var quality: CGFloat = 0.84
+
+        for _ in 0..<6 {
+            let largestSide = max(source.size.width, source.size.height)
+            let scale = largestSide > maxPixel ? maxPixel / largestSide : 1
+            let targetSize = CGSize(
+                width: max(1, floor(source.size.width * scale)),
+                height: max(1, floor(source.size.height * scale))
+            )
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            format.opaque = true
+            let image = UIGraphicsImageRenderer(size: targetSize, format: format).image { _ in
+                UIColor.black.setFill()
+                UIRectFill(CGRect(origin: .zero, size: targetSize))
+                source.draw(in: CGRect(origin: .zero, size: targetSize))
+            }
+            if let data = image.jpegData(compressionQuality: quality), data.count <= maxBytes {
+                return data
+            }
+            quality = max(0.58, quality - 0.07)
+            maxPixel *= 0.82
+        }
+        return nil
     }
 
     @MainActor
