@@ -283,7 +283,7 @@ struct MainTabView: View {
             .ignoresSafeArea(edges: .bottom)
             .tabItem {
                 appTabLabel(
-                    socialFeatures.atmosphereEnabled ? "Atmosphere" : "Home",
+                    "Home",
                     icon: "home",
                     fallback: "house"
                 )
@@ -458,7 +458,7 @@ struct MainTabView: View {
                 HStack(spacing: 0) {
                     bottomTabButton(
                         .home,
-                        title: socialFeatures.atmosphereEnabled ? "Atmosphere" : "Home",
+                        title: "Home",
                         icon: "home",
                         fallback: "house"
                     )

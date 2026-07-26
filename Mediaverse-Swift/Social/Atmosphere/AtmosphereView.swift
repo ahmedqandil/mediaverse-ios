@@ -266,55 +266,64 @@ struct AtmosphereView: View {
     }
 
     private func simpleFeed(_ items: [AtmosphereFeedItem]) -> some View {
-        ScrollView {
-            LazyVStack(spacing: 14) {
-                atmosphereBoundaryListings(model.beforeFeedListings)
-                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                    switch item {
-                    case .ripple(let ripple):
-                        RippleCard(
-                            ripple: ripple,
-                            allowsEngagement: socialFeatures.rippleEngagementEnabled,
-                            activePreviewVideoId: $activePreviewVideoId,
-                            previewManager: previewManager,
-                            isAutoplayBlocked: isAutoplayBlocked,
-                            isPreservingPreviewHandoff: isPreservingPreviewHandoff,
-                            onPreviewPaused: { videoID in
-                                suppressedPreviewVideoId = videoID
-                                updatePreview(videos: feedVideos(from: model.atmosphereItems))
-                            },
-                            onVideoHandoff: { video, frame in
-                                handoffToWatch(video, sourceFrame: frame)
-                            }
-                        )
-                        .padding(.horizontal, feedCardInset)
-                    case .video(let video):
-                        atmosphereVideoCard(video)
-                    case .excludedEpisode, .excludedShort, .unsupported:
-                        EmptyView()
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 14) {
+                    Color.clear.frame(height: 0).id("atmosphere-feed-top")
+                    atmosphereBoundaryListings(model.beforeFeedListings)
+                    ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                        switch item {
+                        case .ripple(let ripple):
+                            RippleCard(
+                                ripple: ripple,
+                                allowsEngagement: socialFeatures.rippleEngagementEnabled,
+                                activePreviewVideoId: $activePreviewVideoId,
+                                previewManager: previewManager,
+                                isAutoplayBlocked: isAutoplayBlocked,
+                                isPreservingPreviewHandoff: isPreservingPreviewHandoff,
+                                onPreviewPaused: { videoID in
+                                    suppressedPreviewVideoId = videoID
+                                    updatePreview(videos: feedVideos(from: model.atmosphereItems))
+                                },
+                                onVideoHandoff: { video, frame in
+                                    handoffToWatch(video, sourceFrame: frame)
+                                }
+                            )
+                            .padding(.horizontal, feedCardInset)
+                        case .video(let video):
+                            atmosphereVideoCard(video)
+                        case .excludedEpisode, .excludedShort, .unsupported:
+                            EmptyView()
+                        }
+                        if let listing = inlineListing(after: index) {
+                            NativeCurationListingView(listing: listing)
+                                .padding(.vertical, 6)
+                        }
                     }
-                    if let listing = inlineListing(after: index) {
-                        NativeCurationListingView(listing: listing)
-                            .padding(.vertical, 6)
-                    }
+                    atmosphereBoundaryListings(model.afterFeedListings)
                 }
-                atmosphereBoundaryListings(model.afterFeedListings)
+                .padding(.vertical, C.pagePad)
+                .padding(.bottom, C.bottomMenuClearance)
             }
-            .padding(.vertical, C.pagePad)
-            .padding(.bottom, C.bottomMenuClearance)
-        }
-        .coordinateSpace(name: "homeFeedScroll")
-        .onPreferenceChange(HomeVideoFramePreferenceKey.self) { frames in
-            schedulePreviewUpdate(frames: frames, videos: feedVideos(from: items))
-        }
-        .refreshable { await model.reload(.atmosphere) }
-        .overlay {
-            if items.isEmpty {
-                ContentUnavailableView(
-                    "Your Atmosphere is quiet",
-                    systemImage: "wind",
-                    description: Text("Follow people and Vibes to see their Ripples here.")
-                )
+            .coordinateSpace(name: "homeFeedScroll")
+            .onPreferenceChange(HomeVideoFramePreferenceKey.self) { frames in
+                schedulePreviewUpdate(frames: frames, videos: feedVideos(from: items))
+            }
+            .refreshable { await model.reload(.atmosphere) }
+            .onReceive(NotificationCenter.default.publisher(for: .mainTabScrollToTopRequested)) { notification in
+                guard notification.object as? String == "home" else { return }
+                withAnimation(.easeOut(duration: 0.28)) {
+                    proxy.scrollTo("atmosphere-feed-top", anchor: .top)
+                }
+            }
+            .overlay {
+                if items.isEmpty {
+                    ContentUnavailableView(
+                        "Your Atmosphere is quiet",
+                        systemImage: "wind",
+                        description: Text("Follow people and Vibes to see their Ripples here.")
+                    )
+                }
             }
         }
     }
@@ -450,68 +459,86 @@ struct AtmosphereView: View {
     }
 
     private func simpleRipples(_ ripples: [Ripple]) -> some View {
-        ScrollView {
-            LazyVStack(spacing: 12) {
-                atmosphereBoundaryListings(model.beforeFeedListings)
-                ForEach(ripples) {
-                    RippleCard(
-                        ripple: $0,
-                        allowsEngagement: socialFeatures.rippleEngagementEnabled
-                    )
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 12) {
+                    Color.clear.frame(height: 0).id("atmosphere-discover-top")
+                    atmosphereBoundaryListings(model.beforeFeedListings)
+                    ForEach(ripples) {
+                        RippleCard(
+                            ripple: $0,
+                            allowsEngagement: socialFeatures.rippleEngagementEnabled
+                        )
+                    }
+                    atmosphereBoundaryListings(model.afterFeedListings)
                 }
-                atmosphereBoundaryListings(model.afterFeedListings)
+                .padding(.vertical, C.pagePad)
+                .padding(.horizontal, feedCardInset)
+                .padding(.bottom, C.bottomMenuClearance)
             }
-            .padding(.vertical, C.pagePad)
-            .padding(.horizontal, feedCardInset)
-            .padding(.bottom, C.bottomMenuClearance)
+            .refreshable { await model.reload(.discover) }
+            .onReceive(NotificationCenter.default.publisher(for: .mainTabScrollToTopRequested)) { notification in
+                guard notification.object as? String == "home" else { return }
+                withAnimation(.easeOut(duration: 0.28)) {
+                    proxy.scrollTo("atmosphere-discover-top", anchor: .top)
+                }
+            }
         }
-        .refreshable { await model.reload(.discover) }
     }
 
     private func simpleVibes(_ vibes: [VibeSummary]) -> some View {
-        ScrollView {
-            LazyVStack(spacing: 10) {
-                atmosphereBoundaryListings(model.beforeFeedListings)
-                Button {
-                    showsCreateVibe = true
-                } label: {
-                    Label("Create Vibe", systemImage: "plus.circle.fill")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(C.watch)
-                ForEach(vibes) { vibe in
-                    NavigationLink(value: AppRoute.vibe(vibe.slug)) {
-                        HStack(spacing: 12) {
-                            SocialIdentityAvatar(
-                                image: vibe.avatarURL,
-                                name: vibe.name,
-                                size: 48
-                            )
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(vibe.name).font(.headline)
-                                Text("\(vibe.memberCount) members · \(vibe.postCount) Ripples")
-                                    .font(.caption)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    Color.clear.frame(height: 0).id("atmosphere-vibes-top")
+                    atmosphereBoundaryListings(model.beforeFeedListings)
+                    Button {
+                        showsCreateVibe = true
+                    } label: {
+                        Label("Create Vibe", systemImage: "plus.circle.fill")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(C.watch)
+                    ForEach(vibes) { vibe in
+                        NavigationLink(value: AppRoute.vibe(vibe.slug)) {
+                            HStack(spacing: 12) {
+                                SocialIdentityAvatar(
+                                    image: vibe.avatarURL,
+                                    name: vibe.name,
+                                    size: 48
+                                )
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(vibe.name).font(.headline)
+                                    Text("\(vibe.memberCount) members · \(vibe.postCount) Ripples")
+                                        .font(.caption)
+                                        .foregroundStyle(C.textMuted)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
                                     .foregroundStyle(C.textMuted)
                             }
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(C.textMuted)
+                            .padding(12)
+                            .background(C.surface, in: RoundedRectangle(cornerRadius: C.cardRadius))
                         }
-                        .padding(12)
-                        .background(C.surface, in: RoundedRectangle(cornerRadius: C.cardRadius))
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
+                    atmosphereBoundaryListings(model.afterFeedListings)
                 }
-                atmosphereBoundaryListings(model.afterFeedListings)
+                .padding(C.pagePad)
+                .padding(.bottom, C.bottomMenuClearance)
             }
-            .padding(C.pagePad)
-            .padding(.bottom, C.bottomMenuClearance)
+            .refreshable { await model.reload(.myVibes) }
+            .onReceive(NotificationCenter.default.publisher(for: .mainTabScrollToTopRequested)) { notification in
+                guard notification.object as? String == "home" else { return }
+                withAnimation(.easeOut(duration: 0.28)) {
+                    proxy.scrollTo("atmosphere-vibes-top", anchor: .top)
+                }
+            }
         }
-        .refreshable { await model.reload(.myVibes) }
     }
 
     @ViewBuilder
