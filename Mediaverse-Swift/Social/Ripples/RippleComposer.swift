@@ -1,4 +1,6 @@
+import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum RippleComposerDestination: Equatable {
     case personal
@@ -23,6 +25,10 @@ struct RippleComposer: View {
     @State private var isPublishing = false
     @State private var notice: String?
     @State private var errorMessage: String?
+    @State private var photoSelections: [PhotosPickerItem] = []
+    @State private var photos: [UploadedRipplePhoto] = []
+    @State private var isUploadingPhotos = false
+    @State private var uploadProgress = 0
 
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
 
@@ -52,11 +58,29 @@ struct RippleComposer: View {
                 attachmentPreview
             }
 
+            if !photos.isEmpty {
+                photoGrid
+            }
+            if isUploadingPhotos {
+                ProgressView(value: Double(uploadProgress), total: 100)
+                    .tint(C.watch)
+            }
+
             if pollOpen {
                 pollEditor
             }
 
             HStack(spacing: 4) {
+                PhotosPicker(
+                    selection: $photoSelections,
+                    maxSelectionCount: max(0, 10 - photos.count),
+                    matching: .images
+                ) {
+                    Label("Photos", systemImage: "photo.on.rectangle.angled")
+                }
+                .onChange(of: photoSelections) { _, items in
+                    Task { await upload(items) }
+                }
                 Button {
                     pollOpen.toggle()
                     if !pollOpen {
@@ -80,7 +104,7 @@ struct RippleComposer: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(C.watch)
-                .disabled(!canPublish || isPublishing || isResolving)
+                .disabled(!canPublish || isPublishing || isResolving || isUploadingPhotos)
             }
             .font(.caption.weight(.semibold))
 
@@ -109,7 +133,7 @@ struct RippleComposer: View {
     private var canPublish: Bool {
         let hasBody = !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasPoll = pollDraft != nil
-        return hasBody || attachment != nil || hasPoll
+        return hasBody || attachment != nil || !photos.isEmpty || hasPoll
     }
 
     private var pollDraft: RipplePollDraft? {
@@ -185,6 +209,42 @@ struct RippleComposer: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
+    private var photoGrid: some View {
+        LazyVGrid(
+            columns: photos.count == 1
+                ? [GridItem(.flexible())]
+                : [GridItem(.flexible()), GridItem(.flexible())],
+            spacing: 8
+        ) {
+            ForEach(Array(photos.enumerated()), id: \.offset) { index, photo in
+                ZStack(alignment: .topTrailing) {
+                    CachedRemoteImage(
+                        url: C.mediaURL(photo.imageURL),
+                        targetSize: CGSize(width: 260, height: 180)
+                    ) { $0.resizable().scaledToFill() } placeholder: {
+                        C.elevated
+                    }
+                    .frame(height: photos.count == 1 ? 190 : 120)
+                    .frame(maxWidth: .infinity)
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                    Button {
+                        photos.remove(at: index)
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption.bold())
+                            .foregroundStyle(.white)
+                            .padding(7)
+                            .background(.black.opacity(0.7), in: Circle())
+                    }
+                    .padding(6)
+                    .accessibilityLabel("Remove photo")
+                }
+            }
+        }
+    }
+
     private func optionToggle(
         _ title: String,
         systemImage: String,
@@ -232,6 +292,44 @@ struct RippleComposer: View {
     }
 
     @MainActor
+    private func upload(_ items: [PhotosPickerItem]) async {
+        guard !items.isEmpty, !isUploadingPhotos else { return }
+        isUploadingPhotos = true
+        errorMessage = nil
+        defer {
+            isUploadingPhotos = false
+            uploadProgress = 0
+            photoSelections = []
+        }
+        do {
+            let slug: String
+            switch destination {
+            case .personal:
+                slug = try await api.ensurePersonalVibe().slug
+            case .vibe(let destinationSlug, _):
+                slug = destinationSlug
+            }
+            let available = Array(items.prefix(max(0, 10 - photos.count)))
+            for (index, item) in available.enumerated() {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    throw LegacySocialAPIError.invalidPhoto
+                }
+                let contentType = item.supportedContentTypes.first ?? .jpeg
+                let mimeType = contentType.preferredMIMEType ?? "image/jpeg"
+                let photo = try await api.uploadRipplePhoto(
+                    toVibe: slug,
+                    data: data,
+                    mimeType: mimeType
+                )
+                photos.append(photo)
+                uploadProgress = Int((Double(index + 1) / Double(available.count)) * 100)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
     private func publish() async {
         guard canPublish, !isPublishing else { return }
         isPublishing = true
@@ -248,7 +346,8 @@ struct RippleComposer: View {
             let created = try await api.createRipple(
                 inVibe: slug,
                 body: bodyText,
-                attachments: attachment.map { [$0] } ?? [],
+                attachments: photos.map { .photo(imageURL: $0.imageURL) }
+                    + (attachment.map { [$0] } ?? []),
                 poll: pollDraft,
                 isSpoiler: isSpoiler,
                 commentsDisabled: commentsDisabled
@@ -274,6 +373,8 @@ struct RippleComposer: View {
         attachment = nil
         preview = nil
         resolvedURL = nil
+        photoSelections = []
+        photos = []
     }
 }
 

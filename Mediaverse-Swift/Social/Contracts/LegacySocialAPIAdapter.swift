@@ -6,6 +6,7 @@ public protocol LegacySocialTransport: Sendable {
     func socialData(path: String) async throws -> Data
     func socialPostData(path: String, body: Data) async throws -> Data
     func socialDeleteData(path: String) async throws -> Data
+    func socialUploadData(path: String, body: Data, contentType: String) async throws -> Data
 }
 
 public enum SocialDiscoverMode: String, Sendable {
@@ -25,6 +26,7 @@ public enum LegacySocialAPIError: Error, Equatable {
     case invalidPath
     case invalidEnergy
     case invalidPollSelection
+    case invalidPhoto
 }
 
 /// Adapter for the currently deployed, intentionally frozen social endpoints.
@@ -179,6 +181,39 @@ public actor LegacySocialAPIAdapter {
             ResolvedRippleAttachmentResponse.self,
             path: "/api/fan-clubs/resolve-attachment",
             body: try JSONEncoder().encode(ResolveAttachmentRequest(url: url))
+        )
+    }
+
+    public func uploadRipplePhoto(
+        toVibe slug: String,
+        data: Data,
+        mimeType: String
+    ) async throws -> UploadedRipplePhoto {
+        guard !data.isEmpty, data.count <= 10 * 1024 * 1024 else {
+            throw LegacySocialAPIError.invalidPhoto
+        }
+        let prepared = try await post(
+            RipplePhotoUploadPreparation.self,
+            path: "/api/fan-clubs/\(try segment(slug))/images/upload-url?purpose=post",
+            body: try JSONEncoder().encode(
+                RipplePhotoUploadRequest(mimeType: mimeType, size: data.count)
+            )
+        )
+        let uploaded = try decoder.decode(
+            RipplePhotoUploadResult.self,
+            from: try await transport.socialUploadData(
+                path: prepared.uploadURL,
+                body: data,
+                contentType: mimeType
+            )
+        )
+        guard let imageURL = uploaded.mediaURL ?? prepared.mediaURL ?? nonempty(prepared.deliveryURL)
+        else {
+            throw LegacySocialAPIError.invalidPhoto
+        }
+        return UploadedRipplePhoto(
+            imageURL: imageURL,
+            objectKey: prepared.objectKey
         )
     }
 
@@ -364,6 +399,16 @@ private struct CreateRippleRequest: Encodable {
 
 private struct ResolveAttachmentRequest: Encodable {
     let url: String
+}
+
+private struct RipplePhotoUploadRequest: Encodable {
+    let mimeType: String
+    let size: Int
+}
+
+private func nonempty(_ value: String?) -> String? {
+    guard let value, !value.isEmpty else { return nil }
+    return value
 }
 
 private struct VibeJoinRequest: Encodable {

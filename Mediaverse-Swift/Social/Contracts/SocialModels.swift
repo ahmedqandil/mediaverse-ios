@@ -609,6 +609,33 @@ public struct RippleAttachmentPreview: Decodable, Sendable {
     }
 }
 
+public struct RipplePhotoUploadPreparation: Decodable, Sendable {
+    public let uploadURL: String
+    public let objectKey: String?
+    public let deliveryURL: String?
+    public let mediaURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case objectKey
+        case uploadURL = "uploadUrl"
+        case deliveryURL = "deliveryUrl"
+        case mediaURL = "mediaUrl"
+    }
+}
+
+public struct RipplePhotoUploadResult: Decodable, Sendable {
+    public let mediaURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case mediaURL = "mediaUrl"
+    }
+}
+
+public struct UploadedRipplePhoto: Equatable, Sendable {
+    public let imageURL: String
+    public let objectKey: String?
+}
+
 public struct DiscoverRipplePageResponse: Decodable, Sendable {
     public let version: Int
     public let mode: String

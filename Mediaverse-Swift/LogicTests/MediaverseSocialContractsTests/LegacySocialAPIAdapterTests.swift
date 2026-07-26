@@ -279,6 +279,33 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         XCTAssertEqual(poll["options"] as? [String], ["Yes", "Later"])
         XCTAssertEqual(poll["resultsVisibility"] as? String, "AFTER_VOTE")
     }
+
+    func testPhotoUploadReusesVibeR2PreparationAndProxyContracts() async throws {
+        let preparePath = "/api/fan-clubs/cinema/images/upload-url?purpose=post"
+        let uploadPath = "/api/fan-clubs/cinema/images/upload-proxy?target=signed"
+        let transport = SocialTransportStub(responses: [
+            preparePath: """
+            {"uploadUrl":"\(uploadPath)","objectKey":"stories/fan-clubs/u1/post/photo",
+            "deliveryUrl":"https://cdn.example.com/photo.jpg"}
+            """,
+            uploadPath: #"{"uploaded":true,"mediaUrl":"https://cdn.example.com/photo.jpg"}"#
+        ])
+        let adapter = LegacySocialAPIAdapter(transport: transport)
+        let bytes = Data([0xFF, 0xD8, 0xFF])
+
+        let photo = try await adapter.uploadRipplePhoto(
+            toVibe: "cinema",
+            data: bytes,
+            mimeType: "image/jpeg"
+        )
+
+        XCTAssertEqual(photo.imageURL, "https://cdn.example.com/photo.jpg")
+        XCTAssertEqual(photo.objectKey, "stories/fan-clubs/u1/post/photo")
+        let uploadPaths = await transport.uploadPaths
+        let uploadTypes = await transport.uploadContentTypes
+        XCTAssertEqual(uploadPaths, [uploadPath])
+        XCTAssertEqual(uploadTypes, ["image/jpeg"])
+    }
 }
 
 private actor SocialTransportStub: LegacySocialTransport {
@@ -287,6 +314,8 @@ private actor SocialTransportStub: LegacySocialTransport {
     private(set) var postPaths: [String] = []
     private(set) var postBodies: [Data] = []
     private(set) var deletePaths: [String] = []
+    private(set) var uploadPaths: [String] = []
+    private(set) var uploadContentTypes: [String] = []
 
     init(responses: [String: String]) {
         self.responses = responses
@@ -312,6 +341,15 @@ private actor SocialTransportStub: LegacySocialTransport {
     func socialDeleteData(path: String) async throws -> Data {
         deletePaths.append(path)
         guard let response = responses[path] else {
+            throw StubError.missing(path)
+        }
+        return Data(response.utf8)
+    }
+
+    func socialUploadData(path: String, body: Data, contentType: String) async throws -> Data {
+        uploadPaths.append(path)
+        uploadContentTypes.append(contentType)
+        guard !body.isEmpty, let response = responses[path] else {
             throw StubError.missing(path)
         }
         return Data(response.utf8)
