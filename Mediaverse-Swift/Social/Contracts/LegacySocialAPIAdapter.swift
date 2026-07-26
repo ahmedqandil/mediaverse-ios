@@ -186,6 +186,55 @@ public actor LegacySocialAPIAdapter {
         ).post
     }
 
+    public func editRipple(
+        postId: String,
+        body: String,
+        isSpoiler: Bool,
+        commentsDisabled: Bool
+    ) async throws -> EditedRipplePost {
+        let data = try await transport.socialPatchData(
+            path: "/api/fan-club-posts/\(try segment(postId))",
+            body: try JSONEncoder().encode(
+                EditRippleRequest(
+                    body: body,
+                    isSpoiler: isSpoiler,
+                    commentsDisabled: commentsDisabled
+                )
+            )
+        )
+        return try decoder.decode(EditedRippleResponse.self, from: data).post
+    }
+
+    public func deleteRipple(postId: String) async throws {
+        let data = try await transport.socialDeleteData(
+            path: "/api/fan-club-posts/\(try segment(postId))"
+        )
+        _ = try decoder.decode(SocialOKResponse.self, from: data)
+    }
+
+    public func reportRipple(
+        postId: String,
+        vibeSlug: String,
+        reason: String,
+        details: String? = nil
+    ) async throws -> VibeReportReceipt {
+        let normalizedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedDetails = details?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = try JSONEncoder().encode(
+            VibeReportRequest(
+                targetType: "POST",
+                postId: postId,
+                reason: normalizedReason,
+                details: normalizedDetails?.isEmpty == false ? normalizedDetails : nil
+            )
+        )
+        return try await post(
+            VibeReportResponse.self,
+            path: "/api/fan-clubs/\(try segment(vibeSlug))/reports",
+            body: body
+        ).report
+    }
+
     public func rippleComments(postId: String) async throws -> [RippleComment] {
         try await decode(
             RippleCommentsResponse.self,
@@ -557,6 +606,19 @@ private struct AffiliationReviewRequest: Encodable {
     let action: AffiliationReviewAction
     let note: String?
     let relationshipType: VibeAffiliationRelationship
+}
+
+private struct EditRippleRequest: Encodable {
+    let body: String
+    let isSpoiler: Bool
+    let commentsDisabled: Bool
+}
+
+private struct VibeReportRequest: Encodable {
+    let targetType: String
+    let postId: String
+    let reason: String
+    let details: String?
 }
 
 private struct CreateRippleRequest: Encodable {

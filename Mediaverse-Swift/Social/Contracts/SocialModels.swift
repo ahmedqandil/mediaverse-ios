@@ -225,6 +225,26 @@ public struct SocialOKResponse: Decodable, Sendable {
     public let ok: Bool
 }
 
+public struct EditedRipplePost: Decodable, Sendable {
+    public let id: String
+    public let body: String?
+    public let isSpoiler: Bool
+    public let commentsDisabled: Bool
+}
+
+public struct EditedRippleResponse: Decodable, Sendable {
+    public let post: EditedRipplePost
+}
+
+public struct VibeReportReceipt: Decodable, Sendable {
+    public let id: String
+    public let status: String
+}
+
+public struct VibeReportResponse: Decodable, Sendable {
+    public let report: VibeReportReceipt
+}
+
 public struct VibeListResponse: Decodable, Sendable {
     public let clubs: [VibeSummary]
     public let nextCursor: String?

@@ -19,11 +19,19 @@ struct RippleCard: View {
     let ripple: Ripple
     let actions: RippleCardActions
     let allowsEngagement: Bool
+    @EnvironmentObject private var auth: AuthManager
     @StateObject private var engagement: RippleEngagementController
     @State private var showsEnergy = false
     @State private var showsShare = false
     @State private var showsComments = false
     @State private var showsEcho = false
+    @State private var showsEdit = false
+    @State private var showsReport = false
+    @State private var confirmsDelete = false
+    @State private var isDeleted = false
+    @State private var editedBody: String?
+    @State private var editedSpoiler: Bool?
+    @State private var editedCommentsDisabled: Bool?
 
     init(
         ripple: Ripple,
@@ -42,7 +50,7 @@ struct RippleCard: View {
                 .padding(.horizontal, 14)
                 .padding(.top, 14)
 
-            if let body = ripple.body?.trimmingCharacters(in: .whitespacesAndNewlines),
+            if let body = (editedBody ?? ripple.body)?.trimmingCharacters(in: .whitespacesAndNewlines),
                !body.isEmpty {
                 Text(body)
                     .font(bodyFont(hasAttachments: !ripple.attachments.isEmpty || ripple.poll != nil))
@@ -89,6 +97,9 @@ struct RippleCard: View {
                 .stroke(C.borderSubtle, lineWidth: 1)
         }
         .clipShape(RoundedRectangle(cornerRadius: C.cardRadius))
+        .frame(height: isDeleted ? 0 : nil)
+        .opacity(isDeleted ? 0 : 1)
+        .clipped()
         .accessibilityElement(children: .contain)
         .sheet(isPresented: $showsEnergy) {
             RippleEnergySheet(controller: engagement)
@@ -118,6 +129,35 @@ struct RippleCard: View {
             }
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showsEdit) {
+            RippleEditSheet(
+                ripple: ripple,
+                initialBody: editedBody ?? ripple.body ?? "",
+                initialSpoiler: editedSpoiler ?? ripple.isSpoiler,
+                initialCommentsDisabled: editedCommentsDisabled ?? ripple.commentsDisabled
+            ) { updated in
+                editedBody = updated.body
+                editedSpoiler = updated.isSpoiler
+                editedCommentsDisabled = updated.commentsDisabled
+            }
+        }
+        .sheet(isPresented: $showsReport) {
+            if let slug = ripple.club?.slug {
+                RippleReportSheet(postId: ripple.id, vibeSlug: slug)
+            }
+        }
+        .confirmationDialog(
+            "Delete this Ripple?",
+            isPresented: $confirmsDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Ripple", role: .destructive) {
+                Task { await deleteRipple() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the Ripple and cannot be undone.")
         }
         .alert(
             "Ripple update failed",
@@ -169,16 +209,16 @@ struct RippleCard: View {
 
             Spacer(minLength: 8)
 
-            if actions.edit != nil || actions.delete != nil || actions.report != nil {
+            if showsActionMenu {
                 Menu {
-                    if let edit = actions.edit {
-                        Button("Edit", systemImage: "pencil", action: edit)
+                    if let editAction {
+                        Button("Edit", systemImage: "pencil", action: editAction)
                     }
-                    if let delete = actions.delete {
-                        Button("Delete", systemImage: "trash", role: .destructive, action: delete)
+                    if let deleteAction {
+                        Button("Delete", systemImage: "trash", role: .destructive, action: deleteAction)
                     }
-                    if let report = actions.report {
-                        Button("Report", systemImage: "flag", action: report)
+                    if let reportAction {
+                        Button("Report", systemImage: "flag", action: reportAction)
                     }
                 } label: {
                     Image(systemName: "ellipsis")
@@ -188,6 +228,43 @@ struct RippleCard: View {
                         .contentShape(Rectangle())
                 }
             }
+        }
+    }
+
+    private var isOwner: Bool {
+        auth.currentUser?.id == ripple.author.id
+    }
+
+    private var editAction: (() -> Void)? {
+        actions.edit ?? (allowsEngagement && isOwner ? { showsEdit = true } : nil)
+    }
+
+    private var deleteAction: (() -> Void)? {
+        actions.delete ?? (allowsEngagement && isOwner ? { confirmsDelete = true } : nil)
+    }
+
+    private var reportAction: (() -> Void)? {
+        actions.report ?? (
+            allowsEngagement && !isOwner && ripple.club?.slug != nil
+                ? { showsReport = true }
+                : nil
+        )
+    }
+
+    private var showsActionMenu: Bool {
+        editAction != nil || deleteAction != nil || reportAction != nil
+    }
+
+    @MainActor
+    private func deleteRipple() async {
+        do {
+            try await LegacySocialAPIAdapter(transport: APIClient.shared)
+                .deleteRipple(postId: ripple.id)
+            withAnimation(.easeOut(duration: 0.2)) {
+                isDeleted = true
+            }
+        } catch {
+            engagement.errorMessage = socialErrorMessage(error)
         }
     }
 
@@ -204,7 +281,7 @@ struct RippleCard: View {
                 systemImage: "bubble.left",
                 count: ripple.commentCount,
                 handler: actions.comment ?? (
-                    allowsEngagement && !ripple.commentsDisabled
+                    allowsEngagement && !(editedCommentsDisabled ?? ripple.commentsDisabled)
                         ? { showsComments = true }
                         : nil
                 )
@@ -316,6 +393,164 @@ struct SocialIdentityAvatar: View {
         Text(String((name?.trimmingCharacters(in: .whitespacesAndNewlines).first ?? "W")).uppercased())
             .font(.system(size: size * 0.36, weight: .bold))
             .foregroundStyle(C.textMuted)
+    }
+}
+
+private struct RippleEditSheet: View {
+    let ripple: Ripple
+    let onSaved: (EditedRipplePost) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var bodyText: String
+    @State private var isSpoiler: Bool
+    @State private var commentsDisabled: Bool
+    @State private var isSaving = false
+    @State private var errorMessage: String?
+    private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+
+    init(
+        ripple: Ripple,
+        initialBody: String,
+        initialSpoiler: Bool,
+        initialCommentsDisabled: Bool,
+        onSaved: @escaping (EditedRipplePost) -> Void
+    ) {
+        self.ripple = ripple
+        self.onSaved = onSaved
+        _bodyText = State(initialValue: initialBody)
+        _isSpoiler = State(initialValue: initialSpoiler)
+        _commentsDisabled = State(initialValue: initialCommentsDisabled)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Ripple") {
+                    TextField("What’s the energy?", text: $bodyText, axis: .vertical)
+                        .lineLimit(4...12)
+                    Toggle("Spoiler", isOn: $isSpoiler)
+                    Toggle("Disable comments", isOn: $commentsDisabled)
+                }
+                Section {
+                    Text("Existing photos, media, polls, and Echo attachments are preserved and cannot be changed here.")
+                        .font(.caption)
+                        .foregroundStyle(C.textMuted)
+                }
+            }
+            .navigationTitle("Edit Ripple")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { Task { await save() } }
+                        .disabled(isSaving)
+                }
+            }
+            .alert(
+                "Ripple could not be edited",
+                isPresented: Binding(
+                    get: { errorMessage != nil },
+                    set: { if !$0 { errorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "")
+            }
+        }
+    }
+
+    @MainActor
+    private func save() async {
+        guard !isSaving else { return }
+        isSaving = true
+        do {
+            let updated = try await api.editRipple(
+                postId: ripple.id,
+                body: bodyText,
+                isSpoiler: isSpoiler,
+                commentsDisabled: commentsDisabled
+            )
+            onSaved(updated)
+            dismiss()
+        } catch {
+            errorMessage = socialErrorMessage(error)
+        }
+        isSaving = false
+    }
+}
+
+private struct RippleReportSheet: View {
+    let postId: String
+    let vibeSlug: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var reason = ""
+    @State private var details = ""
+    @State private var isSubmitting = false
+    @State private var errorMessage: String?
+    private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Reason") {
+                    TextField("Reason for reporting", text: $reason)
+                    TextField("Optional details", text: $details, axis: .vertical)
+                        .lineLimit(3...8)
+                }
+                Section {
+                    Text("The Vibe’s moderation team will review this report.")
+                        .font(.caption)
+                        .foregroundStyle(C.textMuted)
+                }
+            }
+            .navigationTitle("Report Ripple")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Submit") { Task { await submit() } }
+                        .disabled(
+                            isSubmitting
+                            || reason.trimmingCharacters(in: .whitespacesAndNewlines).count < 3
+                            || reason.count > 100
+                            || details.count > 2_000
+                        )
+                }
+            }
+            .alert(
+                "Report could not be submitted",
+                isPresented: Binding(
+                    get: { errorMessage != nil },
+                    set: { if !$0 { errorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "")
+            }
+        }
+    }
+
+    @MainActor
+    private func submit() async {
+        guard !isSubmitting else { return }
+        isSubmitting = true
+        do {
+            _ = try await api.reportRipple(
+                postId: postId,
+                vibeSlug: vibeSlug,
+                reason: reason,
+                details: details
+            )
+            dismiss()
+        } catch {
+            errorMessage = socialErrorMessage(error)
+        }
+        isSubmitting = false
     }
 }
 

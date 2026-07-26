@@ -445,6 +445,50 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         XCTAssertEqual(payload["note"] as? String, "Verified")
         XCTAssertEqual(payload["relationshipType"] as? String, "OFFICIAL")
     }
+
+    func testRippleOwnerAndReportActionsUseFrozenContracts() async throws {
+        let editedJSON = """
+        {"post":{"id":"p-1","body":"Updated Ripple","isSpoiler":true,"commentsDisabled":false}}
+        """
+        let reportJSON = """
+        {"report":{"id":"report-1","status":"OPEN"}}
+        """
+        let transport = SocialTransportStub(responses: [
+            "PATCH /api/fan-club-posts/p-1": editedJSON,
+            "/api/fan-club-posts/p-1": #"{"ok":true}"#,
+            "/api/fan-clubs/cinema/reports": reportJSON
+        ])
+        let api = LegacySocialAPIAdapter(transport: transport)
+
+        let edited = try await api.editRipple(
+            postId: "p-1",
+            body: "Updated Ripple",
+            isSpoiler: true,
+            commentsDisabled: false
+        )
+        XCTAssertEqual(edited.body, "Updated Ripple")
+        try await api.deleteRipple(postId: "p-1")
+        let receipt = try await api.reportRipple(
+            postId: "p-1",
+            vibeSlug: "cinema",
+            reason: "Spam",
+            details: "Repeated promotional content"
+        )
+        XCTAssertEqual(receipt.status, "OPEN")
+
+        let postPaths = await transport.postPaths
+        XCTAssertEqual(postPaths, [
+            "PATCH /api/fan-club-posts/p-1",
+            "/api/fan-clubs/cinema/reports"
+        ])
+        let deletePaths = await transport.deletePaths
+        XCTAssertEqual(deletePaths, ["/api/fan-club-posts/p-1"])
+        let bodies = await transport.postBodies
+        let report = try XCTUnwrap(JSONSerialization.jsonObject(with: bodies[1]) as? [String: Any])
+        XCTAssertEqual(report["targetType"] as? String, "POST")
+        XCTAssertEqual(report["postId"] as? String, "p-1")
+        XCTAssertEqual(report["reason"] as? String, "Spam")
+    }
 }
 
 private actor SocialTransportStub: LegacySocialTransport {
