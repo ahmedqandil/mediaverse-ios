@@ -203,8 +203,6 @@ struct CommentThreadView: View {
 
     private var supportsCommentManagement: Bool {
         if case .post = target { return false }
-        if case .ripple = target { return false }
-        if case .ripplePhoto = target { return false }
         return true
     }
 
@@ -528,13 +526,30 @@ struct CommentThreadView: View {
 
     private func editComment(commentId: String, text: String) async throws {
         guard auth.isAuthenticated else { return }
-        let updated = try await APIClient.shared.editComment(commentId: commentId, content: text)
+        let updatedContent: String?
+        let updatedHTML: String?
+        switch target {
+        case .ripple:
+            let updated = try await LegacySocialAPIAdapter(transport: APIClient.shared)
+                .editRippleComment(commentId: commentId, content: text)
+            updatedContent = updated.content
+            updatedHTML = updated.contentHTML
+        case .ripplePhoto:
+            let updated = try await LegacySocialAPIAdapter(transport: APIClient.shared)
+                .editRipplePhotoComment(commentId: commentId, content: text)
+            updatedContent = updated.content
+            updatedHTML = updated.contentHTML
+        default:
+            let updated = try await APIClient.shared.editComment(commentId: commentId, content: text)
+            updatedContent = updated.content
+            updatedHTML = updated.contentHtml
+        }
         withAnimation(contentAnimation) {
             comments = comments.map {
                 $0.updatingContent(
                     commentId: commentId,
-                    content: updated.content ?? text,
-                    contentHtml: updated.contentHtml
+                    content: updatedContent ?? text,
+                    contentHtml: updatedHTML
                 )
             }
         }
@@ -542,7 +557,16 @@ struct CommentThreadView: View {
 
     private func deleteComment(commentId: String) async throws {
         guard auth.isAuthenticated else { return }
-        try await APIClient.shared.deleteComment(commentId: commentId)
+        switch target {
+        case .ripple:
+            try await LegacySocialAPIAdapter(transport: APIClient.shared)
+                .deleteRippleComment(commentId: commentId)
+        case .ripplePhoto:
+            try await LegacySocialAPIAdapter(transport: APIClient.shared)
+                .deleteRipplePhotoComment(commentId: commentId)
+        default:
+            try await APIClient.shared.deleteComment(commentId: commentId)
+        }
         withAnimation(contentAnimation) {
             comments = comments.compactMap { $0.removing(commentId: commentId) }
             if replyTarget?.id == commentId {

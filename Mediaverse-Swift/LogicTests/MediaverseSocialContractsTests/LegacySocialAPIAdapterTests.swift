@@ -543,6 +543,36 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
             "PATCH /api/fan-clubs/cinema/join-requests/j-1"
         ])
     }
+
+    func testRippleAndPhotoCommentManagementUsesTargetSpecificContracts() async throws {
+        let rippleComment = """
+        {"comment":{"id":"c-1","userId":"u-1","content":"Updated","contentHtml":null,"parentId":null,"likeCount":0,"createdAt":"2026-07-26T00:00:00.000Z","editedAt":"2026-07-26T00:01:00.000Z","user":{"id":"u-1","name":"Ava","handle":"ava","image":null},"replies":[],"likes":[]}}
+        """
+        let photoComment = rippleComment.replacingOccurrences(of: "c-1", with: "pc-1")
+        let transport = SocialTransportStub(responses: [
+            "PATCH /api/fan-club-comments/c-1": rippleComment,
+            "/api/fan-club-comments/c-1": #"{"ok":true}"#,
+            "PATCH /api/fan-club-attachment-comments/pc-1": photoComment,
+            "/api/fan-club-attachment-comments/pc-1": #"{"ok":true}"#
+        ])
+        let api = LegacySocialAPIAdapter(transport: transport)
+
+        _ = try await api.editRippleComment(commentId: "c-1", content: "Updated")
+        try await api.deleteRippleComment(commentId: "c-1")
+        _ = try await api.editRipplePhotoComment(commentId: "pc-1", content: "Updated")
+        try await api.deleteRipplePhotoComment(commentId: "pc-1")
+
+        let writes = await transport.postPaths
+        XCTAssertEqual(writes, [
+            "PATCH /api/fan-club-comments/c-1",
+            "PATCH /api/fan-club-attachment-comments/pc-1"
+        ])
+        let deletes = await transport.deletePaths
+        XCTAssertEqual(deletes, [
+            "/api/fan-club-comments/c-1",
+            "/api/fan-club-attachment-comments/pc-1"
+        ])
+    }
 }
 
 private actor SocialTransportStub: LegacySocialTransport {

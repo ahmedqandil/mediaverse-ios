@@ -339,6 +339,21 @@ public actor LegacySocialAPIAdapter {
         )
     }
 
+    public func editRippleComment(commentId: String, content: String) async throws -> RippleComment {
+        let data = try await transport.socialPatchData(
+            path: "/api/fan-club-comments/\(try segment(commentId))",
+            body: try JSONEncoder().encode(RippleCommentEditRequest(content: content))
+        )
+        return try decoder.decode(RippleCommentResponse.self, from: data).comment
+    }
+
+    public func deleteRippleComment(commentId: String) async throws {
+        let data = try await transport.socialDeleteData(
+            path: "/api/fan-club-comments/\(try segment(commentId))"
+        )
+        _ = try decoder.decode(SocialOKResponse.self, from: data)
+    }
+
     public func ripplePhotoComments(attachmentId: String) async throws -> [RippleComment] {
         try await decode(
             RippleCommentsResponse.self,
@@ -367,6 +382,21 @@ public actor LegacySocialAPIAdapter {
             path: "/api/fan-club-attachment-comments/\(try segment(commentId))/like",
             body: Data("{}".utf8)
         )
+    }
+
+    public func editRipplePhotoComment(commentId: String, content: String) async throws -> RippleComment {
+        let data = try await transport.socialPatchData(
+            path: "/api/fan-club-attachment-comments/\(try segment(commentId))",
+            body: try JSONEncoder().encode(RippleCommentEditRequest(content: content))
+        )
+        return try decoder.decode(RippleCommentResponse.self, from: data).comment
+    }
+
+    public func deleteRipplePhotoComment(commentId: String) async throws {
+        let data = try await transport.socialDeleteData(
+            path: "/api/fan-club-attachment-comments/\(try segment(commentId))"
+        )
+        _ = try decoder.decode(SocialOKResponse.self, from: data)
     }
 
     public func ripplePhotoEnergy(attachmentId: String) async throws -> RippleEnergyResponse {
@@ -708,6 +738,10 @@ private struct ResolveReportRequest: Encodable {
 private struct JoinRequestDecision: Encodable {
     let decision: String
     let note: String?
+}
+
+private struct RippleCommentEditRequest: Encodable {
+    let content: String
 }
 
 
