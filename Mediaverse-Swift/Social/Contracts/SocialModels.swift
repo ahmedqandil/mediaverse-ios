@@ -295,6 +295,28 @@ public struct VibeJoinRequestsResponse: Decodable, Sendable {
     public let requests: [VibePendingJoinRequest]
 }
 
+public struct VibeMember: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let role: String
+    public let joinedAt: String?
+    public let user: SocialIdentity
+}
+
+public struct VibeMembersResponse: Decodable, Sendable {
+    public let members: [VibeMember]
+    public let nextCursor: String?
+}
+
+public struct UpdatedVibeMember: Decodable, Sendable {
+    public let id: String
+    public let role: String
+    public let status: String
+}
+
+public struct UpdatedVibeMemberResponse: Decodable, Sendable {
+    public let member: UpdatedVibeMember
+}
+
 public struct VibeListResponse: Decodable, Sendable {
     public let clubs: [VibeSummary]
     public let nextCursor: String?

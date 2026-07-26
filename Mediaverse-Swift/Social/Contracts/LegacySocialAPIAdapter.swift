@@ -309,6 +309,50 @@ public actor LegacySocialAPIAdapter {
         _ = try decoder.decode(SocialOKResponse.self, from: data)
     }
 
+    public func vibeMembers(
+        vibeSlug: String,
+        query: String? = nil,
+        cursor: String? = nil
+    ) async throws -> VibeMembersResponse {
+        var items: [URLQueryItem] = []
+        if let query {
+            let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalized.isEmpty { items.append(URLQueryItem(name: "q", value: normalized)) }
+        }
+        if let cursor, !cursor.isEmpty {
+            items.append(URLQueryItem(name: "cursor", value: cursor))
+        }
+        return try await decode(
+            VibeMembersResponse.self,
+            path: try path(
+                "/api/fan-clubs/\(try segment(vibeSlug))/members",
+                query: items
+            )
+        )
+    }
+
+    public func updateVibeMember(
+        vibeSlug: String,
+        userId: String,
+        role: String? = nil,
+        status: String? = nil,
+        reason: String? = nil,
+        suspendedUntil: String? = nil
+    ) async throws -> UpdatedVibeMember {
+        let data = try await transport.socialPatchData(
+            path: "/api/fan-clubs/\(try segment(vibeSlug))/members/\(try segment(userId))",
+            body: try JSONEncoder().encode(
+                UpdateVibeMemberRequest(
+                    role: role,
+                    status: status,
+                    reason: reason?.trimmingCharacters(in: .whitespacesAndNewlines),
+                    suspendedUntil: suspendedUntil
+                )
+            )
+        )
+        return try decoder.decode(UpdatedVibeMemberResponse.self, from: data).member
+    }
+
     public func rippleComments(postId: String) async throws -> [RippleComment] {
         try await decode(
             RippleCommentsResponse.self,
@@ -742,6 +786,13 @@ private struct JoinRequestDecision: Encodable {
 
 private struct RippleCommentEditRequest: Encodable {
     let content: String
+}
+
+private struct UpdateVibeMemberRequest: Encodable {
+    let role: String?
+    let status: String?
+    let reason: String?
+    let suspendedUntil: String?
 }
 
 

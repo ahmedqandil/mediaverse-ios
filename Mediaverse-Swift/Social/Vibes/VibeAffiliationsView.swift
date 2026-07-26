@@ -512,6 +512,7 @@ private enum VibeModerationTab: String, CaseIterable, Identifiable {
     case ripples = "Ripples"
     case reports = "Reports"
     case requests = "Requests"
+    case members = "Members"
     var id: String { rawValue }
 }
 
@@ -523,9 +524,11 @@ struct VibeModerationView: View {
     @State private var ripples: [ModerationRipple] = []
     @State private var reports: [ModerationReport] = []
     @State private var requests: [VibePendingJoinRequest] = []
+    @State private var members: [VibeMember] = []
     @State private var selectedRipple: ModerationRipple?
     @State private var selectedReport: ModerationReport?
     @State private var selectedRequest: VibePendingJoinRequest?
+    @State private var selectedMember: VibeMember?
     @State private var isLoading = true
     @State private var errorMessage: String?
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
@@ -536,7 +539,7 @@ struct VibeModerationView: View {
             value.append(contentsOf: [.ripples, .reports])
         }
         if capabilities.canModerateMembers {
-            value.append(.requests)
+            value.append(contentsOf: [.requests, .members])
         }
         return value
     }
@@ -584,6 +587,16 @@ struct VibeModerationView: View {
             .sheet(item: $selectedRequest) { request in
                 JoinRequestDecisionSheet(slug: slug, request: request) {
                     selectedRequest = nil
+                    await load()
+                }
+            }
+            .sheet(item: $selectedMember) { member in
+                MemberModerationSheet(
+                    slug: slug,
+                    member: member,
+                    capabilities: capabilities
+                ) {
+                    selectedMember = nil
                     await load()
                 }
             }
@@ -637,6 +650,15 @@ struct VibeModerationView: View {
                             badge: "PENDING"
                         ) { selectedRequest = request }
                     }
+                case .members:
+                    if members.isEmpty { empty("No active members") }
+                    ForEach(members) { member in
+                        moderationRow(
+                            title: member.user.name ?? member.user.handle ?? "Westreem user",
+                            subtitle: member.user.handle.map { "@\($0)" } ?? "Active member",
+                            badge: member.role
+                        ) { selectedMember = member }
+                    }
                 }
             }
             .padding(C.pagePad)
@@ -684,11 +706,126 @@ struct VibeModerationView: View {
                 reports = try await api.moderationReports(vibeSlug: slug)
             case .requests:
                 requests = try await api.joinRequests(vibeSlug: slug)
+            case .members:
+                members = try await api.vibeMembers(vibeSlug: slug).members
             }
         } catch {
             errorMessage = socialErrorMessage(error)
         }
         isLoading = false
+    }
+}
+
+private struct MemberModerationSheet: View {
+    let slug: String
+    let member: VibeMember
+    let capabilities: VibeCapabilities
+    let onFinished: () async -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var role: String
+    @State private var status = "ACTIVE"
+    @State private var reason = ""
+    @State private var busy = false
+    @State private var errorMessage: String?
+    private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+
+    init(
+        slug: String,
+        member: VibeMember,
+        capabilities: VibeCapabilities,
+        onFinished: @escaping () async -> Void
+    ) {
+        self.slug = slug
+        self.member = member
+        self.capabilities = capabilities
+        self.onFinished = onFinished
+        _role = State(initialValue: member.role)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Member") {
+                    LabeledContent("Name", value: member.user.name ?? member.user.handle ?? "Westreem user")
+                    LabeledContent("Current role", value: member.role.capitalized)
+                }
+                if capabilities.canManageRoles && member.role != "OWNER" {
+                    Section("Role") {
+                        Picker("Role", selection: $role) {
+                            Text("Member").tag("MEMBER")
+                            Text("Moderator").tag("MODERATOR")
+                            Text("Administrator").tag("ADMIN")
+                        }
+                    }
+                }
+                if member.role != "OWNER" {
+                    Section("Status") {
+                        Picker("Action", selection: $status) {
+                            Text("Keep active").tag("ACTIVE")
+                            Text("Suspend").tag("SUSPENDED")
+                            if capabilities.canBanMembers {
+                                Text("Ban").tag("BANNED")
+                            }
+                            Text("Remove").tag("REMOVED")
+                        }
+                        if status != "ACTIVE" {
+                            TextField("Moderation reason (required)", text: $reason, axis: .vertical)
+                                .lineLimit(2...5)
+                        }
+                    }
+                }
+                Section {
+                    Text("Only active members can be listed by the current server contract. Suspended, banned, and removed members cannot be rediscovered in this screen.")
+                        .font(.caption)
+                        .foregroundStyle(C.textMuted)
+                }
+            }
+            .navigationTitle("Manage Member")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { Task { await save() } }
+                        .disabled(
+                            busy
+                            || (status != "ACTIVE" && reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        )
+                }
+            }
+            .alert(
+                "Member update failed",
+                isPresented: Binding(
+                    get: { errorMessage != nil },
+                    set: { if !$0 { errorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "")
+            }
+        }
+    }
+
+    @MainActor
+    private func save() async {
+        guard !busy else { return }
+        busy = true
+        do {
+            _ = try await api.updateVibeMember(
+                vibeSlug: slug,
+                userId: member.user.id,
+                role: capabilities.canManageRoles && role != member.role ? role : nil,
+                status: status != "ACTIVE" ? status : nil,
+                reason: reason
+            )
+            await onFinished()
+            dismiss()
+        } catch {
+            errorMessage = socialErrorMessage(error)
+        }
+        busy = false
     }
 }
 

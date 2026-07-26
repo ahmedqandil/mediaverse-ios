@@ -573,6 +573,34 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
             "/api/fan-club-attachment-comments/pc-1"
         ])
     }
+
+    func testMemberModerationUsesFrozenCapabilityBackedContract() async throws {
+        let members = """
+        {"members":[{"id":"m-1","role":"MEMBER","joinedAt":"2026-07-01T00:00:00.000Z","user":{"id":"u-1","name":"Ava","handle":"ava","image":null}}],"nextCursor":null}
+        """
+        let updated = """
+        {"member":{"id":"m-1","role":"MODERATOR","status":"ACTIVE"}}
+        """
+        let transport = SocialTransportStub(responses: [
+            "/api/fan-clubs/cinema/members?q=%40ava": members,
+            "PATCH /api/fan-clubs/cinema/members/u-1": updated
+        ])
+        let api = LegacySocialAPIAdapter(transport: transport)
+
+        let page = try await api.vibeMembers(vibeSlug: "cinema", query: "@ava")
+        XCTAssertEqual(page.members.first?.user.handle, "ava")
+        let member = try await api.updateVibeMember(
+            vibeSlug: "cinema",
+            userId: "u-1",
+            role: "MODERATOR"
+        )
+        XCTAssertEqual(member.role, "MODERATOR")
+
+        let reads = await transport.paths
+        XCTAssertEqual(reads, ["/api/fan-clubs/cinema/members?q=%40ava"])
+        let writes = await transport.postPaths
+        XCTAssertEqual(writes, ["PATCH /api/fan-clubs/cinema/members/u-1"])
+    }
 }
 
 private actor SocialTransportStub: LegacySocialTransport {
