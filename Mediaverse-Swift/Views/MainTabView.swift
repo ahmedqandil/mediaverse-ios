@@ -333,6 +333,7 @@ struct MainTabView: View {
         .tint(C.watch)
         .toolbar(.hidden, for: .tabBar)
         .ignoresSafeArea(edges: .bottom)
+        .background(SystemTabBarHider())
     }
 
     private func openUploadOptions(provideHaptic: Bool = true) {
@@ -450,7 +451,7 @@ struct MainTabView: View {
     }
 
     private var bottomTabBar: some View {
-        GeometryReader { _ in
+        GeometryReader { proxy in
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
 
@@ -469,15 +470,18 @@ struct MainTabView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
                 .frame(maxWidth: 392)
-                .background(C.elevated.opacity(0.94), in: Capsule())
+                .background(
+                    C.elevated.opacity(0.94),
+                    in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+                )
                 .overlay {
-                    Capsule()
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
                 }
                 .shadow(color: .black.opacity(0.42), radius: 18, y: 8)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 24)
-                .padding(.bottom, 16)
+                .padding(.bottom, max(10, proxy.safeAreaInsets.bottom))
                 .scaleEffect(isBottomTabBarCompressed ? 0.94 : 1, anchor: .bottom)
                 .opacity(isBottomTabBarCompressed ? 0.90 : 1)
                 .offset(y: isBottomTabBarCompressed ? 4 : 0)
@@ -940,6 +944,41 @@ struct MainTabView: View {
 
         UITabBar.appearance().standardAppearance   = appearance
         UITabBar.appearance().scrollEdgeAppearance = appearance
+    }
+}
+
+private struct SystemTabBarHider: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> Controller {
+        Controller()
+    }
+
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.hideSystemTabBar()
+    }
+
+    final class Controller: UIViewController {
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            hideSystemTabBar()
+        }
+
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            hideSystemTabBar()
+        }
+
+        func hideSystemTabBar() {
+            var ancestor: UIViewController? = self
+            while let current = ancestor {
+                if let tabController = current as? UITabBarController
+                    ?? current.tabBarController {
+                    tabController.tabBar.isHidden = true
+                    tabController.additionalSafeAreaInsets.bottom = 0
+                    return
+                }
+                ancestor = current.parent
+            }
+        }
     }
 }
 
