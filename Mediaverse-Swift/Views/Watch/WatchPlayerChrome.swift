@@ -212,7 +212,9 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
             storedPlayerMuted = muted
         }
         .onChange(of: playbackRate) { _, rate in
-            if isPlaying { player.rate = rate }
+            if isPlaying {
+                player.playImmediately(atRate: rate)
+            }
         }
         .onChange(of: likedSeconds) { _, newValue in
             replaceDisplayedLikedSeconds(newValue)
@@ -897,7 +899,6 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
             ForEach(speeds, id: \.self) { speed in
                 Button {
                     playbackRate = speed
-                    if isPlaying { player.rate = speed }
                     withAnimation(.easeOut(duration: 0.16)) { showSpeedMenu = false }
                     scheduleHide()
                 } label: {
