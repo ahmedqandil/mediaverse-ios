@@ -699,7 +699,7 @@ struct HomeView: View {
     }
 
     private var homeContentTopInset: CGFloat {
-        52
+        headerStyle == .home ? 52 : 0
     }
 
     private func canReplaceMiniPlayer(with video: FeedVideo) -> Bool {
@@ -852,12 +852,21 @@ struct HomeView: View {
 
             if headerStyle == .home {
                 homeFloatingHeader
-            } else {
-                videosHeader
             }
         }
+        .navigationTitle(headerStyle == .videos ? "Videos" : "")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .navigationBar)
+        .toolbar(headerStyle == .home ? .hidden : .visible, for: .navigationBar)
+        .toolbar {
+            if headerStyle == .videos {
+                ToolbarItem(placement: .principal) {
+                    Text("Videos")
+                        .font(.system(size: 17, weight: .bold))
+                        .fontDesign(.rounded)
+                        .foregroundStyle(C.text)
+                }
+            }
+        }
         .sheet(isPresented: $searchPresented) { SearchView() }
         .sheet(isPresented: $notificationsPresented) {
             NotificationsView { unreadCount in
@@ -1044,19 +1053,6 @@ struct HomeView: View {
         )
     }
 
-    private var videosHeader: some View {
-        HStack {
-            Text("Videos")
-                .font(.title2.bold())
-                .foregroundStyle(C.text)
-            Spacer()
-        }
-        .padding(.horizontal, C.pagePad)
-        .padding(.top, 8)
-        .padding(.bottom, 12)
-        .background(C.bg)
-    }
-
     private func toolbarIcon(_ iconName: String, fallback: String) -> some View {
         MediaverseIcon(name: iconName, fallbackSystemName: fallback)
             .frame(width: 20, height: 20)
@@ -1139,9 +1135,9 @@ struct HomeView: View {
                 await reloadForContextChange()
                 await loadNotificationCount()
             }
-            .tint(.clear)
+            .tint(headerStyle == .videos ? C.watch : .clear)
             .overlay(alignment: .top) {
-                if isRefreshingHome {
+                if isRefreshingHome && headerStyle == .home {
                     HomeRefreshIndicator()
                         .padding(.top, 12)
                         .transition(.move(edge: .top).combined(with: .opacity))
