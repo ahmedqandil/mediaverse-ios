@@ -1249,6 +1249,7 @@ struct ShortsView: View {
             }
         }
         .simultaneousGesture(showsDismissControls ? edgeDismissGesture : nil)
+        .simultaneousGesture(feedSwipeGesture)
         .navigationBarHidden(true)
         .navigationBarBackButtonHidden(showsDismissControls)
         .disablesInteractiveSwipeBack()
@@ -1326,29 +1327,45 @@ struct ShortsView: View {
     }
 
     private var feedTabs: some View {
-        HStack(spacing: 8) {
-            ForEach(ShortsFeed.allCases, id: \.self) { tab in
-                Button {
-                    Task { await switchFeed(tab) }
-                } label: {
-                    Text(tab.label)
-                        .font(.system(size: 14, weight: feed == tab ? .bold : .semibold))
-                        .foregroundStyle(feed == tab ? .black : .white.opacity(0.78))
-                        .padding(.horizontal, 16)
-                        .frame(height: 34)
-                        .background(feed == tab ? C.watch : Color.black.opacity(0.42), in: Capsule())
-                        .overlay {
-                            Capsule()
-                                .stroke(feed == tab ? C.watch.opacity(0.4) : Color.white.opacity(0.16), lineWidth: 1)
-                        }
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(tab.label)
-            }
+        MediaverseUnderlineTabStrip(
+            items: ShortsFeed.allCases.map {
+                MediaverseTabItem(id: $0.rawValue, label: $0.label)
+            },
+            selectedID: feed.rawValue,
+            fillsWidth: true,
+            horizontalPadding: 0,
+            verticalPadding: 10,
+            background: .clear
+        ) { id in
+            guard let tab = ShortsFeed(rawValue: id) else { return }
+            Task { await switchFeed(tab) }
         }
+        .frame(maxWidth: 300)
+        .background(Color.black.opacity(0.42))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .padding(.top, 14)
         .padding(.horizontal, 12)
         .zIndex(40)
+    }
+
+    private var feedSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 36)
+            .onEnded { value in
+                guard shouldShowFeedTabs, !showsDismissControls else { return }
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                guard abs(horizontal) > abs(vertical) * 1.5, abs(horizontal) > 72 else { return }
+                let feeds = ShortsFeed.allCases
+                guard let index = feeds.firstIndex(of: feed) else { return }
+                let nextIndex = horizontal < 0 ? index + 1 : index - 1
+                guard feeds.indices.contains(nextIndex) else { return }
+                C.lightHaptic()
+                Task { await switchFeed(feeds[nextIndex]) }
+            }
     }
 
     @ViewBuilder

@@ -58,6 +58,7 @@ struct BrowseView: View {
 
                     selectedContent
                         .id("\(selectedSection.rawValue)-\(scrollResetToken)")
+                        .simultaneousGesture(sectionSwipeGesture)
                 }
             }
         }
@@ -112,45 +113,40 @@ struct BrowseView: View {
 
     private var sectionTabs: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(browseItems) { item in
-                    let section = BrowseSection(rawValue: item.id) ?? .shows
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.18)) {
-                            selectedSection = section
-                        }
-                    } label: {
-                        VStack(spacing: 4) {
-                            MediaverseIcon(name: section.assetIcon, fallbackSystemName: section.fallbackIcon)
-                                .frame(width: 22, height: 22)
-
-                            Text(item.label)
-                                .font(.system(size: 11, weight: .semibold))
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.72)
-                        }
-                        .foregroundStyle(selectedSection == section ? C.watch : Color.white.opacity(0.35))
-                        .frame(width: C.mainTabWidth, height: C.mainTabHeight)
-                        .background {
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(selectedSection == section ? C.watch.opacity(0.10) : Color.clear)
-                        }
-                        .contentShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(item.label)
-                    .animation(.easeInOut(duration: 0.18), value: selectedSection)
+            MediaverseUnderlineTabStrip(
+                items: browseItems.map {
+                    MediaverseTabItem(id: $0.id, label: $0.label)
+                },
+                selectedID: selectedSection.rawValue,
+                fillsWidth: false,
+                horizontalPadding: C.pagePad,
+                verticalPadding: 11,
+                background: C.bg
+            ) { id in
+                guard let section = BrowseSection(rawValue: id) else { return }
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    selectedSection = section
                 }
             }
-            .padding(.horizontal, C.pagePad)
         }
-        .padding(.vertical, 8)
         .background(C.bg.opacity(0.97))
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(C.borderSubtle)
-                .frame(height: 0.5)
-        }
+    }
+
+    private var sectionSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 36)
+            .onEnded { value in
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                guard abs(horizontal) > abs(vertical) * 1.35, abs(horizontal) > 64 else { return }
+                let sections = browseItems.compactMap { BrowseSection(rawValue: $0.id) }
+                guard let index = sections.firstIndex(of: selectedSection) else { return }
+                let nextIndex = horizontal < 0 ? index + 1 : index - 1
+                guard sections.indices.contains(nextIndex) else { return }
+                C.lightHaptic()
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    selectedSection = sections[nextIndex]
+                }
+            }
     }
 
     private var emptyCurationState: some View {

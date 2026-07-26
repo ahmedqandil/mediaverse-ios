@@ -1,3 +1,4 @@
+import AVKit
 import SwiftUI
 
 struct VibeDetailView: View {
@@ -22,7 +23,10 @@ struct VibeDetailView: View {
     @State private var relationshipNotice: String?
     @State private var errorMessage: String?
     @State private var activeSheet: VibeSheet?
+    @StateObject private var autoplay = SocialFeedAutoplayController()
+    @AppStorage("playerMuted") private var playerMuted = false
     @EnvironmentObject private var auth: AuthManager
+    @EnvironmentObject private var miniPlayer: MiniPlayerManager
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
     private let features = SocialFeatureConfiguration.runtime()
 
@@ -49,7 +53,19 @@ struct VibeDetailView: View {
                     ForEach(ripples) {
                         RippleCard(
                             ripple: $0,
-                            allowsEngagement: features.rippleEngagementEnabled
+                            allowsEngagement: features.rippleEngagementEnabled,
+                            activePreviewVideoId: $autoplay.activeVideoID,
+                            previewManager: autoplay.previewManager,
+                            isAutoplayBlocked: isAutoplayBlocked,
+                            isPreservingPreviewHandoff: autoplay.isPreservingHandoff,
+                            onPreviewPaused: { videoID in
+                                autoplay.suppressAndReselect(
+                                    videoID: videoID,
+                                    ripples: ripples,
+                                    blocked: isAutoplayBlocked
+                                )
+                            },
+                            onVideoHandoff: handoffToWatch
                         )
                     }
                     if nextCursor != nil {
@@ -70,6 +86,14 @@ struct VibeDetailView: View {
             }
             .padding(.bottom, C.bottomMenuClearance)
         }
+        .coordinateSpace(name: "homeFeedScroll")
+        .onPreferenceChange(HomeVideoFramePreferenceKey.self) { frames in
+            autoplay.update(frames: frames, ripples: ripples, blocked: isAutoplayBlocked)
+        }
+        .onChange(of: isAutoplayBlocked) { _, blocked in
+            autoplay.setBlocked(blocked, ripples: ripples)
+        }
+        .onDisappear { autoplay.stop() }
         .background(C.bg.ignoresSafeArea())
         .navigationTitle(detail?.club.name ?? "Vibe")
         .navigationBarTitleDisplayMode(.inline)
@@ -159,6 +183,34 @@ struct VibeDetailView: View {
         }
         .task(id: slug) { await load() }
         .refreshable { await load() }
+    }
+
+    private var isAutoplayBlocked: Bool {
+        miniPlayer.item != nil || miniPlayer.isExpansionHandoffActive
+    }
+
+    private func handoffToWatch(_ video: FeedVideo, _ sourceFrame: CGRect?) {
+        let route = AppRoute.media(id: video.id, type: video.type)
+        if case .short = route {
+            autoplay.stop()
+            NotificationCenter.default.post(name: .mentionNavigationRequested, object: route)
+            return
+        }
+        guard let url = C.mediaURL(video.videoUrl) else {
+            NotificationCenter.default.post(name: .mentionNavigationRequested, object: route)
+            return
+        }
+        let player = autoplay.previewManager.handoffActivePlayer(for: video.id, muted: playerMuted)
+            ?? AVPlayer(url: url)
+        player.isMuted = playerMuted
+        player.volume = 1
+        miniPlayer.replaceAndExpand(
+            player: player,
+            title: video.title,
+            route: route,
+            sourceFrame: sourceFrame,
+            entrySurface: .atmosphere
+        )
     }
 
     private func rippleComposerPrompt(for detail: VibeDetailResponse) -> some View {
@@ -373,6 +425,10 @@ private struct VibeOptionsSheet: View {
 
 struct RippleDetailView: View {
     let postId: String
+    @EnvironmentObject private var miniPlayer: MiniPlayerManager
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @AppStorage("playerMuted") private var playerMuted = false
+    @StateObject private var autoplay = SocialFeedAutoplayController()
     @State private var ripple: Ripple?
     @State private var isLoading = true
     @State private var errorMessage: String?
@@ -385,7 +441,19 @@ struct RippleDetailView: View {
                 if let ripple {
                     RippleCard(
                         ripple: ripple,
-                        allowsEngagement: features.rippleEngagementEnabled
+                        allowsEngagement: features.rippleEngagementEnabled,
+                        activePreviewVideoId: $autoplay.activeVideoID,
+                        previewManager: autoplay.previewManager,
+                        isAutoplayBlocked: isAutoplayBlocked,
+                        isPreservingPreviewHandoff: autoplay.isPreservingHandoff,
+                        onPreviewPaused: { videoID in
+                            autoplay.suppressAndReselect(
+                                videoID: videoID,
+                                ripples: [ripple],
+                                blocked: isAutoplayBlocked
+                            )
+                        },
+                        onVideoHandoff: handoffToWatch
                     )
                 } else if isLoading {
                     ProgressView().tint(C.watch).padding(.top, 80)
@@ -397,13 +465,54 @@ struct RippleDetailView: View {
                     )
                 }
             }
-            .padding(C.pagePad)
+            .padding(.vertical, C.pagePad)
+            .padding(.horizontal, horizontalSizeClass == .compact ? 0 : C.pagePad)
+        }
+        .coordinateSpace(name: "homeFeedScroll")
+        .onPreferenceChange(HomeVideoFramePreferenceKey.self) { frames in
+            autoplay.update(
+                frames: frames,
+                ripples: ripple.map { [$0] } ?? [],
+                blocked: isAutoplayBlocked
+            )
+        }
+        .onChange(of: isAutoplayBlocked) { _, blocked in
+            autoplay.setBlocked(blocked, ripples: ripple.map { [$0] } ?? [])
         }
         .background(C.bg.ignoresSafeArea())
         .navigationTitle("Ripple")
         .navigationBarTitleDisplayMode(.inline)
         .task(id: postId) { await load() }
         .refreshable { await load() }
+        .onDisappear { autoplay.stop() }
+    }
+
+    private var isAutoplayBlocked: Bool {
+        miniPlayer.item != nil || miniPlayer.isExpansionHandoffActive
+    }
+
+    private func handoffToWatch(_ video: FeedVideo, _ sourceFrame: CGRect?) {
+        let route = AppRoute.media(id: video.id, type: video.type)
+        if case .short = route {
+            autoplay.stop()
+            NotificationCenter.default.post(name: .mentionNavigationRequested, object: route)
+            return
+        }
+        guard let url = C.mediaURL(video.videoUrl) else {
+            NotificationCenter.default.post(name: .mentionNavigationRequested, object: route)
+            return
+        }
+        let player = autoplay.previewManager.handoffActivePlayer(for: video.id, muted: playerMuted)
+            ?? AVPlayer(url: url)
+        player.isMuted = playerMuted
+        player.volume = 1
+        miniPlayer.replaceAndExpand(
+            player: player,
+            title: video.title,
+            route: route,
+            sourceFrame: sourceFrame,
+            entrySurface: .atmosphere
+        )
     }
 
     private func load() async {
@@ -439,7 +548,10 @@ struct AtmoProfileView: View {
 
     let handle: String
     @EnvironmentObject private var auth: AuthManager
+    @EnvironmentObject private var miniPlayer: MiniPlayerManager
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @AppStorage("playerMuted") private var playerMuted = false
+    @StateObject private var autoplay = SocialFeedAutoplayController()
     @State private var selectedTab: Tab = .atmosphere
     @State private var ripples: [Ripple] = []
     @State private var vibes: [VibeSummary] = []
@@ -462,6 +574,9 @@ struct AtmoProfileView: View {
             ) { value in
                 guard let tab = Tab(rawValue: value) else { return }
                 selectedTab = tab
+                if tab.feedTab == nil {
+                    autoplay.stop()
+                }
                 Task { await load() }
             }
             ScrollView {
@@ -480,7 +595,19 @@ struct AtmoProfileView: View {
                                     togglePin: isSelf ? pinAction(for: $0) : nil,
                                     isPinned: $0.pinnedAt != nil
                                 ),
-                                allowsEngagement: features.rippleEngagementEnabled
+                                allowsEngagement: features.rippleEngagementEnabled,
+                                activePreviewVideoId: $autoplay.activeVideoID,
+                                previewManager: autoplay.previewManager,
+                                isAutoplayBlocked: isAutoplayBlocked,
+                                isPreservingPreviewHandoff: autoplay.isPreservingHandoff,
+                                onPreviewPaused: { videoID in
+                                    autoplay.suppressAndReselect(
+                                        videoID: videoID,
+                                        ripples: ripples,
+                                        blocked: isAutoplayBlocked
+                                    )
+                                },
+                                onVideoHandoff: handoffToWatch
                             )
                         }
                         if nextCursor != nil {
@@ -495,8 +622,14 @@ struct AtmoProfileView: View {
                 )
                 .padding(.bottom, C.bottomMenuClearance)
             }
+            .coordinateSpace(name: "homeFeedScroll")
+            .onPreferenceChange(HomeVideoFramePreferenceKey.self) { frames in
+                guard selectedTab.feedTab != nil else { return }
+                autoplay.update(frames: frames, ripples: ripples, blocked: isAutoplayBlocked)
+            }
             .refreshable { await load() }
         }
+        .simultaneousGesture(profileTabSwipeGesture)
         .background(C.bg.ignoresSafeArea())
         .navigationTitle("@\(handle)")
         .navigationBarTitleDisplayMode(.inline)
@@ -516,6 +649,10 @@ struct AtmoProfileView: View {
             await loadIdentity()
             await load()
         }
+        .onDisappear { autoplay.stop() }
+        .onChange(of: isAutoplayBlocked) { _, blocked in
+            autoplay.setBlocked(blocked, ripples: ripples)
+        }
         .alert(
             "Atmo unavailable",
             isPresented: Binding(
@@ -527,6 +664,53 @@ struct AtmoProfileView: View {
         } message: {
             Text(errorMessage ?? "")
         }
+    }
+
+    private var profileTabSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 36)
+            .onEnded { value in
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                guard abs(horizontal) > abs(vertical) * 1.35, abs(horizontal) > 64 else { return }
+                let visibleTabs = tabItems.compactMap { Tab(rawValue: $0.id) }
+                guard let index = visibleTabs.firstIndex(of: selectedTab) else { return }
+                let nextIndex = horizontal < 0 ? index + 1 : index - 1
+                guard visibleTabs.indices.contains(nextIndex) else { return }
+                C.lightHaptic()
+                selectedTab = visibleTabs[nextIndex]
+                if selectedTab.feedTab == nil {
+                    autoplay.stop()
+                }
+                Task { await load() }
+            }
+    }
+
+    private var isAutoplayBlocked: Bool {
+        miniPlayer.item != nil || miniPlayer.isExpansionHandoffActive
+    }
+
+    private func handoffToWatch(_ video: FeedVideo, _ sourceFrame: CGRect?) {
+        let route = AppRoute.media(id: video.id, type: video.type)
+        if case .short = route {
+            autoplay.stop()
+            NotificationCenter.default.post(name: .mentionNavigationRequested, object: route)
+            return
+        }
+        guard let url = C.mediaURL(video.videoUrl) else {
+            NotificationCenter.default.post(name: .mentionNavigationRequested, object: route)
+            return
+        }
+        let player = autoplay.previewManager.handoffActivePlayer(for: video.id, muted: playerMuted)
+            ?? AVPlayer(url: url)
+        player.isMuted = playerMuted
+        player.volume = 1
+        miniPlayer.replaceAndExpand(
+            player: player,
+            title: video.title,
+            route: route,
+            sourceFrame: sourceFrame,
+            entrySurface: .atmosphere
+        )
     }
 
     private var tabItems: [MediaverseTabItem] {

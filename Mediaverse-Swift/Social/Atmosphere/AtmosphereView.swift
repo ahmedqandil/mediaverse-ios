@@ -39,10 +39,11 @@ struct AtmosphereView: View {
             }
             content
         }
+        .simultaneousGesture(tabSwipeGesture)
         .background(C.bg.ignoresSafeArea())
         .task { await model.loadIfNeeded() }
         .onChange(of: model.selectedTab) { _, tab in
-            if tab != .atmosphere {
+            if tab == .myVibes {
                 previewIdleTask?.cancel()
                 activePreviewVideoId = nil
                 previewManager.pause()
@@ -89,6 +90,23 @@ struct AtmosphereView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             Task { await loadNotificationCount() }
         }
+    }
+
+    private var tabSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 36)
+            .onEnded { value in
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                guard abs(horizontal) > abs(vertical) * 1.35, abs(horizontal) > 64 else { return }
+                let tabs = AtmosphereViewModel.Tab.allCases
+                guard let index = tabs.firstIndex(of: model.selectedTab) else { return }
+                let nextIndex = horizontal < 0 ? index + 1 : index - 1
+                guard tabs.indices.contains(nextIndex) else { return }
+                C.lightHaptic()
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    model.select(tabs[nextIndex])
+                }
+            }
     }
 
     private var header: some View {
@@ -268,7 +286,7 @@ struct AtmosphereView: View {
     private func simpleFeed(_ items: [AtmosphereFeedItem]) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 14) {
+                LazyVStack(spacing: 12) {
                     Color.clear.frame(height: 0).id("atmosphere-feed-top")
                     atmosphereBoundaryListings(model.beforeFeedListings)
                     ForEach(Array(items.enumerated()), id: \.offset) { index, item in
@@ -307,7 +325,11 @@ struct AtmosphereView: View {
             }
             .coordinateSpace(name: "homeFeedScroll")
             .onPreferenceChange(HomeVideoFramePreferenceKey.self) { frames in
-                schedulePreviewUpdate(frames: frames, videos: feedVideos(from: items))
+                schedulePreviewUpdate(
+                    frames: frames,
+                    videos: feedVideos(from: items),
+                    expectedTab: .atmosphere
+                )
             }
             .refreshable { await model.reload(.atmosphere) }
             .onReceive(NotificationCenter.default.publisher(for: .mainTabScrollToTopRequested)) { notification in
@@ -406,7 +428,17 @@ struct AtmosphereView: View {
         }
     }
 
-    private func schedulePreviewUpdate(frames: [String: CGRect], videos: [FeedVideo]) {
+    private func feedVideos(from ripples: [Ripple]) -> [FeedVideo] {
+        ripples.flatMap { ripple in
+            ripple.attachments.compactMap { $0.video?.feedVideo }
+        }
+    }
+
+    private func schedulePreviewUpdate(
+        frames: [String: CGRect],
+        videos: [FeedVideo],
+        expectedTab: AtmosphereViewModel.Tab
+    ) {
         previewFrames = frames
         previewIdleTask?.cancel()
         previewManager.warm(videos: videos, currentID: activePreviewVideoId)
@@ -424,7 +456,7 @@ struct AtmosphereView: View {
         previewManager.prebufferBottomCandidates(videos: videos, frames: frames)
         previewIdleTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(360))
-            guard !Task.isCancelled, model.selectedTab == .atmosphere else { return }
+            guard !Task.isCancelled, model.selectedTab == expectedTab else { return }
             updatePreview(videos: videos)
             previewIdleTask = nil
         }
@@ -467,7 +499,18 @@ struct AtmosphereView: View {
                     ForEach(ripples) {
                         RippleCard(
                             ripple: $0,
-                            allowsEngagement: socialFeatures.rippleEngagementEnabled
+                            allowsEngagement: socialFeatures.rippleEngagementEnabled,
+                            activePreviewVideoId: $activePreviewVideoId,
+                            previewManager: previewManager,
+                            isAutoplayBlocked: isAutoplayBlocked,
+                            isPreservingPreviewHandoff: isPreservingPreviewHandoff,
+                            onPreviewPaused: { videoID in
+                                suppressedPreviewVideoId = videoID
+                                updatePreview(videos: feedVideos(from: ripples))
+                            },
+                            onVideoHandoff: { video, frame in
+                                handoffToWatch(video, sourceFrame: frame)
+                            }
                         )
                     }
                     atmosphereBoundaryListings(model.afterFeedListings)
@@ -475,6 +518,14 @@ struct AtmosphereView: View {
                 .padding(.vertical, C.pagePad)
                 .padding(.horizontal, feedCardInset)
                 .padding(.bottom, C.bottomMenuClearance)
+            }
+            .coordinateSpace(name: "homeFeedScroll")
+            .onPreferenceChange(HomeVideoFramePreferenceKey.self) { frames in
+                schedulePreviewUpdate(
+                    frames: frames,
+                    videos: feedVideos(from: ripples),
+                    expectedTab: .discover
+                )
             }
             .refreshable { await model.reload(.discover) }
             .onReceive(NotificationCenter.default.publisher(for: .mainTabScrollToTopRequested)) { notification in

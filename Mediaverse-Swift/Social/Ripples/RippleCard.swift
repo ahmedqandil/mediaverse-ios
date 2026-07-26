@@ -1,6 +1,92 @@
 import SwiftUI
 import UIKit
 
+@MainActor
+final class SocialFeedAutoplayController: ObservableObject {
+    @Published var activeVideoID: String?
+    @Published private(set) var isPreservingHandoff = false
+
+    let previewManager = FeedPreviewPlayerManager()
+
+    private var frames: [String: CGRect] = [:]
+    private var updateTask: Task<Void, Never>?
+    private var suppressedVideoID: String?
+
+    func update(frames: [String: CGRect], ripples: [Ripple], blocked: Bool) {
+        let videos = feedVideos(in: ripples)
+        self.frames = frames
+        updateTask?.cancel()
+        previewManager.warm(videos: videos, currentID: activeVideoID)
+
+        guard !blocked else {
+            isPreservingHandoff = false
+            activeVideoID = nil
+            previewManager.pause()
+            return
+        }
+        if activeVideoID != nil {
+            isPreservingHandoff = true
+            activeVideoID = nil
+            previewManager.pausePreservingHandoff()
+        }
+        previewManager.prebufferBottomCandidates(videos: videos, frames: frames)
+        updateTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(360))
+            guard !Task.isCancelled, let self else { return }
+            self.selectPreview(from: videos)
+            self.updateTask = nil
+        }
+    }
+
+    func suppressAndReselect(videoID: String, ripples: [Ripple], blocked: Bool) {
+        suppressedVideoID = videoID
+        update(frames: frames, ripples: ripples, blocked: blocked)
+    }
+
+    func setBlocked(_ blocked: Bool, ripples: [Ripple]) {
+        update(frames: frames, ripples: ripples, blocked: blocked)
+    }
+
+    func stop() {
+        updateTask?.cancel()
+        updateTask = nil
+        activeVideoID = nil
+        isPreservingHandoff = false
+        previewManager.pause()
+    }
+
+    private func selectPreview(from videos: [FeedVideo]) {
+        isPreservingHandoff = false
+        let policy = FeedPreviewAutoplayPolicy()
+        let videosByID = Dictionary(videos.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let candidate = videos.compactMap { video -> (String, URL, CGFloat)? in
+            guard video.id != suppressedVideoID,
+                  let frame = frames[video.id],
+                  let url = C.mediaURL(videosByID[video.id]?.videoUrl),
+                  let score = policy.candidateScore(for: frame)
+            else { return nil }
+            return (video.id, url, score)
+        }
+        .max { $0.2 < $1.2 }
+
+        guard let candidate else {
+            activeVideoID = nil
+            previewManager.pause()
+            return
+        }
+        suppressedVideoID = nil
+        activeVideoID = candidate.0
+        previewManager.warm(videos: videos, currentID: candidate.0)
+        previewManager.play(videoId: candidate.0, url: candidate.1)
+    }
+
+    private func feedVideos(in ripples: [Ripple]) -> [FeedVideo] {
+        ripples.flatMap { ripple in
+            ripple.attachments.compactMap { $0.video?.feedVideo }
+        }
+    }
+}
+
 struct RippleCardActions {
     var addEnergy: (() -> Void)?
     var comment: (() -> Void)?
