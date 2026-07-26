@@ -664,19 +664,20 @@ private struct AtmospherePublishedVideoCard<MediaCard: View>: View {
                 actionButton(
                     title: "Add Energy",
                     count: energyCount,
+                    systemImage: "bolt",
                     highlighted: energyAggregate?.count ?? 0 > 0
                 ) {
                     guard auth.isAuthenticated else { return }
                     showEnergy = true
                 }
-                actionButton(title: "Comment", count: commentCount) {
+                actionButton(title: "Comment", count: commentCount, systemImage: "bubble.left") {
                     showComments = true
                 }
-                actionButton(title: "Echo", count: echoCount) {
+                actionButton(title: "Echo", count: echoCount, systemImage: "wave.3.right") {
                     guard auth.isAuthenticated else { return }
                     showEcho = true
                 }
-                actionButton(title: "Share", count: 0) {
+                actionButton(title: "Share", count: 0, systemImage: "square.and.arrow.up") {
                     share()
                 }
             }
@@ -691,11 +692,14 @@ private struct AtmospherePublishedVideoCard<MediaCard: View>: View {
     private func actionButton(
         title: String,
         count: Int,
+        systemImage: String,
         highlighted: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             HStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 13, weight: .semibold))
                 Text(title)
                 if count > 0 {
                     Text(count.formatted())

@@ -346,11 +346,13 @@ struct RippleCard: View {
         HStack(spacing: 0) {
             action(
                 title: "Add Energy",
+                systemImage: "bolt.fill",
                 count: engagement.energyCount,
                 handler: actions.addEnergy ?? (allowsEngagement ? { showsEnergy = true } : nil)
             )
             action(
                 title: "Comment",
+                systemImage: "bubble.left",
                 count: displayedCommentCount,
                 handler: actions.comment ?? (
                     allowsEngagement && !(editedCommentsDisabled ?? ripple.commentsDisabled)
@@ -360,11 +362,13 @@ struct RippleCard: View {
             )
             action(
                 title: "Echo",
+                systemImage: "dot.radiowaves.left.and.right",
                 count: engagement.echoCount,
                 handler: actions.echo ?? (allowsEngagement ? { showsEcho = true } : nil)
             )
             action(
                 title: "Share",
+                systemImage: "square.and.arrow.up",
                 count: engagement.shareCount,
                 handler: actions.share ?? (allowsEngagement && shareURL != nil ? { showsShare = true } : nil)
             )
@@ -376,13 +380,16 @@ struct RippleCard: View {
 
     private func action(
         title: String,
+        systemImage: String,
         count: Int,
         handler: (() -> Void)?
     ) -> some View {
         Button(action: { handler?() }) {
             HStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 12, weight: .semibold))
                 Text(count > 0 ? "\(title) · \(count)" : title)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 10, weight: .semibold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
             }
@@ -1950,10 +1957,10 @@ struct SocialEnergyMeter: View {
                     .foregroundStyle(C.textMuted)
                 Spacer()
                 ForEach(Array(tags.prefix(3)), id: \.self) { tag in
-                    Label(energyLabel(tag), systemImage: energySymbol(tag))
-                        .labelStyle(.iconOnly)
+                    Text(energyLabel(tag))
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(C.textMuted)
-                        .accessibilityLabel(energyLabel(tag))
+                        .lineLimit(1)
                 }
             }
             GeometryReader { proxy in
