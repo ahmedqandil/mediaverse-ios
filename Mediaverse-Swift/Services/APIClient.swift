@@ -3,7 +3,7 @@ import Foundation
 /// Thin URLSession wrapper that authenticates with the stored mobile session JWT.
 /// The JWT is stored through SessionStorage and attached to every request as both
 /// a bearer token and compatibility cookies.
-actor APIClient {
+actor APIClient: LegacySocialTransport {
     static let shared = APIClient()
 
     private let session: URLSession = {
@@ -187,6 +187,13 @@ actor APIClient {
     func get<T: Decodable>(_ path: String) async throws -> T {
         let data = try await getData(path)
         return try decoder.decode(T.self, from: data)
+    }
+
+    /// Frozen-backend bridge for the social adapter. Keeping this inside the
+    /// existing client preserves its JWT, compatibility cookies, trust checks,
+    /// caching, and error behavior for every social request.
+    func socialData(path: String) async throws -> Data {
+        try await getData(path)
     }
 
     private func get<T: Decodable>(_ path: String, authenticated: Bool) async throws -> T {

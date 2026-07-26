@@ -32,6 +32,7 @@ struct MainTabView: View {
     @State private var isShortsAdPlaybackActive = false
     @State private var isRoutedShortsPresented = false
     @State private var isUploadEligible = false
+    private let socialFeatures = SocialFeatureConfiguration.runtime()
 
     enum AppTab: Int, Hashable {
         case home = 0
@@ -281,13 +282,25 @@ struct MainTabView: View {
             .tag(AppTab.explore)
 
             NavigationStack(path: $homePath) {
-                HomeView()
-                    .navigationDestination(for: AppRoute.self) { route in
-                        routeDestination(route)
+                Group {
+                    if socialFeatures.atmosphereEnabled {
+                        AtmosphereView()
+                    } else {
+                        HomeView()
                     }
+                }
+                .navigationDestination(for: AppRoute.self) { route in
+                    routeDestination(route)
+                }
             }
             .ignoresSafeArea(edges: .bottom)
-            .tabItem { appTabLabel("Home", icon: "home", fallback: "house") }
+            .tabItem {
+                appTabLabel(
+                    socialFeatures.atmosphereEnabled ? "Atmosphere" : "Home",
+                    icon: "home",
+                    fallback: "house"
+                )
+            }
             .tag(AppTab.home)
 
             NavigationStack(path: $shortsPath) {
@@ -433,7 +446,12 @@ struct MainTabView: View {
                 HStack(spacing: 0) {
                     bottomTabButton(.upload, title: "Upload", icon: "upload", fallback: "plus.circle")
                     bottomTabButton(.explore, title: "Explore", icon: "explore", fallback: "safari")
-                    bottomTabButton(.home, title: "Home", icon: "home", fallback: "house")
+                    bottomTabButton(
+                        .home,
+                        title: socialFeatures.atmosphereEnabled ? "Atmosphere" : "Home",
+                        icon: "home",
+                        fallback: "house"
+                    )
                     bottomTabButton(.shorts, title: "Shorts", icon: "short", fallback: "bolt")
                     bottomTabButton(.profile, title: "Me", icon: "user", fallback: "person")
                 }

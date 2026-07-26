@@ -96,9 +96,17 @@ final class SocialContractDecodingTests: XCTestCase {
             [{
               "_kind": "fan_club_post",
               "id": "ripple-1",
-              "clubId": "vibe-1",
               "createdAt": "2026-07-26T10:00:00.000Z",
-              "author": {"id": "user-1"}
+              "author": {"id": "user-1"},
+              "club": {"id":"vibe-1","slug":"cinema","name":"Cinema"},
+              "poll": {
+                "id":"poll-1",
+                "question":"Ready?",
+                "allowsMultiple":false,
+                "maxSelections":1,
+                "resultsVisibility":"AFTER_VOTE",
+                "options":[{"id":"yes","label":"Yes"}]
+              }
             }, {
               "_kind": "video",
               "id": "video-1",
@@ -131,9 +139,13 @@ final class SocialContractDecodingTests: XCTestCase {
         let feed = try decoder.decode(AtmosphereFeed.self, from: data)
 
         XCTAssertEqual(feed.items.count, 2)
-        guard case .ripple = feed.items[0], case .video = feed.items[1] else {
+        guard case .ripple(let ripple) = feed.items[0], case .video = feed.items[1] else {
             return XCTFail("Atmosphere must retain Ripple then regular video")
         }
+        XCTAssertNil(ripple.clubId)
+        XCTAssertEqual(ripple.club?.slug, "cinema")
+        XCTAssertFalse(ripple.poll?.allowsVoteChanges ?? true)
+        XCTAssertEqual(ripple.poll?.votes.count, 0)
     }
 
     func testPollDefaultsOptionalCountsAndPositions() throws {
@@ -179,5 +191,18 @@ final class SocialContractDecodingTests: XCTestCase {
         XCTAssertFalse(configuration.hasAnyEnabledFeature)
         XCTAssertFalse(configuration.atmosphereEnabled)
         XCTAssertFalse(configuration.rippleComposerEnabled)
+    }
+
+    func testRuntimeFeatureConfigurationOnlyEnablesExplicitKeys() throws {
+        let suite = try XCTUnwrap(UserDefaults(suiteName: "SocialContractDecodingTests"))
+        suite.removePersistentDomain(forName: "SocialContractDecodingTests")
+        suite.set(true, forKey: "social.atmosphere.enabled")
+
+        let configuration = SocialFeatureConfiguration.runtime(userDefaults: suite)
+
+        XCTAssertTrue(configuration.atmosphereEnabled)
+        XCTAssertFalse(configuration.discoverEnabled)
+        XCTAssertFalse(configuration.rippleEngagementEnabled)
+        suite.removePersistentDomain(forName: "SocialContractDecodingTests")
     }
 }

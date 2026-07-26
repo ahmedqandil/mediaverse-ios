@@ -31,6 +31,19 @@ public struct SocialFeatureConfiguration: Equatable, Sendable {
 
     public static let disabled = SocialFeatureConfiguration()
 
+    /// Local rollout switch. Every key defaults to false, so installing this
+    /// code cannot replace an existing surface until QA explicitly enables it.
+    public static func runtime(userDefaults: UserDefaults = .standard) -> SocialFeatureConfiguration {
+        SocialFeatureConfiguration(
+            atmosphereEnabled: userDefaults.bool(forKey: "social.atmosphere.enabled"),
+            discoverEnabled: userDefaults.bool(forKey: "social.discover.enabled"),
+            vibeDetailEnabled: userDefaults.bool(forKey: "social.vibe-detail.enabled"),
+            rippleEngagementEnabled: userDefaults.bool(forKey: "social.ripple-engagement.enabled"),
+            rippleComposerEnabled: userDefaults.bool(forKey: "social.ripple-composer.enabled"),
+            flashesEnergyEnabled: userDefaults.bool(forKey: "social.flashes-energy.enabled")
+        )
+    }
+
     public var hasAnyEnabledFeature: Bool {
         atmosphereEnabled ||
         discoverEnabled ||

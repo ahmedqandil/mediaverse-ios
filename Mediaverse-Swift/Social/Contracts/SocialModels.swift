@@ -128,7 +128,8 @@ public struct RippleAuthor: Decodable, Equatable, Sendable {
 
 public struct Ripple: Decodable, Identifiable, Sendable {
     public let id: String
-    public let clubId: String
+    public let clubId: String?
+    public let club: VibeSummary?
     public let body: String?
     public let status: String?
     public let isSpoiler: Bool
@@ -149,7 +150,7 @@ public struct Ripple: Decodable, Identifiable, Sendable {
     public let poll: RipplePoll?
 
     enum CodingKeys: String, CodingKey {
-        case id, clubId, body, status, isSpoiler, commentsDisabled
+        case id, clubId, club, body, status, isSpoiler, commentsDisabled
         case likeCount, commentCount, shareCount, echoCount
         case energyCount, energyTotal, energyTags
         case pinnedAt, publishedAt, createdAt, liked, author, attachments, poll
@@ -158,7 +159,8 @@ public struct Ripple: Decodable, Identifiable, Sendable {
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id)
-        clubId = try values.decode(String.self, forKey: .clubId)
+        clubId = try values.decodeIfPresent(String.self, forKey: .clubId)
+        club = try values.decodeIfPresent(VibeSummary.self, forKey: .club)
         body = try values.decodeIfPresent(String.self, forKey: .body)
         status = try values.decodeIfPresent(String.self, forKey: .status)
         isSpoiler = try values.decodeIfPresent(Bool.self, forKey: .isSpoiler) ?? false
@@ -321,6 +323,24 @@ public struct RipplePoll: Decodable, Sendable {
     public let closesAt: String?
     public let options: [RipplePollOption]
     public let votes: [RipplePollVote]
+
+    enum CodingKeys: String, CodingKey {
+        case id, question, allowsMultiple, maxSelections, allowsVoteChanges
+        case resultsVisibility, closesAt, options, votes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        question = try values.decode(String.self, forKey: .question)
+        allowsMultiple = try values.decodeIfPresent(Bool.self, forKey: .allowsMultiple) ?? false
+        maxSelections = try values.decodeIfPresent(Int.self, forKey: .maxSelections) ?? 1
+        allowsVoteChanges = try values.decodeIfPresent(Bool.self, forKey: .allowsVoteChanges) ?? false
+        resultsVisibility = try values.decodeIfPresent(String.self, forKey: .resultsVisibility) ?? "AFTER_VOTE"
+        closesAt = try values.decodeIfPresent(String.self, forKey: .closesAt)
+        options = try values.decodeIfPresent([RipplePollOption].self, forKey: .options) ?? []
+        votes = try values.decodeIfPresent([RipplePollVote].self, forKey: .votes) ?? []
+    }
 }
 
 public struct RipplePollOption: Decodable, Identifiable, Sendable {
