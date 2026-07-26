@@ -8,10 +8,12 @@ struct BrowseView: View {
     let isRootActive: Bool
 
     @EnvironmentObject private var platformConfig: PlatformConfigManager
-    @State private var selectedSection: BrowseSection = .shows
+    @State private var selectedSection: BrowseSection = .discover
     @State private var searchPresented = false
     @State private var scrollResetToken = 0
     @State private var curatedBrowseItems: [PlatformBrowseItem]?
+    @State private var discoverListings: [AssembledListing] = []
+    @State private var isDiscoverLoading = false
 
     init(isRootActive: Bool = true) {
         self.isRootActive = isRootActive
@@ -23,7 +25,9 @@ struct BrowseView: View {
     }
 
     private var browseItems: [PlatformBrowseItem] {
-        curatedBrowseItems ?? platformBrowseItems
+        let categories = curatedBrowseItems ?? platformBrowseItems
+        return [PlatformBrowseItem(id: "discover", label: "Discover", enabled: true)]
+            + categories.filter { BrowseSection(rawValue: $0.id) != .discover }
     }
 
     var body: some View {
@@ -157,6 +161,12 @@ struct BrowseView: View {
     @ViewBuilder
     private var selectedContent: some View {
         switch selectedSection {
+        case .discover:
+            DiscoverHubView(
+                listings: discoverListings,
+                isLoading: isDiscoverLoading,
+                openSection: { selectedSection = $0 }
+            )
         case .shows:
             ShowsBrowseView(isBrowseActive: isRootActive)
         case .videos:
@@ -176,7 +186,11 @@ struct BrowseView: View {
 
     @MainActor
     private func refreshCuratedBrowseItems() async {
+        isDiscoverLoading = true
+        async let discoverTask: AssembledPage? = try? CurationManager.shared.fetchPage(key: "discover")
         let items = await CurationManager.shared.curatedBrowseItems(from: platformBrowseItems)
+        discoverListings = await discoverTask?.activeListings ?? []
+        isDiscoverLoading = false
         curatedBrowseItems = items
         ensureSelectedSectionIsVisible()
     }
@@ -211,6 +225,7 @@ struct PlatformSectionUnavailableView: View {
 }
 
 private enum BrowseSection: String, CaseIterable, Identifiable {
+    case discover
     case shows
     case videos
     case movies
@@ -223,6 +238,7 @@ private enum BrowseSection: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .discover: return "Discover"
         case .shows: return "Shows"
         case .videos: return "Videos"
         case .movies: return "Movies"
@@ -235,6 +251,7 @@ private enum BrowseSection: String, CaseIterable, Identifiable {
 
     var assetIcon: String {
         switch self {
+        case .discover: return "compass"
         case .shows: return "tv"
         case .videos: return "play"
         case .movies: return "film"
@@ -247,6 +264,7 @@ private enum BrowseSection: String, CaseIterable, Identifiable {
 
     var fallbackIcon: String {
         switch self {
+        case .discover: return "safari"
         case .shows: return "tv"
         case .videos: return "play.rectangle"
         case .movies: return "film"
@@ -254,6 +272,90 @@ private enum BrowseSection: String, CaseIterable, Identifiable {
         case .channels: return "rectangle.stack.person.crop"
         case .following: return "bell"
         case .collections: return "square.stack"
+        }
+    }
+}
+
+private struct DiscoverHubView: View {
+    let listings: [AssembledListing]
+    let isLoading: Bool
+    let openSection: (BrowseSection) -> Void
+
+    private let categorySections: [BrowseSection] = [
+        .shows, .channels, .movies, .microdramas, .following, .collections
+    ]
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: C.sectionSpacing) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Discover")
+                        .font(.largeTitle.bold())
+                        .fontDesign(.rounded)
+                        .foregroundStyle(C.text)
+                    Text("Trending topics, Ripples, videos, Shorts, people, Vibes, Shows, and Channels.")
+                        .font(.subheadline)
+                        .foregroundStyle(C.textMuted)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, C.pagePad)
+
+                if isLoading && listings.isEmpty {
+                    ForEach(0..<3, id: \.self) { _ in
+                        RoundedRectangle(cornerRadius: C.cardRadius)
+                            .fill(C.surface)
+                            .frame(height: 150)
+                            .padding(.horizontal, C.pagePad)
+                            .redacted(reason: .placeholder)
+                    }
+                } else {
+                    ForEach(listings) { listing in
+                        NativeCurationListingView(listing: listing)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Browse all")
+                        .font(.headline)
+                        .foregroundStyle(C.text)
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible(), spacing: 10),
+                            GridItem(.flexible(), spacing: 10)
+                        ],
+                        spacing: 10
+                    ) {
+                        ForEach(categorySections) { section in
+                            Button {
+                                openSection(section)
+                            } label: {
+                                HStack(spacing: 10) {
+                                    MediaverseIcon(name: section.assetIcon, fallbackSystemName: section.fallbackIcon)
+                                        .frame(width: 22, height: 22)
+                                        .foregroundStyle(C.watch)
+                                    Text(section.title)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(C.text)
+                                        .lineLimit(1)
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(12)
+                                .frame(maxWidth: .infinity, minHeight: 54)
+                                .background(C.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous)
+                                        .stroke(C.borderSubtle, lineWidth: 1)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(.horizontal, C.pagePad)
+            }
+            .padding(.vertical, C.pagePad)
+            .padding(.bottom, C.bottomMenuClearance)
         }
     }
 }
