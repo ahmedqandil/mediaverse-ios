@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AtmosphereView: View {
     @StateObject private var model = AtmosphereViewModel()
+    private let socialFeatures = SocialFeatureConfiguration.runtime()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -95,7 +96,10 @@ struct AtmosphereView: View {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     switch item {
                     case .ripple(let ripple):
-                        RippleCard(ripple: ripple)
+                        RippleCard(
+                            ripple: ripple,
+                            allowsEngagement: socialFeatures.rippleEngagementEnabled
+                        )
                     case .video(let video):
                         AtmosphereVideoPlaceholder(video: video)
                     case .excludedEpisode, .excludedShort, .unsupported:
@@ -121,7 +125,12 @@ struct AtmosphereView: View {
     private func simpleRipples(_ ripples: [Ripple]) -> some View {
         ScrollView {
             LazyVStack(spacing: 12) {
-                ForEach(ripples) { RippleCard(ripple: $0) }
+                ForEach(ripples) {
+                    RippleCard(
+                        ripple: $0,
+                        allowsEngagement: socialFeatures.rippleEngagementEnabled
+                    )
+                }
             }
             .padding(C.pagePad)
             .padding(.bottom, C.bottomMenuClearance)

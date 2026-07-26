@@ -4,6 +4,7 @@ import Foundation
 /// The social layer owns no cookies, tokens, retry policy, or backend behavior.
 public protocol LegacySocialTransport: Sendable {
     func socialData(path: String) async throws -> Data
+    func socialPostData(path: String, body: Data) async throws -> Data
 }
 
 public enum SocialDiscoverMode: String, Sendable {
@@ -21,6 +22,8 @@ public enum SocialProfileTab: String, Sendable {
 
 public enum LegacySocialAPIError: Error, Equatable {
     case invalidPath
+    case invalidEnergy
+    case invalidPollSelection
 }
 
 /// Adapter for the currently deployed, intentionally frozen social endpoints.
@@ -98,8 +101,70 @@ public actor LegacySocialAPIAdapter {
         )
     }
 
+    public func addEnergy(
+        toRipple postId: String,
+        overall: Int,
+        tags: [String]
+    ) async throws -> RippleEnergySelection {
+        guard (1...5).contains(overall) else { throw LegacySocialAPIError.invalidEnergy }
+        let normalizedTags = Array(
+            Set(tags.compactMap { value -> String? in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : String(trimmed.prefix(80))
+            })
+        )
+        .sorted()
+        .prefix(10)
+        let body = try JSONEncoder().encode(
+            RippleEnergyRequest(overall: overall, tags: Array(normalizedTags))
+        )
+        return try await post(
+            RippleEnergySelection.self,
+            path: "/api/fan-club-posts/\(try segment(postId))/rating",
+            body: body
+        )
+    }
+
+    public func rippleEnergy(postId: String) async throws -> RippleEnergyResponse {
+        try await decode(
+            RippleEnergyResponse.self,
+            path: "/api/fan-club-posts/\(try segment(postId))/rating"
+        )
+    }
+
+    public func vote(
+        inPoll pollId: String,
+        optionIds: [String]
+    ) async throws -> RipplePollVoteResponse {
+        let options = Array(Set(optionIds.filter { !$0.isEmpty })).sorted()
+        guard !options.isEmpty else { throw LegacySocialAPIError.invalidPollSelection }
+        let body = try JSONEncoder().encode(RipplePollVoteRequest(optionIds: options))
+        return try await post(
+            RipplePollVoteResponse.self,
+            path: "/api/fan-club-polls/\(try segment(pollId))/vote",
+            body: body
+        )
+    }
+
+    public func recordShare(
+        ofRipple postId: String,
+        channel: RippleShareChannel
+    ) async throws -> RippleShareResult {
+        let body = try JSONEncoder().encode(RippleShareRequest(channel: channel.rawValue))
+        return try await post(
+            RippleShareResult.self,
+            path: "/api/fan-club-posts/\(try segment(postId))/share",
+            body: body
+        )
+    }
+
     private func decode<T: Decodable>(_ type: T.Type, path: String) async throws -> T {
         let data = try await transport.socialData(path: path)
+        return try decoder.decode(type, from: data)
+    }
+
+    private func post<T: Decodable>(_ type: T.Type, path: String, body: Data) async throws -> T {
+        let data = try await transport.socialPostData(path: path, body: body)
         return try decoder.decode(type, from: data)
     }
 
@@ -126,6 +191,51 @@ public actor LegacySocialAPIAdapter {
         }
         return "\(path)?\(pairs.joined(separator: "&"))"
     }
+}
+
+public enum RippleShareChannel: String, Sendable {
+    case copyLink = "copy_link"
+    case native
+    case internalEcho = "internal"
+}
+
+public struct RippleEnergySelection: Codable, Equatable, Sendable {
+    public let overall: Int
+    public let tags: [String]
+    public let review: String?
+}
+
+public struct RippleEnergyResponse: Decodable, Sendable {
+    public let userRating: RippleEnergySelection?
+    public let aggregate: RippleEnergyAggregate
+}
+
+public struct RippleEnergyAggregate: Decodable, Sendable {
+    public let avg: Double?
+    public let count: Int
+    public let distribution: [String: Int]
+    public let topTags: [String]
+}
+
+public struct RippleShareResult: Decodable, Equatable, Sendable {
+    public let shareCount: Int
+}
+
+public struct RipplePollVoteResponse: Decodable, Sendable {
+    public let poll: RipplePoll
+}
+
+private struct RippleEnergyRequest: Encodable {
+    let overall: Int
+    let tags: [String]
+}
+
+private struct RipplePollVoteRequest: Encodable {
+    let optionIds: [String]
+}
+
+private struct RippleShareRequest: Encodable {
+    let channel: String
 }
 
 private extension CharacterSet {

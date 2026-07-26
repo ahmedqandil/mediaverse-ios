@@ -74,11 +74,67 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         let paths = await transport.paths
         XCTAssertEqual(paths, [expected])
     }
+
+    func testAddEnergyUsesExactLegacyEndpointAndSanitizedBody() async throws {
+        let path = "/api/fan-club-posts/ripple%2Fone/rating"
+        let transport = SocialTransportStub(responses: [
+            path: #"{"overall":4,"tags":["DEEP","REAL"],"review":null}"#
+        ])
+        let adapter = LegacySocialAPIAdapter(transport: transport)
+
+        let result = try await adapter.addEnergy(
+            toRipple: "ripple/one",
+            overall: 4,
+            tags: [" REAL ", "DEEP", "REAL", ""]
+        )
+
+        XCTAssertEqual(result.overall, 4)
+        let postPaths = await transport.postPaths
+        let postBodies = await transport.postBodies
+        XCTAssertEqual(postPaths, [path])
+        let body = try XCTUnwrap(postBodies.last)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: body) as? [String: Any]
+        )
+        XCTAssertEqual(object["overall"] as? Int, 4)
+        XCTAssertEqual(object["tags"] as? [String], ["DEEP", "REAL"])
+    }
+
+    func testPollVoteAndShareKeepEndpointSpecificEnvelopes() async throws {
+        let pollPath = "/api/fan-club-polls/poll-1/vote"
+        let pollTransport = SocialTransportStub(responses: [
+            pollPath: """
+            {"poll":{"id":"poll-1","question":"Pick","allowsMultiple":false,
+            "maxSelections":1,"resultsVisibility":"AFTER_VOTE",
+            "options":[{"id":"a","label":"A","voteCount":2}],"votes":[{"optionId":"a"}]}}
+            """
+        ])
+        let adapter = LegacySocialAPIAdapter(transport: pollTransport)
+        let vote = try await adapter.vote(inPoll: "poll-1", optionIds: ["a"])
+        XCTAssertEqual(vote.poll.votes.first?.optionId, "a")
+        let pollPostPaths = await pollTransport.postPaths
+        XCTAssertEqual(pollPostPaths, [pollPath])
+
+        let sharePath = "/api/fan-club-posts/ripple-1/share"
+        let shareTransport = SocialTransportStub(responses: [
+            sharePath: #"{"shareCount":7}"#
+        ])
+        let shareAdapter = LegacySocialAPIAdapter(transport: shareTransport)
+        let share = try await shareAdapter.recordShare(
+            ofRipple: "ripple-1",
+            channel: .native
+        )
+        XCTAssertEqual(share.shareCount, 7)
+        let sharePostPaths = await shareTransport.postPaths
+        XCTAssertEqual(sharePostPaths, [sharePath])
+    }
 }
 
 private actor SocialTransportStub: LegacySocialTransport {
     private let responses: [String: String]
     private(set) var paths: [String] = []
+    private(set) var postPaths: [String] = []
+    private(set) var postBodies: [Data] = []
 
     init(responses: [String: String]) {
         self.responses = responses
@@ -86,6 +142,15 @@ private actor SocialTransportStub: LegacySocialTransport {
 
     func socialData(path: String) async throws -> Data {
         paths.append(path)
+        guard let response = responses[path] else {
+            throw StubError.missing(path)
+        }
+        return Data(response.utf8)
+    }
+
+    func socialPostData(path: String, body: Data) async throws -> Data {
+        postPaths.append(path)
+        postBodies.append(body)
         guard let response = responses[path] else {
             throw StubError.missing(path)
         }

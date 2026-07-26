@@ -196,6 +196,22 @@ actor APIClient: LegacySocialTransport {
         try await getData(path)
     }
 
+    func socialPostData(path: String, body: Data) async throws -> Data {
+        guard let url = URL(string: C.baseURL + path) else {
+            throw APIError.badURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = body
+        attachAuth(&request)
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        invalidateResponseCache()
+        return data
+    }
+
     private func get<T: Decodable>(_ path: String, authenticated: Bool) async throws -> T {
         let data = try await getData(path, authenticated: authenticated)
         return try decoder.decode(T.self, from: data)

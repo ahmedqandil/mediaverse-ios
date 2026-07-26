@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct RippleCardActions {
     var addEnergy: (() -> Void)?
@@ -16,7 +17,22 @@ struct RippleCardActions {
 
 struct RippleCard: View {
     let ripple: Ripple
-    var actions: RippleCardActions = .readOnly
+    let actions: RippleCardActions
+    let allowsEngagement: Bool
+    @StateObject private var engagement: RippleEngagementController
+    @State private var showsEnergy = false
+    @State private var showsShare = false
+
+    init(
+        ripple: Ripple,
+        actions: RippleCardActions = .readOnly,
+        allowsEngagement: Bool = false
+    ) {
+        self.ripple = ripple
+        self.actions = actions
+        self.allowsEngagement = allowsEngagement
+        _engagement = StateObject(wrappedValue: RippleEngagementController(ripple: ripple))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -34,8 +50,13 @@ struct RippleCard: View {
                     .padding(.top, 12)
             }
 
-            if let poll = ripple.poll {
-                RipplePollCard(poll: poll)
+            if let poll = engagement.poll {
+                RipplePollCard(
+                    poll: poll,
+                    allowsVoting: allowsEngagement && !engagement.isBusy
+                ) { optionIds in
+                    Task { await engagement.vote(optionIds: optionIds) }
+                }
                     .padding(.horizontal, 14)
                     .padding(.top, 12)
             }
@@ -45,11 +66,11 @@ struct RippleCard: View {
                     .padding(.top, 12)
             }
 
-            if ripple.energyCount > 0 {
+            if engagement.energyCount > 0 {
                 SocialEnergyMeter(
-                    total: ripple.energyTotal,
-                    count: ripple.energyCount,
-                    tags: ripple.energyTags
+                    total: engagement.energyTotal,
+                    count: engagement.energyCount,
+                    tags: engagement.energyTags
                 )
                 .padding(.horizontal, 14)
                 .padding(.top, 12)
@@ -67,6 +88,31 @@ struct RippleCard: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: C.cardRadius))
         .accessibilityElement(children: .contain)
+        .sheet(isPresented: $showsEnergy) {
+            RippleEnergySheet(controller: engagement)
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showsShare) {
+            if let shareURL {
+                NativeShareSheet(items: [shareURL])
+                    .ignoresSafeArea()
+                    .onAppear {
+                        Task { await engagement.recordNativeShare() }
+                    }
+            }
+        }
+        .alert(
+            "Ripple update failed",
+            isPresented: Binding(
+                get: { engagement.errorMessage != nil },
+                set: { if !$0 { engagement.errorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(engagement.errorMessage ?? "")
+        }
     }
 
     private var identityHeader: some View {
@@ -137,8 +183,8 @@ struct RippleCard: View {
             action(
                 title: "Add Energy",
                 systemImage: "bolt.fill",
-                count: ripple.energyCount,
-                handler: actions.addEnergy
+                count: engagement.energyCount,
+                handler: actions.addEnergy ?? (allowsEngagement ? { showsEnergy = true } : nil)
             )
             action(
                 title: "Comment",
@@ -155,8 +201,8 @@ struct RippleCard: View {
             action(
                 title: "Share",
                 systemImage: "square.and.arrow.up",
-                count: ripple.shareCount,
-                handler: actions.share
+                count: engagement.shareCount,
+                handler: actions.share ?? (allowsEngagement && shareURL != nil ? { showsShare = true } : nil)
             )
         }
         .overlay(alignment: .top) {
@@ -191,6 +237,11 @@ struct RippleCard: View {
 
     private func bodyFont(hasAttachments: Bool) -> Font {
         hasAttachments ? .body : .system(size: 20, weight: .medium, design: .rounded)
+    }
+
+    private var shareURL: URL? {
+        guard let slug = ripple.club?.slug else { return nil }
+        return URL(string: "\(C.baseURL)/vibes/\(C.pathSegment(slug))/posts/\(C.pathSegment(ripple.id))")
     }
 }
 
@@ -568,6 +619,20 @@ private struct EmbeddedRippleView: View {
 
 private struct RipplePollCard: View {
     let poll: RipplePoll
+    let allowsVoting: Bool
+    let onVote: ([String]) -> Void
+    @State private var selections: Set<String>
+
+    init(
+        poll: RipplePoll,
+        allowsVoting: Bool,
+        onVote: @escaping ([String]) -> Void
+    ) {
+        self.poll = poll
+        self.allowsVoting = allowsVoting
+        self.onVote = onVote
+        _selections = State(initialValue: Set(poll.votes.map(\.optionId)))
+    }
 
     private var totalVotes: Int { poll.options.reduce(0) { $0 + $1.voteCount } }
 
@@ -580,22 +645,41 @@ private struct RipplePollCard: View {
             }
             ForEach(poll.options) { option in
                 let fraction = totalVotes > 0 ? Double(option.voteCount) / Double(totalVotes) : 0
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack {
-                        Text(option.label).font(.subheadline)
-                        Spacer()
-                        Text("\(Int((fraction * 100).rounded()))%").font(.caption.bold())
-                    }
-                    GeometryReader { proxy in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(C.border)
-                            Capsule()
-                                .fill(C.watch)
-                                .frame(width: proxy.size.width * CGFloat(fraction))
+                Button {
+                    select(option.id)
+                } label: {
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Image(systemName: selections.contains(option.id) ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(selections.contains(option.id) ? C.watch : C.textTertiary)
+                            Text(option.label).font(.subheadline)
+                            Spacer()
+                            Text("\(Int((fraction * 100).rounded()))%").font(.caption.bold())
                         }
+                        GeometryReader { proxy in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(C.border)
+                                Capsule()
+                                    .fill(C.watch)
+                                    .frame(width: proxy.size.width * CGFloat(fraction))
+                            }
+                        }
+                        .frame(height: 7)
                     }
-                    .frame(height: 7)
                 }
+                .buttonStyle(.plain)
+                .disabled(!allowsVoting)
+            }
+            if poll.allowsMultiple, allowsVoting {
+                Button("Submit vote") {
+                    onVote(Array(selections).sorted())
+                }
+                .font(.caption.bold())
+                .foregroundStyle(C.bg)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(C.watch, in: Capsule())
+                .disabled(selections.isEmpty || selections.count > poll.maxSelections)
             }
             Text(totalVotes == 1 ? "1 vote" : "\(totalVotes) votes")
                 .font(.caption)
@@ -604,6 +688,166 @@ private struct RipplePollCard: View {
         .padding(12)
         .background(C.elevated, in: RoundedRectangle(cornerRadius: 12))
     }
+
+    private func select(_ id: String) {
+        guard allowsVoting else { return }
+        if poll.allowsMultiple {
+            if selections.contains(id) {
+                selections.remove(id)
+            } else if selections.count < poll.maxSelections {
+                selections.insert(id)
+            }
+        } else {
+            selections = [id]
+            onVote([id])
+        }
+    }
+}
+
+private struct RippleEnergySheet: View {
+    @ObservedObject var controller: RippleEngagementController
+    @Environment(\.dismiss) private var dismiss
+    @State private var overall = 3
+    @State private var tags: Set<String> = []
+
+    private let choices = ["HITS", "INSPIRED", "REAL", "DEEP", "CHILL", "CLUTCH"]
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("How much Energy?").font(.headline)
+                    HStack {
+                        ForEach(1...5, id: \.self) { value in
+                            Button {
+                                overall = value
+                            } label: {
+                                Text("\(value)")
+                                    .font(.headline)
+                                    .foregroundStyle(value == overall ? C.bg : C.text)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 42)
+                                    .background(value == overall ? C.watch : C.elevated, in: RoundedRectangle(cornerRadius: 9))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("What kind?").font(.headline)
+                    FlowLayout(spacing: 8) {
+                        ForEach(choices, id: \.self) { choice in
+                            Button {
+                                if tags.contains(choice) { tags.remove(choice) }
+                                else { tags.insert(choice) }
+                            } label: {
+                                Label(energyLabel(choice), systemImage: energySymbol(choice))
+                                    .font(.caption.bold())
+                                    .foregroundStyle(tags.contains(choice) ? C.bg : C.text)
+                                    .padding(.horizontal, 11)
+                                    .padding(.vertical, 8)
+                                    .background(tags.contains(choice) ? C.watch : C.elevated, in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                Spacer()
+            }
+            .padding(C.pagePad)
+            .background(C.bg.ignoresSafeArea())
+            .foregroundStyle(C.text)
+            .navigationTitle("Add Energy")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        Task {
+                            if await controller.submitEnergy(
+                                overall: overall,
+                                tags: Array(tags)
+                            ) {
+                                dismiss()
+                            }
+                        }
+                    }
+                    .disabled(controller.isBusy)
+                }
+            }
+            .task {
+                await controller.loadEnergy()
+                if let current = controller.currentEnergy {
+                    overall = current.overall
+                    tags = Set(current.tags)
+                }
+            }
+        }
+    }
+}
+
+private struct FlowLayout: Layout {
+    let spacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        layout(proposal: proposal, subviews: subviews).size
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let result = layout(
+            proposal: ProposedViewSize(width: bounds.width, height: bounds.height),
+            subviews: subviews
+        )
+        for (index, point) in result.points.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y),
+                proposal: .unspecified
+            )
+        }
+    }
+
+    private func layout(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, points: [CGPoint]) {
+        let width = proposal.width ?? .infinity
+        var points: [CGPoint] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            points.append(CGPoint(x: x, y: y))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return (CGSize(width: proposal.width ?? x, height: y + rowHeight), points)
+    }
+}
+
+private struct NativeShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
 struct SocialEnergyMeter: View {
