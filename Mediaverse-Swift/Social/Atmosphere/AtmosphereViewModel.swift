@@ -96,9 +96,15 @@ final class AtmosphereViewModel: ObservableObject {
         do {
             let page = try await CurationManager.shared.fetchPage(key: "atmosphere")
             curationListings = page.activeListings
+            #if DEBUG
+            print("[social-ui] atmosphere curation listings=\(curationListings.count)")
+            #endif
         } catch {
             // Curation is presentation-only. Organic social feeds remain available.
             curationListings = []
+            #if DEBUG
+            print("[social-ui] atmosphere curation failed=\(String(describing: error))")
+            #endif
         }
     }
 
@@ -114,10 +120,22 @@ final class AtmosphereViewModel: ObservableObject {
                 myVibes = try await api.myVibes().clubs
             }
             stateByTab[tab] = .loaded
+            #if DEBUG
+            let count: Int
+            switch tab {
+            case .atmosphere: count = atmosphereItems.count
+            case .discover: count = discoveredRipples.count
+            case .myVibes: count = myVibes.count
+            }
+            print("[social-ui] \(tab.rawValue) decoded=\(count)")
+            #endif
         } catch is CancellationError {
             stateByTab[tab] = .idle
         } catch {
             stateByTab[tab] = .failed(Self.message(for: error))
+            #if DEBUG
+            print("[social-ui] \(tab.rawValue) failed=\(String(describing: error))")
+            #endif
         }
     }
 

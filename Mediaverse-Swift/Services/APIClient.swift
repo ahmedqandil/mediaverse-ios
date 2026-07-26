@@ -193,7 +193,18 @@ actor APIClient: LegacySocialTransport {
     /// existing client preserves its JWT, compatibility cookies, trust checks,
     /// caching, and error behavior for every social request.
     func socialData(path: String) async throws -> Data {
-        try await getData(path)
+        do {
+            let data = try await getData(path)
+            #if DEBUG
+            print("[social-api] GET \(path) bytes=\(data.count) authenticated=\(SessionStorage.token != nil)")
+            #endif
+            return data
+        } catch {
+            #if DEBUG
+            print("[social-api] GET \(path) failed=\(String(describing: error)) authenticated=\(SessionStorage.token != nil)")
+            #endif
+            throw error
+        }
     }
 
     func socialPostData(path: String, body: Data) async throws -> Data {

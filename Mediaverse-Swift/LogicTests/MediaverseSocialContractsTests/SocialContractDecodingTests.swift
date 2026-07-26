@@ -90,6 +90,25 @@ final class SocialContractDecodingTests: XCTestCase {
         XCTAssertEqual(response.nextCursor, "ripple-1")
     }
 
+    func testRippleAcceptsDeployedEnergyTagCountObject() throws {
+        let data = Data(
+            """
+            {
+              "posts": [{
+                "id": "ripple-legacy-energy",
+                "createdAt": "2026-07-26T10:00:00.000Z",
+                "energyTags": {"DEEP": 2, "INSPIRED": 5, "CHILL": 0},
+                "author": {"id": "user-1"}
+              }]
+            }
+            """.utf8
+        )
+
+        let response = try decoder.decode(RipplePageResponse.self, from: data)
+
+        XCTAssertEqual(response.posts[0].energyTags, ["INSPIRED", "DEEP"])
+    }
+
     func testAtmosphereFeedKeepsRipplesAndRegularVideosOnly() throws {
         let data = Data(
             """

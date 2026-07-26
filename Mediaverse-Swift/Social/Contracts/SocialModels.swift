@@ -494,6 +494,28 @@ public struct RippleAuthor: Decodable, Equatable, Sendable {
     public let image: String?
 }
 
+private struct RippleEnergyTags: Decodable {
+    let values: [String]
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let tags = try? container.decode([String].self) {
+            values = tags
+            return
+        }
+        if let counts = try? container.decode([String: Int].self) {
+            values = counts
+                .filter { $0.value > 0 }
+                .sorted {
+                    $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value
+                }
+                .map(\.key)
+            return
+        }
+        values = []
+    }
+}
+
 public struct Ripple: Decodable, Identifiable, Sendable {
     public let id: String
     public let clubId: String?
@@ -539,7 +561,7 @@ public struct Ripple: Decodable, Identifiable, Sendable {
         echoCount = try values.decodeIfPresent(Int.self, forKey: .echoCount) ?? 0
         energyCount = try values.decodeIfPresent(Int.self, forKey: .energyCount) ?? 0
         energyTotal = try values.decodeIfPresent(Int.self, forKey: .energyTotal) ?? 0
-        energyTags = try values.decodeIfPresent([String].self, forKey: .energyTags) ?? []
+        energyTags = try values.decodeIfPresent(RippleEnergyTags.self, forKey: .energyTags)?.values ?? []
         pinnedAt = try values.decodeIfPresent(String.self, forKey: .pinnedAt)
         publishedAt = try values.decodeIfPresent(String.self, forKey: .publishedAt)
         createdAt = try values.decode(String.self, forKey: .createdAt)
@@ -688,6 +710,27 @@ public struct EmbeddedRipple: Decodable, Sendable {
     public let energyTags: [String]
     public let author: RippleAuthor
     public let attachments: [RippleAttachment]
+
+    enum CodingKeys: String, CodingKey {
+        case id, body, isSpoiler, commentsDisabled, commentCount, shareCount
+        case echoCount, energyCount, energyTotal, energyTags, author, attachments
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        body = try values.decodeIfPresent(String.self, forKey: .body)
+        isSpoiler = try values.decodeIfPresent(Bool.self, forKey: .isSpoiler) ?? false
+        commentsDisabled = try values.decodeIfPresent(Bool.self, forKey: .commentsDisabled) ?? false
+        commentCount = try values.decodeIfPresent(Int.self, forKey: .commentCount) ?? 0
+        shareCount = try values.decodeIfPresent(Int.self, forKey: .shareCount) ?? 0
+        echoCount = try values.decodeIfPresent(Int.self, forKey: .echoCount) ?? 0
+        energyCount = try values.decodeIfPresent(Int.self, forKey: .energyCount) ?? 0
+        energyTotal = try values.decodeIfPresent(Int.self, forKey: .energyTotal) ?? 0
+        energyTags = try values.decodeIfPresent(RippleEnergyTags.self, forKey: .energyTags)?.values ?? []
+        author = try values.decode(RippleAuthor.self, forKey: .author)
+        attachments = try values.decodeIfPresent([RippleAttachment].self, forKey: .attachments) ?? []
+    }
 }
 
 public struct RipplePoll: Decodable, Sendable {

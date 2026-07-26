@@ -65,7 +65,7 @@ These are server limitations, not omitted Swift implementations. The no-backend-
   - Previous native behavior trusted any Keychain token and ignored an explicit missing session user, leaving the UI apparently signed in while social APIs treated it as anonymous.
   - Native now clears a server-rejected stored session and returns to authentication, while retaining sessions during genuine transport failures.
   - Discover no longer discards curation errors through `try?`; activation deterministically triggers loading and failed, empty, loading, and populated states are distinct and retryable.
-- Swift contract suite: 39 tests, zero failures.
+- Swift contract suite: 40 tests, zero failures, including deployed object-shaped Ripple energy tags.
 - Xcode test build:
 
 ```text
