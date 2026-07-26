@@ -1,6 +1,16 @@
 import SwiftUI
 
 struct VibeDetailView: View {
+    fileprivate enum VibeSheet: String, Identifiable {
+        case options
+        case affiliations
+        case moderation
+        case invitations
+        case settings
+
+        var id: String { rawValue }
+    }
+
     let slug: String
     var initialManagementTab: String? = nil
     @State private var detail: VibeDetailResponse?
@@ -10,10 +20,7 @@ struct VibeDetailView: View {
     @State private var isMutatingRelationship = false
     @State private var relationshipNotice: String?
     @State private var errorMessage: String?
-    @State private var showsAffiliations = false
-    @State private var showsModeration = false
-    @State private var showsInvitations = false
-    @State private var showsSettings = false
+    @State private var activeSheet: VibeSheet?
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
     private let features = SocialFeatureConfiguration.runtime()
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -70,78 +77,55 @@ struct VibeDetailView: View {
         .navigationTitle(detail?.club.name ?? "Vibe")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if detail?.capabilities.canManageClub == true {
+            if hasVibeOptions {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        showsSettings = true
+                        activeSheet = .options
                     } label: {
-                        Image(systemName: "gearshape")
+                        Image(systemName: "line.3.horizontal")
                     }
-                    .accessibilityLabel("Manage Vibe settings")
-                }
-            }
-            if detail?.capabilities.canInvite == true {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showsInvitations = true
-                    } label: {
-                        Image(systemName: "person.badge.plus")
-                    }
-                    .accessibilityLabel("Manage invitations")
-                }
-            }
-            if detail?.capabilities.canModerateContent == true
-                || detail?.capabilities.canModerateMembers == true {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showsModeration = true
-                    } label: {
-                        Image(systemName: "checkmark.shield")
-                    }
-                    .accessibilityLabel("Moderate Vibe")
-                }
-            }
-            if detail?.capabilities.canManageAffiliations == true {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showsAffiliations = true
-                    } label: {
-                        Image(systemName: "link")
-                    }
-                    .accessibilityLabel("Manage affiliations")
+                    .accessibilityLabel("Vibe options")
                 }
             }
         }
-        .sheet(isPresented: $showsAffiliations) {
-            VibeAffiliationsView(slug: slug)
-        }
-        .sheet(isPresented: $showsModeration) {
-            if let capabilities = detail?.capabilities {
-                VibeModerationView(
-                    slug: slug,
-                    capabilities: capabilities,
-                    initialTab: initialManagementTab
-                )
-            }
-        }
-        .sheet(isPresented: $showsInvitations) {
-            if let detail {
-                VibeInvitationsView(
-                    slug: slug,
-                    capabilities: detail.capabilities,
-                    currentRole: detail.membership?.role
-                )
-            }
-        }
-        .sheet(isPresented: $showsSettings) {
-            if let detail {
-                VibeSettingsView(detail: detail) { updatedClub in
-                    self.detail = VibeDetailResponse(
-                        club: updatedClub,
-                        capabilities: detail.capabilities,
-                        membership: detail.membership,
-                        following: detail.following
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .options:
+                if let detail {
+                    VibeOptionsSheet(capabilities: detail.capabilities) { destination in
+                        transitionFromOptions(to: destination)
+                    }
+                    .presentationDetents([.height(optionsSheetHeight(for: detail.capabilities))])
+                    .presentationDragIndicator(.visible)
+                }
+            case .affiliations:
+                VibeAffiliationsView(slug: slug)
+            case .moderation:
+                if let capabilities = detail?.capabilities {
+                    VibeModerationView(
+                        slug: slug,
+                        capabilities: capabilities,
+                        initialTab: initialManagementTab
                     )
+                }
+            case .invitations:
+                if let detail {
+                    VibeInvitationsView(
+                        slug: slug,
+                        capabilities: detail.capabilities,
+                        currentRole: detail.membership?.role
+                    )
+                }
+            case .settings:
+                if let detail {
+                    VibeSettingsView(detail: detail) { updatedClub in
+                        self.detail = VibeDetailResponse(
+                            club: updatedClub,
+                            capabilities: detail.capabilities,
+                            membership: detail.membership,
+                            following: detail.following
+                        )
+                    }
                 }
             }
         }
@@ -161,13 +145,13 @@ struct VibeDetailView: View {
             nextCursor = page.nextCursor
             switch initialManagementTab?.lowercased() {
             case "affiliations":
-                showsAffiliations = detail.capabilities.canManageAffiliations
+                if detail.capabilities.canManageAffiliations { activeSheet = .affiliations }
             case "requests":
-                showsModeration = detail.capabilities.canModerateMembers
+                if detail.capabilities.canModerateMembers { activeSheet = .moderation }
             case "invitations", "invites":
-                showsInvitations = detail.capabilities.canInvite
+                if detail.capabilities.canInvite { activeSheet = .invitations }
             case "settings":
-                showsSettings = detail.capabilities.canManageClub
+                if detail.capabilities.canManageClub { activeSheet = .settings }
             default:
                 break
             }
@@ -231,6 +215,98 @@ struct VibeDetailView: View {
             relationshipNotice = socialErrorMessage(error)
         }
         isMutatingRelationship = false
+    }
+
+    private var hasVibeOptions: Bool {
+        guard let capabilities = detail?.capabilities else { return false }
+        return capabilities.canManageClub
+            || capabilities.canInvite
+            || capabilities.canModerateContent
+            || capabilities.canModerateMembers
+            || capabilities.canManageAffiliations
+    }
+
+    private func optionsSheetHeight(for capabilities: VibeCapabilities) -> CGFloat {
+        var count = 0
+        if capabilities.canManageClub { count += 1 }
+        if capabilities.canInvite { count += 1 }
+        if capabilities.canModerateContent || capabilities.canModerateMembers { count += 1 }
+        if capabilities.canManageAffiliations { count += 1 }
+        return CGFloat(92 + count * 58)
+    }
+
+    private func transitionFromOptions(to destination: VibeSheet) {
+        activeSheet = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
+            activeSheet = destination
+        }
+    }
+}
+
+private struct VibeOptionsSheet: View {
+    let capabilities: VibeCapabilities
+    let onSelect: (VibeDetailView.VibeSheet) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Vibe options")
+                .font(.title3.bold())
+                .foregroundStyle(C.text)
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 14)
+
+            if capabilities.canManageClub {
+                option("Settings", detail: "Branding, privacy, posting, and membership", icon: "gearshape", destination: .settings)
+            }
+            if capabilities.canInvite {
+                option("Invitations", detail: "Create and manage invitation links", icon: "person.badge.plus", destination: .invitations)
+            }
+            if capabilities.canModerateContent || capabilities.canModerateMembers {
+                option("Moderation", detail: "Review content, requests, and members", icon: "checkmark.shield", destination: .moderation)
+            }
+            if capabilities.canManageAffiliations {
+                option("Affiliations", detail: "Connect this Vibe to Shows and Channels", icon: "link", destination: .affiliations)
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(.top, 8)
+        .background(C.bg.ignoresSafeArea())
+    }
+
+    private func option(
+        _ title: String,
+        detail: String,
+        icon: String,
+        destination: VibeDetailView.VibeSheet
+    ) -> some View {
+        Button {
+            onSelect(destination)
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(C.watch)
+                    .frame(width: 34, height: 34)
+                    .background(C.watch.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(C.text)
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(C.textMuted)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.bold())
+                    .foregroundStyle(C.textTertiary)
+            }
+            .padding(.horizontal, 20)
+            .frame(height: 58)
+        }
+        .buttonStyle(.plain)
     }
 }
 
