@@ -1876,6 +1876,36 @@ struct LikeVideoResponse: Codable {
     let userLike: String?   // "like" | "dislike" | null
 }
 
+struct ContentEnergySelection: Decodable {
+    let overall: Int
+    let tags: [String]
+    let review: String?
+}
+
+struct ContentEnergyAggregate: Decodable {
+    let avg: Double?
+    let count: Int
+    let distribution: [String: Int]?
+    let topTags: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case avg, count, distribution, topTags
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        avg = try values.decodeIfPresent(Double.self, forKey: .avg)
+        count = try values.decodeIfPresent(Int.self, forKey: .count) ?? 0
+        distribution = try values.decodeIfPresent([String: Int].self, forKey: .distribution)
+        topTags = try values.decodeIfPresent([String].self, forKey: .topTags) ?? []
+    }
+}
+
+struct ContentEnergyResponse: Decodable {
+    let userRating: ContentEnergySelection?
+    let aggregate: ContentEnergyAggregate
+}
+
 // ── Posts (clip reactions) ────────────────────────────────────────────────────
 
 /// Minimal user stub shared by posts and post comments

@@ -1832,6 +1832,26 @@ actor APIClient: LegacySocialTransport {
         return try await post("/api/episodes/\(C.pathSegment(episodeId))/like", body: Body(type: type))
     }
 
+    func fetchContentEnergy(contentPath: String, id: String) async throws -> ContentEnergyResponse {
+        try await get("/api/\(contentPath)/\(C.pathSegment(id))/rating")
+    }
+
+    func submitContentEnergy(
+        contentPath: String,
+        id: String,
+        overall: Int,
+        tags: [String]
+    ) async throws -> ContentEnergySelection {
+        struct Body: Encodable {
+            let overall: Int
+            let tags: [String]
+        }
+        return try await post(
+            "/api/\(contentPath)/\(C.pathSegment(id))/rating",
+            body: Body(overall: min(max(overall, 1), 5), tags: Array(tags.prefix(10)))
+        )
+    }
+
     func toggleSubscribe(channelId: String) async throws {
         struct Body: Encodable {}
         struct Resp: Decodable { let ok: Bool? }

@@ -44,6 +44,8 @@ struct EpisodeWatchView: View {
     // ── Like / dislike (optimistic)
     @State private var userLike:  String?  // "like" | "dislike" | nil
     @State private var likeCount: Int = 0
+    @State private var showEnergy = false
+    @State private var energyAggregate: ContentEnergyAggregate?
 
     // ── Comments
     @State private var localComments:    [Comment] = []
@@ -154,6 +156,11 @@ struct EpisodeWatchView: View {
         .toolbar(.hidden, for: .navigationBar)
         .disablesInteractiveSwipeBack()
         .task(id: currentEpisodeId) { await load() }
+        .task(id: currentEpisodeId) {
+            energyAggregate = try? await APIClient.shared
+                .fetchContentEnergy(contentPath: "episodes", id: currentEpisodeId)
+                .aggregate
+        }
         .onAppear {
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
         }
@@ -171,6 +178,13 @@ struct EpisodeWatchView: View {
             ) {
                 showCommentsSheet = false
             }
+        }
+        .sheet(isPresented: $showEnergy) {
+            ContentEnergySheet(kind: .episode, contentID: currentEpisodeId) {
+                energyAggregate = $0
+            }
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
         }
         .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification)) { notification in
             handlePlaybackEnded(notification)
@@ -262,46 +276,34 @@ struct EpisodeWatchView: View {
                             .foregroundStyle(C.textMuted)
                     }
 
-                    // Like / Dislike row
+                    // Energy replaces content Like/Dislike; comment likes remain unchanged.
                     if auth.isAuthenticated {
                         HStack(spacing: 8) {
-                            // Like + Dislike pill (grouped, matching VideoWatchView)
-                            HStack(spacing: 0) {
-                                Button {
-                                    Task { await toggleLike("like", episodeId: ep.id) }
-                                } label: {
-                                    HStack(spacing: 5) {
-                                        Image(systemName: userLike == "like" ? "heart.fill" : "heart")
-                                            .font(.system(size: 13, weight: .medium))
-                                            .foregroundStyle(userLike == "like" ? C.watch : C.textMuted)
-                                        Text(likeCount > 0 ? fmtCount(likeCount) : "Like")
-                                            .font(.system(size: 13, weight: .medium))
-                                            .foregroundStyle(userLike == "like" ? .white : C.textMuted)
+                            Button {
+                                showEnergy = true
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "bolt.fill")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(C.watch)
+                                    Text("Add Energy")
+                                        .font(.system(size: 13, weight: .semibold))
+                                    if let count = energyAggregate?.count, count > 0 {
+                                        Text(fmtCount(count))
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundStyle(C.textMuted)
                                     }
-                                    .padding(.horizontal, 14).padding(.vertical, 9)
-                                    .background(C.surface)
                                 }
-
-                                Rectangle()
-                                    .fill(C.border)
-                                    .frame(width: 1, height: 20)
-
-                                Button {
-                                    Task { await toggleLike("dislike", episodeId: ep.id) }
-                                } label: {
-                                    Image(systemName: userLike == "dislike" ? "hand.thumbsdown.fill" : "hand.thumbsdown")
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundStyle(userLike == "dislike" ? .white : C.textMuted)
-                                        .padding(.horizontal, 12).padding(.vertical, 9)
-                                        .background(C.surface)
-                                }
+                                .foregroundStyle(C.text)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 9)
+                                .background(C.surface)
+                                .clipShape(Capsule())
+                                .overlay { Capsule().stroke(C.border, lineWidth: 1) }
                             }
-                            .clipShape(Capsule())
-                            .overlay { Capsule().stroke(C.border, lineWidth: 1) }
 
                             Spacer()
                         }
-                        .animation(.easeInOut(duration: 0.15), value: userLike)
                     }
 
                     Divider().background(C.border)

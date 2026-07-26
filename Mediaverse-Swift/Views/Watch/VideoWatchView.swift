@@ -61,6 +61,8 @@ struct VideoWatchView: View {
     // ── Engagement (optimistic)
     @State private var userLike:      String?   // "like" | "dislike" | nil
     @State private var likeCount:     Int       = 0
+    @State private var showEnergy               = false
+    @State private var energyAggregate: ContentEnergyAggregate?
     @State private var isSubscribed:  Bool      = false
     @State private var isFollowingShow: Bool    = false
     @State private var showFollowerCount: Int   = 0
@@ -182,6 +184,11 @@ struct VideoWatchView: View {
         .toolbar(.hidden, for: .navigationBar)
         .disablesInteractiveSwipeBack()
         .task(id: currentVideoId) { await load() }
+        .task(id: currentVideoId) {
+            energyAggregate = try? await APIClient.shared
+                .fetchContentEnergy(contentPath: "videos", id: currentVideoId)
+                .aggregate
+        }
         .onAppear {
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
         }
@@ -204,6 +211,13 @@ struct VideoWatchView: View {
             ) {
                 showCommentsSheet = false
             }
+        }
+        .sheet(isPresented: $showEnergy) {
+            ContentEnergySheet(kind: .video, contentID: currentVideoId) {
+                energyAggregate = $0
+            }
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
         }
         .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification)) { notification in
             handlePlaybackEnded(notification)
@@ -777,39 +791,32 @@ struct VideoWatchView: View {
                 }
             }
 
-            // Action pill row: Like / Dislike / Share. Labels stay single-line under compression.
+            // Action pill row: Energy is the universal primary reaction; Share stays last.
             HStack(spacing: 8) {
-                HStack(spacing: 0) {
-                    Button {
-                        Task { await toggleLike("like", videoId: v.id) }
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: userLike == "like" ? "heart.fill" : "heart")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(userLike == "like" ? C.watch : C.textMuted)
-                            Text(likeCount > 0 ? fmtCount(likeCount) : "Like")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(userLike == "like" ? .white : C.textMuted)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.85)
+                Button {
+                    if auth.isAuthenticated {
+                        showEnergy = true
+                    } else {
+                        NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "bolt.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(C.watch)
+                        Text("Add Energy")
+                            .font(.system(size: 13, weight: .semibold))
+                            .lineLimit(1)
+                        if let count = energyAggregate?.count, count > 0 {
+                            Text(fmtCount(count))
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(C.textMuted)
                         }
-                        .padding(.horizontal, 14).padding(.vertical, 9)
-                        .background(C.surface)
                     }
-
-                    Divider()
-                        .frame(width: 1, height: 22)
-                        .background(C.border)
-
-                    Button {
-                        Task { await toggleLike("dislike", videoId: v.id) }
-                    } label: {
-                        Image(systemName: userLike == "dislike" ? "hand.thumbsdown.fill" : "hand.thumbsdown")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(userLike == "dislike" ? .white : C.textMuted)
-                            .padding(.horizontal, 12).padding(.vertical, 9)
-                            .background(C.surface)
-                    }
+                    .foregroundStyle(C.text)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(C.surface)
                 }
                 .layoutPriority(1)
                 .clipShape(Capsule())

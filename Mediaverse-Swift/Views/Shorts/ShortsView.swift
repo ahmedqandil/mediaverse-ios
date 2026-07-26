@@ -2691,6 +2691,8 @@ private struct ShortCardView: View {
     @State private var isDisliked:      Bool     = false
     @State private var isBookmarked:    Bool     = false
     @State private var likeCount:       Int
+    @State private var showEnergy:      Bool     = false
+    @State private var energyAggregate: ContentEnergyAggregate?
     @State private var isPaused:        Bool     = false
     @State private var showPauseIcon:   Bool     = false
     @State private var heartBursts:     [HeartBurst] = []
@@ -2778,6 +2780,9 @@ private struct ShortCardView: View {
             guard isActive else { return }
             await loadFollowStatus()
             await loadPlaylistIfNeeded()
+            energyAggregate = try? await APIClient.shared
+                .fetchContentEnergy(contentPath: "videos", id: short.id)
+                .aggregate
         }
         .onDisappear {
             teardownPlayer()
@@ -2825,6 +2830,13 @@ private struct ShortCardView: View {
                 showComments = false
             }
             .id(short.id)
+        }
+        .sheet(isPresented: $showEnergy) {
+            ContentEnergySheet(kind: .video, contentID: short.id) {
+                energyAggregate = $0
+            }
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
         }
     }
 
@@ -3022,26 +3034,27 @@ private struct ShortCardView: View {
     // MARK: - Action column
 
     private var actionColumn: some View {
-        let likeRed = Color(red: 1, green: 0.28, blue: 0.34)
         return VStack(alignment: .center, spacing: 18) {
-            // Like
+            // Energy is the single universal content reaction.
             actionBtn(
-                assetIcon:  isLiked ? "heart-filled" : "heart",
-                fallbackIcon: isLiked ? "heart.fill" : "heart",
-                color:      isLiked ? likeRed : .white,
-                bgColor:    isLiked ? likeRed.opacity(0.35) : .black.opacity(0.35),
-                label:      likeCount > 0 ? fmtCount(likeCount) : nil,
-                labelColor: isLiked ? likeRed : .white.opacity(0.85)
-            ) { Task { await handleLike() } }
-
-            // Dislike — matches web IcThumbDown
-            actionBtn(
-                assetIcon: "thumbs-down",
-                fallbackIcon: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown",
-                color:   isDisliked ? Color(white: 0.67) : .white,
-                bgColor: .black.opacity(0.35),
-                label:   nil
-            ) { Task { await handleDislike() } }
+                assetIcon: "energy",
+                fallbackIcon: "bolt.fill",
+                color: C.watch,
+                bgColor: C.watch.opacity(0.28),
+                label: {
+                    if let count = energyAggregate?.count, count > 0 {
+                        return fmtCount(count)
+                    }
+                    return "Add Energy"
+                }(),
+                labelColor: .white.opacity(0.9)
+            ) {
+                if auth.isAuthenticated {
+                    showEnergy = true
+                } else {
+                    NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+                }
+            }
 
             // Comment
             actionBtn(assetIcon: "message-square", fallbackIcon: "bubble.left", color: .white, bgColor: .black.opacity(0.35), label: nil) {
@@ -3363,12 +3376,10 @@ private struct ShortCardView: View {
     }
 
     private func handleDoubleTap() {
-        Task { await handleLike(force: true) }
-        // Heart burst animation
-        let burst = HeartBurst()
-        heartBursts.append(burst)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
-            heartBursts.removeAll { $0.id == burst.id }
+        if auth.isAuthenticated {
+            showEnergy = true
+        } else {
+            NotificationCenter.default.post(name: .profileTabRequested, object: nil)
         }
     }
 

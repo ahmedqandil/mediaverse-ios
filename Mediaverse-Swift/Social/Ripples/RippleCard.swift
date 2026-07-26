@@ -1438,6 +1438,138 @@ private struct RippleEnergySheet: View {
     }
 }
 
+enum ContentEnergyKind {
+    case video
+    case episode
+    case flash
+
+    var path: String {
+        switch self {
+        case .video: "videos"
+        case .episode: "episodes"
+        case .flash: "stories"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .video: "video"
+        case .episode: "episode"
+        case .flash: "Flash"
+        }
+    }
+}
+
+struct ContentEnergySheet: View {
+    let kind: ContentEnergyKind
+    let contentID: String
+    var onSaved: ((ContentEnergyAggregate) -> Void)?
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var overall = 3
+    @State private var tags: Set<String> = []
+    @State private var isSaving = false
+    @State private var errorMessage: String?
+
+    private let choices = ["HITS", "INSPIRED", "REAL", "DEEP", "CHILL", "CLUTCH"]
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("How much Energy?")
+                    .font(.headline)
+                HStack {
+                    ForEach(1...5, id: \.self) { value in
+                        Button {
+                            overall = value
+                        } label: {
+                            Text("\(value)")
+                                .font(.headline)
+                                .foregroundStyle(value == overall ? C.bg : C.text)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 42)
+                                .background(
+                                    value == overall ? C.watch : C.elevated,
+                                    in: RoundedRectangle(cornerRadius: 9)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                Text("What kind?")
+                    .font(.headline)
+                FlowLayout(spacing: 8) {
+                    ForEach(choices, id: \.self) { choice in
+                        Button {
+                            if tags.contains(choice) {
+                                tags.remove(choice)
+                            } else {
+                                tags.insert(choice)
+                            }
+                        } label: {
+                            Label(energyLabel(choice), systemImage: energySymbol(choice))
+                                .font(.caption.bold())
+                                .foregroundStyle(tags.contains(choice) ? C.bg : C.text)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 8)
+                                .background(tags.contains(choice) ? C.watch : C.elevated, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                Spacer()
+            }
+            .padding(C.pagePad)
+            .background(C.bg.ignoresSafeArea())
+            .foregroundStyle(C.text)
+            .navigationTitle("Add Energy")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add Energy") {
+                        Task { await save() }
+                    }
+                    .disabled(isSaving)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func save() async {
+        guard !isSaving else { return }
+        isSaving = true
+        errorMessage = nil
+        defer { isSaving = false }
+        do {
+            _ = try await APIClient.shared.submitContentEnergy(
+                contentPath: kind.path,
+                id: contentID,
+                overall: overall,
+                tags: Array(tags)
+            )
+            let updated = try await APIClient.shared.fetchContentEnergy(
+                contentPath: kind.path,
+                id: contentID
+            )
+            onSaved?(updated.aggregate)
+            dismiss()
+        } catch {
+            errorMessage = "Energy could not be saved. Please try again."
+        }
+    }
+}
+
 private struct FlowLayout: Layout {
     let spacing: CGFloat
 

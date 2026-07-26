@@ -28,18 +28,18 @@ Authoritative references:
 | Link/media preview | Resolve pasted links and preserve internal media attachment identity | `RippleComposer`, attachment models | Composer resolution contract test | Complete |
 | Ripple display | Text, backgrounds, attachments, polls, mentions, metadata, counts, owner menu | `RippleCard` | Unknown attachment forward-compatibility test; full build | Complete |
 | Polls | Vote, dismiss composer poll, result bars and counts | `RippleCard`, `RippleComposer`, adapter | Poll defaults and vote envelope tests | Complete |
-| Energy | Add Energy replaces content likes; labels/meter/counts; comments retain likes | `RippleEngagementController`, `RippleCard`, shared watch/Short/Flash integrations | Exact Energy endpoint/body test; full build | Complete |
+| Energy | Add Energy replaces content likes; labels/meter/counts; comments retain likes | `RippleEngagementController`, `RippleCard`, shared watch/Short/Flash integrations | Ripple Energy is contract-tested; watch/episode/Short/Flash parity remains | In progress |
 | Photo engagement | Per-image Energy and comments; Echo/share operate on the Ripple | `RippleCard`, `CommentThreadView`, adapter | Photo engagement and target-specific comment contract tests | Complete |
-| Comments | Inline comments, replies, mentions, comment likes, owner edit/delete, shared native behavior | `CommentThreadView`, mention utilities | Ripple/comment management and reply contract tests | Complete |
-| Echo | Echo or quote-Echo Ripples and supported media to one or multiple destinations | `EchoVibeSheet`, `RippleComposer`, adapter | Multi-destination canonical-attachment contract test | Complete |
-| Playback | Native chromeless preview/handoff, one autoplay owner, native watch/Short routes, ads retained | `RippleCard`, `AtmosphereView`, existing player managers | Full iOS build; existing player/ad implementation preserved | Complete |
+| Comments | Inline comments, replies, mentions, comment likes, owner edit/delete, shared native behavior | `CommentThreadView`, mention utilities | Management/reply contracts pass; Ripple cards still present comments as a sheet | In progress |
+| Echo | Echo or quote-Echo Ripples and supported media to one or multiple destinations | `EchoVibeSheet`, `RippleComposer`, adapter | Ripple multi-destination contract passes; direct video/Short/clip/collection entry points remain | In progress |
+| Playback | Native chromeless preview/handoff, one autoplay owner, native watch/Short routes, ads retained | `RippleCard`, `AtmosphereView`, existing player managers | Attached Ripple videos are not yet native autoplay previews | In progress |
 | Clips | Video and episode clips open native playback at mark-in and stop at mark-out | `RippleClipAttachmentView`, `VideoWatchView`, `EpisodeWatchView` | Full iOS build | Complete |
-| Flashes | Existing Flash tray/creation plus Energy integration | story views, `SocialFeatureConfiguration.flashesEnergyEnabled` | Full iOS build | Complete within frozen API |
-| Personal Atmo | Channel-style profile, own Ripple composer, Atmo/Vibes/Mentions/Echoed/About, follow, pin/unpin | `AtmoProfileView` and social destination views | Full iOS build; frozen endpoint audit | Complete |
+| Flashes | Existing Flash tray/creation plus Energy integration | story views, `SocialFeatureConfiguration.flashesEnergyEnabled` | Feature flag exists but is not wired to Flash Energy UI | In progress |
+| Personal Atmo | Channel-style profile, own Ripple composer, Atmo/Vibes/Mentions/Echoed/About, follow, pin/unpin | `AtmoProfileView` and social destination views | Self composer/tabs/pin pass build; other-user header/About/Vibes/follow are API-blocked | Partial / frozen API |
 | Affiliations | Vibe requests Show/Channel affiliation; reviewer accepts/rejects; notifications/deep links | `VibeAffiliationsView`, adapter, notifications | Requester/reviewer exact-contract tests | Complete within frozen API |
 | Moderation | Ripple review/action, reports, member roles/suspension/ban/removal, join review | Vibe moderation views, adapter | Moderation/member exact-contract tests | Complete within frozen API |
-| Notifications | Decode and route new social events to native Vibe/Ripple/Atmo destinations | notification models, `PushNotificationManager`, `NotificationsView`, `AppRoute` | Social deep-link contract tests; full build | Complete |
-| Curation entities | show, season, episode, video, short, channel, Ripple, person, Vibe, topic | `ContentItem.appRoute`, native curation cards | Ripple/topic routing tests; full build | Complete |
+| Notifications | Decode and route new social events to native Vibe/Ripple/Atmo destinations | notification models, `PushNotificationManager`, `NotificationsView`, `AppRoute` | Core list/mark-all is aligned; native Flash/manage-tab routing and preferences remain | In progress |
+| Curation entities | show, season, episode, video, short, channel, Ripple, person, Vibe, topic | `ContentItem.appRoute`, native curation cards | Season context is discarded and `stories` renders empty in the generic renderer | In progress |
 | Curation attribution | Fire-and-forget mobile impression and click events without invalidating feed caches | `APIClient.trackCurationEvent`, `CurationEventTracker` | Full iOS build; frozen event contract audit | Complete |
 | Safety | No backend changes; existing native auth/feed/player/ads remain owners | adapter-only integration and native handoffs | Backend worktree check; Swift dirty-file isolation; full build | Complete |
 
@@ -60,7 +60,7 @@ These are server limitations, not omitted Swift implementations. The no-backend-
 
 ## QA evidence
 
-- Swift contract suite: 36 tests, zero failures.
+- Swift contract suite: 38 tests, zero failures.
 - Xcode test build:
 
 ```text
@@ -79,8 +79,8 @@ xcodebuild -project Mediaverse-Swift/Mediaverse.xcodeproj \
 ## Release checklist
 
 - [x] Social features default on for clean installs.
-- [x] Every feature retains an explicit local kill switch.
-- [x] Frozen API paths and envelopes are contract-tested.
+- [ ] Every required feature retains and applies an explicit local kill switch.
+- [ ] Every required frozen API path and envelope is contract-tested.
 - [x] Unknown attachment kinds fail soft.
 - [x] Private/restricted content fails closed.
 - [x] Native playback and ad ownership are preserved.
@@ -88,6 +88,7 @@ xcodebuild -project Mediaverse-Swift/Mediaverse.xcodeproj \
 - [x] Backend worktree remains untouched.
 - [x] Contract suite passes.
 - [x] Full iOS test build passes.
+- [ ] Full iOS test suite passes after the latest social changes.
 - [x] Unsigned optimized Release archive passes.
 - [x] Cold-launch smoke test reaches authentication without crashing.
 - [ ] Signed-in simulator smoke test against a reachable environment.
