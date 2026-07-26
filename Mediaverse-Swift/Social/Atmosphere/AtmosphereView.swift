@@ -2,6 +2,12 @@ import SwiftUI
 
 struct AtmosphereView: View {
     @StateObject private var model = AtmosphereViewModel()
+    @StateObject private var previewManager = FeedPreviewPlayerManager()
+    @State private var activePreviewVideoId: String?
+    @State private var previewFrames: [String: CGRect] = [:]
+    @State private var previewIdleTask: Task<Void, Never>?
+    @State private var suppressedPreviewVideoId: String?
+    @State private var isPreservingPreviewHandoff = false
     private let socialFeatures = SocialFeatureConfiguration.runtime()
 
     var body: some View {
@@ -22,6 +28,18 @@ struct AtmosphereView: View {
         }
         .background(C.bg.ignoresSafeArea())
         .task { await model.loadIfNeeded() }
+        .onChange(of: model.selectedTab) { _, tab in
+            if tab != .atmosphere {
+                previewIdleTask?.cancel()
+                activePreviewVideoId = nil
+                previewManager.pause()
+            }
+        }
+        .onDisappear {
+            previewIdleTask?.cancel()
+            activePreviewVideoId = nil
+            previewManager.pause()
+        }
     }
 
     private var header: some View {
@@ -97,6 +115,7 @@ struct AtmosphereView: View {
                     RippleComposer(destination: .personal) {
                         model.prepend($0)
                     }
+                    .padding(.horizontal, C.pagePad)
                 }
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     switch item {
@@ -105,15 +124,20 @@ struct AtmosphereView: View {
                             ripple: ripple,
                             allowsEngagement: socialFeatures.rippleEngagementEnabled
                         )
+                        .padding(.horizontal, C.pagePad)
                     case .video(let video):
-                        AtmosphereVideoPlaceholder(video: video)
+                        atmosphereVideoCard(video)
                     case .excludedEpisode, .excludedShort, .unsupported:
                         EmptyView()
                     }
                 }
             }
-            .padding(C.pagePad)
+            .padding(.vertical, C.pagePad)
             .padding(.bottom, C.bottomMenuClearance)
+        }
+        .coordinateSpace(name: "homeFeedScroll")
+        .onPreferenceChange(HomeVideoFramePreferenceKey.self) { frames in
+            schedulePreviewUpdate(frames: frames, videos: feedVideos(from: items))
         }
         .refreshable { await model.reload(.atmosphere) }
         .overlay {
@@ -125,6 +149,87 @@ struct AtmosphereView: View {
                 )
             }
         }
+    }
+
+    private func atmosphereVideoCard(_ video: AtmosphereVideo) -> some View {
+        let feedVideo = video.feedVideo
+        let mediaRoute = AppRoute.video(video.id)
+        let sourceRoute: AppRoute? = video.channel.map { .channel($0.handle) }
+            ?? video.show.map { .show($0.id) }
+        return HomeVideoCard(
+            video: feedVideo,
+            mediaRoute: mediaRoute,
+            sourceRoute: sourceRoute,
+            activePreviewVideoId: $activePreviewVideoId,
+            previewManager: previewManager,
+            isAutoplayBlocked: false,
+            isPreservingPreviewHandoff: isPreservingPreviewHandoff,
+            onPreviewPaused: {
+                suppressedPreviewVideoId = video.id
+                updatePreview(videos: feedVideos(from: model.atmosphereItems))
+            },
+            openMediaAction: {
+                NotificationCenter.default.post(
+                    name: .mentionNavigationRequested,
+                    object: mediaRoute
+                )
+            },
+            replaceMediaAction: nil
+        )
+        .padding(.bottom, C.sectionSpacing)
+    }
+
+    private func feedVideos(from items: [AtmosphereFeedItem]) -> [FeedVideo] {
+        items.compactMap {
+            guard case .video(let video) = $0 else { return nil }
+            return video.feedVideo
+        }
+    }
+
+    private func schedulePreviewUpdate(frames: [String: CGRect], videos: [FeedVideo]) {
+        previewFrames = frames
+        previewIdleTask?.cancel()
+        previewManager.warm(videos: videos, currentID: activePreviewVideoId)
+        if activePreviewVideoId != nil {
+            isPreservingPreviewHandoff = true
+            activePreviewVideoId = nil
+            previewManager.pausePreservingHandoff()
+        }
+        previewManager.prebufferBottomCandidates(videos: videos, frames: frames)
+        previewIdleTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(360))
+            guard !Task.isCancelled, model.selectedTab == .atmosphere else { return }
+            updatePreview(videos: videos)
+            previewIdleTask = nil
+        }
+    }
+
+    private func updatePreview(videos: [FeedVideo]) {
+        isPreservingPreviewHandoff = false
+        let policy = FeedPreviewAutoplayPolicy()
+        let videosByID = videos.reduce(into: [String: FeedVideo]()) { result, video in
+            result[video.id] = video
+        }
+        let orderedIDs = videos.map(\.id)
+        let candidate = orderedIDs.compactMap { id -> (String, URL, CGFloat)? in
+            guard id != suppressedPreviewVideoId,
+                  let frame = previewFrames[id],
+                  let url = C.mediaURL(videosByID[id]?.videoUrl),
+                  let score = policy.candidateScore(for: frame)
+            else { return nil }
+            return (id, url, score)
+        }
+        .max { $0.2 < $1.2 }
+
+        guard let candidate else {
+            activePreviewVideoId = nil
+            previewManager.pause()
+            return
+        }
+        suppressedPreviewVideoId = nil
+        activePreviewVideoId = candidate.0
+        previewManager.warm(videos: videos, currentID: candidate.0)
+        previewManager.play(videoId: candidate.0, url: candidate.1)
     }
 
     private func simpleRipples(_ ripples: [Ripple]) -> some View {
@@ -171,21 +276,37 @@ struct AtmosphereView: View {
     }
 }
 
-private struct AtmosphereVideoPlaceholder: View {
-    let video: AtmosphereVideo
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(C.elevated)
-                .aspectRatio(16 / 9, contentMode: .fit)
-                .overlay(Image(systemName: "play.fill").foregroundStyle(C.watch))
-            Text(video.title).font(.headline)
-            if video.views > 0 {
-                Text("\(video.views) views").font(.caption).foregroundStyle(C.textMuted)
+private extension AtmosphereVideo {
+    var feedVideo: FeedVideo {
+        FeedVideo(
+            id: id,
+            title: title,
+            thumbnailUrl: thumbnailURL,
+            videoUrl: videoURL,
+            duration: duration,
+            aspectRatio: nil,
+            width: nil,
+            height: nil,
+            views: views,
+            type: type,
+            publishedAt: publishedAt,
+            createdAt: createdAt,
+            channel: channel.map {
+                ChannelStub(
+                    id: $0.id,
+                    name: $0.name,
+                    handle: $0.handle,
+                    avatarUrl: $0.avatarURL
+                )
+            },
+            show: show.map {
+                ShowStub(
+                    id: $0.id,
+                    title: $0.title,
+                    coverUrl: $0.coverURL,
+                    showType: nil
+                )
             }
-        }
-        .padding(12)
-        .background(C.surface, in: RoundedRectangle(cornerRadius: C.cardRadius))
+        )
     }
 }
