@@ -52,9 +52,12 @@ struct RippleCard: View {
 
             if let body = (editedBody ?? ripple.body)?.trimmingCharacters(in: .whitespacesAndNewlines),
                !body.isEmpty {
-                Text(body)
-                    .font(bodyFont(hasAttachments: !ripple.attachments.isEmpty || ripple.poll != nil))
-                    .foregroundStyle(C.text)
+                MentionText(
+                    plain: body,
+                    html: nil,
+                    font: bodyFont(hasAttachments: !ripple.attachments.isEmpty || ripple.poll != nil),
+                    color: C.text
+                )
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 14)
                     .padding(.top, 12)
@@ -1243,7 +1246,8 @@ private struct EmbeddedRippleView: View {
                 }
             }
             if let body = ripple.body, !body.isEmpty {
-                Text(body).font(.subheadline).foregroundStyle(C.text).lineLimit(5)
+                MentionText(plain: body, html: nil, font: .subheadline, color: C.text)
+                    .lineLimit(5)
             }
         }
         .padding(12)
