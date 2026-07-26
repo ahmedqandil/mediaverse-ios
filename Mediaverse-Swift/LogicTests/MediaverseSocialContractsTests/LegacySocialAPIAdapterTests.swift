@@ -180,6 +180,39 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         XCTAssertFalse(like.liked)
         XCTAssertEqual(like.likeCount, 1)
     }
+
+    func testMultiDestinationEchoUsesPostableVibesAndCanonicalRippleAttachment() async throws {
+        let postablePath = "/api/fan-clubs/postable"
+        let createPath = "/api/fan-clubs/cinema%20fans/posts"
+        let transport = SocialTransportStub(responses: [
+            postablePath: """
+            {"vibes":[{"id":"v1","slug":"cinema fans","name":"Cinema Fans",
+            "avatarUrl":null,"postingPolicy":"MEMBERS","isPersonal":false}]}
+            """,
+            createPath: """
+            {"post":{"id":"echo-1","clubId":"v1","status":"PUBLISHED",
+            "createdAt":"2026-07-26T10:00:00Z","author":{"id":"u1"}}}
+            """
+        ])
+        let adapter = LegacySocialAPIAdapter(transport: transport)
+
+        let destinations = try await adapter.postableVibes()
+        XCTAssertEqual(destinations.first?.slug, "cinema fans")
+        let post = try await adapter.createRipple(
+            inVibe: "cinema fans",
+            body: " My take ",
+            attachments: [.ripple(id: "original-1")]
+        )
+        XCTAssertEqual(post.id, "echo-1")
+
+        let postBodies = await transport.postBodies
+        let body = try XCTUnwrap(postBodies.last)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(object["body"] as? String, "My take")
+        let attachments = try XCTUnwrap(object["attachments"] as? [[String: Any]])
+        XCTAssertEqual(attachments.first?["type"] as? String, "WESTREEM_RIPPLE")
+        XCTAssertEqual(attachments.first?["fanClubPostId"] as? String, "original-1")
+    }
 }
 
 private actor SocialTransportStub: LegacySocialTransport {

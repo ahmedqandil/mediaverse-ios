@@ -119,6 +119,34 @@ public struct VibeListResponse: Decodable, Sendable {
     public let nextCursor: String?
 }
 
+public struct PostableVibe: Decodable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let slug: String
+    public let name: String
+    public let avatarURL: String?
+    public let postingPolicy: String?
+    public let isPersonal: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id, slug, name, postingPolicy, isPersonal
+        case avatarURL = "avatarUrl"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        slug = try values.decode(String.self, forKey: .slug)
+        name = try values.decode(String.self, forKey: .name)
+        avatarURL = try values.decodeIfPresent(String.self, forKey: .avatarURL)
+        postingPolicy = try values.decodeIfPresent(String.self, forKey: .postingPolicy)
+        isPersonal = try values.decodeIfPresent(Bool.self, forKey: .isPersonal) ?? false
+    }
+}
+
+public struct PostableVibesResponse: Decodable, Sendable {
+    public let vibes: [PostableVibe]
+}
+
 public struct RippleAuthor: Decodable, Equatable, Sendable {
     public let id: String
     public let name: String?
@@ -432,6 +460,52 @@ public struct RippleCommentResponse: Decodable, Sendable {
 public struct RippleCommentLikeResponse: Decodable, Equatable, Sendable {
     public let liked: Bool
     public let likeCount: Int
+}
+
+public struct CreateRippleResponse: Decodable, Sendable {
+    public let post: Ripple
+}
+
+public struct PersonalVibeResponse: Decodable, Sendable {
+    public let vibe: VibeSummary
+}
+
+public enum RippleCreateAttachment: Encodable, Equatable, Sendable {
+    case photo(imageURL: String)
+    case link(externalURL: String)
+    case video(id: String)
+    case collection(id: String)
+    case clip(id: String)
+    case ripple(id: String)
+
+    enum CodingKeys: String, CodingKey {
+        case type, imageURL = "imageUrl", externalURL = "externalUrl"
+        case videoId, collectionId, userPostId, fanClubPostId
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .photo(let imageURL):
+            try values.encode("PHOTO", forKey: .type)
+            try values.encode(imageURL, forKey: .imageURL)
+        case .link(let externalURL):
+            try values.encode("LINK", forKey: .type)
+            try values.encode(externalURL, forKey: .externalURL)
+        case .video(let id):
+            try values.encode("WESTREEM_VIDEO", forKey: .type)
+            try values.encode(id, forKey: .videoId)
+        case .collection(let id):
+            try values.encode("WESTREEM_COLLECTION", forKey: .type)
+            try values.encode(id, forKey: .collectionId)
+        case .clip(let id):
+            try values.encode("WESTREEM_CLIP", forKey: .type)
+            try values.encode(id, forKey: .userPostId)
+        case .ripple(let id):
+            try values.encode("WESTREEM_RIPPLE", forKey: .type)
+            try values.encode(id, forKey: .fanClubPostId)
+        }
+    }
 }
 
 public struct DiscoverRipplePageResponse: Decodable, Sendable {

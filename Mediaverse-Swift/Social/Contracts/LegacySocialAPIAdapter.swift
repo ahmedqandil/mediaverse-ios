@@ -138,6 +138,39 @@ public actor LegacySocialAPIAdapter {
         )
     }
 
+    public func ensurePersonalVibe() async throws -> VibeSummary {
+        try await post(
+            PersonalVibeResponse.self,
+            path: "/api/me/personal-vibe",
+            body: Data("{}".utf8)
+        ).vibe
+    }
+
+    public func postableVibes() async throws -> [PostableVibe] {
+        try await decode(PostableVibesResponse.self, path: "/api/fan-clubs/postable").vibes
+    }
+
+    public func createRipple(
+        inVibe slug: String,
+        body: String?,
+        attachments: [RippleCreateAttachment],
+        isSpoiler: Bool = false,
+        commentsDisabled: Bool = false
+    ) async throws -> Ripple {
+        let trimmedBody = body?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let request = CreateRippleRequest(
+            body: trimmedBody?.isEmpty == false ? trimmedBody : nil,
+            isSpoiler: isSpoiler,
+            commentsDisabled: commentsDisabled,
+            attachments: attachments
+        )
+        return try await post(
+            CreateRippleResponse.self,
+            path: "/api/fan-clubs/\(try segment(slug))/posts",
+            body: try JSONEncoder().encode(request)
+        ).post
+    }
+
     public func addEnergy(
         toRipple postId: String,
         overall: Int,
@@ -278,6 +311,13 @@ private struct RippleShareRequest: Encodable {
 private struct RippleCommentRequest: Encodable {
     let content: String
     let parentId: String?
+}
+
+private struct CreateRippleRequest: Encodable {
+    let body: String?
+    let isSpoiler: Bool
+    let commentsDisabled: Bool
+    let attachments: [RippleCreateAttachment]
 }
 
 private extension CharacterSet {

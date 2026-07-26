@@ -6,6 +6,7 @@ final class RippleEngagementController: ObservableObject {
     @Published private(set) var energyTotal: Int
     @Published private(set) var energyTags: [String]
     @Published private(set) var shareCount: Int
+    @Published private(set) var echoCount: Int
     @Published private(set) var poll: RipplePoll?
     @Published private(set) var currentEnergy: RippleEnergySelection?
     @Published private(set) var isBusy = false
@@ -23,6 +24,7 @@ final class RippleEngagementController: ObservableObject {
         energyTotal = ripple.energyTotal
         energyTags = ripple.energyTags
         shareCount = ripple.shareCount
+        echoCount = ripple.echoCount
         poll = ripple.poll
         self.api = api
     }
@@ -78,6 +80,10 @@ final class RippleEngagementController: ObservableObject {
         } catch {
             errorMessage = message(for: error)
         }
+    }
+
+    func addEchoes(_ count: Int) {
+        echoCount += max(0, count)
     }
 
     private func apply(_ response: RippleEnergyResponse) {

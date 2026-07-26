@@ -23,6 +23,7 @@ struct RippleCard: View {
     @State private var showsEnergy = false
     @State private var showsShare = false
     @State private var showsComments = false
+    @State private var showsEcho = false
 
     init(
         ripple: Ripple,
@@ -110,6 +111,13 @@ struct RippleCard: View {
                 autoFocusComposer: true,
                 onClose: { showsComments = false }
             )
+        }
+        .sheet(isPresented: $showsEcho) {
+            EchoVibeSheet(ripple: ripple) { added in
+                engagement.addEchoes(added)
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
         }
         .alert(
             "Ripple update failed",
@@ -204,8 +212,8 @@ struct RippleCard: View {
             action(
                 title: "Echo",
                 systemImage: "dot.radiowaves.left.and.right",
-                count: ripple.echoCount,
-                handler: actions.echo
+                count: engagement.echoCount,
+                handler: actions.echo ?? (allowsEngagement ? { showsEcho = true } : nil)
             )
             action(
                 title: "Share",
