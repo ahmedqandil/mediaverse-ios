@@ -238,13 +238,11 @@ struct NotificationsView: View {
     private func markAsReadIfNeeded(_ notif: AppNotification) async {
         guard !notif.read else { return }
         notificationMutationGeneration &+= 1
-        setNotification(notif.id, read: true)
-        publishUnreadCount(unreadCount)
-
         do {
-            try await APIClient.shared.markNotificationRead(id: notif.id)
+            try await APIClient.shared.markNotificationsRead()
+            notifs = notifs.map { notification($0, read: true) }
+            publishUnreadCount(0)
         } catch {
-            setNotification(notif.id, read: false)
             publishUnreadCount(unreadCount)
         }
     }
@@ -414,16 +412,29 @@ private struct NotifRow: View {
         // aliases like "comment"/"like" that never matched, so everything showed a bell.)
         switch type.lowercased() {
         case "new_comment", "comment_reply", "comment_removed",
-             "post_comment", "post_comment_reply", "comment":
+             "post_comment", "post_comment_reply", "comment",
+             "ripple_comment", "ripple_reply":
             return "bubble.left.fill"
         case "comment_like", "post_comment_liked", "post_liked", "story_like", "like":
             return "heart.fill"
-        case "mention", "story_mention":
+        case "ripple_energy", "ripple_photo_energy", "flash_energy":
+            return "bolt.fill"
+        case "ripple_echo":
+            return "wave.3.right"
+        case "mention", "story_mention", "ripple_mention":
             return "at"
-        case "new_follower", "following", "follow":
+        case "new_follower", "following", "follow", "vibe_follow":
             return "person.badge.plus"
-        case "new_episode", "new_video":
+        case "new_episode", "new_video", "vibe_new_ripple":
             return "play.rectangle.fill"
+        case "vibe_join_request", "vibe_join_decision", "vibe_invite":
+            return "person.2.fill"
+        case "vibe_moderation":
+            return "shield.fill"
+        case "vibe_affiliation_request", "vibe_affiliation_approved",
+             "vibe_affiliation_rejected", "vibe_affiliation_revoked",
+             "vibe_affiliation_cancelled":
+            return "link"
         case "upload_complete", "upload":
             return "arrow.up.circle.fill"
         case "partner_approved":
@@ -445,14 +456,28 @@ private struct NotifRow: View {
 
     private func typeLabel(_ type: String) -> String {
         switch type.lowercased() {
-        case "new_comment", "post_comment":            return "Comment"
-        case "comment_reply", "post_comment_reply":    return "Reply"
+        case "new_comment", "post_comment", "ripple_comment": return "Comment"
+        case "comment_reply", "post_comment_reply", "ripple_reply": return "Reply"
         case "comment_like", "post_comment_liked":     return "Like"
         case "post_liked":                             return "Post Like"
         case "story_like":                             return "Story Like"
-        case "mention", "story_mention":               return "Mention"
+        case "ripple_energy":                          return "Ripple Energy"
+        case "ripple_photo_energy":                    return "Photo Energy"
+        case "flash_energy":                           return "Flash Energy"
+        case "ripple_echo":                            return "Echo"
+        case "mention", "story_mention", "ripple_mention": return "Mention"
         case "comment_removed":                        return "Moderation"
-        case "new_follower", "following":              return "Follower"
+        case "new_follower", "following", "vibe_follow": return "Follower"
+        case "vibe_join_request":                      return "Join Request"
+        case "vibe_join_decision":                     return "Membership"
+        case "vibe_invite":                            return "Vibe Invite"
+        case "vibe_moderation":                        return "Vibe Moderation"
+        case "vibe_new_ripple":                        return "New Ripple"
+        case "vibe_affiliation_request":               return "Affiliation Request"
+        case "vibe_affiliation_approved":              return "Affiliation Approved"
+        case "vibe_affiliation_rejected":              return "Affiliation Rejected"
+        case "vibe_affiliation_revoked":               return "Affiliation Revoked"
+        case "vibe_affiliation_cancelled":             return "Affiliation Cancelled"
         case "new_episode":                            return "New Episode"
         case "new_video":                              return "New Video"
         case "upload_complete":                        return "Upload Ready"
