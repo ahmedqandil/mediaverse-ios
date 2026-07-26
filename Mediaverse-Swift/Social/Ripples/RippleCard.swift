@@ -928,11 +928,26 @@ private struct RipplePhotoEnergySheet: View {
 
 private struct RippleLinkAttachment: View {
     let attachment: RippleAttachment
+    @EnvironmentObject private var inAppBrowser: InAppBrowserManager
 
     var body: some View {
         Group {
             if let url = secureExternalURL {
-                Link(destination: url) { card }
+                Button {
+                    if C.isTrustedBackendURL(url),
+                       let route = AppRoute.route(link: url.absoluteString) {
+                        NotificationCenter.default.post(
+                            name: .mentionNavigationRequested,
+                            object: route
+                        )
+                    } else {
+                        inAppBrowser.open(url)
+                    }
+                } label: {
+                    card
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens in the in-app browser")
             } else {
                 card
             }

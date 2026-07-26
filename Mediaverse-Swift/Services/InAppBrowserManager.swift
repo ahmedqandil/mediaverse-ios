@@ -20,7 +20,16 @@ final class InAppBrowserManager: ObservableObject {
     }
 
     static func canDisplayInApp(_ url: URL) -> Bool {
-        C.isTrustedBrowserURL(url)
+        if C.isTrustedBrowserURL(url) {
+            return true
+        }
+        guard url.scheme?.lowercased() == "https",
+              url.host(percentEncoded: false)?.isEmpty == false,
+              url.user == nil,
+              url.password == nil else {
+            return false
+        }
+        return true
     }
 }
 
