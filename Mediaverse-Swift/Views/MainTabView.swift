@@ -281,6 +281,7 @@ struct MainTabView: View {
                 }
             }
             .ignoresSafeArea(edges: .bottom)
+            .toolbar(.hidden, for: .tabBar)
             .tabItem {
                 appTabLabel(
                     "Home",
@@ -297,6 +298,7 @@ struct MainTabView: View {
                     }
             }
             .ignoresSafeArea(edges: .bottom)
+            .toolbar(.hidden, for: .tabBar)
             .tabItem { appTabLabel("Videos", icon: "play", fallback: "play.rectangle") }
             .tag(AppTab.videos)
 
@@ -307,6 +309,7 @@ struct MainTabView: View {
                     }
             }
             .ignoresSafeArea(edges: .bottom)
+            .toolbar(.hidden, for: .tabBar)
             .tabItem { appTabLabel("Shorts", icon: "short", fallback: "play.rectangle.on.rectangle") }
             .tag(AppTab.shorts)
 
@@ -317,6 +320,7 @@ struct MainTabView: View {
                     }
             }
             .ignoresSafeArea(edges: .bottom)
+            .toolbar(.hidden, for: .tabBar)
             .tabItem { appTabLabel("Discover", icon: "explore", fallback: "safari") }
             .tag(AppTab.explore)
 
@@ -327,6 +331,7 @@ struct MainTabView: View {
                     }
             }
             .ignoresSafeArea(edges: .bottom)
+            .toolbar(.hidden, for: .tabBar)
             .tabItem { appTabLabel("Profile", icon: "user", fallback: "person") }
             .tag(AppTab.profile)
         }
@@ -959,6 +964,16 @@ private struct SystemTabBarHider: UIViewControllerRepresentable {
     final class Controller: UIViewController {
         override func viewDidAppear(_ animated: Bool) {
             super.viewDidAppear(animated)
+            hideSystemTabBar()
+        }
+
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
+            hideSystemTabBar()
+        }
+
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
             hideSystemTabBar()
         }
 
