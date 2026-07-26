@@ -736,6 +736,12 @@ public actor LegacySocialAPIAdapter {
         )
     }
 
+    public func removeEnergy(fromRipple postId: String) async throws {
+        _ = try await transport.socialDeleteData(
+            path: "/api/fan-club-posts/\(try segment(postId))/rating"
+        )
+    }
+
     public func vote(
         inPoll pollId: String,
         optionIds: [String]

@@ -1187,18 +1187,38 @@ private struct StoryEnergySheet: View {
     @State private var isLoading = false
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @State private var hasExistingEnergy = false
 
     var body: some View {
         SocialEnergyForm(
             contentLabel: "Flash",
-            isUpdate: false,
+            isUpdate: hasExistingEnergy,
             overall: $overall,
             selectedTags: $selectedTags,
             isSaving: isSaving || isLoading,
             errorMessage: errorMessage,
             onClose: { dismiss() },
-            onSubmit: { Task { await save() } }
+            onSubmit: { Task { await save() } },
+            onRemove: hasExistingEnergy ? { Task { await remove() } } : nil
         )
+        .task { await load() }
+    }
+
+    @MainActor
+    private func load() async {
+        guard !isLoading else { return }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            let response = try await StoriesAPIClient.shared.fetchEnergy(storyId: story.id)
+            if let current = response.userRating {
+                overall = current.overall
+                selectedTags = Set(current.tags)
+                hasExistingEnergy = true
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     @MainActor
@@ -1218,6 +1238,22 @@ private struct StoryEnergySheet: View {
             errorMessage = error.localizedDescription
         }
         isSaving = false
+    }
+
+    @MainActor
+    private func remove() async {
+        guard !isSaving, hasExistingEnergy else { return }
+        isSaving = true
+        errorMessage = nil
+        defer { isSaving = false }
+        do {
+            try await StoriesAPIClient.shared.removeEnergy(storyId: story.id)
+            let refreshed = try await StoriesAPIClient.shared.fetchEnergy(storyId: story.id)
+            onSaved(refreshed.aggregate)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
 }

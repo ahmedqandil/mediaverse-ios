@@ -1879,6 +1879,10 @@ actor APIClient: LegacySocialTransport {
         )
     }
 
+    func removeContentEnergy(contentPath: String, id: String) async throws {
+        try await deleteEmpty("/api/\(contentPath)/\(C.pathSegment(id))/rating")
+    }
+
     func toggleSubscribe(channelId: String) async throws {
         struct Body: Encodable {}
         struct Resp: Decodable { let ok: Bool? }

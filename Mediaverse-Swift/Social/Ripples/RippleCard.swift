@@ -28,6 +28,7 @@ struct RippleCard: View {
     private let onPreviewPaused: (String) -> Void
     private let onVideoHandoff: (FeedVideo, CGRect?) -> Void
     @EnvironmentObject private var auth: AuthManager
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @StateObject private var engagement: RippleEngagementController
     @State private var showsEnergy = false
     @State private var showsShare = false
@@ -37,6 +38,7 @@ struct RippleCard: View {
     @State private var showsReport = false
     @State private var confirmsDelete = false
     @State private var isDeleted = false
+    @State private var isBodyExpanded = false
     @State private var editedBody: String?
     @State private var editedSpoiler: Bool?
     @State private var editedCommentsDisabled: Bool?
@@ -69,8 +71,8 @@ struct RippleCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             identityHeader
-                .padding(.horizontal, 14)
-                .padding(.top, 14)
+                .padding(.horizontal, 12)
+                .padding(.top, 12)
 
             if let body = (editedBody ?? ripple.body)?.trimmingCharacters(in: .whitespacesAndNewlines),
                !body.isEmpty {
@@ -80,9 +82,22 @@ struct RippleCard: View {
                     font: bodyFont(hasAttachments: !ripple.attachments.isEmpty || ripple.poll != nil),
                     color: C.text
                 )
+                    .lineLimit(isBodyExpanded ? nil : 4)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 14)
-                    .padding(.top, 12)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+
+                if body.count > 180 {
+                    Button(isBodyExpanded ? "Show less" : "More") {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            isBodyExpanded.toggle()
+                        }
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(C.textMuted)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 4)
+                }
             }
 
             if let poll = engagement.poll {
@@ -93,8 +108,8 @@ struct RippleCard: View {
                 ) { optionIds in
                     Task { await engagement.vote(optionIds: optionIds) }
                 }
-                    .padding(.horizontal, 14)
-                    .padding(.top, 12)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
             }
 
             if !ripple.attachments.isEmpty {
@@ -107,7 +122,7 @@ struct RippleCard: View {
                     onPreviewPaused: onPreviewPaused,
                     onVideoHandoff: onVideoHandoff
                 )
-                    .padding(.top, 12)
+                    .padding(.top, 10)
             }
 
             if engagement.energyCount > 0 {
@@ -116,13 +131,13 @@ struct RippleCard: View {
                     count: engagement.energyCount,
                     tags: engagement.energyTags
                 )
-                .padding(.horizontal, 14)
-                .padding(.top, 12)
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
             }
 
             actionBar
-                .padding(.horizontal, 8)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 5)
 
             if showsComments {
                 Divider().background(C.borderSubtle)
@@ -138,12 +153,25 @@ struct RippleCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(C.surface)
+        .background(C.surface.opacity(0.82))
         .overlay {
-            RoundedRectangle(cornerRadius: C.cardRadius)
-                .stroke(C.borderSubtle, lineWidth: 1)
+            if horizontalSizeClass == .compact {
+                VStack(spacing: 0) {
+                    Rectangle().fill(C.borderSubtle).frame(height: 1)
+                    Spacer()
+                    Rectangle().fill(C.borderSubtle).frame(height: 1)
+                }
+            } else {
+                RoundedRectangle(cornerRadius: C.cardRadius)
+                    .stroke(C.borderSubtle, lineWidth: 1)
+            }
         }
-        .clipShape(RoundedRectangle(cornerRadius: C.cardRadius))
+        .clipShape(
+            RoundedRectangle(
+                cornerRadius: horizontalSizeClass == .compact ? 0 : C.cardRadius,
+                style: .continuous
+            )
+        )
         .frame(height: isDeleted ? 0 : nil)
         .opacity(isDeleted ? 0 : 1)
         .clipped()
@@ -217,7 +245,7 @@ struct RippleCard: View {
                 SocialIdentityAvatar(
                     image: ripple.author.image,
                     name: ripple.author.name ?? ripple.author.handle,
-                    size: 40
+                    size: 36
                 )
             }
 
@@ -357,17 +385,17 @@ struct RippleCard: View {
         handler: (() -> Void)?
     ) -> some View {
         Button(action: { handler?() }) {
-            VStack(spacing: 3) {
+            HStack(spacing: 5) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                 Text(count > 0 ? "\(title) · \(count)" : title)
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 10, weight: .semibold))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.75)
+                    .minimumScaleFactor(0.7)
             }
             .foregroundStyle(handler == nil ? C.textTertiary : C.textMuted)
             .frame(maxWidth: .infinity)
-            .frame(height: 50)
+            .frame(height: 40)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -974,18 +1002,40 @@ private struct RipplePhotoEnergySheet: View {
     @State private var isLoading = false
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @State private var hasExistingEnergy = false
 
     var body: some View {
         SocialEnergyForm(
             contentLabel: "photo",
-            isUpdate: false,
+            isUpdate: hasExistingEnergy,
             overall: $overall,
             selectedTags: $tags,
             isSaving: isSaving || isLoading,
             errorMessage: errorMessage,
             onClose: { dismiss() },
-            onSubmit: { Task { await save() } }
+            onSubmit: { Task { await save() } },
+            onRemove: hasExistingEnergy ? { Task { await remove() } } : nil
         )
+        .task { await load() }
+    }
+
+    @MainActor
+    private func load() async {
+        guard !isLoading else { return }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            let response = try await LegacySocialAPIAdapter(
+                transport: APIClient.shared
+            ).ripplePhotoEnergy(attachmentId: attachmentId)
+            if let current = response.userRating {
+                overall = current.overall
+                tags = Set(current.tags)
+                hasExistingEnergy = true
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     @MainActor
@@ -1006,6 +1056,23 @@ private struct RipplePhotoEnergySheet: View {
             errorMessage = error.localizedDescription
         }
         isSaving = false
+    }
+
+    @MainActor
+    private func remove() async {
+        guard !isSaving, hasExistingEnergy else { return }
+        isSaving = true
+        errorMessage = nil
+        defer { isSaving = false }
+        do {
+            let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+            try await api.removeEnergy(fromPhoto: attachmentId)
+            let refreshed = try await api.ripplePhotoEnergy(attachmentId: attachmentId)
+            onSaved(refreshed.aggregate)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
 }
@@ -1517,6 +1584,13 @@ private struct RippleEnergySheet: View {
                         dismiss()
                     }
                 }
+            },
+            onRemove: controller.currentEnergy == nil ? nil : {
+                Task {
+                    if await controller.removeEnergy() {
+                        dismiss()
+                    }
+                }
             }
         )
         .onAppear {
@@ -1571,7 +1645,8 @@ struct ContentEnergySheet: View {
             isSaving: isSaving,
             errorMessage: errorMessage,
             onClose: { dismiss() },
-            onSubmit: { Task { await save() } }
+            onSubmit: { Task { await save() } },
+            onRemove: hasExistingEnergy ? { Task { await remove() } } : nil
         )
         .task { await loadCurrentEnergy() }
     }
@@ -1610,6 +1685,28 @@ struct ContentEnergySheet: View {
             dismiss()
         } catch {
             errorMessage = "Energy could not be saved. Please try again."
+        }
+    }
+
+    @MainActor
+    private func remove() async {
+        guard !isSaving, hasExistingEnergy else { return }
+        isSaving = true
+        errorMessage = nil
+        defer { isSaving = false }
+        do {
+            try await APIClient.shared.removeContentEnergy(
+                contentPath: kind.path,
+                id: contentID
+            )
+            let updated = try await APIClient.shared.fetchContentEnergy(
+                contentPath: kind.path,
+                id: contentID
+            )
+            onSaved?(updated.aggregate)
+            dismiss()
+        } catch {
+            errorMessage = "Energy could not be removed. Please try again."
         }
     }
 }
@@ -1683,6 +1780,8 @@ struct SocialEnergyForm: View {
     let errorMessage: String?
     let onClose: () -> Void
     let onSubmit: () -> Void
+    var onRemove: (() -> Void)? = nil
+    @State private var confirmsRemoval = false
 
     private let choices = ["HITS", "INSPIRED", "REAL", "DEEP", "CHILL", "CLUTCH"]
 
@@ -1766,12 +1865,38 @@ struct SocialEnergyForm: View {
             .buttonStyle(.plain)
             .disabled(isSaving || overall < 1)
             .opacity(isSaving || overall < 1 ? 0.45 : 1)
+
+            if isUpdate, onRemove != nil {
+                Button(role: .destructive) {
+                    confirmsRemoval = true
+                } label: {
+                    Label("Remove Energy", systemImage: "bolt.slash")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.red.opacity(0.88))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 40)
+                }
+                .buttonStyle(.plain)
+                .disabled(isSaving)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.top, 18)
         .padding(.bottom, 22)
         .background(C.bg.ignoresSafeArea())
         .foregroundStyle(C.text)
+        .confirmationDialog(
+            "Remove your Energy?",
+            isPresented: $confirmsRemoval,
+            titleVisibility: .visible
+        ) {
+            Button("Remove Energy", role: .destructive) {
+                onRemove?()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your Energy and selected keywords will be removed from this \(contentLabel).")
+        }
     }
 
     private func energyLevelDescription(_ level: Int) -> String {

@@ -56,6 +56,21 @@ final class RippleEngagementController: ObservableObject {
         }
     }
 
+    func removeEnergy() async -> Bool {
+        guard !isBusy, currentEnergy != nil else { return false }
+        isBusy = true
+        errorMessage = nil
+        defer { isBusy = false }
+        do {
+            try await api.removeEnergy(fromRipple: rippleId)
+            apply(try await api.rippleEnergy(postId: rippleId))
+            return true
+        } catch {
+            errorMessage = message(for: error)
+            return false
+        }
+    }
+
     func vote(optionIds: [String]) async {
         guard !isBusy else { return }
         isBusy = true

@@ -98,6 +98,10 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         )
         XCTAssertEqual(object["overall"] as? Int, 4)
         XCTAssertEqual(object["tags"] as? [String], ["DEEP", "REAL"])
+
+        try await adapter.removeEnergy(fromRipple: "ripple/one")
+        let deletePaths = await transport.deletePaths
+        XCTAssertEqual(deletePaths, [path])
     }
 
     func testPollVoteAndShareKeepEndpointSpecificEnvelopes() async throws {

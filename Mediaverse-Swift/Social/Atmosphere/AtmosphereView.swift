@@ -226,7 +226,7 @@ struct AtmosphereView: View {
 
     private var loading: some View {
         ScrollView {
-            LazyVStack(spacing: 12) {
+            LazyVStack(spacing: 14) {
                 ForEach(0..<4, id: \.self) { _ in
                     RoundedRectangle(cornerRadius: C.cardRadius)
                         .fill(C.surface)
@@ -267,7 +267,7 @@ struct AtmosphereView: View {
 
     private func simpleFeed(_ items: [AtmosphereFeedItem]) -> some View {
         ScrollView {
-            LazyVStack(spacing: 12) {
+            LazyVStack(spacing: 14) {
                 atmosphereBoundaryListings(model.beforeFeedListings)
                 ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                     switch item {
@@ -349,7 +349,6 @@ struct AtmosphereView: View {
                 horizontalContentInset: C.pagePad
             )
         }
-        .padding(.bottom, C.sectionSpacing)
     }
 
     private var isAutoplayBlocked: Bool {
@@ -538,6 +537,7 @@ private struct AtmospherePublishedVideoCard<MediaCard: View>: View {
     @ViewBuilder let mediaCard: () -> MediaCard
 
     @EnvironmentObject private var auth: AuthManager
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showEnergy = false
     @State private var showComments = false
     @State private var showEcho = false
@@ -575,16 +575,29 @@ private struct AtmospherePublishedVideoCard<MediaCard: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             publisherHeader
             mediaCard()
-                .padding(.bottom, 14)
+                .padding(.bottom, 10)
             actionBar
         }
         .background(C.surface.opacity(0.82))
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .clipShape(
+            RoundedRectangle(
+                cornerRadius: horizontalSizeClass == .compact ? 0 : 16,
+                style: .continuous
+            )
+        )
         .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(C.borderSubtle, lineWidth: 1)
+            if horizontalSizeClass == .compact {
+                VStack(spacing: 0) {
+                    Rectangle().fill(C.borderSubtle).frame(height: 1)
+                    Spacer()
+                    Rectangle().fill(C.borderSubtle).frame(height: 1)
+                }
+            } else {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(C.borderSubtle, lineWidth: 1)
+            }
         }
-        .padding(.horizontal, C.pagePad)
+        .padding(.horizontal, horizontalSizeClass == .compact ? 0 : C.pagePad)
         .task(id: video.id) {
             guard let response = try? await APIClient.shared.fetchContentEnergy(
                 contentPath: "videos",
@@ -624,9 +637,9 @@ private struct AtmospherePublishedVideoCard<MediaCard: View>: View {
     }
 
     private var publisherHeader: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             sourceTarget {
-                SocialIdentityAvatar(image: ownerImage, name: ownerName, size: 40)
+                SocialIdentityAvatar(image: ownerImage, name: ownerName, size: 36)
             }
             VStack(alignment: .leading, spacing: 2) {
                 sourceTarget {
@@ -641,7 +654,8 @@ private struct AtmospherePublishedVideoCard<MediaCard: View>: View {
             }
             Spacer()
         }
-        .padding(16)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
     }
 
     private var actionBar: some View {
@@ -694,8 +708,8 @@ private struct AtmospherePublishedVideoCard<MediaCard: View>: View {
             }
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(highlighted ? Color.orange.opacity(0.9) : C.textMuted)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .frame(height: 40)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
