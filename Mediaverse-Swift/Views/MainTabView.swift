@@ -67,10 +67,6 @@ struct MainTabView: View {
         isCommentsOverlayPresented || isUploadSheetPresented || isKeyboardVisible || (isPlayerRouteActive && !isRoutedShortsPresented)
     }
 
-    private var isRootTabPagingLocked: Bool {
-        selectedTab == .shorts && isShortsAdPlaybackActive
-    }
-
     private func scrollTarget(for tab: AppTab) -> String {
         switch tab {
         case .home:
@@ -336,9 +332,7 @@ struct MainTabView: View {
         }
         .tint(C.watch)
         .toolbar(.hidden, for: .tabBar)
-        .tabViewStyle(.page(indexDisplayMode: .never))
         .ignoresSafeArea(edges: .bottom)
-        .background(RootTabPagingLock(isLocked: isRootTabPagingLocked))
     }
 
     private func openUploadOptions(provideHaptic: Bool = true) {
@@ -581,10 +575,12 @@ struct MainTabView: View {
             .frame(maxWidth: .infinity)
             .frame(height: 54)
             .background {
-                Capsule()
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(isSelected ? C.watch.opacity(0.14) : Color.clear)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 3)
             }
-            .contentShape(Capsule())
+            .contentShape(Rectangle())
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(title)
             .accessibilityAddTraits(isSelected ? [.isSelected] : [])
@@ -961,44 +957,6 @@ private extension AppRoute {
     var isShortRoute: Bool {
         if case .short = self { return true }
         return false
-    }
-}
-
-private struct RootTabPagingLock: UIViewRepresentable {
-    let isLocked: Bool
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
-        view.isUserInteractionEnabled = false
-        return view
-    }
-
-    func updateUIView(_ view: UIView, context: Context) {
-        DispatchQueue.main.async {
-            setHorizontalPagingEnabled(!isLocked, from: view)
-        }
-    }
-
-    private func setHorizontalPagingEnabled(_ isEnabled: Bool, from marker: UIView) {
-        guard let root = marker.window else { return }
-        root.allSubviews(of: UIScrollView.self)
-            .filter { scrollView in
-                scrollView.isPagingEnabled
-                    && scrollView.contentSize.width > scrollView.bounds.width + 1
-                    && scrollView.contentSize.height <= scrollView.bounds.height + 1
-            }
-            .forEach { scrollView in
-                scrollView.isScrollEnabled = isEnabled
-            }
-    }
-}
-
-private extension UIView {
-    func allSubviews<T: UIView>(of type: T.Type) -> [T] {
-        subviews.flatMap { subview -> [T] in
-            let matches = subview as? T
-            return [matches].compactMap { $0 } + subview.allSubviews(of: type)
-        }
     }
 }
 
