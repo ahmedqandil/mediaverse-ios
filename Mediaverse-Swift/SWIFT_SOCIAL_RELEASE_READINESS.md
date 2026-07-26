@@ -60,6 +60,11 @@ These are server limitations, not omitted Swift implementations. The no-backend-
 
 ## QA evidence
 
+- Empty-social-layer regression:
+  - Production reproduction: a rejected bearer token returns HTTP 200 with `{}` from `/api/auth/session` and HTTP 200 with `[]` from `/api/subscriptions/feed`.
+  - Previous native behavior trusted any Keychain token and ignored an explicit missing session user, leaving the UI apparently signed in while social APIs treated it as anonymous.
+  - Native now clears a server-rejected stored session and returns to authentication, while retaining sessions during genuine transport failures.
+  - Discover no longer discards curation errors through `try?`; activation deterministically triggers loading and failed, empty, loading, and populated states are distinct and retryable.
 - Swift contract suite: 39 tests, zero failures.
 - Xcode test build:
 
@@ -71,7 +76,7 @@ xcodebuild -project Mediaverse-Swift/Mediaverse.xcodeproj \
 ```
 
 - Result: `TEST BUILD SUCCEEDED`.
-- Full iOS XCTest suite: 97 tests, zero failures (`TEST EXECUTE SUCCEEDED`).
+- Full iOS XCTest suite: 99 tests, zero failures (`TEST SUCCEEDED`), including stored-session rejection regression coverage.
 - Unsigned optimized Release archive: `ARCHIVE SUCCEEDED`.
 - Simulator cold launch reached the native sign-in surface without an app crash.
 - Backend repository: no Swift-phase changes.

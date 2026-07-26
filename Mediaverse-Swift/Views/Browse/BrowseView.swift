@@ -14,6 +14,7 @@ struct BrowseView: View {
     @State private var curatedBrowseItems: [PlatformBrowseItem]?
     @State private var discoverListings: [AssembledListing] = []
     @State private var isDiscoverLoading = false
+    @State private var discoverError: String?
 
     init(isRootActive: Bool = true) {
         self.isRootActive = isRootActive
@@ -85,13 +86,9 @@ struct BrowseView: View {
             guard isRootActive else { return }
             Task { await refreshCuratedBrowseItems() }
         }
-        .task {
+        .task(id: isRootActive) {
             guard isRootActive else { return }
             await refreshCuratedBrowseItems()
-        }
-        .onChange(of: isRootActive) { _, isActive in
-            guard isActive else { return }
-            Task { await refreshCuratedBrowseItems() }
         }
         .onAppear {
             ensureSelectedSectionIsVisible()
@@ -165,6 +162,8 @@ struct BrowseView: View {
             DiscoverHubView(
                 listings: discoverListings,
                 isLoading: isDiscoverLoading,
+                errorMessage: discoverError,
+                retry: { await refreshCuratedBrowseItems() },
                 openSection: { selectedSection = $0 }
             )
         case .shows:
@@ -185,12 +184,34 @@ struct BrowseView: View {
     @MainActor
     private func refreshCuratedBrowseItems() async {
         isDiscoverLoading = true
-        async let discoverTask: AssembledPage? = try? CurationManager.shared.fetchPage(key: "discover")
+        discoverError = nil
+        async let discoverResult = fetchDiscoverPage()
         let items = await CurationManager.shared.curatedBrowseItems(from: platformBrowseItems)
-        discoverListings = await discoverTask?.activeListings ?? []
+        switch await discoverResult {
+        case .success(let page):
+            discoverListings = page.activeListings
+        case .failure(let error):
+            discoverListings = []
+            discoverError = Self.discoverErrorMessage(error)
+        }
         isDiscoverLoading = false
         curatedBrowseItems = items
         ensureSelectedSectionIsVisible()
+    }
+
+    private func fetchDiscoverPage() async -> Result<AssembledPage, Error> {
+        do {
+            return .success(try await CurationManager.shared.fetchPage(key: "discover"))
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private static func discoverErrorMessage(_ error: Error) -> String {
+        if let apiError = error as? APIError {
+            return apiError.localizedDescription
+        }
+        return "Discover could not load its curated sections."
     }
 
     private func ensureSelectedSectionIsVisible() {
@@ -273,6 +294,8 @@ private enum BrowseSection: String, CaseIterable, Identifiable {
 private struct DiscoverHubView: View {
     let listings: [AssembledListing]
     let isLoading: Bool
+    let errorMessage: String?
+    let retry: () async -> Void
     let openSection: (BrowseSection) -> Void
 
     private let categorySections: [BrowseSection] = [
@@ -302,6 +325,28 @@ private struct DiscoverHubView: View {
                             .padding(.horizontal, C.pagePad)
                             .redacted(reason: .placeholder)
                     }
+                } else if let errorMessage, listings.isEmpty {
+                    ContentUnavailableView {
+                        Label("Couldn’t load Discover", systemImage: "wifi.exclamationmark")
+                    } description: {
+                        Text(errorMessage)
+                    } actions: {
+                        Button("Try Again") {
+                            Task { await retry() }
+                        }
+                            .buttonStyle(.borderedProminent)
+                            .tint(C.watch)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, C.pagePad)
+                } else if listings.isEmpty {
+                    ContentUnavailableView(
+                        "Discover is not curated yet",
+                        systemImage: "sparkles",
+                        description: Text("Browse the categories below while new recommendations are prepared.")
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, C.pagePad)
                 } else {
                     ForEach(listings) { listing in
                         NativeCurationListingView(listing: listing)
@@ -351,5 +396,6 @@ private struct DiscoverHubView: View {
             .padding(.vertical, C.pagePad)
             .padding(.bottom, C.bottomMenuClearance)
         }
+        .refreshable { await retry() }
     }
 }

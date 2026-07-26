@@ -3,6 +3,22 @@ import CoreImage
 import CoreMedia
 @testable import Mediaverse
 
+final class SocialSessionValidationTests: XCTestCase {
+    func testMissingSessionUserRejectsStoredCredential() {
+        XCTAssertEqual(
+            StoredSessionValidation.resolve(hasUser: false),
+            .rejected
+        )
+    }
+
+    func testReturnedSessionUserAuthenticatesStoredCredential() {
+        XCTAssertEqual(
+            StoredSessionValidation.resolve(hasUser: true),
+            .authenticated
+        )
+    }
+}
+
 final class StoryTimedMediaOverlayTests: XCTestCase {
     func testOverlayMediaLoopsAgainstItsOwnDuration() {
         XCTAssertEqual(storyLoopedMediaTime(elapsed: 0.5, duration: 2), 0.5, accuracy: 0.0001)
