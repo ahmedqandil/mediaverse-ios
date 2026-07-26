@@ -1188,77 +1188,17 @@ private struct StoryEnergySheet: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
 
-    private let tags = ["HITS", "INSPIRED", "REAL", "DEEP", "CHILL", "CLUTCH"]
-    private let columns = [GridItem(.adaptive(minimum: 105), spacing: 8)]
-
     var body: some View {
-        NavigationStack {
-            Group {
-                if isLoading {
-                    ProgressView().tint(C.watch)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    VStack(alignment: .leading, spacing: 20) {
-                        SocialEnergyLevelPicker(value: $overall)
-
-                        Text("What kind?")
-                            .font(.headline)
-                        LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
-                            ForEach(tags, id: \.self) { tag in
-                                Button {
-                                    if selectedTags.contains(tag) {
-                                        selectedTags.remove(tag)
-                                    } else {
-                                        selectedTags.insert(tag)
-                                    }
-                                } label: {
-                                    Label(flashEnergyLabel(tag), systemImage: flashEnergySymbol(tag))
-                                        .font(.caption.bold())
-                                        .foregroundStyle(selectedTags.contains(tag) ? C.bg : C.text)
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 9)
-                                        .background(
-                                            selectedTags.contains(tag) ? C.watch : C.elevated,
-                                            in: Capsule()
-                                        )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-
-                        Spacer()
-                    }
-                    .padding(C.pagePad)
-                }
-            }
-            .background(C.bg.ignoresSafeArea())
-            .foregroundStyle(C.text)
-            .navigationTitle("Add Energy")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        Task { await save() }
-                    }
-                    .disabled(isLoading || isSaving)
-                }
-            }
-            .alert(
-                "Energy update failed",
-                isPresented: Binding(
-                    get: { errorMessage != nil },
-                    set: { if !$0 { errorMessage = nil } }
-                )
-            ) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(errorMessage ?? "")
-            }
-        }
+        SocialEnergyForm(
+            contentLabel: "Flash",
+            isUpdate: false,
+            overall: $overall,
+            selectedTags: $selectedTags,
+            isSaving: isSaving || isLoading,
+            errorMessage: errorMessage,
+            onClose: { dismiss() },
+            onSubmit: { Task { await save() } }
+        )
     }
 
     @MainActor

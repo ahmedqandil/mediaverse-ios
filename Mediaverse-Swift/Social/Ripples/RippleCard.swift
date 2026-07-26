@@ -891,64 +891,17 @@ private struct RipplePhotoEnergySheet: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
 
-    private let choices = ["HITS", "INSPIRED", "REAL", "DEEP", "CHILL", "CLUTCH"]
-
     var body: some View {
-        NavigationStack {
-            Group {
-                if isLoading {
-                    ProgressView().tint(C.watch)
-                } else {
-                    VStack(alignment: .leading, spacing: 20) {
-                        SocialEnergyLevelPicker(value: $overall)
-                        Text("What kind?").font(.headline)
-                        FlowLayout(spacing: 8) {
-                            ForEach(choices, id: \.self) { choice in
-                                Button {
-                                    if tags.contains(choice) { tags.remove(choice) }
-                                    else { tags.insert(choice) }
-                                } label: {
-                                    Label(energyLabel(choice), systemImage: energySymbol(choice))
-                                        .font(.caption.bold())
-                                        .foregroundStyle(tags.contains(choice) ? C.bg : C.text)
-                                        .padding(.horizontal, 11)
-                                        .padding(.vertical, 8)
-                                        .background(tags.contains(choice) ? C.watch : C.elevated, in: Capsule())
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        Spacer()
-                    }
-                    .padding(C.pagePad)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(C.bg.ignoresSafeArea())
-            .foregroundStyle(C.text)
-            .navigationTitle("Add Energy")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await save() } }
-                        .disabled(isLoading || isSaving)
-                }
-            }
-            .alert(
-                "Energy update failed",
-                isPresented: Binding(
-                    get: { errorMessage != nil },
-                    set: { if !$0 { errorMessage = nil } }
-                )
-            ) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(errorMessage ?? "")
-            }
-        }
+        SocialEnergyForm(
+            contentLabel: "photo",
+            isUpdate: false,
+            overall: $overall,
+            selectedTags: $tags,
+            isSaving: isSaving || isLoading,
+            errorMessage: errorMessage,
+            onClose: { dismiss() },
+            onSubmit: { Task { await save() } }
+        )
     }
 
     @MainActor
@@ -1387,59 +1340,27 @@ private struct RippleEnergySheet: View {
     @State private var overall = 3
     @State private var tags: Set<String> = []
 
-    private let choices = ["HITS", "INSPIRED", "REAL", "DEEP", "CHILL", "CLUTCH"]
-
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 8) {
-                    SocialEnergyLevelPicker(value: $overall)
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("What kind?").font(.headline)
-                    FlowLayout(spacing: 8) {
-                        ForEach(choices, id: \.self) { choice in
-                            Button {
-                                if tags.contains(choice) { tags.remove(choice) }
-                                else { tags.insert(choice) }
-                            } label: {
-                                Label(energyLabel(choice), systemImage: energySymbol(choice))
-                                    .font(.caption.bold())
-                                    .foregroundStyle(tags.contains(choice) ? C.bg : C.text)
-                                    .padding(.horizontal, 11)
-                                    .padding(.vertical, 8)
-                                    .background(tags.contains(choice) ? C.watch : C.elevated, in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
+        SocialEnergyForm(
+            contentLabel: "Ripple",
+            isUpdate: controller.currentEnergy != nil,
+            overall: $overall,
+            selectedTags: $tags,
+            isSaving: controller.isBusy,
+            errorMessage: controller.errorMessage,
+            onClose: { dismiss() },
+            onSubmit: {
+                Task {
+                    if await controller.submitEnergy(overall: overall, tags: Array(tags)) {
+                        dismiss()
                     }
                 }
-
-                Spacer()
             }
-            .padding(C.pagePad)
-            .background(C.bg.ignoresSafeArea())
-            .foregroundStyle(C.text)
-            .navigationTitle("Add Energy")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        Task {
-                            if await controller.submitEnergy(
-                                overall: overall,
-                                tags: Array(tags)
-                            ) {
-                                dismiss()
-                            }
-                        }
-                    }
-                    .disabled(controller.isBusy)
-                }
+        )
+        .onAppear {
+            if let current = controller.currentEnergy {
+                overall = current.overall
+                tags = Set(current.tags)
             }
         }
     }
@@ -1477,59 +1398,32 @@ struct ContentEnergySheet: View {
     @State private var tags: Set<String> = []
     @State private var isSaving = false
     @State private var errorMessage: String?
-
-    private let choices = ["HITS", "INSPIRED", "REAL", "DEEP", "CHILL", "CLUTCH"]
+    @State private var hasExistingEnergy = false
 
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 20) {
-                SocialEnergyLevelPicker(value: $overall)
+        SocialEnergyForm(
+            contentLabel: kind.label,
+            isUpdate: hasExistingEnergy,
+            overall: $overall,
+            selectedTags: $tags,
+            isSaving: isSaving,
+            errorMessage: errorMessage,
+            onClose: { dismiss() },
+            onSubmit: { Task { await save() } }
+        )
+        .task { await loadCurrentEnergy() }
+    }
 
-                Text("What kind?")
-                    .font(.headline)
-                FlowLayout(spacing: 8) {
-                    ForEach(choices, id: \.self) { choice in
-                        Button {
-                            if tags.contains(choice) {
-                                tags.remove(choice)
-                            } else {
-                                tags.insert(choice)
-                            }
-                        } label: {
-                            Label(energyLabel(choice), systemImage: energySymbol(choice))
-                                .font(.caption.bold())
-                                .foregroundStyle(tags.contains(choice) ? C.bg : C.text)
-                                .padding(.horizontal, 11)
-                                .padding(.vertical, 8)
-                                .background(tags.contains(choice) ? C.watch : C.elevated, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-
-                if let errorMessage {
-                    Text(errorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-                Spacer()
-            }
-            .padding(C.pagePad)
-            .background(C.bg.ignoresSafeArea())
-            .foregroundStyle(C.text)
-            .navigationTitle("Add Energy")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Add Energy") {
-                        Task { await save() }
-                    }
-                    .disabled(isSaving)
-                }
-            }
+    @MainActor
+    private func loadCurrentEnergy() async {
+        guard !isSaving else { return }
+        if let response = try? await APIClient.shared.fetchContentEnergy(
+            contentPath: kind.path,
+            id: contentID
+        ), let current = response.userRating {
+            overall = current.overall
+            tags = Set(current.tags)
+            hasExistingEnergy = true
         }
     }
 
@@ -1618,6 +1512,111 @@ private struct NativeShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
+struct SocialEnergyForm: View {
+    let contentLabel: String
+    let isUpdate: Bool
+    @Binding var overall: Int
+    @Binding var selectedTags: Set<String>
+    let isSaving: Bool
+    let errorMessage: String?
+    let onClose: () -> Void
+    let onSubmit: () -> Void
+
+    private let choices = ["HITS", "INSPIRED", "REAL", "DEEP", "CHILL", "CLUTCH"]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                Text(isUpdate ? "Update your Energy" : "Add Energy to this \(contentLabel)")
+                    .font(.headline)
+                    .foregroundStyle(C.text)
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(C.textMuted)
+                        .frame(width: 32, height: 32)
+                        .background(C.elevated, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+            }
+
+            SocialEnergyLevelPicker(value: $overall)
+                .padding(14)
+                .background(C.elevated.opacity(0.72), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(C.borderSubtle, lineWidth: 1)
+                }
+
+            Text(energyLevelDescription(overall))
+                .font(.caption)
+                .foregroundStyle(C.textMuted)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .accessibilityLabel("Energy level \(overall), \(energyLevelDescription(overall))")
+
+            FlowLayout(spacing: 7) {
+                ForEach(choices, id: \.self) { choice in
+                    let selected = selectedTags.contains(choice)
+                    Button {
+                        if selected { selectedTags.remove(choice) }
+                        else { selectedTags.insert(choice) }
+                    } label: {
+                        Label(energyLabel(choice), systemImage: energySymbol(choice))
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(selected ? C.bg : C.textMuted)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(selected ? C.watch : Color.clear, in: Capsule())
+                            .overlay {
+                                Capsule()
+                                    .stroke(selected ? Color.clear : C.border, lineWidth: 1)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+            }
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+
+            Button(action: onSubmit) {
+                HStack(spacing: 8) {
+                    if isSaving {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(C.bg)
+                    }
+                    Text(isSaving ? "Saving…" : isUpdate ? "Update Energy" : "Add Energy")
+                        .font(.subheadline.bold())
+                }
+                .foregroundStyle(C.bg)
+                .frame(maxWidth: .infinity)
+                .frame(height: 46)
+                .background(C.watch, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(isSaving || overall < 1)
+            .opacity(isSaving || overall < 1 ? 0.45 : 1)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 18)
+        .padding(.bottom, 22)
+        .background(C.bg.ignoresSafeArea())
+        .foregroundStyle(C.text)
+    }
+
+    private func energyLevelDescription(_ level: Int) -> String {
+        ["", "Terrible", "Poor", "Okay", "Good", "Excellent"][min(max(level, 1), 5)]
+    }
+}
+
 struct SocialEnergyMeter: View {
     let total: Int
     let count: Int
@@ -1685,49 +1684,73 @@ struct SocialEnergyLevelPicker: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Vibe Meter")
-                    .font(.headline)
+                    .font(.system(size: 12, weight: .semibold))
+                    .tracking(1.8)
+                    .textCase(.uppercase)
+                    .foregroundStyle(C.textMuted)
                 Spacer()
                 Text(String(format: "%.1f", Double(value)))
-                    .font(.headline.monospacedDigit())
+                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(C.text.opacity(0.72))
             }
 
-            Slider(
-                value: Binding(
-                    get: { Double(value) },
-                    set: { value = Int($0.rounded()) }
-                ),
-                in: 1...5,
-                step: 1
-            )
-            .tint(.white)
-            .background(
-                LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing),
-                in: Capsule()
-            )
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.10))
+                    Capsule()
+                        .fill(LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing))
+                        .frame(width: proxy.size.width * CGFloat(value) / 5)
+                        .shadow(color: Color(hex: "#5967C9").opacity(0.32), radius: 7)
+                    Circle()
+                        .fill(.white)
+                        .frame(width: 18, height: 18)
+                        .overlay { Circle().stroke(C.bg.opacity(0.35), lineWidth: 1) }
+                        .shadow(color: .black.opacity(0.28), radius: 4, y: 1)
+                        .offset(x: max(0, min(proxy.size.width - 18, proxy.size.width * CGFloat(value - 1) / 4)))
+                    Slider(
+                        value: Binding(
+                            get: { Double(value) },
+                            set: { value = Int($0.rounded()) }
+                        ),
+                        in: 1...5,
+                        step: 1
+                    )
+                    .opacity(0.015)
+                }
+            }
+            .frame(height: 18)
+            .accessibilityElement()
             .accessibilityLabel("Energy")
             .accessibilityValue("\(value) of 5")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: value = min(5, value + 1)
+                case .decrement: value = max(1, value - 1)
+                @unknown default: break
+                }
+            }
 
             HStack {
                 Text("Low")
                 Spacer()
                 Text("Electric")
             }
-            .font(.caption)
-            .foregroundStyle(C.textMuted)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(C.textTertiary)
 
-            HStack(spacing: 7) {
+            HStack(spacing: 4) {
                 ForEach(1...5, id: \.self) { level in
                     Button {
                         value = level
                     } label: {
                         Text("\(level)")
-                            .font(.headline)
-                            .foregroundStyle(level == value ? C.bg : C.text)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(level == value ? C.text : C.textMuted)
                             .frame(maxWidth: .infinity)
-                            .frame(height: 38)
+                            .frame(height: 28)
                             .background(
-                                level == value ? C.watch : C.elevated,
-                                in: RoundedRectangle(cornerRadius: 9)
+                                level == value ? Color.white.opacity(0.10) : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 7)
                             )
                     }
                     .buttonStyle(.plain)

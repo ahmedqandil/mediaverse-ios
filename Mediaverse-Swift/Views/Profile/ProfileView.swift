@@ -4,6 +4,23 @@ import UIKit
 
 /// User profile — avatar, name, stats, settings rows, context switcher, sign out.
 struct ProfileView: View {
+    private enum ProfileDestination: Hashable, Identifiable {
+        case history
+        case collections
+        case channel(String)
+        case pairedDevices
+        case affiliationReviews
+
+        var id: String {
+            switch self {
+            case .history: "history"
+            case .collections: "collections"
+            case .channel(let id): "channel-\(id)"
+            case .pairedDevices: "paired-devices"
+            case .affiliationReviews: "affiliation-reviews"
+            }
+        }
+    }
 
     let isRootActive: Bool
 
@@ -15,12 +32,8 @@ struct ProfileView: View {
     @State private var contextUser: ContextUser?
     @State private var isLoading      = true
     @State private var showCtxSwitcher = false
-    @State private var showHistory    = false
-    @State private var showCollections = false
+    @State private var profileDestination: ProfileDestination?
     @State private var showEditProfile = false
-    @State private var showChannelSettings = false
-    @State private var showPairedDevices = false
-    @State private var showAffiliationReviews = false
     @State private var showPartnerRequest = false
     @State private var subscriptions = [UserSubscription]()
     @State private var rentals = [UserRental]()
@@ -89,24 +102,21 @@ struct ProfileView: View {
                 Task { await loadAll() }
             }
         }
-        .navigationDestination(isPresented: $showHistory) {
-            WatchHistoryView()
-        }
-        .navigationDestination(isPresented: $showCollections) {
-            CollectionsView()
-        }
-        .navigationDestination(isPresented: $showChannelSettings) {
-            if let channelId = activeChannelId {
+        .navigationDestination(item: $profileDestination) { destination in
+            switch destination {
+            case .history:
+                WatchHistoryView()
+            case .collections:
+                CollectionsView()
+            case .channel(let channelId):
                 ChannelSettingsView(channelId: channelId) {
                     Task { await loadAll() }
                 }
+            case .pairedDevices:
+                PairedDevicesView()
+            case .affiliationReviews:
+                AffiliationReviewView()
             }
-        }
-        .navigationDestination(isPresented: $showPairedDevices) {
-            PairedDevicesView()
-        }
-        .navigationDestination(isPresented: $showAffiliationReviews) {
-            AffiliationReviewView()
         }
         .task {
             guard isRootActive else { return }
@@ -321,14 +331,14 @@ struct ProfileView: View {
             sectionTitle("Me")
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                 quickActionTile(iconName: "history", fallbackSystemName: "clock", title: "History", subtitle: "Resume watching") {
-                    showHistory = true
+                    profileDestination = .history
                 }
                 quickActionTile(iconName: "collection", fallbackSystemName: "square.grid.2x2", title: "Collections", subtitle: "Saved clips and shows") {
-                    showCollections = true
+                    profileDestination = .collections
                 }
-                if activeChannelId != nil {
+                if let activeChannelId {
                     quickActionTile(iconName: "play", fallbackSystemName: "play.rectangle", title: "Channel", subtitle: activeChannelSubtitle) {
-                        showChannelSettings = true
+                        profileDestination = .channel(activeChannelId)
                     }
                 }
             }
@@ -350,11 +360,11 @@ struct ProfileView: View {
                 }
                 rowDivider
                 accountRow(iconName: "devices", fallbackSystemName: "tv.and.mediabox", title: "Paired Devices", subtitle: "TVs and living-room apps") {
-                    showPairedDevices = true
+                    profileDestination = .pairedDevices
                 }
                 rowDivider
                 accountRow(iconName: "network", fallbackSystemName: "link.badge.plus", title: "Affiliation Requests", subtitle: "Review Vibe connections you manage") {
-                    showAffiliationReviews = true
+                    profileDestination = .affiliationReviews
                 }
                 rowDivider
                 if canRequestPartner {
