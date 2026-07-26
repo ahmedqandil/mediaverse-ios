@@ -489,6 +489,60 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         XCTAssertEqual(report["postId"] as? String, "p-1")
         XCTAssertEqual(report["reason"] as? String, "Spam")
     }
+
+    func testVibeModerationUsesExactFrozenContracts() async throws {
+        let posts = """
+        {"posts":[{"id":"p-1","body":"Review me","status":"PENDING_REVIEW","hiddenReason":null,"author":{"id":"u-1","name":"Ava","handle":"ava","image":null}}]}
+        """
+        let reports = """
+        {"reports":[{"id":"r-1","targetType":"POST","reason":"Spam","details":null,"status":"OPEN","severity":"NORMAL","post":{"id":"p-1","body":"Review me","content":null},"comment":null,"reportedUser":null}]}
+        """
+        let joins = """
+        {"requests":[{"id":"j-1","message":"Let me in","createdAt":"2026-07-26T00:00:00.000Z","user":{"id":"u-2","name":"Noor","handle":"noor","image":null}}]}
+        """
+        let transport = SocialTransportStub(responses: [
+            "/api/fan-clubs/cinema/moderation": posts,
+            "/api/fan-clubs/cinema/moderation?view=reports": reports,
+            "/api/fan-clubs/cinema/join-requests": joins,
+            "/api/fan-club-posts/p-1/moderate": #"{"post":{"id":"p-1"}}"#,
+            "PATCH /api/fan-clubs/cinema/reports/r-1": #"{"ok":true}"#,
+            "PATCH /api/fan-clubs/cinema/join-requests/j-1": #"{"ok":true}"#
+        ])
+        let api = LegacySocialAPIAdapter(transport: transport)
+
+        let moderationRipples = try await api.moderationRipples(vibeSlug: "cinema")
+        let moderationReports = try await api.moderationReports(vibeSlug: "cinema")
+        let joinRequests = try await api.joinRequests(vibeSlug: "cinema")
+        XCTAssertEqual(moderationRipples.count, 1)
+        XCTAssertEqual(moderationReports.count, 1)
+        XCTAssertEqual(joinRequests.count, 1)
+        try await api.moderateRipple(postId: "p-1", action: "hide", reason: "Off topic")
+        try await api.resolveReport(
+            vibeSlug: "cinema",
+            reportId: "r-1",
+            status: "RESOLVED_ACTIONED",
+            note: "Ripple hidden"
+        )
+        try await api.decideJoinRequest(
+            vibeSlug: "cinema",
+            requestId: "j-1",
+            approve: true,
+            note: "Welcome"
+        )
+
+        let readPaths = await transport.paths
+        XCTAssertEqual(readPaths, [
+            "/api/fan-clubs/cinema/moderation",
+            "/api/fan-clubs/cinema/moderation?view=reports",
+            "/api/fan-clubs/cinema/join-requests"
+        ])
+        let writePaths = await transport.postPaths
+        XCTAssertEqual(writePaths, [
+            "/api/fan-club-posts/p-1/moderate",
+            "PATCH /api/fan-clubs/cinema/reports/r-1",
+            "PATCH /api/fan-clubs/cinema/join-requests/j-1"
+        ])
+    }
 }
 
 private actor SocialTransportStub: LegacySocialTransport {

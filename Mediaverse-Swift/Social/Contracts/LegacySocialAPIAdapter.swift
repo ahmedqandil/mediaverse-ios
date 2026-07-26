@@ -235,6 +235,80 @@ public actor LegacySocialAPIAdapter {
         ).report
     }
 
+    public func moderationRipples(vibeSlug: String) async throws -> [ModerationRipple] {
+        try await decode(
+            ModerationRippleResponse.self,
+            path: "/api/fan-clubs/\(try segment(vibeSlug))/moderation"
+        ).posts
+    }
+
+    public func moderationReports(vibeSlug: String) async throws -> [ModerationReport] {
+        try await decode(
+            ModerationReportsResponse.self,
+            path: "/api/fan-clubs/\(try segment(vibeSlug))/moderation?view=reports"
+        ).reports
+    }
+
+    public func moderateRipple(
+        postId: String,
+        action: String,
+        reason: String? = nil
+    ) async throws {
+        let normalizedReason = reason?.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await transport.socialPostData(
+            path: "/api/fan-club-posts/\(try segment(postId))/moderate",
+            body: try JSONEncoder().encode(
+                ModerationActionRequest(
+                    action: action,
+                    reason: normalizedReason?.isEmpty == false ? normalizedReason : nil
+                )
+            )
+        )
+    }
+
+    public func resolveReport(
+        vibeSlug: String,
+        reportId: String,
+        status: String,
+        note: String? = nil
+    ) async throws {
+        let data = try await transport.socialPatchData(
+            path: "/api/fan-clubs/\(try segment(vibeSlug))/reports/\(try segment(reportId))",
+            body: try JSONEncoder().encode(
+                ResolveReportRequest(
+                    status: status,
+                    resolutionNote: note?.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            )
+        )
+        _ = try decoder.decode(SocialOKResponse.self, from: data)
+    }
+
+    public func joinRequests(vibeSlug: String) async throws -> [VibePendingJoinRequest] {
+        try await decode(
+            VibeJoinRequestsResponse.self,
+            path: "/api/fan-clubs/\(try segment(vibeSlug))/join-requests"
+        ).requests
+    }
+
+    public func decideJoinRequest(
+        vibeSlug: String,
+        requestId: String,
+        approve: Bool,
+        note: String? = nil
+    ) async throws {
+        let data = try await transport.socialPatchData(
+            path: "/api/fan-clubs/\(try segment(vibeSlug))/join-requests/\(try segment(requestId))",
+            body: try JSONEncoder().encode(
+                JoinRequestDecision(
+                    decision: approve ? "approve" : "reject",
+                    note: note?.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            )
+        )
+        _ = try decoder.decode(SocialOKResponse.self, from: data)
+    }
+
     public func rippleComments(postId: String) async throws -> [RippleComment] {
         try await decode(
             RippleCommentsResponse.self,
@@ -620,6 +694,22 @@ private struct VibeReportRequest: Encodable {
     let reason: String
     let details: String?
 }
+
+private struct ModerationActionRequest: Encodable {
+    let action: String
+    let reason: String?
+}
+
+private struct ResolveReportRequest: Encodable {
+    let status: String
+    let resolutionNote: String?
+}
+
+private struct JoinRequestDecision: Encodable {
+    let decision: String
+    let note: String?
+}
+
 
 private struct CreateRippleRequest: Encodable {
     let body: String?

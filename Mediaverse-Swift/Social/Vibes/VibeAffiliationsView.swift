@@ -507,3 +507,347 @@ struct AffiliationReviewView: View {
         busyID = nil
     }
 }
+
+private enum VibeModerationTab: String, CaseIterable, Identifiable {
+    case ripples = "Ripples"
+    case reports = "Reports"
+    case requests = "Requests"
+    var id: String { rawValue }
+}
+
+struct VibeModerationView: View {
+    let slug: String
+    let capabilities: VibeCapabilities
+    @Environment(\.dismiss) private var dismiss
+    @State private var tab: VibeModerationTab = .ripples
+    @State private var ripples: [ModerationRipple] = []
+    @State private var reports: [ModerationReport] = []
+    @State private var requests: [VibePendingJoinRequest] = []
+    @State private var selectedRipple: ModerationRipple?
+    @State private var selectedReport: ModerationReport?
+    @State private var selectedRequest: VibePendingJoinRequest?
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+    private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+
+    private var tabs: [VibeModerationTab] {
+        var value: [VibeModerationTab] = []
+        if capabilities.canModerateContent {
+            value.append(contentsOf: [.ripples, .reports])
+        }
+        if capabilities.canModerateMembers {
+            value.append(.requests)
+        }
+        return value
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                Picker("Moderation", selection: $tab) {
+                    ForEach(tabs) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .padding(C.pagePad)
+
+                if isLoading {
+                    ProgressView().tint(C.watch).frame(maxHeight: .infinity)
+                } else {
+                    list
+                }
+            }
+            .background(C.bg.ignoresSafeArea())
+            .navigationTitle("Vibe Moderation")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .task {
+                if !tabs.contains(tab), let first = tabs.first { tab = first }
+                await load()
+            }
+            .onChange(of: tab) { _, _ in Task { await load() } }
+            .sheet(item: $selectedRipple) { ripple in
+                RippleModerationDecisionSheet(ripple: ripple) {
+                    selectedRipple = nil
+                    await load()
+                }
+            }
+            .sheet(item: $selectedReport) { report in
+                ReportResolutionSheet(slug: slug, report: report) {
+                    selectedReport = nil
+                    await load()
+                }
+            }
+            .sheet(item: $selectedRequest) { request in
+                JoinRequestDecisionSheet(slug: slug, request: request) {
+                    selectedRequest = nil
+                    await load()
+                }
+            }
+            .alert(
+                "Moderation could not be loaded",
+                isPresented: Binding(
+                    get: { errorMessage != nil },
+                    set: { if !$0 { errorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var list: some View {
+        ScrollView {
+            LazyVStack(spacing: 10) {
+                switch tab {
+                case .ripples:
+                    if ripples.isEmpty { empty("No Ripples need review") }
+                    ForEach(ripples) { ripple in
+                        moderationRow(
+                            title: ripple.author.name ?? ripple.author.handle ?? "Member",
+                            subtitle: ripple.body ?? "Media Ripple",
+                            badge: ripple.status
+                        ) { selectedRipple = ripple }
+                    }
+                case .reports:
+                    if reports.isEmpty { empty("No open reports") }
+                    ForEach(reports) { report in
+                        moderationRow(
+                            title: report.reason,
+                            subtitle: report.details
+                                ?? report.post?.body
+                                ?? report.comment?.content
+                                ?? report.reportedUser?.name
+                                ?? report.targetType.capitalized,
+                            badge: report.status
+                        ) { selectedReport = report }
+                    }
+                case .requests:
+                    if requests.isEmpty { empty("No pending join requests") }
+                    ForEach(requests) { request in
+                        moderationRow(
+                            title: request.user.name ?? request.user.handle ?? "Westreem user",
+                            subtitle: request.message ?? "Wants to join this Vibe",
+                            badge: "PENDING"
+                        ) { selectedRequest = request }
+                    }
+                }
+            }
+            .padding(C.pagePad)
+        }
+        .refreshable { await load() }
+    }
+
+    private func empty(_ title: String) -> some View {
+        ContentUnavailableView(title, systemImage: "checkmark.shield")
+            .foregroundStyle(C.text)
+            .padding(.top, 50)
+    }
+
+    private func moderationRow(
+        title: String,
+        subtitle: String,
+        badge: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title).font(.subheadline.bold()).foregroundStyle(C.text)
+                    Text(subtitle).font(.caption).foregroundStyle(C.textMuted).lineLimit(3)
+                    Text(badge.replacingOccurrences(of: "_", with: " ").capitalized)
+                        .font(.caption2.bold()).foregroundStyle(C.watch)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").foregroundStyle(C.textMuted)
+            }
+            .padding(12)
+            .background(C.surface, in: RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @MainActor
+    private func load() async {
+        isLoading = true
+        do {
+            switch tab {
+            case .ripples:
+                ripples = try await api.moderationRipples(vibeSlug: slug)
+            case .reports:
+                reports = try await api.moderationReports(vibeSlug: slug)
+            case .requests:
+                requests = try await api.joinRequests(vibeSlug: slug)
+            }
+        } catch {
+            errorMessage = socialErrorMessage(error)
+        }
+        isLoading = false
+    }
+}
+
+private struct RippleModerationDecisionSheet: View {
+    let ripple: ModerationRipple
+    let onFinished: () async -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var action = "approve"
+    @State private var reason = ""
+    @State private var busy = false
+    @State private var errorMessage: String?
+    private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Ripple") {
+                    Text(ripple.body ?? "Media Ripple")
+                    LabeledContent("Status", value: ripple.status.replacingOccurrences(of: "_", with: " ").capitalized)
+                }
+                Section("Decision") {
+                    Picker("Action", selection: $action) {
+                        Text("Approve").tag("approve")
+                        Text("Restore").tag("restore")
+                        Text("Hide").tag("hide")
+                        Text("Investigate").tag("investigate")
+                        Text("Remove").tag("remove")
+                    }
+                    if !["approve", "restore"].contains(action) {
+                        TextField("Reason (required)", text: $reason, axis: .vertical)
+                    }
+                }
+            }
+            .navigationTitle("Review Ripple")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Submit") { Task { await submit() } }
+                        .disabled(busy || (!["approve", "restore"].contains(action) && reason.trimmingCharacters(in: .whitespacesAndNewlines).count < 3))
+                }
+            }
+            .alert("Moderation failed", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(errorMessage ?? "") }
+        }
+    }
+
+    @MainActor
+    private func submit() async {
+        busy = true
+        do {
+            try await api.moderateRipple(postId: ripple.id, action: action, reason: reason)
+            await onFinished()
+            dismiss()
+        } catch { errorMessage = socialErrorMessage(error) }
+        busy = false
+    }
+}
+
+private struct ReportResolutionSheet: View {
+    let slug: String
+    let report: ModerationReport
+    let onFinished: () async -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var status = "REVIEWING"
+    @State private var note = ""
+    @State private var busy = false
+    @State private var errorMessage: String?
+    private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Report") {
+                    Text(report.reason).font(.headline)
+                    if let details = report.details { Text(details) }
+                }
+                Section("Resolution") {
+                    Picker("Status", selection: $status) {
+                        Text("Reviewing").tag("REVIEWING")
+                        Text("Resolved — actioned").tag("RESOLVED_ACTIONED")
+                        Text("Resolved — no action").tag("RESOLVED_NO_ACTION")
+                    }
+                    TextField("Resolution note", text: $note, axis: .vertical)
+                }
+                if status == "RESOLVED_ACTIONED" {
+                    Text("Resolve the report after separately applying the appropriate Ripple or member action.")
+                        .font(.caption).foregroundStyle(C.textMuted)
+                }
+            }
+            .navigationTitle("Resolve Report")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { Task { await submit() } }
+                        .disabled(busy || (status.hasPrefix("RESOLVED") && note.trimmingCharacters(in: .whitespacesAndNewlines).count < 3))
+                }
+            }
+            .alert("Report update failed", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(errorMessage ?? "") }
+        }
+    }
+
+    @MainActor
+    private func submit() async {
+        busy = true
+        do {
+            try await api.resolveReport(vibeSlug: slug, reportId: report.id, status: status, note: note)
+            await onFinished()
+            dismiss()
+        } catch { errorMessage = socialErrorMessage(error) }
+        busy = false
+    }
+}
+
+private struct JoinRequestDecisionSheet: View {
+    let slug: String
+    let request: VibePendingJoinRequest
+    let onFinished: () async -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var note = ""
+    @State private var busy = false
+    @State private var errorMessage: String?
+    private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Request") {
+                    Text(request.user.name ?? request.user.handle ?? "Westreem user")
+                    if let message = request.message { Text(message) }
+                }
+                Section("Optional note") {
+                    TextField("Message to the requester", text: $note, axis: .vertical)
+                }
+            }
+            .navigationTitle("Join Request")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItemGroup(placement: .confirmationAction) {
+                    Button("Reject", role: .destructive) { Task { await decide(false) } }.disabled(busy)
+                    Button("Approve") { Task { await decide(true) } }.disabled(busy)
+                }
+            }
+            .alert("Decision failed", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(errorMessage ?? "") }
+        }
+    }
+
+    @MainActor
+    private func decide(_ approve: Bool) async {
+        busy = true
+        do {
+            try await api.decideJoinRequest(vibeSlug: slug, requestId: request.id, approve: approve, note: note)
+            await onFinished()
+            dismiss()
+        } catch { errorMessage = socialErrorMessage(error) }
+        busy = false
+    }
+}

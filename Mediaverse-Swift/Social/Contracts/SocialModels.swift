@@ -72,13 +72,16 @@ public struct VibeCapabilities: Decodable, Equatable, Sendable {
     public let canManageClub: Bool
     public let canModerateContent: Bool
     public let canModerateMembers: Bool
+    public let canBanMembers: Bool
+    public let canManageRoles: Bool
     public let canInvite: Bool
     public let canManageAffiliations: Bool
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case canView, canViewContent, canPost, canComment, canVote, canFollow
         case canJoin, canRequestJoin, canLeave, canManageClub
-        case canModerateContent, canModerateMembers, canInvite, canManageAffiliations
+        case canModerateContent, canModerateMembers, canBanMembers, canManageRoles
+        case canInvite, canManageAffiliations
     }
 
     public init(from decoder: Decoder) throws {
@@ -95,6 +98,8 @@ public struct VibeCapabilities: Decodable, Equatable, Sendable {
         canManageClub = try values.decodeIfPresent(Bool.self, forKey: .canManageClub) ?? false
         canModerateContent = try values.decodeIfPresent(Bool.self, forKey: .canModerateContent) ?? false
         canModerateMembers = try values.decodeIfPresent(Bool.self, forKey: .canModerateMembers) ?? false
+        canBanMembers = try values.decodeIfPresent(Bool.self, forKey: .canBanMembers) ?? false
+        canManageRoles = try values.decodeIfPresent(Bool.self, forKey: .canManageRoles) ?? false
         canInvite = try values.decodeIfPresent(Bool.self, forKey: .canInvite) ?? false
         canManageAffiliations = try values.decodeIfPresent(Bool.self, forKey: .canManageAffiliations) ?? false
     }
@@ -243,6 +248,51 @@ public struct VibeReportReceipt: Decodable, Sendable {
 
 public struct VibeReportResponse: Decodable, Sendable {
     public let report: VibeReportReceipt
+}
+
+public struct ModerationRipple: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let body: String?
+    public let status: String
+    public let hiddenReason: String?
+    public let author: SocialIdentity
+}
+
+public struct ModerationRippleResponse: Decodable, Sendable {
+    public let posts: [ModerationRipple]
+}
+
+public struct ModerationReportTarget: Decodable, Sendable {
+    public let id: String
+    public let body: String?
+    public let content: String?
+}
+
+public struct ModerationReport: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let targetType: String
+    public let reason: String
+    public let details: String?
+    public let status: String
+    public let severity: String?
+    public let post: ModerationReportTarget?
+    public let comment: ModerationReportTarget?
+    public let reportedUser: SocialIdentity?
+}
+
+public struct ModerationReportsResponse: Decodable, Sendable {
+    public let reports: [ModerationReport]
+}
+
+public struct VibePendingJoinRequest: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let user: SocialIdentity
+    public let message: String?
+    public let createdAt: String?
+}
+
+public struct VibeJoinRequestsResponse: Decodable, Sendable {
+    public let requests: [VibePendingJoinRequest]
 }
 
 public struct VibeListResponse: Decodable, Sendable {
