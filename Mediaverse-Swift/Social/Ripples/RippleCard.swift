@@ -698,6 +698,7 @@ private struct RippleAttachmentsView: View {
 private struct RipplePhotoGrid: View {
     let photos: [RippleAttachment]
     @State private var selectedPhoto: RippleAttachment?
+    @State private var energyPhoto: RippleAttachment?
 
     var body: some View {
         GeometryReader { proxy in
@@ -709,30 +710,32 @@ private struct RipplePhotoGrid: View {
                 spacing: spacing
             ) {
                 ForEach(Array(photos.prefix(4).enumerated()), id: \.element.id) { index, photo in
-                    Button {
-                        selectedPhoto = photo
-                    } label: {
-                        CachedRemoteImage(
-                            url: C.mediaURL(photo.imageURL),
-                            targetSize: CGSize(width: width, height: photos.count == 1 ? width : width * 0.9)
-                        ) { image in
-                            image.resizable().scaledToFill()
-                        } placeholder: {
-                            C.elevated
-                        }
-                        .frame(width: width, height: photos.count == 1 ? width : width * 0.9)
-                        .clipped()
-                        .overlay {
-                            if index == 3, photos.count > 4 {
-                                Color.black.opacity(0.55)
-                                Text("+\(photos.count - 3)")
-                                    .font(.title.bold())
-                                    .foregroundStyle(.white)
-                            }
+                    CachedRemoteImage(
+                        url: C.mediaURL(photo.imageURL),
+                        targetSize: CGSize(width: width, height: photos.count == 1 ? width : width * 0.9)
+                    ) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        C.elevated
+                    }
+                    .frame(width: width, height: photos.count == 1 ? width : width * 0.9)
+                    .clipped()
+                    .overlay {
+                        if index == 3, photos.count > 4 {
+                            Color.black.opacity(0.55)
+                            Text("+\(photos.count - 3)")
+                                .font(.title.bold())
+                                .foregroundStyle(.white)
                         }
                     }
-                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
+                    .gesture(photoTapGesture(photo))
+                    .accessibilityAddTraits(.isButton)
                     .accessibilityLabel("Open photo \(index + 1) of \(photos.count)")
+                    .accessibilityHint("Double tap to open")
+                    .accessibilityAction(named: "Add Energy") {
+                        energyPhoto = photo
+                    }
                 }
             }
         }
@@ -744,6 +747,29 @@ private struct RipplePhotoGrid: View {
                 onClose: { selectedPhoto = nil }
             )
         }
+        .sheet(item: $energyPhoto) { photo in
+            RipplePhotoEnergySheet(attachmentId: photo.id) { _ in
+                energyPhoto = nil
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+    }
+
+    private func photoTapGesture(
+        _ photo: RippleAttachment
+    ) -> some Gesture {
+        TapGesture(count: 2)
+            .exclusively(before: TapGesture(count: 1))
+            .onEnded { value in
+                switch value {
+                case .first(_):
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    energyPhoto = photo
+                case .second(_):
+                    selectedPhoto = photo
+                }
+            }
     }
 }
 
@@ -892,6 +918,14 @@ private struct RipplePhotoViewerPage: View {
                 ProgressView().tint(.white)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                showsEnergy = true
+            }
+            .accessibilityAction(named: "Add Energy") {
+                showsEnergy = true
+            }
             Spacer(minLength: 20)
             if energyCount > 0 {
                 SocialEnergyMeter(
