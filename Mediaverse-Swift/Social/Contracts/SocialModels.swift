@@ -1083,14 +1083,27 @@ public struct AtmosphereVideo: Decodable, Identifiable, Sendable {
     public let createdAt: String
     public let channel: AtmosphereChannel?
     public let show: AtmosphereShow?
+    public let contentRatings: [AtmosphereContentRating]?
+    public let counts: AtmosphereVideoCounts?
 
     enum CodingKeys: String, CodingKey {
         case id, title, duration, views, type, description, publishedAt, createdAt
         case thumbnailURL = "thumbnailUrl"
         case thumbnailFocus
         case videoURL = "videoUrl"
-        case channel, show
+        case channel, show, contentRatings
+        case counts = "_count"
     }
+}
+
+public struct AtmosphereContentRating: Decodable, Sendable {
+    public let overall: Int
+    public let tags: [String]?
+}
+
+public struct AtmosphereVideoCounts: Decodable, Sendable {
+    public let comments: Int?
+    public let fanClubAttachments: Int?
 }
 
 public struct AtmosphereChannel: Decodable, Sendable {

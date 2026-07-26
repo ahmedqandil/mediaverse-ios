@@ -1,5 +1,6 @@
 import SwiftUI
 import AVKit
+import UIKit
 
 struct AtmosphereView: View {
     @AppStorage("playerMuted") private var playerMuted = false
@@ -323,28 +324,31 @@ struct AtmosphereView: View {
         let mediaRoute = AppRoute.video(video.id)
         let sourceRoute: AppRoute? = video.channel.map { .channel($0.handle) }
             ?? video.show.map { .show($0.id) }
-        return HomeVideoCard(
-            video: feedVideo,
-            mediaRoute: mediaRoute,
-            sourceRoute: sourceRoute,
-            activePreviewVideoId: $activePreviewVideoId,
-            previewManager: previewManager,
-            isAutoplayBlocked: isAutoplayBlocked,
-            isPreservingPreviewHandoff: isPreservingPreviewHandoff,
-            onPreviewPaused: {
-                suppressedPreviewVideoId = video.id
-                updatePreview(videos: feedVideos(from: model.atmosphereItems))
-            },
-            openMediaAction: {
-                NotificationCenter.default.post(
-                    name: .mentionNavigationRequested,
-                    object: mediaRoute
-                )
-            },
-            replaceMediaAction: canHandoff(feedVideo) ? { sourceFrame in
-                handoffToWatch(feedVideo, sourceFrame: sourceFrame)
-            } : nil
-        )
+        return AtmospherePublishedVideoCard(video: video, sourceRoute: sourceRoute) {
+            HomeVideoCard(
+                video: feedVideo,
+                mediaRoute: mediaRoute,
+                sourceRoute: sourceRoute,
+                activePreviewVideoId: $activePreviewVideoId,
+                previewManager: previewManager,
+                isAutoplayBlocked: isAutoplayBlocked,
+                isPreservingPreviewHandoff: isPreservingPreviewHandoff,
+                onPreviewPaused: {
+                    suppressedPreviewVideoId = video.id
+                    updatePreview(videos: feedVideos(from: model.atmosphereItems))
+                },
+                openMediaAction: {
+                    NotificationCenter.default.post(
+                        name: .mentionNavigationRequested,
+                        object: mediaRoute
+                    )
+                },
+                replaceMediaAction: canHandoff(feedVideo) ? { sourceFrame in
+                    handoffToWatch(feedVideo, sourceFrame: sourceFrame)
+                } : nil,
+                horizontalContentInset: C.pagePad
+            )
+        }
         .padding(.bottom, C.sectionSpacing)
     }
 
@@ -525,6 +529,196 @@ struct AtmosphereView: View {
         let injectionIndex = ((zeroBasedIndex + 1) / every) - 1
         guard model.inlineListings.indices.contains(injectionIndex) else { return nil }
         return model.inlineListings[injectionIndex]
+    }
+}
+
+private struct AtmospherePublishedVideoCard<MediaCard: View>: View {
+    let video: AtmosphereVideo
+    let sourceRoute: AppRoute?
+    @ViewBuilder let mediaCard: () -> MediaCard
+
+    @EnvironmentObject private var auth: AuthManager
+    @State private var showEnergy = false
+    @State private var showComments = false
+    @State private var showEcho = false
+    @State private var energyCount: Int
+    @State private var commentCount: Int
+    @State private var echoCount: Int
+    @State private var energyAggregate: ContentEnergyAggregate?
+
+    init(
+        video: AtmosphereVideo,
+        sourceRoute: AppRoute?,
+        @ViewBuilder mediaCard: @escaping () -> MediaCard
+    ) {
+        self.video = video
+        self.sourceRoute = sourceRoute
+        self.mediaCard = mediaCard
+        _energyCount = State(initialValue: video.contentRatings?.count ?? 0)
+        _commentCount = State(initialValue: video.counts?.comments ?? 0)
+        _echoCount = State(initialValue: video.counts?.fanClubAttachments ?? 0)
+    }
+
+    private var ownerName: String {
+        video.channel?.name ?? video.show?.title ?? "WeStreem"
+    }
+
+    private var ownerImage: String? {
+        video.channel?.avatarURL ?? video.show?.coverURL
+    }
+
+    private var ownerKind: String {
+        video.channel != nil ? "Channel" : video.show != nil ? "Show" : "publisher"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            publisherHeader
+            mediaCard()
+                .padding(.bottom, 14)
+            actionBar
+        }
+        .background(C.surface.opacity(0.82))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(C.borderSubtle, lineWidth: 1)
+        }
+        .padding(.horizontal, C.pagePad)
+        .task(id: video.id) {
+            guard let response = try? await APIClient.shared.fetchContentEnergy(
+                contentPath: "videos",
+                id: video.id
+            ) else { return }
+            energyAggregate = response.aggregate
+            energyCount = response.aggregate.count
+        }
+        .sheet(isPresented: $showEnergy) {
+            ContentEnergySheet(kind: .video, contentID: video.id) { aggregate in
+                energyAggregate = aggregate
+                energyCount = aggregate.count
+            }
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showComments) {
+            StandardCommentsSheet(
+                target: .video(video.id),
+                initialCount: commentCount,
+                autoFocusComposer: true,
+                onClose: { showComments = false },
+                onCountChange: { commentCount = $0 }
+            )
+        }
+        .sheet(isPresented: $showEcho) {
+            EchoVibeSheet(
+                content: .video(
+                    id: video.id,
+                    title: video.title,
+                    thumbnailURL: video.thumbnailURL
+                )
+            ) { added in
+                echoCount += added
+            }
+        }
+    }
+
+    private var publisherHeader: some View {
+        HStack(spacing: 12) {
+            sourceTarget {
+                SocialIdentityAvatar(image: ownerImage, name: ownerName, size: 40)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                sourceTarget {
+                    Text(ownerName)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(C.text)
+                        .lineLimit(1)
+                }
+                Text("From a \(ownerKind) you follow")
+                    .font(.system(size: 12))
+                    .foregroundStyle(C.textMuted)
+            }
+            Spacer()
+        }
+        .padding(16)
+    }
+
+    private var actionBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 0) {
+                actionButton(
+                    title: "Add Energy",
+                    count: energyCount,
+                    systemImage: "bolt",
+                    highlighted: energyAggregate?.count ?? 0 > 0
+                ) {
+                    guard auth.isAuthenticated else { return }
+                    showEnergy = true
+                }
+                actionButton(title: "Comment", count: commentCount, systemImage: "bubble.left") {
+                    showComments = true
+                }
+                actionButton(title: "Echo", count: echoCount, systemImage: "wave.3.right") {
+                    guard auth.isAuthenticated else { return }
+                    showEcho = true
+                }
+                actionButton(title: "Share", count: 0, systemImage: "square.and.arrow.up") {
+                    share()
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+        }
+        .overlay(alignment: .top) {
+            Rectangle().fill(C.borderSubtle).frame(height: 1)
+        }
+    }
+
+    private func actionButton(
+        title: String,
+        count: Int,
+        systemImage: String,
+        highlighted: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 16, weight: .medium))
+                Text(title)
+                if count > 0 {
+                    Text(count.formatted())
+                        .foregroundStyle(C.textTertiary)
+                }
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(highlighted ? Color.orange.opacity(0.9) : C.textMuted)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(count > 0 ? "\(title), \(count)" : title)
+    }
+
+    @ViewBuilder
+    private func sourceTarget<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        if let sourceRoute {
+            NavigationLink(value: sourceRoute) {
+                content()
+            }
+            .buttonStyle(.plain)
+        } else {
+            content()
+        }
+    }
+
+    private func share() {
+        guard let url = URL(string: "\(C.baseURL)/watch/\(C.pathSegment(video.id))?src=atmosphere") else {
+            return
+        }
+        UIActivityViewController(activityItems: [url], applicationActivities: nil).presentFromRoot()
     }
 }
 

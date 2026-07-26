@@ -2418,6 +2418,7 @@ struct HomeVideoCard: View {
     let onPreviewPaused: () -> Void
     let openMediaAction: () -> Void
     let replaceMediaAction: ((CGRect?) -> Void)?
+    var horizontalContentInset: CGFloat = 0
     @State private var thumbnailGlobalFrame: CGRect?
     @State private var previewScrubTime: Double?
     @State private var showPreviewVideo = false
@@ -2486,7 +2487,7 @@ struct HomeVideoCard: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, C.pagePad)
+            .padding(.horizontal, horizontalContentInset > 0 ? horizontalContentInset : C.pagePad)
         }
         .contentShape(Rectangle())
         .background {
@@ -2683,6 +2684,7 @@ struct HomeVideoCard: View {
         }
         .frame(height: video.homeFeedCardHeight(for: UIScreen.main.bounds.width))
         .frame(maxWidth: .infinity)
+        .padding(.horizontal, horizontalContentInset)
         .clipped()
         .onDisappear {
             let wasActive = activePreviewVideoId == video.id || previewManager.activeVideoId == video.id

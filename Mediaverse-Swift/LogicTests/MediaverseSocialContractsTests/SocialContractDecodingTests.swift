@@ -135,6 +135,8 @@ final class SocialContractDecodingTests: XCTestCase {
               "duration": 40,
               "views": 20,
               "type": "video",
+              "contentRatings": [{"overall": 4, "tags": ["Inspired"]}],
+              "_count": {"comments": 3, "fanClubAttachments": 2},
               "publishedAt": null,
               "createdAt": "2026-07-26T09:00:00.000Z"
             }, {
@@ -158,13 +160,16 @@ final class SocialContractDecodingTests: XCTestCase {
         let feed = try decoder.decode(AtmosphereFeed.self, from: data)
 
         XCTAssertEqual(feed.items.count, 2)
-        guard case .ripple(let ripple) = feed.items[0], case .video = feed.items[1] else {
+        guard case .ripple(let ripple) = feed.items[0], case .video(let video) = feed.items[1] else {
             return XCTFail("Atmosphere must retain Ripple then regular video")
         }
         XCTAssertNil(ripple.clubId)
         XCTAssertEqual(ripple.club?.slug, "cinema")
         XCTAssertFalse(ripple.poll?.allowsVoteChanges ?? true)
         XCTAssertEqual(ripple.poll?.votes.count, 0)
+        XCTAssertEqual(video.contentRatings?.first?.overall, 4)
+        XCTAssertEqual(video.counts?.comments, 3)
+        XCTAssertEqual(video.counts?.fanClubAttachments, 2)
     }
 
     func testPollDefaultsOptionalCountsAndPositions() throws {
