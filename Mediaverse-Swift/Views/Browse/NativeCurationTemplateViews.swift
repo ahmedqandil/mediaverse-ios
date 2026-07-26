@@ -25,9 +25,9 @@ struct NativeCurationListingView: View {
     var body: some View {
         Group {
             if isIdentityOnly {
-                NativeCurationIdentityCarousel(listing: listing)
+                NativeCurationIdentityTemplate(listing: listing)
             } else if isRippleOnly && templateType == "carousel" {
-                NativeCurationRippleList(listing: listing)
+                NativeCurationRippleCarousel(listing: listing)
             } else {
                 templateRenderer
             }
@@ -51,13 +51,17 @@ struct NativeCurationListingView: View {
                 NativeCurationSpotlight(listing: listing)
             case "channels":
                 NativeCurationChannelList(listing: listing)
+            case "social_rows":
+                NativeCurationSocialRows(listing: listing)
             case "carousel":
                 NativeCurationCarousel(listing: listing)
             case "ripples":
                 NativeCurationRippleList(listing: listing)
             case "stories":
                 NativeCurationFlashesTray(listing: listing)
-            case "continue_watching", "video_feed", "shorts_feed", "atmosphere_feed":
+            case "continue_watching":
+                NativeCurationContinueWatching(listing: listing)
+            case "video_feed", "shorts_feed", "atmosphere_feed":
                 EmptyView()
             default:
                 NativeCurationCarousel(listing: listing)
@@ -65,24 +69,114 @@ struct NativeCurationListingView: View {
     }
 }
 
-private struct NativeCurationIdentityCarousel: View {
+private struct NativeCurationIdentityTemplate: View {
     let listing: AssembledListing
+
+    private var templateType: String { listing.normalizedTemplateType }
 
     var body: some View {
         if !listing.items.isEmpty {
             VStack(alignment: .leading, spacing: C.rowSpacing) {
                 NativeCurationHeader(listing: listing, showSeeAll: true)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(spacing: C.gridSpacing) {
+                if templateType == "hero" || templateType == "banner" {
+                    NativeCurationChannelFullCard(item: listing.items[0])
+                        .frame(maxWidth: 680)
+                        .padding(.horizontal, C.pagePad)
+                } else if templateType == "carousel" || templateType == "social_rows" {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(alignment: .top, spacing: C.gridSpacing) {
+                            ForEach(Array(listing.items.enumerated()), id: \.offset) { _, item in
+                                NativeCurationChannelFullCard(item: item)
+                                    .frame(width: 290)
+                            }
+                        }
+                        .padding(.horizontal, C.pagePad)
+                        .padding(.bottom, 2)
+                    }
+                } else {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 260), spacing: C.gridSpacing)],
+                        spacing: C.gridSpacing
+                    ) {
                         ForEach(Array(listing.items.enumerated()), id: \.offset) { _, item in
-                            NativeCurationEntityCard(item: item, mode: .carousel)
-                                .frame(width: NativeCurationEntityCard.width(for: item, mode: .carousel))
+                            NativeCurationChannelFullCard(item: item)
                         }
                     }
                     .padding(.horizontal, C.pagePad)
                 }
             }
         }
+    }
+}
+
+private struct NativeCurationContinueWatching: View {
+    let listing: AssembledListing
+
+    @State private var items: [ProgressItem] = []
+    @State private var didLoad = false
+
+    var body: some View {
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: C.rowSpacing) {
+                NativeCurationHeader(listing: listing, showSeeAll: true)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: CarouselCardMetrics.spacing) {
+                        ForEach(items) { item in
+                            if let route = route(for: item) {
+                                NavigationLink(value: route) {
+                                    ContinueWatchingRailCard(
+                                        title: item.episode?.title ?? item.video?.title ?? "Continue watching",
+                                        subtitle: subtitle(for: item),
+                                        thumbnailUrl: item.episode?.thumbnailUrl ?? item.video?.thumbnailUrl,
+                                        progress: item.progress,
+                                        contentType: item.video?.type ?? (item.episode == nil ? nil : "episode"),
+                                        width: 160
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, C.pagePad)
+                }
+            }
+        } else if !didLoad {
+            Color.clear
+                .frame(height: 1)
+                .task { await load() }
+        }
+    }
+
+    @MainActor
+    private func load() async {
+        guard !didLoad else { return }
+        didLoad = true
+        items = (try? await APIClient.shared.fetchContinueWatching())?.items ?? []
+    }
+
+    private func route(for item: ProgressItem) -> AppRoute? {
+        if let episodeId = item.episodeId ?? item.episode?.id { return .episode(episodeId) }
+        if let video = item.video {
+            return C.normalizedContentType(video.type) == "short"
+                ? .short(video.id, showId: nil, channelId: video.channel?.id)
+                : .video(video.id)
+        }
+        if let videoId = item.videoId { return .video(videoId) }
+        return nil
+    }
+
+    private func subtitle(for item: ProgressItem) -> String? {
+        if let episode = item.episode {
+            let episodeLabel: String?
+            if let seasonNumber = episode.season?.seasonNumber,
+               let episodeNumber = episode.episodeNumber {
+                episodeLabel = "S\(seasonNumber)E\(episodeNumber)"
+            } else {
+                episodeLabel = nil
+            }
+            return [episode.season?.show?.title, episodeLabel].compactMap { $0 }.joined(separator: " · ")
+        }
+        return item.video?.channel?.name
     }
 }
 
@@ -137,64 +231,121 @@ private struct NativeCurationRippleList: View {
                 NativeCurationHeader(listing: listing, showSeeAll: true)
                 LazyVStack(spacing: C.rowSpacing) {
                     ForEach(Array(listing.items.enumerated()), id: \.offset) { _, item in
-                        NavigationLink(value: item.appRoute) {
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack(spacing: 10) {
-                                    NativeCurationAvatar(
-                                        url: item.metaString("authorImage") ?? item.metaString("clubAvatar"),
-                                        title: item.metaString("authorName") ?? item.metaString("clubName") ?? item.title
-                                    )
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(item.metaString("authorName") ?? item.metaString("clubName") ?? "Westreem")
-                                            .font(.subheadline.weight(.semibold))
-                                            .foregroundStyle(C.text)
-                                            .lineLimit(1)
-                                        Text(item.rippleContextText)
-                                            .font(.caption)
-                                            .foregroundStyle(C.textMuted)
-                                            .lineLimit(1)
-                                    }
-                                    Spacer(minLength: 0)
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption.weight(.bold))
-                                        .foregroundStyle(C.textTertiary)
-                                }
-
-                                Text(item.displayTitle)
-                                    .font(.body)
-                                    .foregroundStyle(C.text)
-                                    .lineLimit(4)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                                if item.thumbnailUrl != nil || item.coverUrl != nil {
-                                    NativeCurationArtwork(
-                                        item: item,
-                                        aspectRatio: 16.0 / 9.0,
-                                        cornerRadius: C.cardRadius,
-                                        preferCover: false
-                                    )
-                                }
-
-                                HStack(spacing: 16) {
-                                    NativeCurationMetric(icon: "bolt.fill", count: item.metaInt("energy"), label: "Energy")
-                                    NativeCurationMetric(icon: "bubble.left", count: item.metaInt("comments"), label: "Comments")
-                                    NativeCurationMetric(icon: "wave.3.right", count: item.metaInt("echoes"), label: "Echoes")
-                                }
-                            }
-                            .padding(14)
-                            .background(C.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous)
-                                    .stroke(C.borderSubtle, lineWidth: 1)
-                            }
-                        }
-                        .buttonStyle(.plain)
+                        NativeCurationRippleCard(item: item)
                     }
                 }
                 .padding(.horizontal, C.pagePad)
             }
         }
+    }
+}
+
+private struct NativeCurationRippleCarousel: View {
+    let listing: AssembledListing
+
+    var body: some View {
+        if !listing.items.isEmpty {
+            VStack(alignment: .leading, spacing: C.rowSpacing) {
+                NativeCurationHeader(listing: listing, showSeeAll: true)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: C.gridSpacing) {
+                        ForEach(Array(listing.items.enumerated()), id: \.offset) { _, item in
+                            NativeCurationRippleCard(item: item)
+                                .containerRelativeFrame(.horizontal, count: 1, span: 1, spacing: C.gridSpacing)
+                                .frame(maxWidth: 390)
+                        }
+                    }
+                    .scrollTargetLayout()
+                    .padding(.horizontal, C.pagePad)
+                    .padding(.bottom, 2)
+                }
+                .scrollTargetBehavior(.viewAligned)
+            }
+        }
+    }
+}
+
+private struct NativeCurationRippleCard: View {
+    let item: ContentItem
+
+    var body: some View {
+        NavigationLink(value: item.appRoute) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    NativeCurationAvatar(
+                        url: item.metaString("authorImage") ?? item.metaString("clubAvatar"),
+                        title: item.metaString("authorName") ?? item.metaString("clubName") ?? item.title
+                    )
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.metaString("authorName") ?? item.metaString("clubName") ?? "Westreem member")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(C.text)
+                            .lineLimit(1)
+                        Text(item.rippleContextText)
+                            .font(.caption)
+                            .foregroundStyle(C.textMuted)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    Text("RIPPLE")
+                        .font(.system(size: 9, weight: .bold))
+                        .tracking(0.7)
+                        .foregroundStyle(C.watch)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(C.watch.opacity(0.10), in: Capsule())
+                }
+
+                Text(item.displayTitle)
+                    .font((item.thumbnailUrl == nil && item.coverUrl == nil) ? .body.weight(.medium) : .subheadline)
+                    .foregroundStyle(C.text.opacity(0.88))
+                    .lineLimit(item.thumbnailUrl == nil && item.coverUrl == nil ? 6 : 3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding((item.thumbnailUrl == nil && item.coverUrl == nil) ? 14 : 0)
+                    .background {
+                        if item.thumbnailUrl == nil && item.coverUrl == nil {
+                            LinearGradient(
+                                colors: [C.watch.opacity(0.12), C.surface, Color.indigo.opacity(0.08)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                    }
+
+                if item.thumbnailUrl != nil || item.coverUrl != nil {
+                    NativeCurationArtwork(
+                        item: item,
+                        aspectRatio: 2.0,
+                        cornerRadius: 12,
+                        preferCover: false
+                    )
+                }
+
+                HStack(spacing: 16) {
+                    NativeCurationMetric(icon: "bolt.fill", count: item.metaInt("energy"), label: "Energy")
+                    NativeCurationMetric(icon: "bubble.left", count: item.metaInt("comments"), label: "Comments")
+                    NativeCurationMetric(icon: "wave.3.right", count: item.metaInt("echoes"), label: "Echoes")
+                    if (item.metaInt("energy") ?? 0) == 0,
+                       (item.metaInt("comments") ?? 0) == 0,
+                       (item.metaInt("echoes") ?? 0) == 0 {
+                        Text("Open Ripple")
+                            .font(.caption)
+                            .foregroundStyle(C.textMuted)
+                    }
+                }
+                .frame(minHeight: 24)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(C.surface.opacity(0.82))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(C.borderSubtle, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -474,6 +625,74 @@ private struct NativeCurationChannelList: View {
     }
 }
 
+private struct NativeCurationSocialRows: View {
+    let listing: AssembledListing
+
+    var body: some View {
+        if !listing.items.isEmpty {
+            VStack(alignment: .leading, spacing: C.rowSpacing) {
+                NativeCurationHeader(listing: listing, showSeeAll: true)
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(listing.items.enumerated()), id: \.offset) { index, item in
+                        NavigationLink(value: item.appRoute) {
+                            HStack(spacing: 12) {
+                                NativeCurationAvatar(
+                                    url: item.thumbnailUrl,
+                                    title: item.displayTitle
+                                )
+                                .frame(width: 44, height: 44)
+
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(item.displayTitle)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(C.text)
+                                        .lineLimit(1)
+                                    if !item.curationSubtitle.isEmpty {
+                                        Text(item.curationSubtitle)
+                                            .font(.caption)
+                                            .foregroundStyle(C.textMuted)
+                                            .lineLimit(1)
+                                    }
+                                    if let description = item.metaString("description"), !description.isEmpty {
+                                        Text(description)
+                                            .font(.caption)
+                                            .foregroundStyle(C.textTertiary)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                Spacer(minLength: 8)
+                                Text("View")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(C.textMuted)
+                                    .padding(.horizontal, 14)
+                                    .frame(height: 34)
+                                    .background(C.elevated, in: Capsule())
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .overlay(alignment: .top) {
+                                if index > 0 {
+                                    Rectangle()
+                                        .fill(C.borderSubtle)
+                                        .frame(height: 1)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .background(C.surface.opacity(0.82))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(C.borderSubtle, lineWidth: 1)
+                }
+                .padding(.horizontal, C.pagePad)
+            }
+        }
+    }
+}
+
 private struct NativeCurationChannelFullCard: View {
     let item: ContentItem
     let channel: ChannelBrowseCard
@@ -483,12 +702,29 @@ private struct NativeCurationChannelFullCard: View {
         self.channel = item.asChannelBrowseCard
     }
 
-    private var routeHandle: String { channel.handle }
     private var followerCount: Int { channel._count?.followers ?? 0 }
     private var videoCount: Int { channel._count?.videos ?? item.metaInt("videos") ?? 0 }
+    private var primaryCount: String {
+        switch item.normalizedEntityType {
+        case "vibe":
+            return "\(formatCount(item.metaInt("members") ?? 0)) members"
+        default:
+            return "\(formatCount(followerCount)) followers"
+        }
+    }
+    private var secondaryCount: String {
+        switch item.normalizedEntityType {
+        case "vibe":
+            return "\(formatCount(item.metaInt("ripples") ?? 0)) Ripples"
+        case "person":
+            return "Atmo"
+        default:
+            return "\(formatCount(videoCount)) videos"
+        }
+    }
 
     var body: some View {
-        NavigationLink(value: AppRoute.channel(routeHandle)) {
+        NavigationLink(value: item.appRoute) {
             VStack(spacing: 0) {
                 banner
                 bodyContent
@@ -567,9 +803,9 @@ private struct NativeCurationChannelFullCard: View {
             }
 
             HStack(spacing: 10) {
-                Text("\(formatCount(followerCount)) followers")
+                Text(primaryCount)
                 Text(".")
-                Text("\(formatCount(videoCount)) videos")
+                Text(secondaryCount)
             }
             .font(.caption2)
             .foregroundStyle(C.textMuted.opacity(0.72))
@@ -621,8 +857,12 @@ private struct NativeCurationHero: View {
     @State private var trailerMuted = true
     @State private var trailerVisible = false
     @State private var trailerStartTask: Task<Void, Never>?
+    @State private var activeIndex = 0
 
-    private var item: ContentItem? { listing.items.first }
+    private var item: ContentItem? {
+        guard listing.items.indices.contains(activeIndex) else { return listing.items.first }
+        return listing.items[activeIndex]
+    }
     private var accentColor: Color { listing.accentColor.map(Color.init(hex:)) ?? C.watch }
 
     var body: some View {
@@ -645,7 +885,25 @@ private struct NativeCurationHero: View {
                     .buttonStyle(.plain)
                     .padding(.top, 14)
                     .padding(.trailing, 14)
-                    .accessibilityLabel(trailerMuted ? "Unmute trailer" : "Mute trailer")
+                        .accessibilityLabel(trailerMuted ? "Unmute trailer" : "Mute trailer")
+                }
+
+                if listing.items.count > 1 {
+                    HStack(spacing: 6) {
+                        ForEach(listing.items.indices, id: \.self) { index in
+                            Button {
+                                selectHero(index)
+                            } label: {
+                                Capsule()
+                                    .fill(.white.opacity(index == activeIndex ? 0.95 : 0.38))
+                                    .frame(width: index == activeIndex ? 20 : 6, height: 6)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Show feature \(index + 1)")
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .padding(.bottom, 8)
                 }
             }
             .onAppear { startTrailerIfAvailable(for: item) }
@@ -655,6 +913,13 @@ private struct NativeCurationHero: View {
                 startTrailerIfAvailable(for: item)
             }
         }
+    }
+
+    @MainActor
+    private func selectHero(_ index: Int) {
+        guard listing.items.indices.contains(index), index != activeIndex else { return }
+        stopTrailer()
+        activeIndex = index
     }
 
     private func heroCard(for item: ContentItem) -> some View {
@@ -747,8 +1012,17 @@ private struct NativeCurationHero: View {
 
     @MainActor
     private func startTrailerIfAvailable(for item: ContentItem) {
-        guard trailerPlayer == nil,
-              let trailerURL = item.trailerURL else { return }
+        guard trailerPlayer == nil else { return }
+        guard let trailerURL = item.trailerURL else {
+            guard listing.items.count > 1 else { return }
+            trailerStartTask?.cancel()
+            trailerStartTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled else { return }
+                selectHero((activeIndex + 1) % listing.items.count)
+            }
+            return
+        }
         let playerItem = AVPlayerItem(url: trailerURL)
         let player = AVQueuePlayer()
         player.isMuted = true
@@ -825,33 +1099,55 @@ private struct NativeCurationBanner: View {
     var body: some View {
         if let item {
             NavigationLink(value: listing.seeAllUrl.flatMap { AppRoute.route(link: $0) } ?? item.appRoute) {
-                ZStack(alignment: .bottomLeading) {
-                    NativeCurationArtwork(item: item, aspectRatio: 16.0 / 7.0, cornerRadius: C.cardRadius, preferCover: true)
+                ZStack {
+                    NativeCurationArtwork(item: item, aspectRatio: 16.0 / 6.0, cornerRadius: 12, preferCover: false)
                     LinearGradient(
-                        colors: [.clear, .black.opacity(0.82)],
-                        startPoint: .top,
-                        endPoint: .bottom
+                        colors: [.black.opacity(0.72), .black.opacity(0.20)],
+                        startPoint: .leading,
+                        endPoint: .trailing
                     )
-                    VStack(alignment: .leading, spacing: 6) {
-                        if let sponsor = listing.sponsoredBy, !sponsor.isEmpty {
-                            Text("Sponsored by \(sponsor)")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(accentColor)
+                    HStack(spacing: 14) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let badge = listing.badge, !badge.isEmpty {
+                                Text(badge.uppercased())
+                                    .font(.system(size: 10, weight: .bold))
+                                    .tracking(1.2)
+                                    .foregroundStyle(accentColor)
+                            }
+                            if let title, !title.isEmpty {
+                                Text(title)
+                                    .font(.headline)
+                                    .foregroundStyle(.white)
+                                    .lineLimit(1)
+                            }
+                            if listing.listingTitle != nil {
+                                Text(item.displayTitle)
+                                    .font(.caption)
+                                    .foregroundStyle(.white.opacity(0.55))
+                                    .lineLimit(1)
+                            }
                         }
-                        if let title, !title.isEmpty {
-                            Text(title)
-                                .font(.headline)
-                                .foregroundStyle(.white)
-                                .lineLimit(2)
-                        }
-                        if !item.curationSubtitle.isEmpty {
-                            Text(item.curationSubtitle)
-                                .font(.caption)
-                                .foregroundStyle(.white.opacity(0.72))
-                                .lineLimit(1)
-                        }
+                        Spacer(minLength: 0)
+                        Label(item.primaryActionTitle, systemImage: item.primaryActionIconName)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(C.bg)
+                            .padding(.horizontal, 14)
+                            .frame(height: 34)
+                            .background(accentColor, in: Capsule())
+                            .lineLimit(1)
                     }
-                    .padding(14)
+                    .padding(.horizontal, 18)
+
+                    if listing.sponsoredBy?.isEmpty == false {
+                        Text("Sponsored")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.white.opacity(0.45))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(.black.opacity(0.40), in: RoundedRectangle(cornerRadius: 4))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                            .padding(8)
+                        }
                 }
                 .padding(.horizontal, C.pagePad)
             }
@@ -866,48 +1162,83 @@ private struct NativeCurationSpotlight: View {
     private var accentColor: Color { listing.accentColor.map(Color.init(hex:)) ?? C.watch }
 
     var body: some View {
-        let items = Array(listing.items.prefix(2))
-        if !items.isEmpty {
+        if let featured = listing.items.first {
             VStack(alignment: .leading, spacing: C.rowSpacing) {
                 NativeCurationHeader(listing: listing, showSeeAll: true)
-                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    NavigationLink(value: item.appRoute) {
-                        HStack(alignment: .top, spacing: C.rowSpacing) {
-                            NativeCurationArtwork(item: item, aspectRatio: item.spotlightAspectRatio, cornerRadius: C.cardRadius, preferCover: true)
-                                .frame(width: 132)
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(item.entityTypeDisplayName.uppercased())
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(accentColor)
-                                Text(item.displayTitle)
+                VStack(spacing: C.gridSpacing) {
+                    NavigationLink(value: featured.appRoute) {
+                        ZStack(alignment: .bottomLeading) {
+                            NativeCurationArtwork(
+                                item: featured,
+                                aspectRatio: 16.0 / 9.0,
+                                cornerRadius: 12,
+                                preferCover: false
+                            )
+                            LinearGradient(
+                                colors: [.clear, .black.opacity(0.72)],
+                                startPoint: .center,
+                                endPoint: .bottom
+                            )
+                            VStack(alignment: .leading, spacing: 4) {
+                                if let badge = listing.badge, !badge.isEmpty {
+                                    Text(badge.uppercased())
+                                        .font(.system(size: 10, weight: .bold))
+                                        .tracking(1.2)
+                                        .foregroundStyle(accentColor)
+                                }
+                                Text(featured.displayTitle)
                                     .font(.headline)
-                                    .foregroundStyle(C.text)
+                                    .foregroundStyle(.white)
                                     .lineLimit(2)
-                                if let description = item.metaString("description"), !description.isEmpty {
-                                    Text(description)
-                                        .font(.subheadline)
-                                        .foregroundStyle(C.textMuted)
-                                        .lineLimit(3)
-                                } else if !item.curationSubtitle.isEmpty {
-                                    Text(item.curationSubtitle)
-                                        .font(.subheadline)
-                                        .foregroundStyle(C.textMuted)
-                                        .lineLimit(2)
+                                if let genre = featured.metaString("genre"), !genre.isEmpty {
+                                    Text(genre)
+                                        .font(.caption)
+                                        .foregroundStyle(.white.opacity(0.55))
                                 }
                             }
-                            Spacer(minLength: 0)
+                            .padding(14)
                         }
-                        .padding(12)
-                        .background(C.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous)
-                                .stroke(C.borderSubtle, lineWidth: 1)
-                        }
-                        .padding(.horizontal, C.pagePad)
                     }
                     .buttonStyle(.plain)
+
+                    let supporting = Array(listing.items.dropFirst().prefix(3))
+                    if !supporting.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            LazyHStack(alignment: .top, spacing: C.gridSpacing) {
+                                ForEach(Array(supporting.enumerated()), id: \.offset) { _, item in
+                                    NavigationLink(value: item.appRoute) {
+                                        HStack(alignment: .top, spacing: 10) {
+                                            NativeCurationArtwork(
+                                                item: item,
+                                                aspectRatio: item.cardAspectRatio,
+                                                cornerRadius: 8,
+                                                preferCover: false
+                                            )
+                                            .frame(width: 92)
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Text(item.displayTitle)
+                                                    .font(.system(size: 12, weight: .semibold))
+                                                    .foregroundStyle(C.text)
+                                                    .lineLimit(2)
+                                                if !item.curationSubtitle.isEmpty {
+                                                    Text(item.curationSubtitle)
+                                                        .font(.caption2)
+                                                        .foregroundStyle(C.textTertiary)
+                                                        .lineLimit(1)
+                                                }
+                                            }
+                                            .padding(.top, 2)
+                                            Spacer(minLength: 0)
+                                        }
+                                        .frame(width: 230, alignment: .leading)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
                 }
+                .padding(.horizontal, C.pagePad)
             }
         }
     }
