@@ -27,8 +27,23 @@ struct BrowseView: View {
 
     private var browseItems: [PlatformBrowseItem] {
         let categories = curatedBrowseItems ?? platformBrowseItems
+        let configured = Dictionary(uniqueKeysWithValues: categories.map {
+            (PlatformBrowseItem.normalizedId($0.id), $0)
+        })
+        let serverDestinations: [(String, String)] = [
+            ("shows", "Shows"),
+            ("movies", "Movies"),
+            ("microdramas", "Microdramas"),
+            ("channels", "Channels"),
+            ("people", "People"),
+            ("vibes", "Vibes"),
+            ("collections", "Collections")
+        ]
         return [PlatformBrowseItem(id: "discover", label: "Discover", enabled: true)]
-            + categories.filter { BrowseSection(rawValue: $0.id) != .discover }
+            + serverDestinations.compactMap { id, label in
+                if let item = configured[id], item.enabled { return item }
+                return PlatformBrowseItem(id: id, label: label, enabled: true)
+            }
     }
 
     var body: some View {
@@ -176,6 +191,20 @@ struct BrowseView: View {
             MicrodramasBrowseView(isBrowseActive: isRootActive)
         case .channels:
             ChannelsBrowseView(isBrowseActive: isRootActive)
+        case .people:
+            DiscoverIdentityDirectoryView(
+                pageKey: "discover-people",
+                title: "People",
+                eyebrow: "People to follow",
+                description: "Creators and voices worth following."
+            )
+        case .vibes:
+            DiscoverIdentityDirectoryView(
+                pageKey: "discover-vibes",
+                title: "Vibes",
+                eyebrow: "Vibes to explore",
+                description: "Communities, conversations, and Ripples."
+            )
         case .collections:
             CollectionsView(isBrowseActive: isRootActive)
         }
@@ -250,6 +279,8 @@ private enum BrowseSection: String, CaseIterable, Identifiable {
     case movies
     case microdramas
     case channels
+    case people
+    case vibes
     case collections
 
     var id: String { rawValue }
@@ -262,6 +293,8 @@ private enum BrowseSection: String, CaseIterable, Identifiable {
         case .movies: return "Movies"
         case .microdramas: return "Microdramas"
         case .channels: return "Channels"
+        case .people: return "People"
+        case .vibes: return "Vibes"
         case .collections: return "Collections"
         }
     }
@@ -274,6 +307,8 @@ private enum BrowseSection: String, CaseIterable, Identifiable {
         case .movies: return "film"
         case .microdramas: return "phone"
         case .channels: return "users"
+        case .people: return "user"
+        case .vibes: return "vibes"
         case .collections: return "library"
         }
     }
@@ -286,6 +321,8 @@ private enum BrowseSection: String, CaseIterable, Identifiable {
         case .movies: return "film"
         case .microdramas: return "iphone"
         case .channels: return "rectangle.stack.person.crop"
+        case .people: return "person.2"
+        case .vibes: return "wave.3.right"
         case .collections: return "square.stack"
         }
     }
@@ -299,13 +336,17 @@ private struct DiscoverHubView: View {
     let openSection: (BrowseSection) -> Void
 
     private let categorySections: [BrowseSection] = [
-        .shows, .channels, .movies, .microdramas, .collections
+        .shows, .movies, .microdramas, .channels, .people, .vibes, .collections
     ]
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: C.sectionSpacing) {
                 VStack(alignment: .leading, spacing: 6) {
+                    Text("EXPLORE WESTREEM")
+                        .font(.caption2.bold())
+                        .tracking(2)
+                        .foregroundStyle(C.watch)
                     Text("Discover")
                         .font(.largeTitle.bold())
                         .fontDesign(.rounded)
@@ -316,6 +357,8 @@ private struct DiscoverHubView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, C.pagePad)
+
+                destinationGrid
 
                 if isLoading && listings.isEmpty {
                     ForEach(0..<3, id: \.self) { _ in
@@ -353,49 +396,134 @@ private struct DiscoverHubView: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Browse all")
-                        .font(.headline)
-                        .foregroundStyle(C.text)
-                    LazyVGrid(
-                        columns: [
-                            GridItem(.flexible(), spacing: 10),
-                            GridItem(.flexible(), spacing: 10)
-                        ],
-                        spacing: 10
-                    ) {
-                        ForEach(categorySections) { section in
-                            Button {
-                                openSection(section)
-                            } label: {
-                                HStack(spacing: 10) {
-                                    MediaverseIcon(name: section.assetIcon, fallbackSystemName: section.fallbackIcon)
-                                        .frame(width: 22, height: 22)
-                                        .foregroundStyle(C.watch)
-                                    Text(section.title)
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundStyle(C.text)
-                                        .lineLimit(1)
-                                    Spacer(minLength: 0)
-                                }
-                                .padding(12)
-                                .frame(maxWidth: .infinity, minHeight: 54)
-                                .background(C.surface)
-                                .clipShape(RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous))
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous)
-                                        .stroke(C.borderSubtle, lineWidth: 1)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-                .padding(.horizontal, C.pagePad)
             }
             .padding(.vertical, C.pagePad)
             .padding(.bottom, C.bottomMenuClearance)
         }
         .refreshable { await retry() }
+    }
+
+    private var destinationGrid: some View {
+        LazyVGrid(
+            columns: [
+                GridItem(.flexible(), spacing: 10),
+                GridItem(.flexible(), spacing: 10)
+            ],
+            spacing: 10
+        ) {
+            ForEach(categorySections) { section in
+                Button {
+                    openSection(section)
+                } label: {
+                    VStack(alignment: .leading, spacing: 8) {
+                        MediaverseIcon(name: section.assetIcon, fallbackSystemName: section.fallbackIcon)
+                            .frame(width: 34, height: 34)
+                            .foregroundStyle(C.watch)
+                            .background(C.watch.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+                        Text(section.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(C.text)
+                        Text(destinationDescription(section))
+                            .font(.caption2)
+                            .foregroundStyle(C.textMuted)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
+                    .padding(14)
+                    .background(C.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous)
+                            .stroke(C.borderSubtle, lineWidth: 1)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, C.pagePad)
+    }
+
+    private func destinationDescription(_ section: BrowseSection) -> String {
+        switch section {
+        case .shows: "Series, originals, and full seasons"
+        case .movies: "Feature films and cinematic releases"
+        case .microdramas: "Fast, vertical episodic stories"
+        case .channels: "Publishers, creators, and networks"
+        case .people: "Creators and voices worth following"
+        case .vibes: "Communities, conversations, and Ripples"
+        case .collections: "Curated sets saved by the community"
+        case .discover, .videos: ""
+        }
+    }
+}
+
+private struct DiscoverIdentityDirectoryView: View {
+    let pageKey: String
+    let title: String
+    let eyebrow: String
+    let description: String
+
+    @State private var listings: [AssembledListing] = []
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: C.sectionSpacing) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(eyebrow.uppercased())
+                        .font(.caption2.bold())
+                        .tracking(2)
+                        .foregroundStyle(C.watch)
+                    Text(title)
+                        .font(.largeTitle.bold())
+                        .foregroundStyle(C.text)
+                    Text(description)
+                        .font(.subheadline)
+                        .foregroundStyle(C.textMuted)
+                }
+                .padding(.horizontal, C.pagePad)
+
+                if isLoading && listings.isEmpty {
+                    ProgressView().tint(C.watch).frame(maxWidth: .infinity).padding(.top, 60)
+                } else if let errorMessage, listings.isEmpty {
+                    ContentUnavailableView {
+                        Label("\(title) could not load", systemImage: "wifi.exclamationmark")
+                    } description: {
+                        Text(errorMessage)
+                    } actions: {
+                        Button("Try Again") { Task { await load() } }
+                            .buttonStyle(.borderedProminent)
+                            .tint(C.watch)
+                    }
+                } else if listings.isEmpty {
+                    ContentUnavailableView(
+                        "\(title) has not been curated yet",
+                        systemImage: "sparkles",
+                        description: Text("Content will appear after an active listing is assigned in Backstage.")
+                    )
+                } else {
+                    ForEach(listings) { NativeCurationListingView(listing: $0) }
+                }
+            }
+            .padding(.vertical, C.pagePad)
+            .padding(.bottom, C.bottomMenuClearance)
+        }
+        .task(id: pageKey) { await load() }
+        .refreshable { await load() }
+    }
+
+    @MainActor
+    private func load() async {
+        isLoading = listings.isEmpty
+        do {
+            let page = try await CurationManager.shared.fetchPage(key: pageKey)
+            listings = page.activeListings
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
     }
 }

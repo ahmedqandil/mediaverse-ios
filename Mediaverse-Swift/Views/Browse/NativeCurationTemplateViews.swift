@@ -10,9 +10,37 @@ struct NativeCurationListingView: View {
         listing.templateType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
+    private var isIdentityOnly: Bool {
+        !listing.items.isEmpty && listing.items.allSatisfy {
+            ["channel", "person", "vibe"].contains($0.normalizedEntityType)
+        }
+    }
+
+    private var isRippleOnly: Bool {
+        !listing.items.isEmpty && listing.items.allSatisfy {
+            $0.normalizedEntityType == "ripple"
+        }
+    }
+
     var body: some View {
         Group {
-            switch templateType {
+            if isIdentityOnly {
+                NativeCurationIdentityCarousel(listing: listing)
+            } else if isRippleOnly && templateType == "carousel" {
+                NativeCurationRippleList(listing: listing)
+            } else {
+                templateRenderer
+            }
+        }
+        .environment(\.curationListingId, listing.listingId)
+        .task(id: listing.listingId) {
+            await CurationEventTracker.shared.impression(listingId: listing.listingId)
+        }
+    }
+
+    @ViewBuilder
+    private var templateRenderer: some View {
+        switch templateType {
             case "hero":
                 NativeCurationHero(listing: listing)
             case "grid":
@@ -33,11 +61,27 @@ struct NativeCurationListingView: View {
                 EmptyView()
             default:
                 NativeCurationCarousel(listing: listing)
-            }
         }
-        .environment(\.curationListingId, listing.listingId)
-        .task(id: listing.listingId) {
-            await CurationEventTracker.shared.impression(listingId: listing.listingId)
+    }
+}
+
+private struct NativeCurationIdentityCarousel: View {
+    let listing: AssembledListing
+
+    var body: some View {
+        if !listing.items.isEmpty {
+            VStack(alignment: .leading, spacing: C.rowSpacing) {
+                NativeCurationHeader(listing: listing, showSeeAll: true)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: C.gridSpacing) {
+                        ForEach(Array(listing.items.enumerated()), id: \.offset) { _, item in
+                            NativeCurationEntityCard(item: item, mode: .carousel)
+                                .frame(width: NativeCurationEntityCard.width(for: item, mode: .carousel))
+                        }
+                    }
+                    .padding(.horizontal, C.pagePad)
+                }
+            }
         }
     }
 }
