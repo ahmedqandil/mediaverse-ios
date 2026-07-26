@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
-/// Root page container: Upload · Explore · Home · Shorts · Me
+/// Root page container: Atmosphere · Videos · Shorts · Discover · Me
 /// All watch/channel/show/microdrama screens are PUSHED on the relevant NavigationStack.
 /// On iOS 26 the tab bar adopts Liquid Glass automatically — UITabBar.appearance()
 /// is skipped on that OS to avoid fighting the compositor.
@@ -16,6 +16,7 @@ struct MainTabView: View {
     @State private var selectedTab: AppTab = .home
     @State private var lastContentTab: AppTab = .home
     @State private var homePath: [AppRoute] = []
+    @State private var videosPath: [AppRoute] = []
     @State private var explorePath: [AppRoute] = []
     @State private var shortsPath: [AppRoute] = []
     @State private var profilePath: [AppRoute] = []
@@ -36,16 +37,18 @@ struct MainTabView: View {
 
     enum AppTab: Int, Hashable {
         case home = 0
-        case shorts = 1
-        case explore = 2
-        case profile = 3
-        case upload = 4
+        case videos = 1
+        case shorts = 2
+        case explore = 3
+        case profile = 4
     }
 
     private var activeNavigationPath: [AppRoute] {
         switch selectedTab {
-        case .home, .upload:
+        case .home:
             return homePath
+        case .videos:
+            return videosPath
         case .shorts:
             return shortsPath
         case .explore:
@@ -69,7 +72,9 @@ struct MainTabView: View {
 
     private func scrollTarget(for tab: AppTab) -> String {
         switch tab {
-        case .home, .upload:
+        case .home:
+            return "home"
+        case .videos:
             return "home"
         case .shorts:
             return "shorts"
@@ -115,6 +120,7 @@ struct MainTabView: View {
             shortsPlaybackManager.resetForIdentityChange()
             miniPlayer.close()
             homePath = []
+            videosPath = []
             explorePath = []
             shortsPath = []
             profilePath = []
@@ -264,23 +270,6 @@ struct MainTabView: View {
 
     private var rootTabView: some View {
         TabView(selection: $selectedTab) {
-            NavigationStack {
-                UploadView(presentationStyle: .screen)
-            }
-            .ignoresSafeArea(edges: .bottom)
-            .tabItem { appTabLabel("Upload", icon: "upload", fallback: "plus.circle") }
-            .tag(AppTab.upload)
-
-            NavigationStack(path: $explorePath) {
-                BrowseView(isRootActive: selectedTab == .explore)
-                    .navigationDestination(for: AppRoute.self) { route in
-                        routeDestination(route)
-                    }
-            }
-            .ignoresSafeArea(edges: .bottom)
-            .tabItem { appTabLabel("Explore", icon: "explore", fallback: "safari") }
-            .tag(AppTab.explore)
-
             NavigationStack(path: $homePath) {
                 Group {
                     if socialFeatures.atmosphereEnabled {
@@ -303,6 +292,16 @@ struct MainTabView: View {
             }
             .tag(AppTab.home)
 
+            NavigationStack(path: $videosPath) {
+                HomeView()
+                    .navigationDestination(for: AppRoute.self) { route in
+                        routeDestination(route)
+                    }
+            }
+            .ignoresSafeArea(edges: .bottom)
+            .tabItem { appTabLabel("Videos", icon: "play", fallback: "play.rectangle") }
+            .tag(AppTab.videos)
+
             NavigationStack(path: $shortsPath) {
                 ShortsView(isRootActive: selectedTab == .shorts, playbackManager: shortsPlaybackManager)
                     .navigationDestination(for: AppRoute.self) { route in
@@ -312,6 +311,16 @@ struct MainTabView: View {
             .ignoresSafeArea(edges: .bottom)
             .tabItem { appTabLabel("Shorts", icon: "short", fallback: "play.rectangle.on.rectangle") }
             .tag(AppTab.shorts)
+
+            NavigationStack(path: $explorePath) {
+                BrowseView(isRootActive: selectedTab == .explore)
+                    .navigationDestination(for: AppRoute.self) { route in
+                        routeDestination(route)
+                    }
+            }
+            .ignoresSafeArea(edges: .bottom)
+            .tabItem { appTabLabel("Discover", icon: "explore", fallback: "safari") }
+            .tag(AppTab.explore)
 
             NavigationStack(path: $profilePath) {
                 ProfileView(isRootActive: selectedTab == .profile)
@@ -444,15 +453,15 @@ struct MainTabView: View {
                 Spacer(minLength: 0)
 
                 HStack(spacing: 0) {
-                    bottomTabButton(.upload, title: "Upload", icon: "upload", fallback: "plus.circle")
-                    bottomTabButton(.explore, title: "Explore", icon: "explore", fallback: "safari")
                     bottomTabButton(
                         .home,
                         title: socialFeatures.atmosphereEnabled ? "Atmosphere" : "Home",
                         icon: "home",
                         fallback: "house"
                     )
+                    bottomTabButton(.videos, title: "Videos", icon: "play", fallback: "play.rectangle")
                     bottomTabButton(.shorts, title: "Shorts", icon: "short", fallback: "bolt")
+                    bottomTabButton(.explore, title: "Discover", icon: "explore", fallback: "safari")
                     bottomTabButton(.profile, title: "Me", icon: "user", fallback: "person")
                 }
                 .padding(.horizontal, 10)
@@ -503,7 +512,7 @@ struct MainTabView: View {
     }
 
     private func bottomTabButton(_ tab: AppTab, title: String, icon: String, fallback: String) -> some View {
-        let isSelected = selectedTab == tab || (tab == .upload && selectedTab == .upload)
+        let isSelected = selectedTab == tab
         let color = isSelected ? C.watch : Color.white.opacity(0.35)
 
         return Button {
@@ -563,8 +572,10 @@ struct MainTabView: View {
 
     private func resetNavigationPath(for tab: AppTab) {
         switch tab {
-        case .home, .upload:
+        case .home:
             homePath = []
+        case .videos:
+            videosPath = []
         case .shorts:
             shortsPath = []
         case .explore:
@@ -678,10 +689,10 @@ struct MainTabView: View {
         switch selectedTab {
         case .home:
             homePath.append(route)
+        case .videos:
+            videosPath.append(route)
         case .shorts:
             shortsPath.append(route)
-        case .upload:
-            homePath.append(route)
         case .explore:
             explorePath.append(route)
         case .profile:
@@ -692,6 +703,7 @@ struct MainTabView: View {
     private func openPushRoute(_ route: AppRoute) {
         miniPlayer.close()
         homePath = []
+        videosPath = []
         explorePath = []
         shortsPath = []
         profilePath = []

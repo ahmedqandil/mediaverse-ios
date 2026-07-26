@@ -45,11 +45,11 @@ struct BrowseView: View {
                 }
             }
         }
-        .navigationTitle("Explore")
+        .navigationTitle("Discover")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Text("Explore")
+                Text("Discover")
                     .font(.system(size: 17, weight: .bold))
                     .fontDesign(.rounded)
                     .foregroundStyle(C.text)
@@ -149,7 +149,7 @@ struct BrowseView: View {
             Text("No curated sections")
                 .font(.headline)
                 .foregroundStyle(C.text)
-            Text("Explore sections will appear here once curation is configured.")
+            Text("Discover sections will appear here once curation is configured.")
                 .font(.subheadline)
                 .foregroundStyle(C.textMuted)
                 .multilineTextAlignment(.center)
@@ -177,8 +177,6 @@ struct BrowseView: View {
             MicrodramasBrowseView(isBrowseActive: isRootActive)
         case .channels:
             ChannelsBrowseView(isBrowseActive: isRootActive)
-        case .following:
-            FollowingView(isBrowseActive: isRootActive)
         case .collections:
             CollectionsView(isBrowseActive: isRootActive)
         }
@@ -231,7 +229,6 @@ private enum BrowseSection: String, CaseIterable, Identifiable {
     case movies
     case microdramas
     case channels
-    case following
     case collections
 
     var id: String { rawValue }
@@ -244,7 +241,6 @@ private enum BrowseSection: String, CaseIterable, Identifiable {
         case .movies: return "Movies"
         case .microdramas: return "Microdramas"
         case .channels: return "Channels"
-        case .following: return "Following"
         case .collections: return "Collections"
         }
     }
@@ -257,7 +253,6 @@ private enum BrowseSection: String, CaseIterable, Identifiable {
         case .movies: return "film"
         case .microdramas: return "phone"
         case .channels: return "users"
-        case .following: return "notification"
         case .collections: return "library"
         }
     }
@@ -270,7 +265,6 @@ private enum BrowseSection: String, CaseIterable, Identifiable {
         case .movies: return "film"
         case .microdramas: return "iphone"
         case .channels: return "rectangle.stack.person.crop"
-        case .following: return "bell"
         case .collections: return "square.stack"
         }
     }
@@ -282,7 +276,7 @@ private struct DiscoverHubView: View {
     let openSection: (BrowseSection) -> Void
 
     private let categorySections: [BrowseSection] = [
-        .shows, .channels, .movies, .microdramas, .following, .collections
+        .shows, .channels, .movies, .microdramas, .collections
     ]
 
     var body: some View {
