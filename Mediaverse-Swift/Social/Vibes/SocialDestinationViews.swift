@@ -412,12 +412,6 @@ struct AtmoProfileView: View {
                     } else if selectedTab == .about {
                         aboutSection
                     } else {
-                        if selectedTab == .atmosphere, isSelf {
-                            RippleComposer(destination: .personal) { ripple in
-                                ripples.insert(ripple, at: 0)
-                            }
-                            .padding(.horizontal, horizontalSizeClass == .compact ? 8 : 0)
-                        }
                         ForEach(ripples) {
                             RippleCard(
                                 ripple: $0,
@@ -445,6 +439,18 @@ struct AtmoProfileView: View {
         .background(C.bg.ignoresSafeArea())
         .navigationTitle("@\(handle)")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if isSelf {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        ProfileView()
+                    } label: {
+                        Text("Account")
+                    }
+                    .accessibilityLabel("Open Account")
+                }
+            }
+        }
         .task(id: handle) {
             await loadIdentity()
             await load()
@@ -638,6 +644,89 @@ struct AtmoProfileView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(C.surface, in: RoundedRectangle(cornerRadius: C.cardRadius))
+    }
+}
+
+/// Resolves the signed-in user's public Atmo before presenting the Profile tab.
+/// The legacy profile/settings experience remains available as Account.
+struct MyAtmoProfileView: View {
+    let isRootActive: Bool
+
+    @EnvironmentObject private var auth: AuthManager
+    @State private var handle: String?
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        Group {
+            if !auth.isAuthenticated {
+                ProfileView(isRootActive: isRootActive)
+            } else if let handle, !handle.isEmpty {
+                AtmoProfileView(handle: handle)
+            } else if isLoading {
+                ProgressView()
+                    .tint(C.watch)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(C.bg)
+            } else {
+                ContentUnavailableView {
+                    Label("Atmo unavailable", systemImage: "person.crop.circle.badge.exclamationmark")
+                } description: {
+                    Text(errorMessage ?? "Add a handle in Account to activate your public Atmo.")
+                } actions: {
+                    NavigationLink {
+                        ProfileView()
+                    } label: {
+                        Text("Open Account")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(C.watch)
+
+                    Button("Try Again") {
+                        Task { await load() }
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .foregroundStyle(C.text)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(C.bg)
+            }
+        }
+        .task(id: auth.currentUser?.id) {
+            guard isRootActive else { return }
+            await load()
+        }
+        .onChange(of: isRootActive) { _, active in
+            guard active else { return }
+            Task { await load() }
+        }
+        .onChange(of: auth.isAuthenticated) { _, authenticated in
+            guard authenticated, isRootActive else {
+                handle = nil
+                return
+            }
+            Task { await load() }
+        }
+    }
+
+    @MainActor
+    private func load() async {
+        guard auth.isAuthenticated else {
+            handle = nil
+            errorMessage = nil
+            isLoading = false
+            return
+        }
+        isLoading = true
+        do {
+            let response = try await APIClient.shared.fetchProfile()
+            handle = response.profile.handle?.trimmingCharacters(in: .whitespacesAndNewlines)
+            errorMessage = handle?.isEmpty == false ? nil : "Add a handle in Account to activate your public Atmo."
+        } catch {
+            handle = nil
+            errorMessage = "Your Atmo could not be loaded. Please try again."
+        }
+        isLoading = false
     }
 }
 

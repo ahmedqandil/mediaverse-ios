@@ -2,7 +2,7 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
-/// User profile — avatar, name, stats, settings rows, context switcher, sign out.
+/// Account — identity settings, library shortcuts, context switcher, and sign out.
 struct ProfileView: View {
     private enum ProfileDestination: Hashable, Identifiable {
         case history
@@ -82,7 +82,7 @@ struct ProfileView: View {
                 }
             }
         }
-        .navigationTitle("Profile")
+        .navigationTitle("Account")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showCtxSwitcher) {
             ContextSwitcherView(

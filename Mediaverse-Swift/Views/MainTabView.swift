@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
-/// Root page container: Atmosphere · Videos · Shorts · Discover · Me
+/// Root page container: Home · Videos · Shorts · Discover · Profile
 /// All watch/channel/show/microdrama screens are PUSHED on the relevant NavigationStack.
 /// On iOS 26 the tab bar adopts Liquid Glass automatically — UITabBar.appearance()
 /// is skipped on that OS to avoid fighting the compositor.
@@ -321,13 +321,13 @@ struct MainTabView: View {
             .tag(AppTab.explore)
 
             NavigationStack(path: $profilePath) {
-                ProfileView(isRootActive: selectedTab == .profile)
+                MyAtmoProfileView(isRootActive: selectedTab == .profile)
                     .navigationDestination(for: AppRoute.self) { route in
                         routeDestination(route)
                     }
             }
             .ignoresSafeArea(edges: .bottom)
-            .tabItem { appTabLabel("Me", icon: "user", fallback: "person") }
+            .tabItem { appTabLabel("Profile", icon: "user", fallback: "person") }
             .tag(AppTab.profile)
         }
         .tint(C.watch)
@@ -465,7 +465,7 @@ struct MainTabView: View {
                     bottomTabButton(.videos, title: "Videos", icon: "play", fallback: "play.rectangle")
                     bottomTabButton(.shorts, title: "Shorts", icon: "short", fallback: "bolt")
                     bottomTabButton(.explore, title: "Discover", icon: "explore", fallback: "safari")
-                    bottomTabButton(.profile, title: "Me", icon: "user", fallback: "person")
+                    bottomTabButton(.profile, title: "Profile", icon: "user", fallback: "person")
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
