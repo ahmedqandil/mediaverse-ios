@@ -93,14 +93,25 @@ struct AtmosphereView: View {
     }
 
     private var tabSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 36)
+        DragGesture(minimumDistance: 28, coordinateSpace: .local)
             .onEnded { value in
                 let horizontal = value.translation.width
                 let vertical = value.translation.height
-                guard abs(horizontal) > abs(vertical) * 1.35, abs(horizontal) > 64 else { return }
+                let predictedHorizontal = value.predictedEndTranslation.width
+                guard abs(horizontal) > abs(vertical) * 1.15,
+                      abs(horizontal) > 48 || abs(predictedHorizontal) > 80 else { return }
                 let tabs = AtmosphereViewModel.Tab.allCases
                 guard let index = tabs.firstIndex(of: model.selectedTab) else { return }
-                let nextIndex = horizontal < 0 ? index + 1 : index - 1
+                let direction = abs(predictedHorizontal) > abs(horizontal) ? predictedHorizontal : horizontal
+
+                if direction > 0, model.selectedTab == .atmosphere {
+                    guard auth.isAuthenticated else { return }
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    NotificationCenter.default.post(name: .uploadRequested, object: nil)
+                    return
+                }
+
+                let nextIndex = direction < 0 ? index + 1 : index - 1
                 guard tabs.indices.contains(nextIndex) else { return }
                 C.lightHaptic()
                 withAnimation(.easeInOut(duration: 0.2)) {

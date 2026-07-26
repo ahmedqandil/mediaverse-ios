@@ -115,7 +115,13 @@ struct BrowseView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             MediaverseUnderlineTabStrip(
                 items: browseItems.map {
-                    MediaverseTabItem(id: $0.id, label: $0.label)
+                    let section = BrowseSection(rawValue: $0.id) ?? .discover
+                    return MediaverseTabItem(
+                        id: $0.id,
+                        label: $0.label,
+                        iconName: section.assetIcon,
+                        fallbackSystemName: section.fallbackIcon
+                    )
                 },
                 selectedID: selectedSection.rawValue,
                 fillsWidth: false,
@@ -133,14 +139,17 @@ struct BrowseView: View {
     }
 
     private var sectionSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 36)
+        DragGesture(minimumDistance: 28, coordinateSpace: .local)
             .onEnded { value in
                 let horizontal = value.translation.width
                 let vertical = value.translation.height
-                guard abs(horizontal) > abs(vertical) * 1.35, abs(horizontal) > 64 else { return }
+                let predictedHorizontal = value.predictedEndTranslation.width
+                guard abs(horizontal) > abs(vertical) * 1.15,
+                      abs(horizontal) > 48 || abs(predictedHorizontal) > 80 else { return }
                 let sections = browseItems.compactMap { BrowseSection(rawValue: $0.id) }
                 guard let index = sections.firstIndex(of: selectedSection) else { return }
-                let nextIndex = horizontal < 0 ? index + 1 : index - 1
+                let direction = abs(predictedHorizontal) > abs(horizontal) ? predictedHorizontal : horizontal
+                let nextIndex = direction < 0 ? index + 1 : index - 1
                 guard sections.indices.contains(nextIndex) else { return }
                 C.lightHaptic()
                 withAnimation(.easeInOut(duration: 0.2)) {
