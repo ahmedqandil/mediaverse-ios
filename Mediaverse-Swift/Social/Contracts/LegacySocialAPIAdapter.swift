@@ -5,6 +5,7 @@ import Foundation
 public protocol LegacySocialTransport: Sendable {
     func socialData(path: String) async throws -> Data
     func socialPostData(path: String, body: Data) async throws -> Data
+    func socialDeleteData(path: String) async throws -> Data
 }
 
 public enum SocialDiscoverMode: String, Sendable {
@@ -171,6 +172,36 @@ public actor LegacySocialAPIAdapter {
         ).post
     }
 
+    public func followVibe(slug: String) async throws -> VibeFollowResponse {
+        try await post(
+            VibeFollowResponse.self,
+            path: "/api/fan-clubs/\(try segment(slug))/follow",
+            body: Data("{}".utf8)
+        )
+    }
+
+    public func unfollowVibe(slug: String) async throws -> VibeFollowResponse {
+        let data = try await transport.socialDeleteData(
+            path: "/api/fan-clubs/\(try segment(slug))/follow"
+        )
+        return try decoder.decode(VibeFollowResponse.self, from: data)
+    }
+
+    public func joinVibe(slug: String, message: String? = nil) async throws -> VibeJoinResponse {
+        let body = try JSONEncoder().encode(VibeJoinRequest(message: message))
+        return try await post(
+            VibeJoinResponse.self,
+            path: "/api/fan-clubs/\(try segment(slug))/join",
+            body: body
+        )
+    }
+
+    public func leaveVibe(slug: String) async throws {
+        _ = try await transport.socialDeleteData(
+            path: "/api/fan-clubs/\(try segment(slug))/join"
+        )
+    }
+
     public func addEnergy(
         toRipple postId: String,
         overall: Int,
@@ -318,6 +349,10 @@ private struct CreateRippleRequest: Encodable {
     let isSpoiler: Bool
     let commentsDisabled: Bool
     let attachments: [RippleCreateAttachment]
+}
+
+private struct VibeJoinRequest: Encodable {
+    let message: String?
 }
 
 private extension CharacterSet {

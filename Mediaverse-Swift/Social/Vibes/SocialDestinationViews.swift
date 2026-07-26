@@ -6,6 +6,8 @@ struct VibeDetailView: View {
     @State private var ripples: [Ripple] = []
     @State private var nextCursor: String?
     @State private var isLoading = true
+    @State private var isMutatingRelationship = false
+    @State private var relationshipNotice: String?
     @State private var errorMessage: String?
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
     private let features = SocialFeatureConfiguration.runtime()
@@ -14,7 +16,18 @@ struct VibeDetailView: View {
         ScrollView {
             LazyVStack(spacing: 12) {
                 if let detail {
-                    VibeHero(detail: detail)
+                    VibeHero(
+                        detail: detail,
+                        isBusy: isMutatingRelationship,
+                        relationshipAction: relationshipAction
+                    )
+                    if let relationshipNotice {
+                        Text(relationshipNotice)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(C.watch)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, C.pagePad)
+                    }
                     ForEach(ripples) {
                         RippleCard(
                             ripple: $0,
@@ -75,6 +88,47 @@ struct VibeDetailView: View {
         } catch {
             errorMessage = socialErrorMessage(error)
         }
+    }
+
+    private var relationshipAction: (() -> Void)? {
+        guard let detail else { return nil }
+        let canMutate = detail.club.isPersonal
+            ? detail.capabilities.canFollow || detail.following
+            : detail.capabilities.canJoin
+                || detail.capabilities.canRequestJoin
+                || detail.capabilities.canLeave
+        guard canMutate else { return nil }
+        return { Task { await mutateRelationship() } }
+    }
+
+    @MainActor
+    private func mutateRelationship() async {
+        guard let detail, !isMutatingRelationship else { return }
+        isMutatingRelationship = true
+        relationshipNotice = nil
+        do {
+            if detail.club.isPersonal {
+                if detail.following {
+                    _ = try await api.unfollowVibe(slug: slug)
+                    relationshipNotice = "Vibe unfollowed."
+                } else {
+                    _ = try await api.followVibe(slug: slug)
+                    relationshipNotice = "Vibe followed."
+                }
+            } else if detail.capabilities.canLeave {
+                try await api.leaveVibe(slug: slug)
+                relationshipNotice = "You left this Vibe."
+            } else {
+                let result = try await api.joinVibe(slug: slug)
+                relationshipNotice = result.pending
+                    ? "Your request was sent to the Vibe moderators."
+                    : "You joined this Vibe."
+            }
+            self.detail = try await api.vibe(slug: slug)
+        } catch {
+            relationshipNotice = socialErrorMessage(error)
+        }
+        isMutatingRelationship = false
     }
 }
 
@@ -243,6 +297,8 @@ struct AtmoProfileView: View {
 
 private struct VibeHero: View {
     let detail: VibeDetailResponse
+    let isBusy: Bool
+    let relationshipAction: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -286,11 +342,37 @@ private struct VibeHero: View {
                     .foregroundStyle(C.textMuted)
                 }
                 Spacer()
+                if let relationshipAction {
+                    Button(action: relationshipAction) {
+                        if isBusy {
+                            ProgressView().tint(.black)
+                        } else {
+                            Text(relationshipLabel)
+                        }
+                    }
+                    .font(.caption.bold())
+                    .buttonStyle(.borderedProminent)
+                    .tint(C.watch)
+                    .disabled(isBusy)
+                }
             }
             .padding(.horizontal, C.pagePad)
             .padding(.bottom, 4)
         }
         .background(C.surface)
+    }
+
+    private var relationshipLabel: String {
+        if detail.club.isPersonal {
+            return detail.following ? "Following" : "Follow"
+        }
+        if detail.capabilities.canLeave {
+            return "Leave"
+        }
+        if detail.capabilities.canRequestJoin {
+            return "Request to Join"
+        }
+        return "Join"
     }
 }
 

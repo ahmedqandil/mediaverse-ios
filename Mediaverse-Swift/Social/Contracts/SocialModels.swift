@@ -470,6 +470,27 @@ public struct PersonalVibeResponse: Decodable, Sendable {
     public let vibe: VibeSummary
 }
 
+public struct VibeFollowResponse: Decodable, Equatable, Sendable {
+    public let following: Bool
+}
+
+public struct VibeJoinResponse: Decodable, Sendable {
+    public let membership: VibeMembership?
+    public let alreadyMember: Bool
+    public let pending: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case membership, alreadyMember, pending
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        membership = try values.decodeIfPresent(VibeMembership.self, forKey: .membership)
+        alreadyMember = try values.decodeIfPresent(Bool.self, forKey: .alreadyMember) ?? false
+        pending = try values.decodeIfPresent(Bool.self, forKey: .pending) ?? false
+    }
+}
+
 public enum RippleCreateAttachment: Encodable, Equatable, Sendable {
     case photo(imageURL: String)
     case link(externalURL: String)

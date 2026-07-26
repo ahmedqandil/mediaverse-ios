@@ -213,6 +213,34 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         XCTAssertEqual(attachments.first?["type"] as? String, "WESTREEM_RIPPLE")
         XCTAssertEqual(attachments.first?["fanClubPostId"] as? String, "original-1")
     }
+
+    func testPersonalFollowAndCommunityJoinUseDistinctFrozenEndpoints() async throws {
+        let followPath = "/api/fan-clubs/my%20pulse/follow"
+        let joinPath = "/api/fan-clubs/cinema/join"
+        let transport = SocialTransportStub(responses: [
+            followPath: #"{"following":true}"#,
+            joinPath: #"{"pending":true}"#
+        ])
+        let adapter = LegacySocialAPIAdapter(transport: transport)
+
+        let followed = try await adapter.followVibe(slug: "my pulse")
+        let joined = try await adapter.joinVibe(slug: "cinema", message: "Let me in")
+        XCTAssertTrue(followed.following)
+        XCTAssertTrue(joined.pending)
+
+        let postPaths = await transport.postPaths
+        XCTAssertEqual(postPaths, [followPath, joinPath])
+        let postBodies = await transport.postBodies
+        let joinBody = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: try XCTUnwrap(postBodies.last)) as? [String: Any]
+        )
+        XCTAssertEqual(joinBody["message"] as? String, "Let me in")
+
+        _ = try await adapter.unfollowVibe(slug: "my pulse")
+        try await adapter.leaveVibe(slug: "cinema")
+        let deletePaths = await transport.deletePaths
+        XCTAssertEqual(deletePaths, [followPath, joinPath])
+    }
 }
 
 private actor SocialTransportStub: LegacySocialTransport {
@@ -220,6 +248,7 @@ private actor SocialTransportStub: LegacySocialTransport {
     private(set) var paths: [String] = []
     private(set) var postPaths: [String] = []
     private(set) var postBodies: [Data] = []
+    private(set) var deletePaths: [String] = []
 
     init(responses: [String: String]) {
         self.responses = responses
@@ -236,6 +265,14 @@ private actor SocialTransportStub: LegacySocialTransport {
     func socialPostData(path: String, body: Data) async throws -> Data {
         postPaths.append(path)
         postBodies.append(body)
+        guard let response = responses[path] else {
+            throw StubError.missing(path)
+        }
+        return Data(response.utf8)
+    }
+
+    func socialDeleteData(path: String) async throws -> Data {
+        deletePaths.append(path)
         guard let response = responses[path] else {
             throw StubError.missing(path)
         }
