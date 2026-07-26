@@ -212,6 +212,22 @@ actor APIClient: LegacySocialTransport {
         return data
     }
 
+    func socialPatchData(path: String, body: Data) async throws -> Data {
+        guard let url = URL(string: C.baseURL + path) else {
+            throw APIError.badURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = body
+        attachAuth(&request)
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        invalidateResponseCache()
+        return data
+    }
+
     func socialDeleteData(path: String) async throws -> Data {
         guard let url = URL(string: C.baseURL + path) else {
             throw APIError.badURL(path)

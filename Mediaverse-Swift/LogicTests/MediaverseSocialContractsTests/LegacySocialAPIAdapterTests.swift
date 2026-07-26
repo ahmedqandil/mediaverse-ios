@@ -406,6 +406,45 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         let deletePaths = await transport.deletePaths
         XCTAssertEqual(deletePaths, [cancelPath])
     }
+
+    func testAffiliationReviewUsesExactFrozenBackstageContract() async throws {
+        let queueJSON = """
+        {"affiliations":[{"id":"aff-1","entityType":"CHANNEL","relationshipType":"AFFILIATED_COMMUNITY","status":"PENDING","requestMessage":"Please connect us","reviewNote":null,"isPrimary":false,"club":{"id":"v-1","slug":"cinema","name":"Cinema","ownerId":"u-1"},"show":null,"channel":{"id":"c-1","name":"Cinema Channel","handle":"cinema"},"requestedBy":{"id":"u-1","name":"Ava","handle":"ava","image":null}}],"counts":{"total":1,"pending":1,"approved":0}}
+        """
+        let decisionJSON = """
+        {"ok":true,"status":"APPROVED","relationshipType":"OFFICIAL"}
+        """
+        let transport = SocialTransportStub(responses: [
+            "/api/backstage/affiliations?status=PENDING": queueJSON,
+            "PATCH /api/backstage/affiliations": decisionJSON
+        ])
+        let api = LegacySocialAPIAdapter(transport: transport)
+
+        let queue = try await api.reviewableAffiliations(status: .pending)
+        XCTAssertEqual(queue.affiliations.first?.club?.slug, "cinema")
+        XCTAssertEqual(queue.counts.pending, 1)
+
+        let decision = try await api.reviewAffiliation(
+            id: "aff-1",
+            action: .approve,
+            note: "Verified",
+            relationship: .official
+        )
+        XCTAssertTrue(decision.ok)
+        XCTAssertEqual(decision.status, .approved)
+
+        let paths = await transport.paths
+        XCTAssertEqual(paths, ["/api/backstage/affiliations?status=PENDING"])
+        let postPaths = await transport.postPaths
+        XCTAssertEqual(postPaths, ["PATCH /api/backstage/affiliations"])
+        let postedBodies = await transport.postBodies
+        let body = try XCTUnwrap(postedBodies.first)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(payload["affiliationId"] as? String, "aff-1")
+        XCTAssertEqual(payload["action"] as? String, "approve")
+        XCTAssertEqual(payload["note"] as? String, "Verified")
+        XCTAssertEqual(payload["relationshipType"] as? String, "OFFICIAL")
+    }
 }
 
 private actor SocialTransportStub: LegacySocialTransport {
@@ -433,6 +472,15 @@ private actor SocialTransportStub: LegacySocialTransport {
         postPaths.append(path)
         postBodies.append(body)
         guard let response = responses[path] else {
+            throw StubError.missing(path)
+        }
+        return Data(response.utf8)
+    }
+
+    func socialPatchData(path: String, body: Data) async throws -> Data {
+        postPaths.append("PATCH \(path)")
+        postBodies.append(body)
+        guard let response = responses["PATCH \(path)"] ?? responses[path] else {
             throw StubError.missing(path)
         }
         return Data(response.utf8)

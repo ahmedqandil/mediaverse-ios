@@ -127,9 +127,15 @@ public enum VibeAffiliationStatus: String, Decodable, Sendable {
     case cancelled = "CANCELLED"
 }
 
-public enum VibeAffiliationRelationship: String, Decodable, Sendable {
+public enum VibeAffiliationRelationship: String, Codable, Sendable {
     case official = "OFFICIAL"
     case affiliatedCommunity = "AFFILIATED_COMMUNITY"
+}
+
+public enum AffiliationReviewAction: String, Encodable, Sendable {
+    case approve
+    case reject
+    case revoke
 }
 
 public struct VibeAffiliationTarget: Decodable, Identifiable, Sendable {
@@ -155,8 +161,17 @@ public struct VibeAffiliation: Decodable, Identifiable, Sendable {
     public let isPrimary: Bool
     public let show: VibeAffiliationEntity?
     public let channel: VibeAffiliationEntity?
+    public let club: AffiliationVibe?
+    public let requestedBy: SocialIdentity?
 
     public var entity: VibeAffiliationEntity? { show ?? channel }
+}
+
+public struct AffiliationVibe: Decodable, Sendable {
+    public let id: String
+    public let slug: String
+    public let name: String
+    public let ownerId: String?
 }
 
 public struct VibeAffiliationEntity: Decodable, Sendable {
@@ -187,6 +202,23 @@ public struct VibeAffiliationsResponse: Decodable, Sendable {
 
 public struct VibeAffiliationResponse: Decodable, Sendable {
     public let affiliation: VibeAffiliation
+}
+
+public struct AffiliationReviewCounts: Decodable, Sendable {
+    public let total: Int
+    public let pending: Int
+    public let approved: Int
+}
+
+public struct AffiliationReviewQueueResponse: Decodable, Sendable {
+    public let affiliations: [VibeAffiliation]
+    public let counts: AffiliationReviewCounts
+}
+
+public struct AffiliationReviewDecisionResponse: Decodable, Sendable {
+    public let ok: Bool
+    public let status: VibeAffiliationStatus
+    public let relationshipType: VibeAffiliationRelationship
 }
 
 public struct SocialOKResponse: Decodable, Sendable {

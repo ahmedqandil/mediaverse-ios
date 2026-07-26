@@ -20,6 +20,7 @@ struct ProfileView: View {
     @State private var showEditProfile = false
     @State private var showChannelSettings = false
     @State private var showPairedDevices = false
+    @State private var showAffiliationReviews = false
     @State private var showPartnerRequest = false
     @State private var subscriptions = [UserSubscription]()
     @State private var rentals = [UserRental]()
@@ -103,6 +104,9 @@ struct ProfileView: View {
         }
         .navigationDestination(isPresented: $showPairedDevices) {
             PairedDevicesView()
+        }
+        .navigationDestination(isPresented: $showAffiliationReviews) {
+            AffiliationReviewView()
         }
         .task {
             guard isRootActive else { return }
@@ -347,6 +351,10 @@ struct ProfileView: View {
                 rowDivider
                 accountRow(iconName: "devices", fallbackSystemName: "tv.and.mediabox", title: "Paired Devices", subtitle: "TVs and living-room apps") {
                     showPairedDevices = true
+                }
+                rowDivider
+                accountRow(iconName: "network", fallbackSystemName: "link.badge.plus", title: "Affiliation Requests", subtitle: "Review Vibe connections you manage") {
+                    showAffiliationReviews = true
                 }
                 rowDivider
                 if canRequestPartner {

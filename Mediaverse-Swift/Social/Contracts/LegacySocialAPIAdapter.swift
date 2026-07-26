@@ -5,6 +5,7 @@ import Foundation
 public protocol LegacySocialTransport: Sendable {
     func socialData(path: String) async throws -> Data
     func socialPostData(path: String, body: Data) async throws -> Data
+    func socialPatchData(path: String, body: Data) async throws -> Data
     func socialDeleteData(path: String) async throws -> Data
     func socialUploadData(path: String, body: Data, contentType: String) async throws -> Data
 }
@@ -144,6 +145,38 @@ public actor LegacySocialAPIAdapter {
             path: "/api/fan-clubs/\(try segment(slug))/affiliations/\(try segment(affiliationId))"
         )
         _ = try decoder.decode(SocialOKResponse.self, from: data)
+    }
+
+    public func reviewableAffiliations(
+        status: VibeAffiliationStatus? = nil
+    ) async throws -> AffiliationReviewQueueResponse {
+        let query = status.map { [URLQueryItem(name: "status", value: $0.rawValue)] } ?? []
+        return try await decode(
+            AffiliationReviewQueueResponse.self,
+            path: try path("/api/backstage/affiliations", query: query)
+        )
+    }
+
+    public func reviewAffiliation(
+        id: String,
+        action: AffiliationReviewAction,
+        note: String? = nil,
+        relationship: VibeAffiliationRelationship = .affiliatedCommunity
+    ) async throws -> AffiliationReviewDecisionResponse {
+        let normalizedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = try JSONEncoder().encode(
+            AffiliationReviewRequest(
+                affiliationId: id,
+                action: action,
+                note: normalizedNote?.isEmpty == false ? normalizedNote : nil,
+                relationshipType: relationship
+            )
+        )
+        let data = try await transport.socialPatchData(
+            path: "/api/backstage/affiliations",
+            body: body
+        )
+        return try decoder.decode(AffiliationReviewDecisionResponse.self, from: data)
     }
 
     public func ripple(postId: String) async throws -> Ripple {
@@ -517,6 +550,13 @@ private struct VibeAffiliationRequest: Encodable {
     let entityId: String
     let requestMessage: String?
     let isPrimary: Bool
+}
+
+private struct AffiliationReviewRequest: Encodable {
+    let affiliationId: String
+    let action: AffiliationReviewAction
+    let note: String?
+    let relationshipType: VibeAffiliationRelationship
 }
 
 private struct CreateRippleRequest: Encodable {
