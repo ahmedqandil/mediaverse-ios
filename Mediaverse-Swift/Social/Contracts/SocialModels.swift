@@ -359,11 +359,6 @@ private struct IdentifierOnly: Decodable {
     let id: String?
 }
 
-public struct RipplePhotoEnergyResponse: Decodable, Sendable, Equatable {
-    public let liked: Bool
-    public let likeCount: Int
-}
-
 public struct RippleVideoAttachment: Decodable, Sendable {
     public let id: String
     public let title: String

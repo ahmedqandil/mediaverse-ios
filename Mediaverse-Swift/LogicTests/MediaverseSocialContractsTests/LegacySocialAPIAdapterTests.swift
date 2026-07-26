@@ -309,7 +309,7 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
 
     func testRipplePhotoEngagementUsesAttachmentSpecificFrozenEndpoints() async throws {
         let commentsPath = "/api/fan-club-attachments/photo%201/comments"
-        let reactionPath = "/api/fan-club-attachments/photo%201/like"
+        let reactionPath = "/api/fan-club-attachments/photo%201/rating"
         let commentLikePath = "/api/fan-club-attachment-comments/comment%201/like"
         let transport = SocialTransportStub(responses: [
             commentsPath: """
@@ -320,7 +320,12 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
             "parentId":null,"createdAt":"2026-07-26T10:00:00Z",
             "user":{"id":"u1","handle":"ahmed"}}}
             """,
-            reactionPath: #"{"liked":true,"likeCount":4}"#,
+            reactionPath: """
+            {"userRating":{"overall":4,"tags":["REAL"],"review":null},
+            "aggregate":{"avg":4.0,"count":1,
+            "distribution":{"1":0,"2":0,"3":0,"4":1,"5":0},"topTags":["REAL"]},
+            "overall":4,"tags":["REAL"],"review":null,"ok":true}
+            """,
             commentLikePath: #"{"liked":true,"likeCount":2}"#
         ])
         let adapter = LegacySocialAPIAdapter(transport: transport)
@@ -334,9 +339,14 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         )
         XCTAssertEqual(created.id, "comment 1")
 
-        let energy = try await adapter.toggleRipplePhotoEnergy(attachmentId: "photo 1")
-        XCTAssertTrue(energy.liked)
-        XCTAssertEqual(energy.likeCount, 4)
+        let energy = try await adapter.ripplePhotoEnergy(attachmentId: "photo 1")
+        XCTAssertEqual(energy.aggregate.avg, 4)
+        let saved = try await adapter.addEnergy(
+            toPhoto: "photo 1",
+            overall: 4,
+            tags: ["REAL"]
+        )
+        XCTAssertEqual(saved.tags, ["REAL"])
         let commentLike = try await adapter.toggleRipplePhotoCommentLike(commentId: "comment 1")
         XCTAssertEqual(commentLike.likeCount, 2)
 

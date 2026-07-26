@@ -463,17 +463,16 @@ private struct RipplePhotoViewer: View {
 
 private struct RipplePhotoViewerPage: View {
     let photo: RippleAttachment
-    @State private var energyCount: Int
-    @State private var hasEnergy: Bool
+    @State private var energyCount = 0
+    @State private var energyTotal = 0
+    @State private var energyTags: [String] = []
     @State private var commentCount: Int
-    @State private var isUpdatingEnergy = false
+    @State private var showsEnergy = false
     @State private var showsComments = false
     @State private var errorMessage: String?
 
     init(photo: RippleAttachment) {
         self.photo = photo
-        _energyCount = State(initialValue: photo.likeCount)
-        _hasEnergy = State(initialValue: photo.viewerLikedPhoto)
         _commentCount = State(initialValue: photo.commentCount)
     }
 
@@ -490,18 +489,26 @@ private struct RipplePhotoViewerPage: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             Spacer(minLength: 20)
+            if energyCount > 0 {
+                SocialEnergyMeter(
+                    total: energyTotal,
+                    count: energyCount,
+                    tags: energyTags
+                )
+                .padding(.horizontal, 20)
+                .padding(.bottom, 10)
+            }
             HStack(spacing: 28) {
                 Button {
-                    Task { await toggleEnergy() }
+                    showsEnergy = true
                 } label: {
                     photoAction(
                         icon: "bolt.fill",
                         label: "Add Energy",
                         count: energyCount,
-                        active: hasEnergy
+                        active: false
                     )
                 }
-                .disabled(isUpdatingEnergy)
 
                 Button {
                     showsComments = true
@@ -518,6 +525,14 @@ private struct RipplePhotoViewerPage: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
             .background(.black.opacity(0.82))
+        }
+        .task { await loadEnergy() }
+        .sheet(isPresented: $showsEnergy) {
+            RipplePhotoEnergySheet(attachmentId: photo.id) { aggregate in
+                apply(aggregate)
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showsComments) {
             StandardCommentsSheet(
@@ -554,26 +569,171 @@ private struct RipplePhotoViewerPage: View {
         .frame(minHeight: 36)
     }
 
-    @MainActor
-    private func toggleEnergy() async {
-        guard !isUpdatingEnergy else { return }
-        isUpdatingEnergy = true
-        let previousEnergy = hasEnergy
-        let previousCount = energyCount
-        hasEnergy.toggle()
-        energyCount = max(0, energyCount + (hasEnergy ? 1 : -1))
+    private func loadEnergy() async {
         do {
             let response = try await LegacySocialAPIAdapter(
                 transport: APIClient.shared
-            ).toggleRipplePhotoEnergy(attachmentId: photo.id)
-            hasEnergy = response.liked
-            energyCount = max(0, response.likeCount)
+            ).ripplePhotoEnergy(attachmentId: photo.id)
+            await MainActor.run { apply(response.aggregate) }
         } catch {
-            hasEnergy = previousEnergy
-            energyCount = previousCount
+            await MainActor.run { errorMessage = error.localizedDescription }
+        }
+    }
+
+    private func apply(_ aggregate: RippleEnergyAggregate) {
+        energyCount = max(0, aggregate.count)
+        energyTotal = Int(((aggregate.avg ?? 0) * Double(energyCount)).rounded())
+        energyTags = aggregate.topTags
+    }
+}
+
+private struct RipplePhotoEnergySheet: View {
+    let attachmentId: String
+    let onSaved: (RippleEnergyAggregate) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var overall = 3
+    @State private var tags = Set<String>()
+    @State private var existing: RippleEnergySelection?
+    @State private var isLoading = true
+    @State private var isSaving = false
+    @State private var errorMessage: String?
+
+    private let choices = ["HITS", "INSPIRED", "REAL", "DEEP", "CHILL", "CLUTCH"]
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView().tint(C.watch)
+                } else {
+                    VStack(alignment: .leading, spacing: 20) {
+                        Text("How much Energy?").font(.headline)
+                        HStack {
+                            ForEach(1...5, id: \.self) { value in
+                                Button {
+                                    overall = value
+                                } label: {
+                                    Text("\(value)")
+                                        .font(.headline)
+                                        .foregroundStyle(value == overall ? C.bg : C.text)
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: 42)
+                                        .background(
+                                            value == overall ? C.watch : C.elevated,
+                                            in: RoundedRectangle(cornerRadius: 9)
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        Text("What kind?").font(.headline)
+                        FlowLayout(spacing: 8) {
+                            ForEach(choices, id: \.self) { choice in
+                                Button {
+                                    if tags.contains(choice) { tags.remove(choice) }
+                                    else { tags.insert(choice) }
+                                } label: {
+                                    Label(energyLabel(choice), systemImage: energySymbol(choice))
+                                        .font(.caption.bold())
+                                        .foregroundStyle(tags.contains(choice) ? C.bg : C.text)
+                                        .padding(.horizontal, 11)
+                                        .padding(.vertical, 8)
+                                        .background(tags.contains(choice) ? C.watch : C.elevated, in: Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        if existing != nil {
+                            Button("Remove my Energy", role: .destructive) {
+                                Task { await remove() }
+                            }
+                            .disabled(isSaving)
+                        }
+                        Spacer()
+                    }
+                    .padding(C.pagePad)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(C.bg.ignoresSafeArea())
+            .foregroundStyle(C.text)
+            .navigationTitle("Add Energy")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { Task { await save() } }
+                        .disabled(isLoading || isSaving)
+                }
+            }
+            .task { await load() }
+            .alert(
+                "Energy update failed",
+                isPresented: Binding(
+                    get: { errorMessage != nil },
+                    set: { if !$0 { errorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "")
+            }
+        }
+    }
+
+    @MainActor
+    private func load() async {
+        do {
+            let response = try await LegacySocialAPIAdapter(
+                transport: APIClient.shared
+            ).ripplePhotoEnergy(attachmentId: attachmentId)
+            existing = response.userRating
+            if let rating = response.userRating {
+                overall = rating.overall
+                tags = Set(rating.tags)
+            }
+        } catch {
             errorMessage = error.localizedDescription
         }
-        isUpdatingEnergy = false
+        isLoading = false
+    }
+
+    @MainActor
+    private func save() async {
+        guard !isSaving else { return }
+        isSaving = true
+        do {
+            let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+            _ = try await api.addEnergy(
+                toPhoto: attachmentId,
+                overall: overall,
+                tags: Array(tags)
+            )
+            let refreshed = try await api.ripplePhotoEnergy(attachmentId: attachmentId)
+            onSaved(refreshed.aggregate)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isSaving = false
+    }
+
+    @MainActor
+    private func remove() async {
+        guard !isSaving else { return }
+        isSaving = true
+        do {
+            let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+            try await api.removeEnergy(fromPhoto: attachmentId)
+            let refreshed = try await api.ripplePhotoEnergy(attachmentId: attachmentId)
+            onSaved(refreshed.aggregate)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isSaving = false
     }
 }
 

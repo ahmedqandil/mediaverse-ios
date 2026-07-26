@@ -213,12 +213,41 @@ public actor LegacySocialAPIAdapter {
         )
     }
 
-    public func toggleRipplePhotoEnergy(attachmentId: String) async throws -> RipplePhotoEnergyResponse {
-        try await post(
-            RipplePhotoEnergyResponse.self,
-            path: "/api/fan-club-attachments/\(try segment(attachmentId))/like",
-            body: Data("{}".utf8)
+    public func ripplePhotoEnergy(attachmentId: String) async throws -> RippleEnergyResponse {
+        try await decode(
+            RippleEnergyResponse.self,
+            path: "/api/fan-club-attachments/\(try segment(attachmentId))/rating"
         )
+    }
+
+    public func addEnergy(
+        toPhoto attachmentId: String,
+        overall: Int,
+        tags: [String]
+    ) async throws -> RippleEnergySelection {
+        guard (1...5).contains(overall) else { throw LegacySocialAPIError.invalidEnergy }
+        let normalizedTags = Array(
+            Set(tags.compactMap { value -> String? in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : String(trimmed.prefix(80))
+            })
+        )
+        .sorted()
+        .prefix(10)
+        return try await post(
+            RippleEnergySelection.self,
+            path: "/api/fan-club-attachments/\(try segment(attachmentId))/rating",
+            body: try JSONEncoder().encode(
+                RippleEnergyRequest(overall: overall, tags: Array(normalizedTags))
+            )
+        )
+    }
+
+    public func removeEnergy(fromPhoto attachmentId: String) async throws {
+        let data = try await transport.socialDeleteData(
+            path: "/api/fan-club-attachments/\(try segment(attachmentId))/rating"
+        )
+        _ = try decoder.decode(SocialOKResponse.self, from: data)
     }
 
     public func myVibes(cursor: String? = nil, limit: Int = 24) async throws -> VibeListResponse {
