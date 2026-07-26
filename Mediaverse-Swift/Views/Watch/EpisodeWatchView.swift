@@ -276,6 +276,24 @@ struct EpisodeWatchView: View {
                             .foregroundStyle(C.textMuted)
                     }
 
+                    if let aggregate = energyAggregate, aggregate.count > 0 {
+                        Button {
+                            if auth.isAuthenticated {
+                                showEnergy = true
+                            } else {
+                                NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+                            }
+                        } label: {
+                            SocialEnergyMeter(
+                                total: Int(((aggregate.avg ?? 0) * Double(aggregate.count)).rounded()),
+                                count: aggregate.count,
+                                tags: aggregate.topTags
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("View Vibe Meter")
+                    }
+
                     // Energy replaces content Like/Dislike; comment likes remain unchanged.
                     if auth.isAuthenticated {
                         HStack(spacing: 8) {

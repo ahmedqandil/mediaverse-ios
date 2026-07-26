@@ -803,6 +803,25 @@ struct VideoWatchView: View {
                 }
             }
 
+            if let aggregate = energyAggregate, aggregate.count > 0 {
+                Button {
+                    if auth.isAuthenticated {
+                        showEnergy = true
+                    } else {
+                        NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+                    }
+                } label: {
+                    SocialEnergyMeter(
+                        total: Int(((aggregate.avg ?? 0) * Double(aggregate.count)).rounded()),
+                        count: aggregate.count,
+                        tags: aggregate.topTags
+                    )
+                    .padding(.horizontal, 2)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("View Vibe Meter")
+            }
+
             // Action pill row: Energy is the universal primary reaction; Share stays last.
             HStack(spacing: 8) {
                 Button {
