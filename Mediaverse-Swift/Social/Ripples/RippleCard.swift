@@ -1932,7 +1932,6 @@ struct SocialEnergyForm: View {
 
             SocialEnergyLevelPicker(value: $overall)
                 .padding(14)
-                .background(C.elevated.opacity(0.72), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .stroke(C.borderSubtle, lineWidth: 1)
@@ -2011,6 +2010,7 @@ struct SocialEnergyForm: View {
         .padding(.top, 18)
         .padding(.bottom, 22)
         .background(C.bg.ignoresSafeArea())
+        .presentationBackground(C.bg)
         .foregroundStyle(C.text)
         .confirmationDialog(
             "Remove your Energy?",
