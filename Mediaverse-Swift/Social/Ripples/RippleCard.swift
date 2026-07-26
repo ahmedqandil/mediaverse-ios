@@ -887,8 +887,7 @@ private struct RipplePhotoEnergySheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var overall = 3
     @State private var tags = Set<String>()
-    @State private var existing: RippleEnergySelection?
-    @State private var isLoading = true
+    @State private var isLoading = false
     @State private var isSaving = false
     @State private var errorMessage: String?
 
@@ -901,25 +900,7 @@ private struct RipplePhotoEnergySheet: View {
                     ProgressView().tint(C.watch)
                 } else {
                     VStack(alignment: .leading, spacing: 20) {
-                        Text("How much Energy?").font(.headline)
-                        HStack {
-                            ForEach(1...5, id: \.self) { value in
-                                Button {
-                                    overall = value
-                                } label: {
-                                    Text("\(value)")
-                                        .font(.headline)
-                                        .foregroundStyle(value == overall ? C.bg : C.text)
-                                        .frame(maxWidth: .infinity)
-                                        .frame(height: 42)
-                                        .background(
-                                            value == overall ? C.watch : C.elevated,
-                                            in: RoundedRectangle(cornerRadius: 9)
-                                        )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
+                        SocialEnergyLevelPicker(value: $overall)
                         Text("What kind?").font(.headline)
                         FlowLayout(spacing: 8) {
                             ForEach(choices, id: \.self) { choice in
@@ -936,12 +917,6 @@ private struct RipplePhotoEnergySheet: View {
                                 }
                                 .buttonStyle(.plain)
                             }
-                        }
-                        if existing != nil {
-                            Button("Remove my Energy", role: .destructive) {
-                                Task { await remove() }
-                            }
-                            .disabled(isSaving)
                         }
                         Spacer()
                     }
@@ -962,7 +937,6 @@ private struct RipplePhotoEnergySheet: View {
                         .disabled(isLoading || isSaving)
                 }
             }
-            .task { await load() }
             .alert(
                 "Energy update failed",
                 isPresented: Binding(
@@ -975,23 +949,6 @@ private struct RipplePhotoEnergySheet: View {
                 Text(errorMessage ?? "")
             }
         }
-    }
-
-    @MainActor
-    private func load() async {
-        do {
-            let response = try await LegacySocialAPIAdapter(
-                transport: APIClient.shared
-            ).ripplePhotoEnergy(attachmentId: attachmentId)
-            existing = response.userRating
-            if let rating = response.userRating {
-                overall = rating.overall
-                tags = Set(rating.tags)
-            }
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-        isLoading = false
     }
 
     @MainActor
@@ -1014,21 +971,6 @@ private struct RipplePhotoEnergySheet: View {
         isSaving = false
     }
 
-    @MainActor
-    private func remove() async {
-        guard !isSaving else { return }
-        isSaving = true
-        do {
-            let api = LegacySocialAPIAdapter(transport: APIClient.shared)
-            try await api.removeEnergy(fromPhoto: attachmentId)
-            let refreshed = try await api.ripplePhotoEnergy(attachmentId: attachmentId)
-            onSaved(refreshed.aggregate)
-            dismiss()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-        isSaving = false
-    }
 }
 
 private struct RippleLinkAttachment: View {
@@ -1451,22 +1393,7 @@ private struct RippleEnergySheet: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("How much Energy?").font(.headline)
-                    HStack {
-                        ForEach(1...5, id: \.self) { value in
-                            Button {
-                                overall = value
-                            } label: {
-                                Text("\(value)")
-                                    .font(.headline)
-                                    .foregroundStyle(value == overall ? C.bg : C.text)
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 42)
-                                    .background(value == overall ? C.watch : C.elevated, in: RoundedRectangle(cornerRadius: 9))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
+                    SocialEnergyLevelPicker(value: $overall)
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -1514,13 +1441,6 @@ private struct RippleEnergySheet: View {
                     .disabled(controller.isBusy)
                 }
             }
-            .task {
-                await controller.loadEnergy()
-                if let current = controller.currentEnergy {
-                    overall = current.overall
-                    tags = Set(current.tags)
-                }
-            }
         }
     }
 }
@@ -1563,26 +1483,7 @@ struct ContentEnergySheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 20) {
-                Text("How much Energy?")
-                    .font(.headline)
-                HStack {
-                    ForEach(1...5, id: \.self) { value in
-                        Button {
-                            overall = value
-                        } label: {
-                            Text("\(value)")
-                                .font(.headline)
-                                .foregroundStyle(value == overall ? C.bg : C.text)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 42)
-                                .background(
-                                    value == overall ? C.watch : C.elevated,
-                                    in: RoundedRectangle(cornerRadius: 9)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+                SocialEnergyLevelPicker(value: $overall)
 
                 Text("What kind?")
                     .font(.headline)
@@ -1764,6 +1665,75 @@ struct SocialEnergyMeter: View {
                 }
             }
             .frame(height: 7)
+        }
+    }
+}
+
+struct SocialEnergyLevelPicker: View {
+    @Binding var value: Int
+
+    private let colors = [
+        Color(hex: "#6AE383"),
+        Color(hex: "#B7E875"),
+        Color(hex: "#F2D36B"),
+        Color(hex: "#E8A15F"),
+        Color(hex: "#A780D7"),
+        Color(hex: "#5967C9")
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Vibe Meter")
+                    .font(.headline)
+                Spacer()
+                Text(String(format: "%.1f", Double(value)))
+                    .font(.headline.monospacedDigit())
+            }
+
+            Slider(
+                value: Binding(
+                    get: { Double(value) },
+                    set: { value = Int($0.rounded()) }
+                ),
+                in: 1...5,
+                step: 1
+            )
+            .tint(.white)
+            .background(
+                LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing),
+                in: Capsule()
+            )
+            .accessibilityLabel("Energy")
+            .accessibilityValue("\(value) of 5")
+
+            HStack {
+                Text("Low")
+                Spacer()
+                Text("Electric")
+            }
+            .font(.caption)
+            .foregroundStyle(C.textMuted)
+
+            HStack(spacing: 7) {
+                ForEach(1...5, id: \.self) { level in
+                    Button {
+                        value = level
+                    } label: {
+                        Text("\(level)")
+                            .font(.headline)
+                            .foregroundStyle(level == value ? C.bg : C.text)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 38)
+                            .background(
+                                level == value ? C.watch : C.elevated,
+                                in: RoundedRectangle(cornerRadius: 9)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Energy \(level)")
+                }
+            }
         }
     }
 }

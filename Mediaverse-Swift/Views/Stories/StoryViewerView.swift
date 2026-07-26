@@ -1184,8 +1184,7 @@ private struct StoryEnergySheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var overall = 3
     @State private var selectedTags = Set<String>()
-    @State private var existingRating: StoryEnergyUserRating?
-    @State private var isLoading = true
+    @State private var isLoading = false
     @State private var isSaving = false
     @State private var errorMessage: String?
 
@@ -1200,26 +1199,7 @@ private struct StoryEnergySheet: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     VStack(alignment: .leading, spacing: 20) {
-                        Text("How much Energy?")
-                            .font(.headline)
-                        HStack(spacing: 7) {
-                            ForEach(1...5, id: \.self) { value in
-                                Button {
-                                    overall = value
-                                } label: {
-                                    Text("\(value)")
-                                        .font(.headline)
-                                        .foregroundStyle(value == overall ? C.bg : C.text)
-                                        .frame(maxWidth: .infinity)
-                                        .frame(height: 42)
-                                        .background(
-                                            value == overall ? C.watch : C.elevated,
-                                            in: RoundedRectangle(cornerRadius: 9)
-                                        )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
+                        SocialEnergyLevelPicker(value: $overall)
 
                         Text("What kind?")
                             .font(.headline)
@@ -1267,7 +1247,6 @@ private struct StoryEnergySheet: View {
                     .disabled(isLoading || isSaving)
                 }
             }
-            .task { await load() }
             .alert(
                 "Energy update failed",
                 isPresented: Binding(
@@ -1280,21 +1259,6 @@ private struct StoryEnergySheet: View {
                 Text(errorMessage ?? "")
             }
         }
-    }
-
-    @MainActor
-    private func load() async {
-        do {
-            let response = try await StoriesAPIClient.shared.fetchEnergy(storyId: story.id)
-            existingRating = response.userRating
-            if let rating = response.userRating {
-                overall = rating.overall
-                selectedTags = Set(rating.tags)
-            }
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-        isLoading = false
     }
 
     @MainActor
