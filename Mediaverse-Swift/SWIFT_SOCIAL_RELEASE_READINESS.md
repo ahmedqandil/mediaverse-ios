@@ -71,6 +71,8 @@ xcodebuild -project Mediaverse-Swift/Mediaverse.xcodeproj \
 ```
 
 - Result: `TEST BUILD SUCCEEDED`.
+- Unsigned optimized Release archive: `ARCHIVE SUCCEEDED`.
+- Simulator cold launch reached the native sign-in surface without an app crash.
 - Backend repository: no Swift-phase changes.
 - Unrelated pre-existing player/ad work and credential-file deletions were deliberately excluded from social commits.
 
@@ -86,6 +88,8 @@ xcodebuild -project Mediaverse-Swift/Mediaverse.xcodeproj \
 - [x] Backend worktree remains untouched.
 - [x] Contract suite passes.
 - [x] Full iOS test build passes.
+- [x] Unsigned optimized Release archive passes.
+- [x] Cold-launch smoke test reaches authentication without crashing.
 - [ ] Signed-in simulator smoke test against a reachable environment.
 - [ ] Archive/signing validation with the production Apple team.
 - [ ] Push branch and open/merge the release change through the project’s normal review process.
