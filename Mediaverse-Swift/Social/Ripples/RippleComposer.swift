@@ -78,7 +78,11 @@ struct RippleComposer: View {
                     maxSelectionCount: max(0, 10 - photos.count),
                     matching: .images
                 ) {
-                    composerToolLabel("Photos", systemImage: "photo.on.rectangle.angled")
+                    composerToolLabel(
+                        "Photo",
+                        systemImage: "photo.on.rectangle.angled",
+                        showsCompactTitle: true
+                    )
                 }
                 .onChange(of: photoSelections) { _, items in
                     Task { await upload(items) }
@@ -90,7 +94,11 @@ struct RippleComposer: View {
                         pollOptions = ["", "", "", ""]
                     }
                 } label: {
-                    composerToolLabel(pollOpen ? "Remove Poll" : "Poll", systemImage: "chart.bar")
+                    composerToolLabel(
+                        pollOpen ? "Remove Poll" : "Poll",
+                        systemImage: "chart.bar",
+                        showsCompactTitle: true
+                    )
                 }
                 optionToggle("Spoiler", systemImage: "eye.slash", isOn: $isSpoiler)
                 optionToggle("Close comments", systemImage: "bubble.left.and.exclamationmark", isOn: $commentsDisabled)
@@ -125,8 +133,12 @@ struct RippleComposer: View {
     }
 
     @ViewBuilder
-    private func composerToolLabel(_ title: String, systemImage: String) -> some View {
-        if isCompactWidth {
+    private func composerToolLabel(
+        _ title: String,
+        systemImage: String,
+        showsCompactTitle: Bool = false
+    ) -> some View {
+        if isCompactWidth && !showsCompactTitle {
             Image(systemName: systemImage)
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
