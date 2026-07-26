@@ -96,6 +96,7 @@ struct MainTabView: View {
     var body: some View {
         layeredRoot
         .simultaneousGesture(mainScrollActivityGesture)
+        .simultaneousGesture(homeUploadSwipeGesture)
         .animation(.spring(response: 0.26, dampingFraction: 0.88), value: isUploadSheetPresented)
         .animation(.spring(response: 0.24, dampingFraction: 0.86), value: isBottomTabBarCompressed)
         .onAppear {
@@ -340,10 +341,14 @@ struct MainTabView: View {
     }
 
     private func openUploadOptions() {
-        guard auth.isAuthenticated, isUploadEligible else { return }
+        guard canAccessCreateFlow else { return }
         C.lightHaptic()
         uploadDrawerDragOffset = 0
         isUploadSheetPresented = true
+    }
+
+    private var canAccessCreateFlow: Bool {
+        auth.isAuthenticated && (isUploadEligible || socialFeatures.rippleComposerEnabled)
     }
 
     private func handleShortsAdPlaybackVisibilityChanged(_ notification: Notification) {
@@ -402,7 +407,7 @@ struct MainTabView: View {
 
     private func applyUploadEligibility(_ isEligible: Bool) {
         isUploadEligible = isEligible
-        if !isEligible {
+        if !canAccessCreateFlow {
             isUploadSheetPresented = false
         }
         NotificationCenter.default.post(name: .uploadEligibilityChanged, object: isEligible)
@@ -499,6 +504,29 @@ struct MainTabView: View {
             .onEnded { _ in
                 scheduleBottomTabBarRestore()
             }
+    }
+
+    private var homeUploadSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 28, coordinateSpace: .global)
+            .onEnded { value in
+                guard canOpenUploadFromHomeSwipe else { return }
+                let translation = value.translation
+                let predicted = value.predictedEndTranslation
+                let isRightSwipe = translation.width > 92 || predicted.width > 150
+                let isMostlyHorizontal = abs(translation.width) > abs(translation.height) * 1.65
+                guard isRightSwipe, isMostlyHorizontal else { return }
+                openUploadOptions()
+            }
+    }
+
+    private var canOpenUploadFromHomeSwipe: Bool {
+        selectedTab == .home
+            && canAccessCreateFlow
+            && homePath.isEmpty
+            && !isUploadSheetPresented
+            && !isCommentsOverlayPresented
+            && !isKeyboardVisible
+            && expandingMiniItem == nil
     }
 
     private func scheduleBottomTabBarRestore() {
