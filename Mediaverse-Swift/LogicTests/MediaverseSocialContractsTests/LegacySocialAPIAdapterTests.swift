@@ -306,6 +306,43 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         XCTAssertEqual(uploadPaths, [uploadPath])
         XCTAssertEqual(uploadTypes, ["image/jpeg"])
     }
+
+    func testRipplePhotoEngagementUsesAttachmentSpecificFrozenEndpoints() async throws {
+        let commentsPath = "/api/fan-club-attachments/photo%201/comments"
+        let reactionPath = "/api/fan-club-attachments/photo%201/like"
+        let commentLikePath = "/api/fan-club-attachment-comments/comment%201/like"
+        let transport = SocialTransportStub(responses: [
+            commentsPath: """
+            {"comments":[{"id":"comment 1","userId":"u1","content":"Nice",
+            "parentId":null,"createdAt":"2026-07-26T10:00:00Z",
+            "user":{"id":"u1","handle":"ahmed"}}],
+            "comment":{"id":"comment 1","userId":"u1","content":"Nice",
+            "parentId":null,"createdAt":"2026-07-26T10:00:00Z",
+            "user":{"id":"u1","handle":"ahmed"}}}
+            """,
+            reactionPath: #"{"liked":true,"likeCount":4}"#,
+            commentLikePath: #"{"liked":true,"likeCount":2}"#
+        ])
+        let adapter = LegacySocialAPIAdapter(transport: transport)
+
+        let comments = try await adapter.ripplePhotoComments(attachmentId: "photo 1")
+        XCTAssertEqual(comments.first?.content, "Nice")
+        let created = try await adapter.createRipplePhotoComment(
+            attachmentId: "photo 1",
+            content: "Nice",
+            parentId: nil
+        )
+        XCTAssertEqual(created.id, "comment 1")
+
+        let energy = try await adapter.toggleRipplePhotoEnergy(attachmentId: "photo 1")
+        XCTAssertTrue(energy.liked)
+        XCTAssertEqual(energy.likeCount, 4)
+        let commentLike = try await adapter.toggleRipplePhotoCommentLike(commentId: "comment 1")
+        XCTAssertEqual(commentLike.likeCount, 2)
+
+        let postPaths = await transport.postPaths
+        XCTAssertEqual(postPaths, [commentsPath, reactionPath, commentLikePath])
+    }
 }
 
 private actor SocialTransportStub: LegacySocialTransport {

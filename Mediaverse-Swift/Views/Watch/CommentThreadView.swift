@@ -8,10 +8,12 @@ enum CommentThreadTarget: Equatable {
     case collection(String)
     case post(String)
     case ripple(String)
+    case ripplePhoto(String)
 
     var id: String {
         switch self {
-        case .video(let id), .episode(let id), .collection(let id), .post(let id), .ripple(let id):
+        case .video(let id), .episode(let id), .collection(let id), .post(let id),
+             .ripple(let id), .ripplePhoto(let id):
             return id
         }
     }
@@ -202,12 +204,14 @@ struct CommentThreadView: View {
     private var supportsCommentManagement: Bool {
         if case .post = target { return false }
         if case .ripple = target { return false }
+        if case .ripplePhoto = target { return false }
         return true
     }
 
     private var supportsCommentFlags: Bool {
         if case .post = target { return false }
         if case .ripple = target { return false }
+        if case .ripplePhoto = target { return false }
         return true
     }
 
@@ -479,6 +483,11 @@ struct CommentThreadView: View {
                 transport: APIClient.shared
             ).rippleComments(postId: id)
             return comments.map(\.asSharedComment)
+        case .ripplePhoto(let id):
+            let comments = try await LegacySocialAPIAdapter(
+                transport: APIClient.shared
+            ).ripplePhotoComments(attachmentId: id)
+            return comments.map(\.asSharedComment)
         }
     }
 
@@ -560,6 +569,11 @@ struct CommentThreadView: View {
                 transport: APIClient.shared
             ).createRippleComment(postId: id, content: content, parentId: parentId)
             return comment.asSharedComment
+        case .ripplePhoto(let id):
+            let comment = try await LegacySocialAPIAdapter(
+                transport: APIClient.shared
+            ).createRipplePhotoComment(attachmentId: id, content: content, parentId: parentId)
+            return comment.asSharedComment
         }
     }
 
@@ -577,6 +591,10 @@ struct CommentThreadView: View {
                 _ = try? await LegacySocialAPIAdapter(
                     transport: APIClient.shared
                 ).toggleRippleCommentLike(commentId: commentId)
+            } else if case .ripplePhoto = target {
+                _ = try? await LegacySocialAPIAdapter(
+                    transport: APIClient.shared
+                ).toggleRipplePhotoCommentLike(commentId: commentId)
             } else {
                 _ = try? await APIClient.shared.likeComment(commentId: commentId, liked: !wasLiked)
             }

@@ -127,6 +127,44 @@ public actor LegacySocialAPIAdapter {
         )
     }
 
+    public func ripplePhotoComments(attachmentId: String) async throws -> [RippleComment] {
+        try await decode(
+            RippleCommentsResponse.self,
+            path: "/api/fan-club-attachments/\(try segment(attachmentId))/comments"
+        ).comments
+    }
+
+    public func createRipplePhotoComment(
+        attachmentId: String,
+        content: String,
+        parentId: String?
+    ) async throws -> RippleComment {
+        let body = try JSONEncoder().encode(
+            RippleCommentRequest(content: content, parentId: parentId)
+        )
+        return try await post(
+            RippleCommentResponse.self,
+            path: "/api/fan-club-attachments/\(try segment(attachmentId))/comments",
+            body: body
+        ).comment
+    }
+
+    public func toggleRipplePhotoCommentLike(commentId: String) async throws -> RippleCommentLikeResponse {
+        try await post(
+            RippleCommentLikeResponse.self,
+            path: "/api/fan-club-attachment-comments/\(try segment(commentId))/like",
+            body: Data("{}".utf8)
+        )
+    }
+
+    public func toggleRipplePhotoEnergy(attachmentId: String) async throws -> RipplePhotoEnergyResponse {
+        try await post(
+            RipplePhotoEnergyResponse.self,
+            path: "/api/fan-club-attachments/\(try segment(attachmentId))/like",
+            body: Data("{}".utf8)
+        )
+    }
+
     public func myVibes(cursor: String? = nil, limit: Int = 24) async throws -> VibeListResponse {
         var query = [
             URLQueryItem(name: "mine", value: "1"),

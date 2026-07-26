@@ -374,6 +374,7 @@ private struct RippleAttachmentsView: View {
 
 private struct RipplePhotoGrid: View {
     let photos: [RippleAttachment]
+    @State private var selectedPhoto: RippleAttachment?
 
     var body: some View {
         GeometryReader { proxy in
@@ -385,28 +386,194 @@ private struct RipplePhotoGrid: View {
                 spacing: spacing
             ) {
                 ForEach(Array(photos.prefix(4).enumerated()), id: \.element.id) { index, photo in
-                    CachedRemoteImage(
-                        url: C.mediaURL(photo.imageURL),
-                        targetSize: CGSize(width: width, height: photos.count == 1 ? width : width * 0.9)
-                    ) { image in
-                        image.resizable().scaledToFill()
-                    } placeholder: {
-                        C.elevated
-                    }
-                    .frame(width: width, height: photos.count == 1 ? width : width * 0.9)
-                    .clipped()
-                    .overlay {
-                        if index == 3, photos.count > 4 {
-                            Color.black.opacity(0.55)
-                            Text("+\(photos.count - 3)")
-                                .font(.title.bold())
-                                .foregroundStyle(.white)
+                    Button {
+                        selectedPhoto = photo
+                    } label: {
+                        CachedRemoteImage(
+                            url: C.mediaURL(photo.imageURL),
+                            targetSize: CGSize(width: width, height: photos.count == 1 ? width : width * 0.9)
+                        ) { image in
+                            image.resizable().scaledToFill()
+                        } placeholder: {
+                            C.elevated
+                        }
+                        .frame(width: width, height: photos.count == 1 ? width : width * 0.9)
+                        .clipped()
+                        .overlay {
+                            if index == 3, photos.count > 4 {
+                                Color.black.opacity(0.55)
+                                Text("+\(photos.count - 3)")
+                                    .font(.title.bold())
+                                    .foregroundStyle(.white)
+                            }
                         }
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open photo \(index + 1) of \(photos.count)")
                 }
             }
         }
         .aspectRatio(photos.count == 1 ? 1 : (photos.count == 2 ? 1.7 : 1.1), contentMode: .fit)
+        .fullScreenCover(item: $selectedPhoto) { selected in
+            RipplePhotoViewer(
+                photos: photos,
+                initialPhotoID: selected.id,
+                onClose: { selectedPhoto = nil }
+            )
+        }
+    }
+}
+
+private struct RipplePhotoViewer: View {
+    let photos: [RippleAttachment]
+    let onClose: () -> Void
+    @State private var selectedPhotoID: String
+
+    init(photos: [RippleAttachment], initialPhotoID: String, onClose: @escaping () -> Void) {
+        self.photos = photos
+        self.onClose = onClose
+        _selectedPhotoID = State(initialValue: initialPhotoID)
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            TabView(selection: $selectedPhotoID) {
+                ForEach(photos) { photo in
+                    RipplePhotoViewerPage(photo: photo)
+                        .tag(photo.id)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: photos.count > 1 ? .automatic : .never))
+        }
+        .overlay(alignment: .topTrailing) {
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .background(.black.opacity(0.62), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(16)
+            .accessibilityLabel("Close photo viewer")
+        }
+    }
+}
+
+private struct RipplePhotoViewerPage: View {
+    let photo: RippleAttachment
+    @State private var energyCount: Int
+    @State private var hasEnergy: Bool
+    @State private var commentCount: Int
+    @State private var isUpdatingEnergy = false
+    @State private var showsComments = false
+    @State private var errorMessage: String?
+
+    init(photo: RippleAttachment) {
+        self.photo = photo
+        _energyCount = State(initialValue: photo.likeCount)
+        _hasEnergy = State(initialValue: photo.viewerLikedPhoto)
+        _commentCount = State(initialValue: photo.commentCount)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 60)
+            CachedRemoteImage(
+                url: C.mediaURL(photo.imageURL),
+                targetSize: UIScreen.main.bounds.size
+            ) { image in
+                image.resizable().scaledToFit()
+            } placeholder: {
+                ProgressView().tint(.white)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Spacer(minLength: 20)
+            HStack(spacing: 28) {
+                Button {
+                    Task { await toggleEnergy() }
+                } label: {
+                    photoAction(
+                        icon: "bolt.fill",
+                        label: "Add Energy",
+                        count: energyCount,
+                        active: hasEnergy
+                    )
+                }
+                .disabled(isUpdatingEnergy)
+
+                Button {
+                    showsComments = true
+                } label: {
+                    photoAction(
+                        icon: "bubble.left",
+                        label: "Comment",
+                        count: commentCount,
+                        active: false
+                    )
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .background(.black.opacity(0.82))
+        }
+        .sheet(isPresented: $showsComments) {
+            StandardCommentsSheet(
+                target: .ripplePhoto(photo.id),
+                initialCount: commentCount,
+                autoFocusComposer: true,
+                onClose: { showsComments = false },
+                onCountChange: { commentCount = $0 }
+            )
+        }
+        .alert(
+            "Photo update failed",
+            isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    private func photoAction(icon: String, label: String, count: Int, active: Bool) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: icon)
+            Text(label)
+            if count > 0 {
+                Text(count.formatted(.number.notation(.compactName)))
+            }
+        }
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(active ? C.watch : .white)
+        .frame(minHeight: 36)
+    }
+
+    @MainActor
+    private func toggleEnergy() async {
+        guard !isUpdatingEnergy else { return }
+        isUpdatingEnergy = true
+        let previousEnergy = hasEnergy
+        let previousCount = energyCount
+        hasEnergy.toggle()
+        energyCount = max(0, energyCount + (hasEnergy ? 1 : -1))
+        do {
+            let response = try await LegacySocialAPIAdapter(
+                transport: APIClient.shared
+            ).toggleRipplePhotoEnergy(attachmentId: photo.id)
+            hasEnergy = response.liked
+            energyCount = max(0, response.likeCount)
+        } catch {
+            hasEnergy = previousEnergy
+            energyCount = previousCount
+            errorMessage = error.localizedDescription
+        }
+        isUpdatingEnergy = false
     }
 }
 
