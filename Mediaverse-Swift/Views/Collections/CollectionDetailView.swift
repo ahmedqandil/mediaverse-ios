@@ -9,6 +9,8 @@ struct CollectionDetailView: View {
     @State private var following = false
     @State private var togglingFollow = false
     @State private var showCommentsSheet = false
+    @State private var showEchoSheet = false
+    @EnvironmentObject private var auth: AuthManager
 
     private var isShows: Bool { collection?.type == "shows" }
     private var isShorts: Bool { collection?.type == "shorts" }
@@ -40,6 +42,17 @@ struct CollectionDetailView: View {
         .sheet(isPresented: $showCommentsSheet) {
             StandardCommentsSheet(target: .collection(collectionId)) {
                 showCommentsSheet = false
+            }
+        }
+        .sheet(isPresented: $showEchoSheet) {
+            if let collection {
+                EchoVibeSheet(
+                    content: .collection(
+                        id: collection.id,
+                        title: collection.title,
+                        imageURL: nil
+                    )
+                )
             }
         }
     }
@@ -190,6 +203,25 @@ struct CollectionDetailView: View {
             .font(.caption)
             .foregroundStyle(C.textMuted)
             .lineLimit(2)
+
+            if col.visibility == "public" {
+                Button {
+                    if auth.isAuthenticated {
+                        showEchoSheet = true
+                    } else {
+                        NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+                    }
+                } label: {
+                    Label("Echo", systemImage: "dot.radiowaves.left.and.right")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(C.text)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(C.surface, in: Capsule())
+                        .overlay(Capsule().stroke(C.border, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 

@@ -2703,6 +2703,7 @@ private struct ShortCardView: View {
     @State private var lastTap:         Date     = .distantPast
     @State private var progressTimer:   Timer?
     @State private var showSaveSheet:   Bool     = false
+    @State private var showEchoSheet:   Bool     = false
     @State private var playlist: VideoPlaylist?
     @State private var isLoadingPlaylist = false
     @State private var showPlaylistPage = false
@@ -2824,6 +2825,16 @@ private struct ShortCardView: View {
         .onChange(of: isMuted) { _, muted in playbackManager.setMuted(muted) }
         .sheet(isPresented: $showSaveSheet) {
             SaveToCollectionSheet(videoId: short.id, targetKind: .short)
+        }
+        .sheet(isPresented: $showEchoSheet) {
+            EchoVibeSheet(
+                content: .video(
+                    id: short.id,
+                    title: short.title,
+                    thumbnailURL: short.thumbnailUrl,
+                    isShort: true
+                )
+            )
         }
         .sheet(isPresented: $showComments) {
             StandardCommentsSheet(target: .video(short.id), autoFocusComposer: true) {
@@ -3059,6 +3070,20 @@ private struct ShortCardView: View {
             // Comment
             actionBtn(assetIcon: "message-square", fallbackIcon: "bubble.left", color: .white, bgColor: .black.opacity(0.35), label: nil) {
                 showComments = true
+            }
+
+            actionBtn(
+                assetIcon: "echo",
+                fallbackIcon: "dot.radiowaves.left.and.right",
+                color: .white,
+                bgColor: .black.opacity(0.35),
+                label: "Echo"
+            ) {
+                if auth.isAuthenticated {
+                    showEchoSheet = true
+                } else {
+                    NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+                }
             }
 
             // Share

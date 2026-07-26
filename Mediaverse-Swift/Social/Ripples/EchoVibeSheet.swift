@@ -1,7 +1,57 @@
 import SwiftUI
 
+struct EchoContent {
+    let attachment: RippleCreateAttachment
+    let eyebrow: String
+    let title: String
+    let subtitle: String?
+    let imageURL: String?
+
+    static func ripple(_ ripple: Ripple) -> EchoContent {
+        EchoContent(
+            attachment: .ripple(id: ripple.id),
+            eyebrow: "RIPPLE",
+            title: ripple.body?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? ripple.body!
+                : "Ripple by \(ripple.author.name ?? ripple.author.handle ?? "Westreem user")",
+            subtitle: ripple.club?.name,
+            imageURL: ripple.author.image
+        )
+    }
+
+    static func video(id: String, title: String, thumbnailURL: String?, isShort: Bool = false) -> EchoContent {
+        EchoContent(
+            attachment: .video(id: id),
+            eyebrow: isShort ? "SHORT" : "VIDEO",
+            title: title,
+            subtitle: "Westreem",
+            imageURL: thumbnailURL
+        )
+    }
+
+    static func collection(id: String, title: String, imageURL: String?) -> EchoContent {
+        EchoContent(
+            attachment: .collection(id: id),
+            eyebrow: "COLLECTION",
+            title: title,
+            subtitle: "Westreem Collection",
+            imageURL: imageURL
+        )
+    }
+
+    static func clip(id: String, title: String, imageURL: String?) -> EchoContent {
+        EchoContent(
+            attachment: .clip(id: id),
+            eyebrow: "CLIP",
+            title: title,
+            subtitle: "Westreem Clipping",
+            imageURL: imageURL
+        )
+    }
+}
+
 struct EchoVibeSheet: View {
-    let ripple: Ripple
+    let content: EchoContent
     let onEchoed: (Int) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -16,6 +66,16 @@ struct EchoVibeSheet: View {
     @State private var successMessage: String?
 
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+
+    init(ripple: Ripple, onEchoed: @escaping (Int) -> Void) {
+        content = .ripple(ripple)
+        self.onEchoed = onEchoed
+    }
+
+    init(content: EchoContent, onEchoed: @escaping (Int) -> Void = { _ in }) {
+        self.content = content
+        self.onEchoed = onEchoed
+    }
 
     var body: some View {
         NavigationStack {
@@ -63,22 +123,20 @@ struct EchoVibeSheet: View {
     private var preview: some View {
         HStack(spacing: 12) {
             SocialIdentityAvatar(
-                image: ripple.author.image,
-                name: ripple.author.name ?? ripple.author.handle,
+                image: content.imageURL,
+                name: content.title,
                 size: 52
             )
             VStack(alignment: .leading, spacing: 4) {
-                Text("RIPPLE")
+                Text(content.eyebrow)
                     .font(.caption2.bold())
                     .foregroundStyle(C.watch)
-                Text(ripple.body?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                     ? ripple.body!
-                     : "Ripple by \(ripple.author.name ?? ripple.author.handle ?? "Westreem user")")
+                Text(content.title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(C.text)
                     .lineLimit(3)
-                if let club = ripple.club {
-                    Text(club.name)
+                if let subtitle = content.subtitle {
+                    Text(subtitle)
                         .font(.caption)
                         .foregroundStyle(C.textMuted)
                 }
@@ -251,7 +309,7 @@ struct EchoVibeSheet: View {
                         let created = try await api.createRipple(
                             inVibe: slug,
                             body: isQuoteEcho ? quote : nil,
-                            attachments: [.ripple(id: ripple.id)]
+                            attachments: [content.attachment]
                         )
                         return (slug, .success(created))
                     } catch {

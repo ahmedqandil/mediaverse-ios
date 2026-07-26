@@ -81,6 +81,7 @@ struct VideoWatchView: View {
 
     // ── Save to collection
     @State private var showSaveSheet:     Bool   = false
+    @State private var showEchoSheet:     Bool   = false
     @State private var showPlaylistSheet: Bool   = false
     @State private var clipReactionReloadToken   = 0
     @State private var insertedClipPostToken      = 0
@@ -196,6 +197,17 @@ struct VideoWatchView: View {
         .sheet(isPresented: $showSaveSheet) {
             if let vid = video {
                 SaveToCollectionSheet(videoId: vid.id)
+            }
+        }
+        .sheet(isPresented: $showEchoSheet) {
+            if let vid = video {
+                EchoVibeSheet(
+                    content: .video(
+                        id: vid.id,
+                        title: vid.title,
+                        thumbnailURL: vid.thumbnailUrl
+                    )
+                )
             }
         }
         .sheet(isPresented: $showPlaylistSheet) {
@@ -821,6 +833,28 @@ struct VideoWatchView: View {
                 .layoutPriority(1)
                 .clipShape(Capsule())
                 .overlay { Capsule().stroke(C.border, lineWidth: 1) }
+
+                Button {
+                    if auth.isAuthenticated {
+                        showEchoSheet = true
+                    } else {
+                        NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "dot.radiowaves.left.and.right")
+                            .font(.system(size: 12))
+                        Text("Echo")
+                            .font(.system(size: 13, weight: .medium))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(C.textMuted)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(C.surface)
+                    .clipShape(Capsule())
+                    .overlay { Capsule().stroke(C.border, lineWidth: 1) }
+                }
 
                 Button {
                     shareVideo(v)

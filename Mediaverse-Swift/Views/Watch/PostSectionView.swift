@@ -73,6 +73,7 @@ private struct PostCard: View {
     let onLikeToggle: (String) -> Void
 
     @State private var showComments = false
+    @State private var showEcho = false
     @State private var spoilerRevealed = false
     @State private var displayedCommentCount: Int?
 
@@ -98,6 +99,20 @@ private struct PostCard: View {
         }
         .background(C.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        .sheet(isPresented: $showEcho) {
+            EchoVibeSheet(
+                content: .clip(
+                    id: post.id,
+                    title: post.caption
+                        ?? post.video?.title
+                        ?? post.episode?.title
+                        ?? "Westreem Clipping",
+                    imageURL: post.thumbnailUrl
+                        ?? post.video?.thumbnailUrl
+                        ?? post.episode?.thumbnailUrl
+                )
+            )
+        }
         .overlay { RoundedRectangle(cornerRadius: 12).stroke(C.border, lineWidth: 0.5) }
         .animation(.spring(response: 0.28, dampingFraction: 0.9), value: showComments)
         .sheet(isPresented: $showComments) {
@@ -306,6 +321,22 @@ private struct PostCard: View {
                     .frame(height: 22, alignment: .center)
                     .foregroundStyle(showComments ? Color.white.opacity(0.86) : Color.white.opacity(0.48))
                     .padding(.horizontal, 10).padding(.vertical, 8)
+                }
+                .buttonStyle(.plain)
+
+                // Echo
+                Button {
+                    if auth.isAuthenticated {
+                        showEcho = true
+                    } else {
+                        NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+                    }
+                } label: {
+                    Image(systemName: "dot.radiowaves.left.and.right")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 22, height: 22, alignment: .center)
+                        .foregroundStyle(Color.white.opacity(0.48))
+                        .padding(.horizontal, 10).padding(.vertical, 8)
                 }
                 .buttonStyle(.plain)
 
