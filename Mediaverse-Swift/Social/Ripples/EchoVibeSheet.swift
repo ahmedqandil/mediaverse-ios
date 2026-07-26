@@ -6,46 +6,103 @@ struct EchoContent {
     let title: String
     let subtitle: String?
     let imageURL: String?
+    let avatarURL: String?
+    let description: String?
+    let sourceName: String?
+    let isPortrait: Bool
 
     static func ripple(_ ripple: Ripple) -> EchoContent {
-        EchoContent(
+        let attachment = ripple.attachments.first
+        let video = attachment?.video
+        let clipVideo = attachment?.userPost?.video
+        let clipEpisode = attachment?.userPost?.episode
+        let previewImage = attachment?.imageURL
+            ?? attachment?.linkImageURL
+            ?? video?.thumbnailURL
+            ?? clipVideo?.thumbnailURL
+            ?? clipEpisode?.thumbnailUrl
+        let isPortrait = video?.type?.lowercased() == "short"
+            || ((video?.height ?? 0) > (video?.width ?? Int.max))
+        let authorName = ripple.author.name
+            ?? ripple.author.handle.map { "@\($0)" }
+            ?? "Westreem user"
+        return EchoContent(
             attachment: .ripple(id: ripple.id),
             eyebrow: "RIPPLE",
             title: ripple.body?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
                 ? ripple.body!
-                : "Ripple by \(ripple.author.name ?? ripple.author.handle ?? "Westreem user")",
+                : "Ripple by \(authorName)",
             subtitle: ripple.club?.name,
-            imageURL: ripple.author.image
+            imageURL: previewImage,
+            avatarURL: ripple.author.image,
+            description: attachment?.linkDescription
+                ?? attachment?.collection?.description
+                ?? attachment?.userPost?.caption,
+            sourceName: [authorName, ripple.club?.name]
+                .compactMap { $0 }
+                .joined(separator: " · "),
+            isPortrait: isPortrait
         )
     }
 
-    static func video(id: String, title: String, thumbnailURL: String?, isShort: Bool = false) -> EchoContent {
+    static func video(
+        id: String,
+        title: String,
+        thumbnailURL: String?,
+        isShort: Bool = false,
+        description: String? = nil,
+        sourceName: String? = "Westreem"
+    ) -> EchoContent {
         EchoContent(
             attachment: .video(id: id),
             eyebrow: isShort ? "SHORT" : "VIDEO",
             title: title,
             subtitle: "Westreem",
-            imageURL: thumbnailURL
+            imageURL: thumbnailURL,
+            avatarURL: nil,
+            description: description,
+            sourceName: sourceName,
+            isPortrait: isShort
         )
     }
 
-    static func collection(id: String, title: String, imageURL: String?) -> EchoContent {
+    static func collection(
+        id: String,
+        title: String,
+        imageURL: String?,
+        description: String? = nil,
+        sourceName: String? = "Westreem Collection"
+    ) -> EchoContent {
         EchoContent(
             attachment: .collection(id: id),
             eyebrow: "COLLECTION",
             title: title,
             subtitle: "Westreem Collection",
-            imageURL: imageURL
+            imageURL: imageURL,
+            avatarURL: nil,
+            description: description,
+            sourceName: sourceName,
+            isPortrait: false
         )
     }
 
-    static func clip(id: String, title: String, imageURL: String?) -> EchoContent {
+    static func clip(
+        id: String,
+        title: String,
+        imageURL: String?,
+        description: String? = nil,
+        sourceName: String? = "Westreem Clipping"
+    ) -> EchoContent {
         EchoContent(
             attachment: .clip(id: id),
             eyebrow: "CLIP",
             title: title,
             subtitle: "Westreem Clipping",
-            imageURL: imageURL
+            imageURL: imageURL,
+            avatarURL: nil,
+            description: description,
+            sourceName: sourceName,
+            isPortrait: false
         )
     }
 }
@@ -121,34 +178,80 @@ struct EchoVibeSheet: View {
     }
 
     private var preview: some View {
-        HStack(spacing: 12) {
-            SocialIdentityAvatar(
-                image: content.imageURL,
-                name: content.title,
-                size: 52
-            )
-            VStack(alignment: .leading, spacing: 4) {
-                Text(content.eyebrow)
-                    .font(.caption2.bold())
-                    .foregroundStyle(C.watch)
-                Text(content.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(C.text)
-                    .lineLimit(3)
-                if let subtitle = content.subtitle {
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(C.textMuted)
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Echo preview")
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(1.6)
+                .textCase(.uppercase)
+                .foregroundStyle(C.textTertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+
+            Divider().overlay(C.borderSubtle)
+
+            HStack(spacing: 12) {
+                previewArtwork
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(content.eyebrow)
+                        .font(.system(size: 10, weight: .bold))
+                        .tracking(1.2)
+                        .foregroundStyle(C.watch)
+                    Text(content.title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(C.text.opacity(0.92))
+                        .lineLimit(2)
+                    if let description = content.description,
+                       !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text(description)
+                            .font(.system(size: 12))
+                            .foregroundStyle(C.textMuted)
+                            .lineLimit(2)
+                    }
+                    if let source = content.sourceName ?? content.subtitle {
+                        Text(source)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(C.textTertiary)
+                            .lineLimit(1)
+                    }
                 }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            .frame(minHeight: 96)
+            .padding(12)
         }
-        .padding(12)
-        .background(C.surface)
+        .background(C.surface.opacity(0.72))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(C.borderSubtle))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Content being Echoed")
+    }
+
+    @ViewBuilder
+    private var previewArtwork: some View {
+        if let imageURL = content.imageURL {
+            CachedRemoteImage(
+                url: C.mediaURL(imageURL),
+                targetSize: CGSize(
+                    width: content.isPortrait ? 64 : 144,
+                    height: 96
+                )
+            ) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                C.elevated
+            }
+            .frame(width: content.isPortrait ? 64 : 144, height: 96)
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        } else {
+            SocialIdentityAvatar(
+                image: content.avatarURL,
+                name: content.title,
+                size: 64
+            )
+        }
     }
 
     @ViewBuilder

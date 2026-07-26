@@ -50,7 +50,10 @@ struct CollectionDetailView: View {
                     content: .collection(
                         id: collection.id,
                         title: collection.title,
-                        imageURL: nil
+                        imageURL: collection.items.first?.video?.thumbnailUrl
+                            ?? collection.items.first?.show?.coverUrl,
+                        description: collection.description,
+                        sourceName: collection.user?.name ?? "Westreem Collection"
                     )
                 )
             }

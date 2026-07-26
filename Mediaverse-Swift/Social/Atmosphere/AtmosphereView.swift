@@ -628,7 +628,8 @@ private struct AtmospherePublishedVideoCard<MediaCard: View>: View {
                 content: .video(
                     id: video.id,
                     title: video.title,
-                    thumbnailURL: video.thumbnailURL
+                    thumbnailURL: video.thumbnailURL,
+                    sourceName: ownerName
                 )
             ) { added in
                 echoCount += added
