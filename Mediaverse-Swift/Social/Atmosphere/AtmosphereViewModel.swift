@@ -30,8 +30,10 @@ final class AtmosphereViewModel: ObservableObject {
     @Published private(set) var discoveredRipples: [Ripple] = []
     @Published private(set) var myVibes: [VibeSummary] = []
     @Published private(set) var stateByTab: [Tab: LoadState] = [:]
+    @Published private(set) var curationListings: [AssembledListing] = []
 
     private let api: LegacySocialAPIAdapter
+    private var hasLoadedCuration = false
 
     init(api: LegacySocialAPIAdapter = LegacySocialAPIAdapter(transport: APIClient.shared)) {
         self.api = api
@@ -44,6 +46,7 @@ final class AtmosphereViewModel: ObservableObject {
 
     func loadIfNeeded(_ tab: Tab? = nil) async {
         let tab = tab ?? selectedTab
+        await loadCurationIfNeeded()
         guard stateByTab[tab] == nil || stateByTab[tab] == .idle else { return }
         await load(tab)
     }
@@ -54,6 +57,49 @@ final class AtmosphereViewModel: ObservableObject {
 
     func prepend(_ ripple: Ripple) {
         atmosphereItems.insert(.ripple(ripple), at: 0)
+    }
+
+    var atmosphereFeedListing: AssembledListing? {
+        curationListings.first { $0.normalizedTemplateType == "atmosphere_feed" }
+    }
+
+    var beforeFeedListings: [AssembledListing] {
+        guard let index = curationListings.firstIndex(where: { $0.normalizedTemplateType == "atmosphere_feed" }) else {
+            return []
+        }
+        let injected = Set(atmosphereFeedListing?.feedSlots?.map(\.listingId) ?? [])
+        return curationListings[..<index].filter { !injected.contains($0.listingId) }
+    }
+
+    var afterFeedListings: [AssembledListing] {
+        guard let index = curationListings.firstIndex(where: { $0.normalizedTemplateType == "atmosphere_feed" }) else {
+            return []
+        }
+        let injected = Set(atmosphereFeedListing?.feedSlots?.map(\.listingId) ?? [])
+        return curationListings.suffix(from: curationListings.index(after: index))
+            .filter { !injected.contains($0.listingId) }
+    }
+
+    var inlineListings: [AssembledListing] {
+        guard let feed = atmosphereFeedListing else { return [] }
+        return Array((feed.feedSlots ?? []).prefix(max(0, feed.feedConfig?.mobileCount ?? 2)))
+    }
+
+    var inlineEvery: Int {
+        guard atmosphereFeedListing != nil else { return 0 }
+        return max(1, atmosphereFeedListing?.feedConfig?.mobileEvery ?? 5)
+    }
+
+    private func loadCurationIfNeeded() async {
+        guard !hasLoadedCuration else { return }
+        hasLoadedCuration = true
+        do {
+            let page = try await CurationManager.shared.fetchPage(key: "atmosphere")
+            curationListings = page.activeListings
+        } catch {
+            // Curation is presentation-only. Organic social feeds remain available.
+            curationListings = []
+        }
     }
 
     private func load(_ tab: Tab) async {

@@ -842,6 +842,8 @@ struct MainTabView: View {
             RippleDetailView(postId: postId)
         case .atmo(let handle):
             AtmoProfileView(handle: handle)
+        case .search(let query):
+            SearchView(initialQuery: query)
         }
     }
 
@@ -885,7 +887,7 @@ private extension AppRoute {
         case .video, .episode, .microdramaWatch, .microdramaWatchEp:
             return true
         case .short, .channel, .show, .showAccess, .handoff, .microdramaShow, .playlist, .collection,
-             .vibe, .ripple, .atmo:
+             .vibe, .ripple, .atmo, .search:
             return false
         }
     }

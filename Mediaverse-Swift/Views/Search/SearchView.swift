@@ -60,7 +60,7 @@ private enum SearchFilter: String, CaseIterable, Identifiable {
 
 struct SearchView: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var query = ""
+    @State private var query: String
     @State private var committedQuery = ""
     @State private var suggests = [SuggestItem]()
     @State private var trending = [SuggestItem]()
@@ -80,6 +80,10 @@ struct SearchView: View {
     @State private var searchGeneration = 0
     @AppStorage("searchHistory") private var searchHistoryData = "[]"
     @FocusState private var focused: Bool
+
+    init(initialQuery: String = "") {
+        _query = State(initialValue: initialQuery)
+    }
 
     private var trimmedQuery: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -135,6 +139,9 @@ struct SearchView: View {
             Task {
                 await loadRemoteSearchHistoryIfNeeded()
                 await loadTrendingIfNeeded()
+                if trimmedQuery.count >= 2, !showResults {
+                    await runFullSearch()
+                }
             }
         }
         .onDisappear {
@@ -986,6 +993,7 @@ struct SearchView: View {
         case .vibe(let slug): VibeDetailView(slug: slug)
         case .ripple(let postId): RippleDetailView(postId: postId)
         case .atmo(let handle): AtmoProfileView(handle: handle)
+        case .search(let query): SearchView(initialQuery: query)
         }
     }
 

@@ -24,10 +24,118 @@ struct NativeCurationListingView: View {
             NativeCurationChannelList(listing: listing)
         case "carousel":
             NativeCurationCarousel(listing: listing)
+        case "ripples":
+            NativeCurationRippleList(listing: listing)
         case "stories", "continue_watching", "video_feed", "shorts_feed":
             EmptyView()
         default:
             NativeCurationCarousel(listing: listing)
+        }
+    }
+}
+
+private struct NativeCurationRippleList: View {
+    let listing: AssembledListing
+
+    var body: some View {
+        if !listing.items.isEmpty {
+            VStack(alignment: .leading, spacing: C.rowSpacing) {
+                NativeCurationHeader(listing: listing, showSeeAll: true)
+                LazyVStack(spacing: C.rowSpacing) {
+                    ForEach(Array(listing.items.enumerated()), id: \.offset) { _, item in
+                        NavigationLink(value: item.appRoute) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack(spacing: 10) {
+                                    NativeCurationAvatar(
+                                        url: item.metaString("authorImage") ?? item.metaString("clubAvatar"),
+                                        title: item.metaString("authorName") ?? item.metaString("clubName") ?? item.title
+                                    )
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(item.metaString("authorName") ?? item.metaString("clubName") ?? "Westreem")
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundStyle(C.text)
+                                            .lineLimit(1)
+                                        Text(item.rippleContextText)
+                                            .font(.caption)
+                                            .foregroundStyle(C.textMuted)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer(minLength: 0)
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(C.textTertiary)
+                                }
+
+                                Text(item.displayTitle)
+                                    .font(.body)
+                                    .foregroundStyle(C.text)
+                                    .lineLimit(4)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                                if item.thumbnailUrl != nil || item.coverUrl != nil {
+                                    NativeCurationArtwork(
+                                        item: item,
+                                        aspectRatio: 16.0 / 9.0,
+                                        cornerRadius: C.cardRadius,
+                                        preferCover: false
+                                    )
+                                }
+
+                                HStack(spacing: 16) {
+                                    NativeCurationMetric(icon: "bolt.fill", count: item.metaInt("energy"), label: "Energy")
+                                    NativeCurationMetric(icon: "bubble.left", count: item.metaInt("comments"), label: "Comments")
+                                    NativeCurationMetric(icon: "wave.3.right", count: item.metaInt("echoes"), label: "Echoes")
+                                }
+                            }
+                            .padding(14)
+                            .background(C.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous)
+                                    .stroke(C.borderSubtle, lineWidth: 1)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, C.pagePad)
+            }
+        }
+    }
+}
+
+private struct NativeCurationAvatar: View {
+    let url: String?
+    let title: String
+
+    var body: some View {
+        CachedRemoteImage(url: C.mediaURL(url), targetSize: CGSize(width: 40, height: 40)) { image in
+            image.resizable().scaledToFill()
+        } placeholder: {
+            Circle()
+                .fill(C.elevated)
+                .overlay {
+                    Text(title.first.map(String.init)?.uppercased() ?? "?")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(C.textMuted)
+                }
+        }
+        .frame(width: 40, height: 40)
+        .clipShape(Circle())
+    }
+}
+
+private struct NativeCurationMetric: View {
+    let icon: String
+    let count: Int?
+    let label: String
+
+    var body: some View {
+        if let count, count > 0 {
+            Label("\(count)", systemImage: icon)
+                .font(.caption)
+                .foregroundStyle(C.textMuted)
+                .accessibilityLabel("\(count) \(label)")
         }
     }
 }
@@ -713,8 +821,9 @@ private struct NativeCurationEntityCard: View {
     static func width(for item: ContentItem, mode: Mode) -> CGFloat {
         switch item.normalizedEntityType {
         case "video", "episode": return 190
-        case "channel": return 156
+        case "channel", "person", "vibe", "topic": return 156
         case "short": return 124
+        case "ripple": return 220
         default: return 132
         }
     }
@@ -876,6 +985,11 @@ private extension ContentItem {
         case "short": return "Short"
         case "episode": return "Episode"
         case "channel": return "Channel"
+        case "ripple": return "Ripple"
+        case "person": return "Person"
+        case "vibe": return "Vibe"
+        case "topic": return "Topic"
+        case "season": return "Season"
         default: return normalizedEntityType.capitalized.isEmpty ? "Featured" : normalizedEntityType.capitalized
         }
     }
@@ -910,6 +1024,23 @@ private extension ContentItem {
                 .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
                 .joined(separator: " · ")
+        case "ripple":
+            return rippleContextText
+        case "person":
+            return [channelHandleText, followersText]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " · ")
+        case "vibe":
+            return [membersText, ripplesText]
+                .compactMap { $0 }
+                .joined(separator: " · ")
+        case "topic":
+            return metaString("description") ?? metaString("domain") ?? ""
+        case "season":
+            return [metaString("showTitle"), episodeCountText]
+                .compactMap { $0 }
+                .joined(separator: " · ")
         default:
             return [metaString("channelName"), viewsText, metaString("genre")]
                 .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -923,6 +1054,9 @@ private extension ContentItem {
         case "show": return 2.0 / 3.0
         case "short": return 9.0 / 16.0
         case "channel": return 1.0
+        case "person", "vibe", "topic": return 1.0
+        case "season": return 2.0 / 3.0
+        case "ripple": return 16.0 / 9.0
         case "video", "episode": return 16.0 / 9.0
         default: return C.mediaAspectRatio(forContentType: metaString("type") ?? entityType)
         }
@@ -943,11 +1077,18 @@ private extension ContentItem {
     }
 
     var primaryActionTitle: String {
-        normalizedEntityType == "channel" ? "Open Channel" : "Watch Now"
+        switch normalizedEntityType {
+        case "channel": return "Open Channel"
+        case "person": return "Open Atmo"
+        case "vibe": return "Open Vibe"
+        case "ripple": return "Open Ripple"
+        case "topic": return "Explore Topic"
+        default: return "Watch Now"
+        }
     }
 
     var primaryActionIconName: String {
-        normalizedEntityType == "channel" ? "arrow.right" : "play.fill"
+        ["channel", "person", "vibe", "ripple", "topic"].contains(normalizedEntityType) ? "arrow.right" : "play.fill"
     }
 
     var fallbackIconName: String {
@@ -957,6 +1098,11 @@ private extension ContentItem {
         case "short": return "bolt.fill"
         case "episode": return "film"
         case "channel": return "person.crop.square"
+        case "ripple": return "wave.3.right"
+        case "person": return "person.crop.circle"
+        case "vibe": return "person.3"
+        case "topic": return "number"
+        case "season": return "rectangle.stack"
         default: return "rectangle.stack"
         }
     }
@@ -982,6 +1128,27 @@ private extension ContentItem {
     private var followersText: String? {
         guard let followers = metaInt("followers") else { return nil }
         return "\(Self.abbreviatedCount(followers)) followers"
+    }
+
+    var rippleContextText: String {
+        let handle = metaString("authorHandle").map { $0.hasPrefix("@") ? $0 : "@\($0)" }
+        let vibe = metaString("clubName")
+        return [handle, vibe].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    private var membersText: String? {
+        guard let members = metaInt("members"), members > 0 else { return nil }
+        return "\(Self.abbreviatedCount(members)) members"
+    }
+
+    private var ripplesText: String? {
+        guard let ripples = metaInt("ripples"), ripples > 0 else { return nil }
+        return "\(Self.abbreviatedCount(ripples)) ripples"
+    }
+
+    private var episodeCountText: String? {
+        guard let episodes = metaInt("episodes"), episodes > 0 else { return nil }
+        return episodes == 1 ? "1 episode" : "\(episodes) episodes"
     }
 
     private var channelHandleText: String? {

@@ -2172,6 +2172,11 @@ extension ContentItem {
     }
 
     var appRoute: AppRoute {
+        if let href = metaString("href"),
+           let route = AppRoute.route(link: href) {
+            return route
+        }
+
         let normalizedEntityType = entityType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let normalizedContentType = (metaString("showType") ?? metaString("type") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2190,12 +2195,22 @@ extension ContentItem {
         switch normalizedEntityType {
         case "show":
             return .show(entityId)
+        case "season":
+            return .show(metaString("showId") ?? entityId)
         case "short":
             return .short(entityId, showId: metaString("showId"), channelId: metaString("channelId"))
         case "episode":
             return .episode(entityId)
         case "channel":
             return .channel(metaString("channelHandle") ?? metaString("handle") ?? entityId)
+        case "ripple":
+            return .ripple(entityId)
+        case "person":
+            return .atmo(metaString("handle") ?? entityId)
+        case "vibe":
+            return .vibe(metaString("slug") ?? entityId)
+        case "topic":
+            return .search(metaString("value") ?? title)
         default:
             return .media(id: entityId, type: metaString("type") ?? entityType, showId: metaString("showId"), channelId: metaString("channelId"))
         }

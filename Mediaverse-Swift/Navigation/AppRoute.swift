@@ -22,6 +22,7 @@ public enum AppRoute: Hashable, Identifiable {
         case .vibe(let s):             return "vibe_\(s)"
         case .ripple(let s):           return "ripple_\(s)"
         case .atmo(let s):             return "atmo_\(s)"
+        case .search(let s):           return "search_\(s)"
         }
     }
     case video(String)              // video id
@@ -39,6 +40,7 @@ public enum AppRoute: Hashable, Identifiable {
     case vibe(String)               // Vibe slug
     case ripple(String)             // Ripple id
     case atmo(String)               // user handle
+    case search(String)             // prefilled native search query
 }
 
 extension AppRoute {
@@ -146,6 +148,11 @@ extension AppRoute {
         if parts.count >= 4, parts[0] == "vibes", parts[2] == "posts" { return .ripple(parts[3]) }
         if parts.count >= 2, parts[0] == "vibes" { return .vibe(parts[1]) }
         if parts.count >= 2, parts[0] == "atmo" { return .atmo(parts[1]) }
+        if parts.count >= 2, parts[0] == "ripples" { return .ripple(parts[1]) }
+        if parts.first == "discover",
+           let topic = queryValue(["topic", "q", "query"], in: queryItems) {
+            return .search(topic)
+        }
         if parts.count >= 4, parts[0] == "microdramas", ["watch", "episode", "episodes"].contains(parts[2]), let episodeNumber = Int(parts[3]) {
             return .microdramaWatchEp(parts[1], episodeNumber)
         }

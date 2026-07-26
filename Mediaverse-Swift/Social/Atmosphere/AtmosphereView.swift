@@ -114,13 +114,14 @@ struct AtmosphereView: View {
     private func simpleFeed(_ items: [AtmosphereFeedItem]) -> some View {
         ScrollView {
             LazyVStack(spacing: 12) {
+                atmosphereBoundaryListings(model.beforeFeedListings)
                 if socialFeatures.rippleComposerEnabled {
                     RippleComposer(destination: .personal) {
                         model.prepend($0)
                     }
                     .padding(.horizontal, C.pagePad)
                 }
-                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                     switch item {
                     case .ripple(let ripple):
                         RippleCard(
@@ -133,7 +134,12 @@ struct AtmosphereView: View {
                     case .excludedEpisode, .excludedShort, .unsupported:
                         EmptyView()
                     }
+                    if let listing = inlineListing(after: index) {
+                        NativeCurationListingView(listing: listing)
+                            .padding(.vertical, 6)
+                    }
                 }
+                atmosphereBoundaryListings(model.afterFeedListings)
             }
             .padding(.vertical, C.pagePad)
             .padding(.bottom, C.bottomMenuClearance)
@@ -269,12 +275,14 @@ struct AtmosphereView: View {
     private func simpleRipples(_ ripples: [Ripple]) -> some View {
         ScrollView {
             LazyVStack(spacing: 12) {
+                atmosphereBoundaryListings(model.beforeFeedListings)
                 ForEach(ripples) {
                     RippleCard(
                         ripple: $0,
                         allowsEngagement: socialFeatures.rippleEngagementEnabled
                     )
                 }
+                atmosphereBoundaryListings(model.afterFeedListings)
             }
             .padding(C.pagePad)
             .padding(.bottom, C.bottomMenuClearance)
@@ -285,6 +293,7 @@ struct AtmosphereView: View {
     private func simpleVibes(_ vibes: [VibeSummary]) -> some View {
         ScrollView {
             LazyVStack(spacing: 10) {
+                atmosphereBoundaryListings(model.beforeFeedListings)
                 ForEach(vibes) { vibe in
                     HStack(spacing: 12) {
                         Circle()
@@ -302,11 +311,28 @@ struct AtmosphereView: View {
                     .padding(12)
                     .background(C.surface, in: RoundedRectangle(cornerRadius: C.cardRadius))
                 }
+                atmosphereBoundaryListings(model.afterFeedListings)
             }
             .padding(C.pagePad)
             .padding(.bottom, C.bottomMenuClearance)
         }
         .refreshable { await model.reload(.myVibes) }
+    }
+
+    @ViewBuilder
+    private func atmosphereBoundaryListings(_ listings: [AssembledListing]) -> some View {
+        ForEach(listings) { listing in
+            NativeCurationListingView(listing: listing)
+                .padding(.vertical, 6)
+        }
+    }
+
+    private func inlineListing(after zeroBasedIndex: Int) -> AssembledListing? {
+        let every = model.inlineEvery
+        guard every > 0, (zeroBasedIndex + 1).isMultiple(of: every) else { return nil }
+        let injectionIndex = ((zeroBasedIndex + 1) / every) - 1
+        guard model.inlineListings.indices.contains(injectionIndex) else { return nil }
+        return model.inlineListings[injectionIndex]
     }
 }
 

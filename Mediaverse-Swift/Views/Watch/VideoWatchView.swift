@@ -2468,6 +2468,7 @@ struct VideoWatchView: View {
         case .vibe(let slug): VibeDetailView(slug: slug)
         case .ripple(let postId): RippleDetailView(postId: postId)
         case .atmo(let handle): AtmoProfileView(handle: handle)
+        case .search(let query): SearchView(initialQuery: query)
         }
     }
 
