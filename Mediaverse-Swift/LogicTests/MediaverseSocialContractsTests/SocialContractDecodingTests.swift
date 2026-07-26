@@ -205,24 +205,26 @@ final class SocialContractDecodingTests: XCTestCase {
         XCTAssertFalse(response.comments.first?.viewerLiked ?? true)
     }
 
-    func testSocialFeaturesDefaultOffToPreserveExistingAppBehavior() {
+    func testSocialFeaturesDefaultOnForRelease() {
         let configuration = SocialFeatureConfiguration()
 
-        XCTAssertEqual(configuration, .disabled)
-        XCTAssertFalse(configuration.hasAnyEnabledFeature)
-        XCTAssertFalse(configuration.atmosphereEnabled)
-        XCTAssertFalse(configuration.rippleComposerEnabled)
+        XCTAssertNotEqual(configuration, .disabled)
+        XCTAssertTrue(configuration.hasAnyEnabledFeature)
+        XCTAssertTrue(configuration.atmosphereEnabled)
+        XCTAssertTrue(configuration.rippleComposerEnabled)
+        XCTAssertFalse(SocialFeatureConfiguration.disabled.hasAnyEnabledFeature)
     }
 
-    func testRuntimeFeatureConfigurationOnlyEnablesExplicitKeys() throws {
+    func testRuntimeFeatureConfigurationSupportsExplicitKillSwitches() throws {
         let suite = try XCTUnwrap(UserDefaults(suiteName: "SocialContractDecodingTests"))
         suite.removePersistentDomain(forName: "SocialContractDecodingTests")
         suite.set(true, forKey: "social.atmosphere.enabled")
+        suite.set(false, forKey: "social.ripple-engagement.enabled")
 
         let configuration = SocialFeatureConfiguration.runtime(userDefaults: suite)
 
         XCTAssertTrue(configuration.atmosphereEnabled)
-        XCTAssertFalse(configuration.discoverEnabled)
+        XCTAssertTrue(configuration.discoverEnabled)
         XCTAssertFalse(configuration.rippleEngagementEnabled)
         suite.removePersistentDomain(forName: "SocialContractDecodingTests")
     }
