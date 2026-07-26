@@ -99,7 +99,7 @@ private struct NativeCurationFlashesTray: View {
         StoryTrayView(
             repository: repository,
             activeChannel: nil,
-            title: listing.listingTitle?.uppercased() ?? "FLASHES",
+            title: listing.listingTitle ?? "Flashes",
             onAddStory: {}
         ) { group in
             viewerGroupID = group.id
@@ -242,30 +242,41 @@ private struct NativeCurationHeader: View {
     private var seeAllRoute: AppRoute? { listing.seeAllUrl.flatMap { AppRoute.route(link: $0) } }
 
     var body: some View {
-        if let title = listing.listingTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+        let title = listing.listingTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let badge = listing.badge?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if title?.isEmpty == false || badge?.isEmpty == false {
             HStack(alignment: .center, spacing: 8) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(accentColor)
-                    .frame(width: 3, height: 18)
-                Text(title)
-                    .font(.headline)
-                    .foregroundStyle(C.text)
-                    .lineLimit(1)
-                if let badge = listing.badge, !badge.isEmpty {
+                if let badge, !badge.isEmpty {
                     Text(badge.uppercased())
                         .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(C.bg)
-                        .padding(.horizontal, 6)
+                        .tracking(0.7)
+                        .foregroundStyle(accentColor)
+                        .padding(.horizontal, 8)
                         .padding(.vertical, 3)
-                        .background(accentColor)
+                        .background(accentColor.opacity(0.15))
                         .clipShape(Capsule())
+                        .overlay {
+                            Capsule()
+                                .stroke(accentColor.opacity(0.30), lineWidth: 1)
+                        }
+                }
+                if let title, !title.isEmpty {
+                    Text(title)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(C.text)
+                        .lineLimit(1)
+                }
+                if let sponsor = listing.sponsoredBy, !sponsor.isEmpty {
+                    Text("· Sponsored")
+                        .font(.system(size: 10))
+                        .foregroundStyle(C.textTertiary)
                 }
                 Spacer(minLength: 8)
                 if showSeeAll, let seeAllRoute {
                     NavigationLink(value: seeAllRoute) {
-                        Text("See all")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(C.textMuted)
+                        Text("See all →")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(accentColor.opacity(0.75))
                     }
                     .buttonStyle(.plain)
                 }
@@ -915,11 +926,11 @@ private struct NativeCurationEntityCard: View {
 
     static func width(for item: ContentItem, mode: Mode) -> CGFloat {
         switch item.normalizedEntityType {
-        case "video", "episode": return 190
-        case "channel", "person", "vibe", "topic": return 156
-        case "short": return 124
+        case "video", "episode": return 160
+        case "show", "season", "short": return 140
+        case "channel", "person", "vibe", "topic": return 160
         case "ripple": return 220
-        default: return 132
+        default: return 160
         }
     }
 
@@ -935,6 +946,19 @@ private struct NativeCurationEntityCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 ZStack(alignment: .bottomTrailing) {
                     NativeCurationArtwork(item: item, aspectRatio: aspectRatio, cornerRadius: C.cardRadius, preferCover: mode == .channelGrid)
+                        .overlay(alignment: .topLeading) {
+                            if let typeLabel = item.curationTypePill {
+                                Text(typeLabel.uppercased())
+                                    .font(.system(size: 9, weight: .bold))
+                                    .tracking(0.6)
+                                    .foregroundStyle(.white.opacity(0.72))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 3)
+                                    .background(.black.opacity(0.60))
+                                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                                    .padding(6)
+                            }
+                        }
                     if let duration = item.durationLabel {
                         Text(duration)
                             .font(.system(size: 10, weight: .bold))
@@ -959,7 +983,7 @@ private struct NativeCurationEntityCard: View {
 
                 HStack(spacing: 5) {
                     Text(item.displayTitle)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 12, weight: mode == .grid ? .semibold : .medium))
                         .foregroundStyle(C.text)
                         .lineLimit(2)
                     if item.isVerifiedChannel {
@@ -971,9 +995,9 @@ private struct NativeCurationEntityCard: View {
 
                 if !item.curationSubtitle.isEmpty {
                     Text(item.curationSubtitle)
-                        .font(.system(size: 12))
-                        .foregroundStyle(C.textMuted)
-                        .lineLimit(2)
+                        .font(.system(size: 10))
+                        .foregroundStyle(C.textTertiary)
+                        .lineLimit(1)
                 }
             }
         }
@@ -1095,6 +1119,22 @@ private extension ContentItem {
         case "topic": return "Topic"
         case "season": return "Season"
         default: return normalizedEntityType.capitalized.isEmpty ? "Featured" : normalizedEntityType.capitalized
+        }
+    }
+
+    var curationTypePill: String? {
+        switch normalizedEntityType {
+        case "show": return nil
+        case "short": return "Short"
+        case "video": return "Video"
+        case "episode": return "Ep"
+        case "season": return "Season"
+        case "channel": return "Channel"
+        case "ripple": return "Ripple"
+        case "person": return "Person"
+        case "vibe": return "Vibe"
+        case "topic": return "Topic"
+        default: return nil
         }
     }
 
