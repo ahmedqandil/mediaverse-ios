@@ -88,7 +88,8 @@ struct RippleCard: View {
             if let poll = engagement.poll {
                 RipplePollCard(
                     poll: poll,
-                    allowsVoting: allowsEngagement && !engagement.isBusy
+                    allowsVoting: allowsEngagement && !engagement.isBusy,
+                    isSaving: engagement.isBusy
                 ) { optionIds in
                     Task { await engagement.vote(optionIds: optionIds) }
                 }
@@ -1337,98 +1338,161 @@ private struct EmbeddedRippleView: View {
 private struct RipplePollCard: View {
     let poll: RipplePoll
     let allowsVoting: Bool
+    let isSaving: Bool
     let onVote: ([String]) -> Void
     @State private var selections: Set<String>
-    private let initialSelections: Set<String>
 
     init(
         poll: RipplePoll,
         allowsVoting: Bool,
+        isSaving: Bool,
         onVote: @escaping ([String]) -> Void
     ) {
         self.poll = poll
         self.allowsVoting = allowsVoting
+        self.isSaving = isSaving
         self.onVote = onVote
         let selected = Set(poll.votes.map(\.optionId))
-        initialSelections = selected
         _selections = State(initialValue: selected)
     }
 
-    private var totalVotes: Int { poll.options.reduce(0) { $0 + $1.voteCount } }
+    private var showResults: Bool {
+        !poll.votes.isEmpty || isClosed || poll.resultsVisibility.uppercased() == "ALWAYS"
+    }
+
+    private var isClosed: Bool {
+        if poll.closedAt != nil { return true }
+        guard let closesAt = poll.closesAt,
+              let closeDate = ISO8601DateFormatter().date(from: closesAt) else { return false }
+        return closeDate <= Date()
+    }
+
+    private var statusText: String {
+        if isClosed { return "Poll closed" }
+        if isSaving { return "Saving…" }
+        if !poll.votes.isEmpty { return "Vote saved" }
+        return allowsVoting ? "Tap to vote" : "Voting unavailable"
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(poll.question).font(.headline).foregroundStyle(C.text)
-                Spacer()
-                Image(systemName: "chart.bar.fill").foregroundStyle(C.watch)
-            }
-            ForEach(poll.options) { option in
-                let fraction = totalVotes > 0 ? Double(option.voteCount) / Double(totalVotes) : 0
-                Button {
-                    select(option.id)
-                } label: {
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack {
-                            Image(systemName: selections.contains(option.id) ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(selections.contains(option.id) ? C.watch : C.textTertiary)
-                            Text(option.label).font(.subheadline)
-                            Spacer()
-                            Text("\(Int((fraction * 100).rounded()))%").font(.caption.bold())
-                        }
-                        GeometryReader { proxy in
-                            ZStack(alignment: .leading) {
-                                Capsule().fill(C.border)
-                                Capsule()
-                                    .fill(C.watch)
-                                    .frame(width: proxy.size.width * CGFloat(fraction))
-                            }
-                        }
-                        .frame(height: 7)
-                    }
-                }
-                .buttonStyle(.plain)
-                .disabled(!allowsVoting)
-            }
-            if poll.allowsMultiple, allowsVoting {
-                Button("Submit vote") {
-                    onVote(Array(selections).sorted())
-                }
-                .font(.caption.bold())
-                .foregroundStyle(C.bg)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(C.watch, in: Capsule())
-                .disabled(
-                    selections.count > poll.maxSelections
-                    || (selections.isEmpty && initialSelections.isEmpty)
+        VStack(spacing: 0) {
+            VStack(spacing: 4) {
+                Text(poll.question)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(C.text)
+                    .multilineTextAlignment(.center)
+
+                Text(
+                    poll.allowsMultiple
+                        ? "Select up to \(poll.maxSelections) answers"
+                        : "Select one answer"
                 )
-            }
-            Text(totalVotes == 1 ? "1 vote" : "\(totalVotes) votes")
-                .font(.caption)
+                .font(.system(size: 11))
                 .foregroundStyle(C.textMuted)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 12)
+
+            VStack(spacing: 8) {
+                ForEach(poll.options) { option in
+                    pollOption(option)
+                }
+            }
+
+            HStack {
+                if showResults {
+                    Text(
+                        poll.totalVoters == 1
+                            ? "1 vote"
+                            : "\(poll.totalVoters) votes"
+                    )
+                }
+                Spacer()
+                Text(statusText)
+            }
+            .font(.system(size: 10))
+            .foregroundStyle(C.textMuted)
+            .padding(.top, 9)
         }
         .padding(12)
-        .background(C.elevated, in: RoundedRectangle(cornerRadius: 12))
+        .background(.black.opacity(0.65))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(.white.opacity(0.10), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .onChange(of: poll.votes.map(\.optionId)) { _, optionIDs in
+            selections = Set(optionIDs)
+        }
+    }
+
+    private func pollOption(_ option: RipplePollOption) -> some View {
+        let selected = selections.contains(option.id)
+        let fraction = poll.totalVoters > 0
+            ? min(max(Double(option.voteCount) / Double(poll.totalVoters), 0), 1)
+            : 0
+
+        return Button {
+            select(option.id)
+        } label: {
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(.white.opacity(0.15))
+
+                if showResults {
+                    GeometryReader { proxy in
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(selected ? C.watch : .white.opacity(0.20))
+                            .frame(width: proxy.size.width * CGFloat(fraction))
+                    }
+                }
+
+                HStack(spacing: 12) {
+                    Text(option.label)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    if showResults {
+                        Text("\(Int((fraction * 100).rounded()))%")
+                            .font(.system(size: 11, weight: .semibold))
+                            .monospacedDigit()
+                            .opacity(0.75)
+                    }
+                }
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(selected && showResults ? C.bg : C.text)
+                .padding(.horizontal, 12)
+            }
+            .frame(height: 40)
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(.white.opacity(0.20), lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!allowsVoting || isClosed)
+        .opacity(allowsVoting || isClosed ? 1 : 0.82)
+        .accessibilityValue(showResults ? "\(Int((fraction * 100).rounded())) percent" : "")
     }
 
     private func select(_ id: String) {
-        guard allowsVoting else { return }
+        guard allowsVoting, !isClosed else { return }
+        var updated = selections
+
         if poll.allowsMultiple {
-            if selections.contains(id) {
-                selections.remove(id)
-            } else if selections.count < poll.maxSelections {
-                selections.insert(id)
+            if updated.contains(id) {
+                updated.remove(id)
+            } else if updated.count < poll.maxSelections {
+                updated.insert(id)
+            } else {
+                return
             }
         } else {
-            if selections.contains(id) {
-                selections = []
-                onVote([])
-            } else {
-                selections = [id]
-                onVote([id])
-            }
+            updated = [id]
         }
+
+        selections = updated
+        onVote(Array(updated).sorted())
     }
 }
 

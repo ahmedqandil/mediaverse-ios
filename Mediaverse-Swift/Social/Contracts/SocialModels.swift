@@ -741,12 +741,14 @@ public struct RipplePoll: Decodable, Sendable {
     public let allowsVoteChanges: Bool
     public let resultsVisibility: String
     public let closesAt: String?
+    public let closedAt: String?
     public let options: [RipplePollOption]
     public let votes: [RipplePollVote]
+    public let totalVoters: Int
 
     enum CodingKeys: String, CodingKey {
         case id, question, allowsMultiple, maxSelections, allowsVoteChanges
-        case resultsVisibility, closesAt, options, votes
+        case resultsVisibility, closesAt, closedAt, options, votes, totalVoters
     }
 
     public init(from decoder: Decoder) throws {
@@ -758,8 +760,11 @@ public struct RipplePoll: Decodable, Sendable {
         allowsVoteChanges = try values.decodeIfPresent(Bool.self, forKey: .allowsVoteChanges) ?? false
         resultsVisibility = try values.decodeIfPresent(String.self, forKey: .resultsVisibility) ?? "AFTER_VOTE"
         closesAt = try values.decodeIfPresent(String.self, forKey: .closesAt)
+        closedAt = try values.decodeIfPresent(String.self, forKey: .closedAt)
         options = try values.decodeIfPresent([RipplePollOption].self, forKey: .options) ?? []
         votes = try values.decodeIfPresent([RipplePollVote].self, forKey: .votes) ?? []
+        totalVoters = try values.decodeIfPresent(Int.self, forKey: .totalVoters)
+            ?? options.reduce(0) { $0 + $1.voteCount }
     }
 }
 
