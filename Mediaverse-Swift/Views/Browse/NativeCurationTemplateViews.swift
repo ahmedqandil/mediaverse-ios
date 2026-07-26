@@ -11,26 +11,43 @@ struct NativeCurationListingView: View {
     }
 
     var body: some View {
-        switch templateType {
-        case "hero":
-            NativeCurationHero(listing: listing)
-        case "grid":
-            NativeCurationGrid(listing: listing)
-        case "banner":
-            NativeCurationBanner(listing: listing)
-        case "spotlight":
-            NativeCurationSpotlight(listing: listing)
-        case "channels":
-            NativeCurationChannelList(listing: listing)
-        case "carousel":
-            NativeCurationCarousel(listing: listing)
-        case "ripples":
-            NativeCurationRippleList(listing: listing)
-        case "stories", "continue_watching", "video_feed", "shorts_feed":
-            EmptyView()
-        default:
-            NativeCurationCarousel(listing: listing)
+        Group {
+            switch templateType {
+            case "hero":
+                NativeCurationHero(listing: listing)
+            case "grid":
+                NativeCurationGrid(listing: listing)
+            case "banner":
+                NativeCurationBanner(listing: listing)
+            case "spotlight":
+                NativeCurationSpotlight(listing: listing)
+            case "channels":
+                NativeCurationChannelList(listing: listing)
+            case "carousel":
+                NativeCurationCarousel(listing: listing)
+            case "ripples":
+                NativeCurationRippleList(listing: listing)
+            case "stories", "continue_watching", "video_feed", "shorts_feed", "atmosphere_feed":
+                EmptyView()
+            default:
+                NativeCurationCarousel(listing: listing)
+            }
         }
+        .environment(\.curationListingId, listing.listingId)
+        .task(id: listing.listingId) {
+            await CurationEventTracker.shared.impression(listingId: listing.listingId)
+        }
+    }
+}
+
+private struct CurationListingIdKey: EnvironmentKey {
+    static let defaultValue: String? = nil
+}
+
+private extension EnvironmentValues {
+    var curationListingId: String? {
+        get { self[CurationListingIdKey.self] }
+        set { self[CurationListingIdKey.self] = newValue }
     }
 }
 
@@ -817,6 +834,7 @@ private struct NativeCurationEntityCard: View {
 
     let item: ContentItem
     let mode: Mode
+    @Environment(\.curationListingId) private var curationListingId
 
     static func width(for item: ContentItem, mode: Mode) -> CGFloat {
         switch item.normalizedEntityType {
@@ -883,6 +901,15 @@ private struct NativeCurationEntityCard: View {
             }
         }
         .buttonStyle(.plain)
+        .simultaneousGesture(TapGesture().onEnded {
+            guard let curationListingId else { return }
+            Task {
+                await CurationEventTracker.shared.click(
+                    listingId: curationListingId,
+                    contentId: item.entityId
+                )
+            }
+        })
     }
 }
 

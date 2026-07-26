@@ -616,6 +616,38 @@ actor APIClient: LegacySocialTransport {
         return response.data
     }
 
+    func trackCurationEvent(
+        listingId: String,
+        eventType: String,
+        contentId: String? = nil,
+        sessionId: String? = nil
+    ) async {
+        struct Body: Encodable {
+            let listingId: String
+            let eventType: String
+            let contentId: String?
+            let device: String
+            let sessionId: String?
+        }
+        guard let url = URL(string: C.baseURL + "/api/curation/event"),
+              let body = try? JSONEncoder().encode(
+                Body(
+                    listingId: listingId,
+                    eventType: eventType,
+                    contentId: contentId,
+                    device: "mobile",
+                    sessionId: sessionId
+                )
+              ) else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = body
+        attachAuth(&request)
+        _ = try? await session.data(for: request)
+    }
+
     // MARK: - Shorts
 
     func fetchShorts(
@@ -1944,6 +1976,31 @@ actor APIClient: LegacySocialTransport {
             return 0
         }
         return Int64(http.value(forHTTPHeaderField: "Upload-Offset") ?? "") ?? 0
+    }
+}
+
+actor CurationEventTracker {
+    static let shared = CurationEventTracker()
+
+    private let sessionId = UUID().uuidString
+    private var impressions = Set<String>()
+
+    func impression(listingId: String) async {
+        guard impressions.insert(listingId).inserted else { return }
+        await APIClient.shared.trackCurationEvent(
+            listingId: listingId,
+            eventType: "impression",
+            sessionId: sessionId
+        )
+    }
+
+    func click(listingId: String, contentId: String) async {
+        await APIClient.shared.trackCurationEvent(
+            listingId: listingId,
+            eventType: "click",
+            contentId: contentId,
+            sessionId: sessionId
+        )
     }
 }
 
