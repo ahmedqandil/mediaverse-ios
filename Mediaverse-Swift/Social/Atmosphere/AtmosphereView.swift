@@ -355,7 +355,7 @@ struct AtmosphereView: View {
                 replaceMediaAction: canHandoff(feedVideo) ? { sourceFrame in
                     handoffToWatch(feedVideo, sourceFrame: sourceFrame)
                 } : nil,
-                horizontalContentInset: C.pagePad
+                horizontalContentInset: 0
             )
         }
     }
