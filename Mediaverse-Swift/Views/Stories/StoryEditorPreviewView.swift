@@ -532,18 +532,6 @@ struct StoryEditorPreviewView: View {
                         accessibilityReduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.86),
                         value: activeTool?.id
                     )
-                    .overlay {
-                        if activeTool == .transform,
-                           !isDrawingPresented,
-                           !isTextComposerPresented,
-                           editor.selectedOverlayID == nil {
-                            CanvasMediaTransformGestureLayer(
-                                onBegin: beginCanvasMediaTransform,
-                                onChange: updateCanvasMediaTransform,
-                                onEnd: finishCanvasMediaTransform
-                            )
-                        }
-                    }
             }
 
             if isDrawingPresented {
@@ -818,9 +806,6 @@ struct StoryEditorPreviewView: View {
                     }
                     creationToolbarButton("Beauty", systemImage: "wand.and.stars") {
                         openTool(.beauty)
-                    }
-                    creationToolbarButton("Position", systemImage: "viewfinder") {
-                        openTool(.transform)
                     }
                     creationToolbarButton("Music", systemImage: "music.note") {
                         openTool(.music)
@@ -3561,6 +3546,7 @@ struct StoryEditorPreviewView: View {
                     targets: targets,
                     selectedOverlayID: editor.selectedOverlayID,
                     previewScale: previewScale,
+                    allowsMediaTransform: activeTool == nil || activeTool == .transform,
                     onTap: { overlay in
                         if let overlay {
                             handleOverlayTap(overlay)
@@ -3597,7 +3583,10 @@ struct StoryEditorPreviewView: View {
                         isOverlayInteracting = false
                         overlayAlignmentGuide = OverlayAlignmentGuide()
                         Task { await editor.persistInteractiveOverlayEdits() }
-                    }
+                    },
+                    onMediaBegin: beginCanvasMediaTransform,
+                    onMediaChange: updateCanvasMediaTransform,
+                    onMediaEnd: finishCanvasMediaTransform
                 )
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .zIndex(20_000)
@@ -5355,6 +5344,7 @@ private struct CanvasMediaTransformGestureLayer: UIViewRepresentable {
                 lastScale = 1
                 lastRotation = 0
                 lastTranslation = .zero
+                UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.55)
                 onBegin()
             }
 
@@ -5381,6 +5371,7 @@ private struct CanvasMediaTransformGestureLayer: UIViewRepresentable {
                 lastRotation = 0
                 lastTranslation = .zero
                 onEnd(finalScale, finalRotation, finalTranslation, viewportSize)
+                UISelectionFeedbackGenerator().selectionChanged()
             }
         }
 
@@ -5410,13 +5401,25 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
     let targets: [OverlayGestureTarget]
     let selectedOverlayID: UUID?
     let previewScale: CGFloat
+    let allowsMediaTransform: Bool
     let onTap: (Overlay?) -> Void
     let onBegin: (Overlay) -> Void
     let onChange: (UUID, Transform2D) -> Void
     let onEnd: () -> Void
+    let onMediaBegin: () -> Void
+    let onMediaChange: (Double, Double, CGSize, CGSize) -> Void
+    let onMediaEnd: (Double, Double, CGSize, CGSize) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onTap: onTap, onBegin: onBegin, onChange: onChange, onEnd: onEnd)
+        Coordinator(
+            onTap: onTap,
+            onBegin: onBegin,
+            onChange: onChange,
+            onEnd: onEnd,
+            onMediaBegin: onMediaBegin,
+            onMediaChange: onMediaChange,
+            onMediaEnd: onMediaEnd
+        )
     }
 
     func makeUIView(context: Context) -> UIView {
@@ -5447,6 +5450,7 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
         context.coordinator.targets = targets
         context.coordinator.selectedOverlayID = selectedOverlayID
         context.coordinator.previewScale = previewScale
+        context.coordinator.allowsMediaTransform = allowsMediaTransform
 
         return view
     }
@@ -5459,6 +5463,10 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
         context.coordinator.onChange = onChange
         context.coordinator.onEnd = onEnd
         context.coordinator.previewScale = previewScale
+        context.coordinator.allowsMediaTransform = allowsMediaTransform
+        context.coordinator.onMediaBegin = onMediaBegin
+        context.coordinator.onMediaChange = onMediaChange
+        context.coordinator.onMediaEnd = onMediaEnd
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
@@ -5469,8 +5477,16 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
         var onChange: (UUID, Transform2D) -> Void
         var onEnd: () -> Void
         var previewScale: CGFloat = 1
+        var allowsMediaTransform = true
+        var onMediaBegin: () -> Void
+        var onMediaChange: (Double, Double, CGSize, CGSize) -> Void
+        var onMediaEnd: (Double, Double, CGSize, CGSize) -> Void
         var startTransform: Transform2D?
         var activeTarget: OverlayGestureTarget?
+        var isTransformingMedia = false
+        var mediaScale = 1.0
+        var mediaRotation = 0.0
+        var mediaTranslation = CGSize.zero
         var lastMagnification: Double = 1
         var lastRotation: Double = 0
         weak var pan: UIPanGestureRecognizer?
@@ -5481,12 +5497,18 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
             onTap: @escaping (Overlay?) -> Void,
             onBegin: @escaping (Overlay) -> Void,
             onChange: @escaping (UUID, Transform2D) -> Void,
-            onEnd: @escaping () -> Void
+            onEnd: @escaping () -> Void,
+            onMediaBegin: @escaping () -> Void,
+            onMediaChange: @escaping (Double, Double, CGSize, CGSize) -> Void,
+            onMediaEnd: @escaping (Double, Double, CGSize, CGSize) -> Void
         ) {
             self.onTap = onTap
             self.onBegin = onBegin
             self.onChange = onChange
             self.onEnd = onEnd
+            self.onMediaBegin = onMediaBegin
+            self.onMediaChange = onMediaChange
+            self.onMediaEnd = onMediaEnd
         }
 
         @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
@@ -5495,14 +5517,45 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
         }
 
         @objc func handleTransform(_ recognizer: UIGestureRecognizer) {
-            if recognizer.state == .began, startTransform == nil {
+            if recognizer.state == .began, startTransform == nil, !isTransformingMedia {
                 let location = recognizer.location(in: recognizer.view)
-                guard let target = targetForInteraction(at: location) else { return }
-                activeTarget = target
-                startTransform = target.transform
-                lastMagnification = 1
-                lastRotation = 0
-                onBegin(target.overlay)
+                if let target = targetForInteraction(at: location) {
+                    activeTarget = target
+                    startTransform = target.transform
+                    lastMagnification = 1
+                    lastRotation = 0
+                    onBegin(target.overlay)
+                } else if allowsMediaTransform {
+                    isTransformingMedia = true
+                    mediaScale = 1
+                    mediaRotation = 0
+                    mediaTranslation = .zero
+                    UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.55)
+                    onMediaBegin()
+                } else {
+                    return
+                }
+            }
+
+            if isTransformingMedia {
+                if let pinch, pinch.state == .began || pinch.state == .changed {
+                    mediaScale = Double(pinch.scale)
+                }
+                if let rotation, rotation.state == .began || rotation.state == .changed {
+                    mediaRotation = Double(rotation.rotation)
+                }
+                if let pan, pan.state == .began || pan.state == .changed {
+                    let translation = pan.translation(in: recognizer.view)
+                    mediaTranslation = CGSize(width: translation.x, height: translation.y)
+                }
+                let viewportSize = recognizer.view?.bounds.size ?? .zero
+                onMediaChange(mediaScale, mediaRotation, mediaTranslation, viewportSize)
+                if interactionsEnded {
+                    isTransformingMedia = false
+                    onMediaEnd(mediaScale, mediaRotation, mediaTranslation, viewportSize)
+                    UISelectionFeedbackGenerator().selectionChanged()
+                }
+                return
             }
 
             guard let activeTarget, let startTransform else { return }
@@ -5535,6 +5588,7 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             guard !(gestureRecognizer is UITapGestureRecognizer) else { return true }
             return targetForInteraction(at: gestureRecognizer.location(in: gestureRecognizer.view)) != nil
+                || allowsMediaTransform
         }
 
         private func targetForInteraction(at point: CGPoint) -> OverlayGestureTarget? {

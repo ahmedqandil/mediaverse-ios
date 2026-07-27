@@ -254,9 +254,10 @@ struct UploadView: View {
         }
         .sheet(isPresented: $showThumbnailCropper) {
             if let pendingThumbnailImage {
-                ThumbnailCropperSheet(
+                WestreemImagePositionEditor(
                     image: pendingThumbnailImage,
                     aspectRatio: C.mediaAspectRatio(forContentType: contentType),
+                    title: "Position Thumbnail",
                     onCancel: {
                         clearPendingThumbnailCrop()
                     },

@@ -333,6 +333,9 @@ struct WestreemImagePositionEditor: View {
     @State private var committedZoom: CGFloat = 1
     @State private var offset: CGSize = .zero
     @State private var committedOffset: CGSize = .zero
+    @State private var actualViewportSize: CGSize = .zero
+    @State private var isDragging = false
+    @State private var isPinching = false
 
     var body: some View {
         NavigationStack {
@@ -354,17 +357,23 @@ struct WestreemImagePositionEditor: View {
 
                     HStack {
                         Image(systemName: "minus.magnifyingglass")
-                        Slider(value: $zoom, in: 1...3)
+                        Slider(value: $zoom, in: 1...3) { editing in
+                            if !editing {
+                                committedZoom = zoom
+                                committedOffset = offset
+                            }
+                        }
                             .tint(C.watch)
                             .onChange(of: zoom) { _, _ in
-                                offset = constrainedOffset(offset, viewport: viewportSize)
+                                offset = constrainedOffset(offset, viewport: appliedViewportSize)
                             }
                         Image(systemName: "plus.magnifyingglass")
                     }
                     .foregroundStyle(C.textMuted)
 
                     Button {
-                        withAnimation(.easeInOut(duration: 0.18)) {
+                        C.lightHaptic()
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
                             zoom = 1
                             committedZoom = 1
                             offset = .zero
@@ -389,7 +398,7 @@ struct WestreemImagePositionEditor: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Apply") {
-                        onApply(croppedImage(viewport: viewportSize))
+                        onApply(croppedImage(viewport: appliedViewportSize))
                     }
                     .fontWeight(.semibold)
                 }
@@ -397,9 +406,15 @@ struct WestreemImagePositionEditor: View {
         }
     }
 
-    private var viewportSize: CGSize {
+    private var fallbackViewportSize: CGSize {
         let width: CGFloat = 420
         return CGSize(width: width, height: width / max(aspectRatio, 0.1))
+    }
+
+    private var appliedViewportSize: CGSize {
+        actualViewportSize.width > 0 && actualViewportSize.height > 0
+            ? actualViewportSize
+            : fallbackViewportSize
     }
 
     private func positionedPreview(width: CGFloat, height: CGFloat) -> some View {
@@ -414,6 +429,10 @@ struct WestreemImagePositionEditor: View {
                 .simultaneousGesture(
                     DragGesture()
                         .onChanged { value in
+                            if !isDragging {
+                                isDragging = true
+                                UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.45)
+                            }
                             offset = constrainedOffset(
                                 CGSize(
                                     width: committedOffset.width + value.translation.width,
@@ -422,21 +441,39 @@ struct WestreemImagePositionEditor: View {
                                 viewport: CGSize(width: width, height: height)
                             )
                         }
-                        .onEnded { _ in committedOffset = offset }
+                        .onEnded { _ in
+                            isDragging = false
+                            committedOffset = offset
+                            UISelectionFeedbackGenerator().selectionChanged()
+                        }
                 )
                 .simultaneousGesture(
                     MagnificationGesture()
                         .onChanged { value in
+                            if !isPinching {
+                                isPinching = true
+                                UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.45)
+                            }
                             zoom = min(max(committedZoom * value, 1), 3)
                             offset = constrainedOffset(offset, viewport: CGSize(width: width, height: height))
                         }
                         .onEnded { _ in
+                            isPinching = false
                             committedZoom = zoom
                             committedOffset = offset
+                            UISelectionFeedbackGenerator().selectionChanged()
                         }
                 )
         }
         .frame(width: width, height: height)
+        .onAppear {
+            actualViewportSize = CGSize(width: width, height: height)
+        }
+        .onChange(of: CGSize(width: width, height: height)) { _, size in
+            actualViewportSize = size
+            offset = constrainedOffset(offset, viewport: size)
+            committedOffset = offset
+        }
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay {
             RoundedRectangle(cornerRadius: 12)
