@@ -198,6 +198,12 @@ struct BrowseView: View {
                 listings: discoverListings,
                 isLoading: isDiscoverLoading,
                 errorMessage: discoverError,
+                availableSections: browseItems.compactMap {
+                    guard let section = BrowseSection(rawValue: $0.id),
+                          section != .discover,
+                          section != .videos else { return nil }
+                    return section
+                },
                 retry: { await refreshCuratedBrowseItems() },
                 openSection: { selectedSection = $0 }
             )
@@ -352,12 +358,9 @@ private struct DiscoverHubView: View {
     let listings: [AssembledListing]
     let isLoading: Bool
     let errorMessage: String?
+    let availableSections: [BrowseSection]
     let retry: () async -> Void
     let openSection: (BrowseSection) -> Void
-
-    private let categorySections: [BrowseSection] = [
-        .shows, .movies, .microdramas, .channels, .people, .vibes, .collections
-    ]
 
     var body: some View {
         ScrollView {
@@ -431,7 +434,7 @@ private struct DiscoverHubView: View {
             ],
             spacing: 10
         ) {
-            ForEach(categorySections) { section in
+            ForEach(availableSections) { section in
                 Button {
                     openSection(section)
                 } label: {
