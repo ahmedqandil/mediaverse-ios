@@ -677,7 +677,7 @@ private struct AtmospherePublishedVideoCard<MediaCard: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             publisherHeader
             mediaCard()
-                .padding(.bottom, 10)
+                .padding(.vertical, 14)
             actionBar
         }
         .background(C.surface.opacity(0.82))

@@ -208,7 +208,7 @@ struct RippleCard: View {
                     onPreviewPaused: onPreviewPaused,
                     onVideoHandoff: onVideoHandoff
                 )
-                    .padding(.top, 10)
+                    .padding(.vertical, 14)
             }
 
             if engagement.energyCount > 0 {
