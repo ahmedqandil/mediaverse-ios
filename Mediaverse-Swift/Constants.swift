@@ -322,6 +322,173 @@ struct WestreemHorizontalScrollView<Content: View>: View {
     }
 }
 
+struct WestreemImagePositionEditor: View {
+    let image: UIImage
+    let aspectRatio: CGFloat
+    let title: String
+    let onCancel: () -> Void
+    let onApply: (UIImage) -> Void
+
+    @State private var zoom: CGFloat = 1
+    @State private var committedZoom: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var committedOffset: CGSize = .zero
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                C.bg.ignoresSafeArea()
+                VStack(spacing: 18) {
+                    Label("Drag to position · Pinch to zoom", systemImage: "hand.draw")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(C.textMuted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    GeometryReader { proxy in
+                        let width = min(proxy.size.width, 420)
+                        let height = width / max(aspectRatio, 0.1)
+                        positionedPreview(width: width, height: height)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .frame(height: aspectRatio < 1 ? 460 : 280)
+
+                    HStack {
+                        Image(systemName: "minus.magnifyingglass")
+                        Slider(value: $zoom, in: 1...3)
+                            .tint(C.watch)
+                            .onChange(of: zoom) { _, _ in
+                                offset = constrainedOffset(offset, viewport: viewportSize)
+                            }
+                        Image(systemName: "plus.magnifyingglass")
+                    }
+                    .foregroundStyle(C.textMuted)
+
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            zoom = 1
+                            committedZoom = 1
+                            offset = .zero
+                            committedOffset = .zero
+                        }
+                    } label: {
+                        Label("Reset position", systemImage: "arrow.counterclockwise")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(C.textMuted)
+
+                    Spacer(minLength: 0)
+                }
+                .padding(C.pagePad)
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Apply") {
+                        onApply(croppedImage(viewport: viewportSize))
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+        }
+    }
+
+    private var viewportSize: CGSize {
+        let width: CGFloat = 420
+        return CGSize(width: width, height: width / max(aspectRatio, 0.1))
+    }
+
+    private func positionedPreview(width: CGFloat, height: CGFloat) -> some View {
+        ZStack {
+            Color.black
+            Image(uiImage: normalizedImage)
+                .resizable()
+                .scaledToFill()
+                .frame(width: width, height: height)
+                .scaleEffect(zoom)
+                .offset(offset)
+                .simultaneousGesture(
+                    DragGesture()
+                        .onChanged { value in
+                            offset = constrainedOffset(
+                                CGSize(
+                                    width: committedOffset.width + value.translation.width,
+                                    height: committedOffset.height + value.translation.height
+                                ),
+                                viewport: CGSize(width: width, height: height)
+                            )
+                        }
+                        .onEnded { _ in committedOffset = offset }
+                )
+                .simultaneousGesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            zoom = min(max(committedZoom * value, 1), 3)
+                            offset = constrainedOffset(offset, viewport: CGSize(width: width, height: height))
+                        }
+                        .onEnded { _ in
+                            committedZoom = zoom
+                            committedOffset = offset
+                        }
+                )
+        }
+        .frame(width: width, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(C.watch, lineWidth: 2)
+        }
+        .clipped()
+    }
+
+    private var normalizedImage: UIImage {
+        guard image.imageOrientation != .up else { return image }
+        let renderer = UIGraphicsImageRenderer(size: image.size)
+        return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: image.size)) }
+    }
+
+    private func constrainedOffset(_ proposed: CGSize, viewport: CGSize) -> CGSize {
+        let imageSize = normalizedImage.size
+        let baseScale = max(viewport.width / imageSize.width, viewport.height / imageSize.height)
+        let displayed = CGSize(
+            width: imageSize.width * baseScale * zoom,
+            height: imageSize.height * baseScale * zoom
+        )
+        let maxX = max(0, (displayed.width - viewport.width) / 2)
+        let maxY = max(0, (displayed.height - viewport.height) / 2)
+        return CGSize(
+            width: min(max(proposed.width, -maxX), maxX),
+            height: min(max(proposed.height, -maxY), maxY)
+        )
+    }
+
+    private func croppedImage(viewport: CGSize) -> UIImage {
+        guard let cgImage = normalizedImage.cgImage else { return image }
+        let imageSize = CGSize(width: cgImage.width, height: cgImage.height)
+        let baseScale = max(viewport.width / imageSize.width, viewport.height / imageSize.height)
+        let effectiveScale = baseScale * zoom
+        let displayedSize = CGSize(
+            width: imageSize.width * effectiveScale,
+            height: imageSize.height * effectiveScale
+        )
+        let originX = (displayedSize.width - viewport.width) / 2 - offset.width
+        let originY = (displayedSize.height - viewport.height) / 2 - offset.height
+        let cropRect = CGRect(
+            x: originX / effectiveScale,
+            y: originY / effectiveScale,
+            width: viewport.width / effectiveScale,
+            height: viewport.height / effectiveScale
+        ).intersection(CGRect(origin: .zero, size: imageSize)).integral
+        guard cropRect.width > 0, cropRect.height > 0,
+              let cropped = cgImage.cropping(to: cropRect) else { return normalizedImage }
+        return UIImage(cgImage: cropped, scale: normalizedImage.scale, orientation: .up)
+    }
+}
+
 private struct HorizontalCarouselGestureOwnership: ViewModifier {
     func body(content: Content) -> some View {
         content.simultaneousGesture(

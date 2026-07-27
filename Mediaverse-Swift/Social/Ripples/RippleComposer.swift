@@ -8,6 +8,13 @@ enum RippleComposerDestination: Equatable {
     case vibe(slug: String, name: String)
 }
 
+private struct RipplePhotoPositioning: Identifiable {
+    let index: Int
+    let photo: UploadedRipplePhoto
+    let image: UIImage
+    var id: String { photo.imageURL }
+}
+
 struct RippleComposer: View {
     let destination: RippleComposerDestination
     let onCreated: (Ripple) -> Void
@@ -29,6 +36,8 @@ struct RippleComposer: View {
     @State private var errorMessage: String?
     @State private var photoSelections: [PhotosPickerItem] = []
     @State private var photos: [UploadedRipplePhoto] = []
+    @State private var photoSourceImages: [String: UIImage] = [:]
+    @State private var positioningPhoto: RipplePhotoPositioning?
     @State private var isUploadingPhotos = false
     @State private var uploadProgress = 0
     @FocusState private var isBodyFocused: Bool
@@ -363,17 +372,37 @@ struct RippleComposer: View {
                     .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: 10))
 
-                    Button {
-                        photos.remove(at: index)
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.caption.bold())
-                            .foregroundStyle(.white)
-                            .padding(7)
-                            .background(.black.opacity(0.7), in: Circle())
+                    HStack(spacing: 6) {
+                        if let source = photoSourceImages[photo.imageURL] {
+                            Button {
+                                positioningPhoto = RipplePhotoPositioning(
+                                    index: index,
+                                    photo: photo,
+                                    image: source
+                                )
+                            } label: {
+                                Image(systemName: "crop")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.white)
+                                    .padding(7)
+                                    .background(.black.opacity(0.7), in: Circle())
+                            }
+                            .accessibilityLabel("Adjust photo position")
+                        }
+
+                        Button {
+                            photoSourceImages.removeValue(forKey: photo.imageURL)
+                            photos.remove(at: index)
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption.bold())
+                                .foregroundStyle(.white)
+                                .padding(7)
+                                .background(.black.opacity(0.7), in: Circle())
+                        }
+                        .accessibilityLabel("Remove photo")
                     }
                     .padding(6)
-                    .accessibilityLabel("Remove photo")
                 }
             }
         }
@@ -400,6 +429,18 @@ struct RippleComposer: View {
                 .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+        .fullScreenCover(item: $positioningPhoto) { pending in
+            WestreemImagePositionEditor(
+                image: pending.image,
+                aspectRatio: 1,
+                title: "Position Photo",
+                onCancel: { positioningPhoto = nil },
+                onApply: { positioned in
+                    positioningPhoto = nil
+                    Task { await replacePositionedPhoto(pending, with: positioned) }
+                }
+            )
+        }
     }
 
     private func resolvePastedLinkIfNeeded(in value: String) {
@@ -441,16 +482,11 @@ struct RippleComposer: View {
             photoSelections = []
         }
         do {
-            let slug: String
-            switch destination {
-            case .personal:
-                slug = try await api.ensurePersonalVibe().slug
-            case .vibe(let destinationSlug, _):
-                slug = destinationSlug
-            }
+            let slug = try await uploadVibeSlug()
             let available = Array(items.prefix(max(0, 10 - photos.count)))
             for (index, item) in available.enumerated() {
                 guard let originalData = try await item.loadTransferable(type: Data.self),
+                      let sourceImage = UIImage(data: originalData),
                       let data = preparedPhotoData(from: originalData)
                 else {
                     throw LegacySocialAPIError.invalidPhoto
@@ -461,6 +497,7 @@ struct RippleComposer: View {
                     mimeType: "image/jpeg"
                 )
                 photos.append(photo)
+                photoSourceImages[photo.imageURL] = sourceImage
                 uploadProgress = Int((Double(index + 1) / Double(available.count)) * 100)
             }
         } catch {
@@ -469,6 +506,47 @@ struct RippleComposer: View {
             } else {
                 errorMessage = socialErrorMessage(error)
             }
+        }
+    }
+
+    @MainActor
+    private func replacePositionedPhoto(
+        _ pending: RipplePhotoPositioning,
+        with image: UIImage
+    ) async {
+        guard photos.indices.contains(pending.index),
+              photos[pending.index].imageURL == pending.photo.imageURL else { return }
+        isUploadingPhotos = true
+        errorMessage = nil
+        defer {
+            isUploadingPhotos = false
+            uploadProgress = 0
+        }
+        do {
+            guard let originalData = image.jpegData(compressionQuality: 0.92),
+                  let data = preparedPhotoData(from: originalData) else {
+                throw LegacySocialAPIError.invalidPhoto
+            }
+            let replacement = try await api.uploadRipplePhoto(
+                toVibe: try await uploadVibeSlug(),
+                data: data,
+                mimeType: "image/jpeg"
+            )
+            photoSourceImages.removeValue(forKey: pending.photo.imageURL)
+            photoSourceImages[replacement.imageURL] = image
+            photos[pending.index] = replacement
+            uploadProgress = 100
+        } catch {
+            errorMessage = socialErrorMessage(error)
+        }
+    }
+
+    private func uploadVibeSlug() async throws -> String {
+        switch destination {
+        case .personal:
+            return try await api.ensurePersonalVibe().slug
+        case .vibe(let slug, _):
+            return slug
         }
     }
 

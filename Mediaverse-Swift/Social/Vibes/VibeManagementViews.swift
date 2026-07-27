@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UIKit
 import UniformTypeIdentifiers
 
 struct CreateVibeView: View {
@@ -142,6 +143,9 @@ struct VibeSettingsView: View {
     @State private var bannerFocus: ImageFocus
     @State private var avatarSelection: PhotosPickerItem?
     @State private var bannerSelection: PhotosPickerItem?
+    @State private var avatarSourceImage: UIImage?
+    @State private var bannerSourceImage: UIImage?
+    @State private var positioningImage: VibeImagePositioning?
     @State private var isUploadingAvatar = false
     @State private var isUploadingBanner = false
     @State private var isSaving = false
@@ -184,7 +188,8 @@ struct VibeSettingsView: View {
                         selection: $avatarSelection,
                         focus: $avatarFocus,
                         isUploading: isUploadingAvatar,
-                        aspectRatio: 1
+                        aspectRatio: 1,
+                        kind: .avatar
                     )
                     profileImagePicker(
                         title: "Banner",
@@ -192,7 +197,8 @@ struct VibeSettingsView: View {
                         selection: $bannerSelection,
                         focus: $bannerFocus,
                         isUploading: isUploadingBanner,
-                        aspectRatio: 16.0 / 5.0
+                        aspectRatio: 16.0 / 5.0,
+                        kind: .banner
                     )
                 }
                 WestreemFormPanel("Identity") {
@@ -272,6 +278,18 @@ struct VibeSettingsView: View {
             } message: {
                 Text(errorMessage ?? "")
             }
+            .fullScreenCover(item: $positioningImage) { pending in
+                WestreemImagePositionEditor(
+                    image: pending.image,
+                    aspectRatio: pending.kind == .avatar ? 1 : 16.0 / 5.0,
+                    title: pending.kind == .avatar ? "Position Avatar" : "Position Banner",
+                    onCancel: { positioningImage = nil },
+                    onApply: { image in
+                        positioningImage = nil
+                        Task { await upload(image, kind: pending.kind) }
+                    }
+                )
+            }
         }
     }
 
@@ -282,7 +300,8 @@ struct VibeSettingsView: View {
         selection: Binding<PhotosPickerItem?>,
         focus: Binding<ImageFocus>,
         isUploading: Bool,
-        aspectRatio: CGFloat
+        aspectRatio: CGFloat,
+        kind: ProfileImageKind
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title).font(.subheadline.weight(.semibold))
@@ -300,8 +319,20 @@ struct VibeSettingsView: View {
             }
             .aspectRatio(aspectRatio, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 12))
-            PhotosPicker(selection: selection, matching: .images) {
-                Label(isUploading ? "Uploading…" : "Choose Image", systemImage: "photo")
+            HStack(spacing: 10) {
+                PhotosPicker(selection: selection, matching: .images) {
+                    Label(isUploading ? "Uploading…" : "Choose Image", systemImage: "photo")
+                }
+                if let source = kind == .avatar ? avatarSourceImage : bannerSourceImage {
+                    Button {
+                        positioningImage = VibeImagePositioning(kind: kind, image: source)
+                    } label: {
+                        Image(systemName: "crop")
+                            .frame(width: 42, height: 36)
+                            .background(C.elevated, in: RoundedRectangle(cornerRadius: 9))
+                    }
+                    .accessibilityLabel("Adjust \(title.lowercased()) position")
+                }
             }
             .disabled(isUploading)
             if imageURL != nil {
@@ -362,17 +393,36 @@ struct VibeSettingsView: View {
             guard let data = try await item.loadTransferable(type: Data.self) else {
                 throw LegacySocialAPIError.invalidPhoto
             }
-            let type = item.supportedContentTypes.first ?? .jpeg
+            guard let image = UIImage(data: data) else {
+                throw LegacySocialAPIError.invalidPhoto
+            }
+            await upload(image, kind: kind)
+        } catch {
+            errorMessage = socialErrorMessage(error)
+        }
+    }
+
+    private func upload(_ image: UIImage, kind: ProfileImageKind) async {
+        if kind == .avatar { isUploadingAvatar = true } else { isUploadingBanner = true }
+        defer {
+            if kind == .avatar { isUploadingAvatar = false } else { isUploadingBanner = false }
+        }
+        do {
+            guard let data = image.jpegData(compressionQuality: 0.88) else {
+                throw LegacySocialAPIError.invalidPhoto
+            }
             let uploaded = try await api.uploadVibeProfileImage(
                 toVibe: detail.club.slug,
                 data: data,
-                mimeType: type.preferredMIMEType ?? "image/jpeg"
+                mimeType: "image/jpeg"
             )
             if kind == .avatar {
                 avatarURL = uploaded.imageURL
+                avatarSourceImage = image
                 avatarFocus = ImageFocus(nil)
             } else {
                 bannerURL = uploaded.imageURL
+                bannerSourceImage = image
                 bannerFocus = ImageFocus(nil)
             }
         } catch {
@@ -382,6 +432,12 @@ struct VibeSettingsView: View {
 }
 
 private enum ProfileImageKind { case avatar, banner }
+
+private struct VibeImagePositioning: Identifiable {
+    let kind: ProfileImageKind
+    let image: UIImage
+    var id: String { kind == .avatar ? "avatar" : "banner" }
+}
 
 private struct ImageFocus {
     var x: Double = 50

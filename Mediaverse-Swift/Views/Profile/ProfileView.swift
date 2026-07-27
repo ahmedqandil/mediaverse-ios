@@ -1111,6 +1111,7 @@ private struct EditProfileSheet: View {
     @State private var selectedBannerItem: PhotosPickerItem?
     @State private var profilePreviewImage: UIImage?
     @State private var bannerPreviewImage: UIImage?
+    @State private var positioningImage: ProfileImagePositioning?
     @State private var uploadingProfileImage = false
     @State private var uploadingBannerImage = false
     @State private var saving = false
@@ -1170,7 +1171,15 @@ private struct EditProfileSheet: View {
                                 previewImage: profilePreviewImage,
                                 existingURL: C.mediaURL(image),
                                 isUploading: uploadingProfileImage,
-                                aspectRatio: 1
+                                aspectRatio: 1,
+                                onAdjust: {
+                                    guard let profilePreviewImage else { return }
+                                    positioningImage = ProfileImagePositioning(
+                                        kind: .profile,
+                                        image: profilePreviewImage,
+                                        aspectRatio: 1
+                                    )
+                                }
                             )
                         }
 
@@ -1182,7 +1191,15 @@ private struct EditProfileSheet: View {
                                 previewImage: bannerPreviewImage,
                                 existingURL: C.mediaURL(bannerUrl),
                                 isUploading: uploadingBannerImage,
-                                aspectRatio: 16.0 / 6.0
+                                aspectRatio: 16.0 / 6.0,
+                                onAdjust: {
+                                    guard let bannerPreviewImage else { return }
+                                    positioningImage = ProfileImagePositioning(
+                                        kind: .banner,
+                                        image: bannerPreviewImage,
+                                        aspectRatio: 16.0 / 6.0
+                                    )
+                                }
                             )
                         }
 
@@ -1213,6 +1230,18 @@ private struct EditProfileSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+        .fullScreenCover(item: $positioningImage) { pending in
+            WestreemImagePositionEditor(
+                image: pending.image,
+                aspectRatio: pending.aspectRatio,
+                title: pending.kind == .profile ? "Position Profile Image" : "Position Banner",
+                onCancel: { positioningImage = nil },
+                onApply: { positioned in
+                    positioningImage = nil
+                    Task { await uploadPositionedImage(positioned, kind: pending.kind) }
+                }
+            )
+        }
         .onChange(of: selectedProfileItem) { _, item in
             guard let item else { return }
             Task { await uploadSelectedImage(item, kind: .profile) }
@@ -1245,7 +1274,8 @@ private struct EditProfileSheet: View {
         previewImage: UIImage?,
         existingURL: URL?,
         isUploading: Bool,
-        aspectRatio: CGFloat
+        aspectRatio: CGFloat,
+        onAdjust: @escaping () -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             mediaPreview(previewImage: previewImage, existingURL: existingURL, aspectRatio: aspectRatio)
@@ -1270,6 +1300,18 @@ private struct EditProfileSheet: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
                 .disabled(isUploading || saving)
+
+                if previewImage != nil {
+                    Button(action: onAdjust) {
+                        Image(systemName: "crop")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(C.text)
+                            .frame(width: 42, height: 42)
+                            .background(C.elevated, in: RoundedRectangle(cornerRadius: 10))
+                    }
+                    .accessibilityLabel("Adjust image position")
+                    .disabled(isUploading || saving)
+                }
 
                 if !url.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button("Clear") {
@@ -1341,6 +1383,13 @@ private struct EditProfileSheet: View {
         case banner
     }
 
+    private struct ProfileImagePositioning: Identifiable {
+        let kind: ProfileImageKind
+        let image: UIImage
+        let aspectRatio: CGFloat
+        var id: String { kind.rawValue }
+    }
+
     private func uploadSelectedImage(_ item: PhotosPickerItem, kind: ProfileImageKind) async {
         setUploading(true, for: kind)
         errorMessage = nil
@@ -1354,22 +1403,47 @@ private struct EditProfileSheet: View {
                 throw APIError.invalidResponse("Could not read the selected image.")
             }
 
-            let uploadedURL = try await APIClient.shared.uploadProfileBlobImage(
-                kind: kind.rawValue,
-                imageData: uploadData
-            )
-            switch kind {
-            case .profile:
-                image = uploadedURL
-                profilePreviewImage = sourceImage
-                selectedProfileItem = nil
-            case .banner:
-                bannerUrl = uploadedURL
-                bannerPreviewImage = sourceImage
-                selectedBannerItem = nil
-            }
+            try await uploadPreparedProfileImage(sourceImage, data: uploadData, kind: kind)
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func uploadPositionedImage(_ sourceImage: UIImage, kind: ProfileImageKind) async {
+        setUploading(true, for: kind)
+        errorMessage = nil
+        defer { setUploading(false, for: kind) }
+        do {
+            guard let uploadData = preparedJPEGData(
+                from: sourceImage,
+                maxPixel: kind == .profile ? 1200 : 1800
+            ) else {
+                throw APIError.invalidResponse("Could not prepare the positioned image.")
+            }
+            try await uploadPreparedProfileImage(sourceImage, data: uploadData, kind: kind)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func uploadPreparedProfileImage(
+        _ sourceImage: UIImage,
+        data: Data,
+        kind: ProfileImageKind
+    ) async throws {
+        let uploadedURL = try await APIClient.shared.uploadProfileBlobImage(
+            kind: kind.rawValue,
+            imageData: data
+        )
+        switch kind {
+        case .profile:
+            image = uploadedURL
+            profilePreviewImage = sourceImage
+            selectedProfileItem = nil
+        case .banner:
+            bannerUrl = uploadedURL
+            bannerPreviewImage = sourceImage
+            selectedBannerItem = nil
         }
     }
 
