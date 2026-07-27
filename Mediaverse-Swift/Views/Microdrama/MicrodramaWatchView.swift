@@ -345,7 +345,6 @@ struct MicrodramaWatchView: View {
                                 isRequestingUnlockAd: isRequestingUnlockAd && rewardedEpisodeID == ep.id,
                                 onWatchAd: { Task { await requestRewardedUnlockAd(for: ep) } },
                                 playbackManager: playbackManager,
-                                userID: auth.currentUser?.id,
                                 isFollowing: followStatus?.subscribed == true,
                                 isUpdatingFollow: isUpdatingFollow,
                                 onToggleFollow: { Task { await toggleFollow() } }
@@ -679,7 +678,6 @@ private struct EpisodePlayerSlide: View {
     let isRequestingUnlockAd: Bool
     let onWatchAd: () -> Void
     @ObservedObject var playbackManager: MicrodramaPlaybackManager
-    let userID: String?
     let isFollowing: Bool
     let isUpdatingFollow: Bool
     let onToggleFollow: () -> Void
@@ -688,10 +686,9 @@ private struct EpisodePlayerSlide: View {
     @State private var isSeeking = false
     @State private var showComments = false
     @State private var showSaveSheet = false
-    @State private var likeCount = 0
+    @State private var showEnergy = false
+    @State private var energyAggregate: ContentEnergyAggregate?
     @State private var commentCount = 0
-    @State private var userLike: String?
-    @State private var isUpdatingLike = false
     @AppStorage("playerMuted") private var playerMuted = false
     @Environment(\.openURL) private var openURL
 
@@ -865,6 +862,13 @@ private struct EpisodePlayerSlide: View {
             if let showID = show?.id {
                 SaveToCollectionSheet(showId: showID)
             }
+        }
+        .sheet(isPresented: $showEnergy) {
+            ContentEnergySheet(kind: .episode, contentID: episode.id) {
+                energyAggregate = $0
+            }
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
         }
         .task(id: episode.id + "_\(shouldPrepare)") {
             if shouldPrepare {
@@ -1155,13 +1159,24 @@ private struct EpisodePlayerSlide: View {
     private var rightRail: some View {
         VStack(alignment: .center, spacing: 18) {
             railButton(
-                icon: userLike == "like" ? "heart-filled" : "heart",
-                fallback: userLike == "like" ? "heart.fill" : "heart",
-                color: userLike == "like" ? Color(red: 1, green: 0.28, blue: 0.34) : .white,
-                background: userLike == "like" ? Color(red: 1, green: 0.28, blue: 0.34).opacity(0.35) : .black.opacity(0.35),
-                label: likeCount > 0 ? formatCount(likeCount) : "Like",
-                labelColor: userLike == "like" ? Color(red: 1, green: 0.28, blue: 0.34) : .white.opacity(0.85)
-            ) { Task { await toggleEpisodeLike() } }
+                icon: "energy",
+                fallback: "bolt.fill",
+                color: C.watch,
+                background: C.watch.opacity(0.22),
+                label: {
+                    if let count = energyAggregate?.count, count > 0 {
+                        return "\(formatCount(count)) Energy"
+                    }
+                    return "Add Energy"
+                }(),
+                labelColor: .white
+            ) {
+                if isAuthenticated {
+                    showEnergy = true
+                } else {
+                    NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+                }
+            }
 
             railButton(icon: "message-square", fallback: "bubble.left", label: commentCount > 0 ? formatCount(commentCount) : "Comment") {
                 showComments = true
@@ -1221,30 +1236,14 @@ private struct EpisodePlayerSlide: View {
     @MainActor
     private func loadEngagement() async {
         guard isActive else { return }
-        guard let detail = try? await APIClient.shared.fetchEpisode(id: episode.id) else { return }
-        likeCount = detail.likes.filter { $0.type == "like" }.count
-        commentCount = detail.comments.count
-        userLike = userID.flatMap { id in detail.likes.first(where: { $0.userId == id })?.type }
-    }
-
-    @MainActor
-    private func toggleEpisodeLike() async {
-        guard userID != nil, !isUpdatingLike else { return }
-        isUpdatingLike = true
-        let oldLike = userLike
-        let oldCount = likeCount
-        let requestType = userLike == "like" ? "remove" : "like"
-        userLike = requestType == "like" ? "like" : nil
-        likeCount = max(0, likeCount + (requestType == "like" ? 1 : -1))
-        do {
-            let response = try await APIClient.shared.likeEpisode(episodeId: episode.id, type: requestType)
-            userLike = response.userLike
-            likeCount = response.likes
-        } catch {
-            userLike = oldLike
-            likeCount = oldCount
-        }
-        isUpdatingLike = false
+        async let detailRequest = try? APIClient.shared.fetchEpisode(id: episode.id)
+        async let energyRequest = try? APIClient.shared.fetchContentEnergy(
+            contentPath: "episodes",
+            id: episode.id
+        )
+        let (detail, energy) = await (detailRequest, energyRequest)
+        commentCount = detail?.comments.count ?? 0
+        energyAggregate = energy?.aggregate
     }
 
     private func formatCount(_ count: Int) -> String {
