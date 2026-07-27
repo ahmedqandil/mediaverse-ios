@@ -146,9 +146,14 @@ struct BrowseView: View {
                 let predictedHorizontal = value.predictedEndTranslation.width
                 guard abs(horizontal) > abs(vertical) * 1.15,
                       abs(horizontal) > 48 || abs(predictedHorizontal) > 80 else { return }
+                let direction = abs(predictedHorizontal) > abs(horizontal) ? predictedHorizontal : horizontal
+                let screenWidth = UIScreen.main.bounds.width
+                let beganAtNavigationEdge = direction > 0
+                    ? value.startLocation.x <= 24
+                    : value.startLocation.x >= screenWidth - 24
+                guard beganAtNavigationEdge else { return }
                 let sections = browseItems.compactMap { BrowseSection(rawValue: $0.id) }
                 guard let index = sections.firstIndex(of: selectedSection) else { return }
-                let direction = abs(predictedHorizontal) > abs(horizontal) ? predictedHorizontal : horizontal
                 let nextIndex = direction < 0 ? index + 1 : index - 1
                 guard sections.indices.contains(nextIndex) else { return }
                 C.lightHaptic()

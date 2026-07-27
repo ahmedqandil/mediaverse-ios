@@ -103,6 +103,11 @@ struct AtmosphereView: View {
                 let tabs = AtmosphereViewModel.Tab.allCases
                 guard let index = tabs.firstIndex(of: model.selectedTab) else { return }
                 let direction = abs(predictedHorizontal) > abs(horizontal) ? predictedHorizontal : horizontal
+                let screenWidth = UIScreen.main.bounds.width
+                let beganAtNavigationEdge = direction > 0
+                    ? value.startLocation.x <= 24
+                    : value.startLocation.x >= screenWidth - 24
+                guard beganAtNavigationEdge else { return }
 
                 if direction > 0, model.selectedTab == .atmosphere {
                     guard auth.isAuthenticated else { return }

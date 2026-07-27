@@ -544,8 +544,8 @@ struct MainTabView: View {
             .background {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(isSelected ? C.watch.opacity(0.14) : Color.clear)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 3)
+                    .padding(.horizontal, 1)
+                    .padding(.vertical, 1)
             }
             .contentShape(Rectangle())
             .accessibilityElement(children: .ignore)

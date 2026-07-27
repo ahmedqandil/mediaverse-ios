@@ -115,6 +115,8 @@ struct StoryTrayView: View {
 
 struct StoryAvatarView: View {
     let group: StoryGroup
+    private let avatarSize: CGFloat = 78
+    private let tileWidth: CGFloat = 90
 
     private var initial: String {
         group.publisherName.trimmingCharacters(in: .whitespacesAndNewlines).first.map(String.init) ?? "?"
@@ -123,7 +125,7 @@ struct StoryAvatarView: View {
     var body: some View {
         VStack(spacing: 7) {
             avatar
-                .frame(width: 68, height: 68)
+                .frame(width: avatarSize, height: avatarSize)
                 .padding(2)
                 .background(C.bg)
                 .clipShape(Circle())
@@ -139,9 +141,9 @@ struct StoryAvatarView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .opacity(group.hasUnseen ? 1 : 0.6)
-                .frame(width: 80)
+                .frame(width: tileWidth)
         }
-        .frame(width: 80)
+        .frame(width: tileWidth)
         .contentShape(Rectangle())
     }
 
@@ -150,7 +152,7 @@ struct StoryAvatarView: View {
         if let url = C.mediaURL(group.publisherImageUrl) {
             CachedRemoteImage(
                 url: url,
-                targetSize: CGSize(width: 68, height: 68)
+                targetSize: CGSize(width: avatarSize, height: avatarSize)
             ) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
@@ -175,6 +177,8 @@ struct StoryAvatarView: View {
 
 private struct StoryAddAvatarView: View {
     let channel: UploadContext
+    private let avatarSize: CGFloat = 78
+    private let tileWidth: CGFloat = 90
 
     private var initial: String {
         channel.name.trimmingCharacters(in: .whitespacesAndNewlines).first.map(String.init) ?? "+"
@@ -184,7 +188,7 @@ private struct StoryAddAvatarView: View {
         VStack(spacing: 7) {
             ZStack(alignment: .bottomTrailing) {
                 avatar
-                    .frame(width: 68, height: 68)
+                    .frame(width: avatarSize, height: avatarSize)
                     .padding(2)
                     .background(C.bg)
                     .clipShape(Circle())
@@ -208,9 +212,9 @@ private struct StoryAddAvatarView: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(C.text)
                 .lineLimit(1)
-                .frame(width: 80)
+                .frame(width: tileWidth)
         }
-        .frame(width: 80)
+        .frame(width: tileWidth)
         .contentShape(Rectangle())
     }
 
@@ -219,7 +223,7 @@ private struct StoryAddAvatarView: View {
         if let url = C.mediaURL(channel.avatarUrl) {
             CachedRemoteImage(
                 url: url,
-                targetSize: CGSize(width: 68, height: 68)
+                targetSize: CGSize(width: avatarSize, height: avatarSize)
             ) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
