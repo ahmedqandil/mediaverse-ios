@@ -794,7 +794,7 @@ private struct RipplePhotoCarousel: View {
     let photos: [RippleAttachment]
     @State private var selectedPhoto: RippleAttachment?
     @State private var energyPhoto: RippleAttachment?
-    @State private var selectedPhotoID: String
+    @State private var selectedPhotoID: String?
 
     init(photos: [RippleAttachment]) {
         self.photos = photos
@@ -803,30 +803,35 @@ private struct RipplePhotoCarousel: View {
 
     var body: some View {
         GeometryReader { proxy in
-            TabView(selection: $selectedPhotoID) {
-                ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
-                    CachedRemoteImage(
-                        url: C.mediaURL(photo.imageURL),
-                        targetSize: CGSize(width: proxy.size.width, height: proxy.size.width)
-                    ) { image in
-                        image.resizable().scaledToFill()
-                    } placeholder: {
-                        C.elevated
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 0) {
+                    ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
+                        CachedRemoteImage(
+                            url: C.mediaURL(photo.imageURL),
+                            targetSize: CGSize(width: proxy.size.width, height: proxy.size.width)
+                        ) { image in
+                            image.resizable().scaledToFill()
+                        } placeholder: {
+                            C.elevated
+                        }
+                        .frame(width: proxy.size.width, height: proxy.size.width)
+                        .clipped()
+                        .contentShape(Rectangle())
+                        .gesture(photoTapGesture(photo))
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityLabel("Open photo \(index + 1) of \(photos.count)")
+                        .accessibilityHint("Double tap to add Energy")
+                        .accessibilityAction(named: "Add Energy") {
+                            energyPhoto = photo
+                        }
+                        .id(photo.id)
                     }
-                    .frame(width: proxy.size.width, height: proxy.size.width)
-                    .clipped()
-                    .contentShape(Rectangle())
-                    .gesture(photoTapGesture(photo))
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityLabel("Open photo \(index + 1) of \(photos.count)")
-                    .accessibilityHint("Double tap to add Energy")
-                    .accessibilityAction(named: "Add Energy") {
-                        energyPhoto = photo
-                    }
-                    .tag(photo.id)
                 }
+                .scrollTargetLayout()
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
+            .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $selectedPhotoID)
             .ownsHorizontalCarouselGesture()
             .overlay(alignment: .topTrailing) {
                 if photos.count > 1 {
