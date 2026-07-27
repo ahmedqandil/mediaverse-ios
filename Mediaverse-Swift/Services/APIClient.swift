@@ -96,6 +96,9 @@ actor APIClient: LegacySocialTransport {
         guard let url = req.url, C.isTrustedBackendURL(url) else {
             return
         }
+        // Every backend request carries its app identity so platform visibility
+        // cannot be bypassed by endpoints that do not use query parameters.
+        req.setValue("ios", forHTTPHeaderField: "X-Westreem-Platform")
         if let token = sessionToken {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
