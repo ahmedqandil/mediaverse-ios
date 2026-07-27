@@ -69,12 +69,7 @@ struct ChannelSettingsView: View {
 
             fieldGroup("Channel display name") {
                 TextField("Channel display name", text: $name)
-                    .textFieldStyle(.plain)
-                    .foregroundStyle(C.text)
-                    .padding(12)
-                    .background(Color.white.opacity(0.05))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .overlay { RoundedRectangle(cornerRadius: 10).stroke(C.border, lineWidth: 1) }
+                    .westreemField()
             }
 
             fieldGroup("Profile image") {
@@ -349,10 +344,7 @@ struct ChannelSettingsView: View {
     }
 
     private func fieldGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(C.text)
+        WestreemFormPanel(title) {
             content()
         }
     }

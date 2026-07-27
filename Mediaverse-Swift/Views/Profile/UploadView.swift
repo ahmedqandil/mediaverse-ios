@@ -1149,16 +1149,9 @@ struct UploadView: View {
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title.uppercased())
-                .font(.caption2.bold())
-                .foregroundStyle(C.textTertiary)
+        WestreemFormPanel(title) {
             content()
         }
-        .padding(14)
-        .background(C.surface)
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private func reloadForContextChange() async {

@@ -152,6 +152,135 @@ enum C {
     }
 }
 
+// MARK: - WeStreem form system
+
+/// Shared form chrome derived from the upload/video panel. It keeps sheets and
+/// full-screen editors visually consistent without changing their form state or
+/// submission behavior.
+struct WestreemFormPage<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, C.pagePad)
+            .padding(.vertical, 16)
+            .padding(.bottom, 28)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .background(C.bg.ignoresSafeArea())
+        .tint(C.watch)
+    }
+}
+
+struct WestreemFormPanel<Content: View>: View {
+    let title: String?
+    let helper: String?
+    let content: Content
+
+    init(
+        _ title: String? = nil,
+        helper: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.helper = helper
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let title, !title.isEmpty {
+                Text(title.uppercased())
+                    .font(.caption2.bold())
+                    .tracking(0.45)
+                    .foregroundStyle(C.textTertiary)
+            }
+
+            content
+
+            if let helper, !helper.isEmpty {
+                Text(helper)
+                    .font(.caption)
+                    .foregroundStyle(C.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(C.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(C.borderSubtle, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+private struct WestreemFieldChrome: ViewModifier {
+    let minHeight: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .textFieldStyle(.plain)
+            .foregroundStyle(C.text)
+            .tint(C.watch)
+            .padding(.horizontal, 12)
+            .frame(minHeight: minHeight)
+            .background(Color.white.opacity(0.05))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9)
+                    .stroke(C.border, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 9))
+    }
+}
+
+extension View {
+    func westreemField(minHeight: CGFloat = 46) -> some View {
+        modifier(WestreemFieldChrome(minHeight: minHeight))
+    }
+
+    func westreemFormStyle() -> some View {
+        scrollContentBackground(.hidden)
+            .background(C.bg)
+            .tint(C.watch)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    func westreemFormRow() -> some View {
+        listRowBackground(C.surface)
+            .listRowSeparatorTint(C.borderSubtle)
+    }
+}
+
+struct WestreemPrimaryButtonStyle: ButtonStyle {
+    let isBusy: Bool
+
+    init(isBusy: Bool = false) {
+        self.isBusy = isBusy
+    }
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(Color.black)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 48)
+            .background(C.watch.opacity(configuration.isPressed ? 0.78 : 1))
+            .clipShape(RoundedRectangle(cornerRadius: 11))
+            .opacity(isBusy ? 0.72 : 1)
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+    }
+}
+
 extension Color {
     init(hex: String) {
         let h = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))

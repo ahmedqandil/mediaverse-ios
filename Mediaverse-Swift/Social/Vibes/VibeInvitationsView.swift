@@ -31,6 +31,7 @@ struct VibeInvitationsView: View {
                     TextField("Email (optional)", text: $email)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.emailAddress)
+                        .westreemField()
                     Picker("Role", selection: $role) {
                         ForEach(allowedRoles, id: \.self) { Text($0.label).tag($0) }
                     }
@@ -51,6 +52,7 @@ struct VibeInvitationsView: View {
                 } footer: {
                     Text("Leave email blank for a shareable member link. Targeted invitations can be used once.")
                 }
+                .westreemFormRow()
 
                 if let generatedURL {
                     Section("New Invitation") {
@@ -61,6 +63,7 @@ struct VibeInvitationsView: View {
                             Label("Share Invitation", systemImage: "square.and.arrow.up")
                         }
                     }
+                    .westreemFormRow()
                 }
 
                 Section("Invitation History") {
@@ -75,9 +78,9 @@ struct VibeInvitationsView: View {
                         }
                     }
                 }
+                .westreemFormRow()
             }
-            .scrollContentBackground(.hidden)
-            .background(C.bg)
+            .westreemFormStyle()
             .navigationTitle("Invitations")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

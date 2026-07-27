@@ -1056,10 +1056,7 @@ private struct PartnerRequestSheet: View {
     }
 
     private func fieldGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(C.text)
+        WestreemFormPanel(title) {
             content()
         }
     }
@@ -1289,15 +1286,10 @@ private struct EditProfileSheet: View {
             }
 
             TextField("Image URL", text: url)
-                .textFieldStyle(.plain)
                 .keyboardType(.URL)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .foregroundStyle(C.text)
-                .padding(12)
-                .background(Color.white.opacity(0.05))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay { RoundedRectangle(cornerRadius: 10).stroke(C.border, lineWidth: 1) }
+                .westreemField()
         }
     }
 
@@ -1339,10 +1331,7 @@ private struct EditProfileSheet: View {
     }
 
     private func fieldGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(C.text)
+        WestreemFormPanel(title) {
             content()
         }
     }

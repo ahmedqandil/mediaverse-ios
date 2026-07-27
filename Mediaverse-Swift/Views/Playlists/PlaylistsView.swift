@@ -54,13 +54,8 @@ struct PlaylistEditSheet: View {
                     // ── Title ─────────────────────────────────────────────────
                     fieldGroup(label: "Title *") {
                         TextField("Playlist title", text: $title)
-                            .textFieldStyle(.plain)
                             .font(.body)
-                            .foregroundStyle(C.text)
-                            .padding(12)
-                            .background(Color.white.opacity(0.05))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .overlay { RoundedRectangle(cornerRadius: 10).stroke(C.border, lineWidth: 1) }
+                            .westreemField()
                             .submitLabel(.done)
                             .onSubmit { Task { await save() } }
                     }
@@ -200,10 +195,7 @@ struct PlaylistEditSheet: View {
 
     @ViewBuilder
     private func fieldGroup<Content: View>(label: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(label)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(C.text)
+        WestreemFormPanel(label) {
             content()
         }
     }

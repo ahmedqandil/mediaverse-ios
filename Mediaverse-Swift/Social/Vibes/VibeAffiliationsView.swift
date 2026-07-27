@@ -459,6 +459,7 @@ struct AffiliationReviewView: View {
                     .lineLimit(2...5)
                 }
             }
+            .westreemFormStyle()
             .navigationTitle("Review affiliation")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -786,6 +787,7 @@ private struct MemberModerationSheet: View {
                         .foregroundStyle(C.textMuted)
                 }
             }
+            .westreemFormStyle()
             .navigationTitle("Manage Member")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -865,6 +867,7 @@ private struct RippleModerationDecisionSheet: View {
                     }
                 }
             }
+            .westreemFormStyle()
             .navigationTitle("Review Ripple")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -922,6 +925,7 @@ private struct ReportResolutionSheet: View {
                         .font(.caption).foregroundStyle(C.textMuted)
                 }
             }
+            .westreemFormStyle()
             .navigationTitle("Resolve Report")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -969,6 +973,7 @@ private struct JoinRequestDecisionSheet: View {
                     TextField("Message to the requester", text: $note, axis: .vertical)
                 }
             }
+            .westreemFormStyle()
             .navigationTitle("Join Request")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }

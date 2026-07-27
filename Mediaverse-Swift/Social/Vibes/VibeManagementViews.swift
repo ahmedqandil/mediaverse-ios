@@ -26,44 +26,49 @@ struct CreateVibeView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Identity") {
+            WestreemFormPage {
+                WestreemFormPanel("Identity") {
                     TextField("Vibe name", text: $name)
                         .onChange(of: name) { _, value in
                             if slug.isEmpty { slug = suggestedSlug(value) }
                         }
+                        .westreemField()
                     TextField("Slug", text: $slug)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .westreemField()
                     TextField("Description", text: $description, axis: .vertical)
                         .lineLimit(3...6)
+                        .westreemField(minHeight: 92)
                 }
-                Section("Access") {
+                WestreemFormPanel("Access") {
                     Picker("Visibility", selection: $visibility) {
                         ForEach(VibeVisibility.allCases, id: \.self) {
                             Text($0.label).tag($0)
                         }
                     }
+                    .westreemField()
                     Picker("Joining", selection: $joinPolicy) {
                         ForEach(VibeJoinPolicy.allCases, id: \.self) {
                             Text($0.label).tag($0)
                         }
                     }
+                    .westreemField()
                 }
-                Section {
+                WestreemFormPanel(
+                    "Discovery",
+                    helper: "Add up to 12 topics so people can discover this Vibe."
+                ) {
                     TextField("Topics, separated by commas", text: $topics)
+                        .westreemField()
                     TextField("Language code (optional)", text: $language)
                         .textInputAutocapitalization(.never)
+                        .westreemField()
                     TextField("Country code (optional)", text: $country)
                         .textInputAutocapitalization(.characters)
-                } header: {
-                    Text("Discovery")
-                } footer: {
-                    Text("Add up to 12 topics so people can discover this Vibe.")
+                        .westreemField()
                 }
             }
-            .scrollContentBackground(.hidden)
-            .background(C.bg)
             .navigationTitle("Create Vibe")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -171,8 +176,8 @@ struct VibeSettingsView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Branding") {
+            WestreemFormPage {
+                WestreemFormPanel("Branding") {
                     profileImagePicker(
                         title: "Avatar",
                         imageURL: avatarURL,
@@ -190,18 +195,23 @@ struct VibeSettingsView: View {
                         aspectRatio: 16.0 / 5.0
                     )
                 }
-                Section("Identity") {
+                WestreemFormPanel("Identity") {
                     TextField("Name", text: $name)
                         .disabled(isPersonal)
+                        .westreemField()
                     TextField("Description", text: $description, axis: .vertical)
                         .lineLimit(3...6)
+                        .westreemField(minHeight: 92)
                     TextField("Topics", text: $topics)
+                        .westreemField()
                     TextField("Language code", text: $language)
                         .textInputAutocapitalization(.never)
+                        .westreemField()
                     TextField("Country code", text: $country)
                         .textInputAutocapitalization(.characters)
+                        .westreemField()
                 }
-                Section("Access and Posting") {
+                WestreemFormPanel("Access and Posting") {
                     if isPersonal {
                         Toggle("Followers only", isOn: $followersOnly)
                     } else {
@@ -210,16 +220,19 @@ struct VibeSettingsView: View {
                                 Text($0.label).tag($0)
                             }
                         }
+                        .westreemField()
                         Picker("Joining", selection: $joinPolicy) {
                             ForEach(VibeJoinPolicy.allCases, id: \.self) {
                                 Text($0.label).tag($0)
                             }
                         }
+                        .westreemField()
                         Picker("Who can post", selection: $postingPolicy) {
                             ForEach(VibePostingPolicy.allCases, id: \.self) {
                                 Text($0.label).tag($0)
                             }
                         }
+                        .westreemField()
                         Toggle("Members can invite", isOn: $membersCanInvite)
                         Toggle("Moderators can invite", isOn: $moderatorsCanInvite)
                         Toggle("Moderators can ban", isOn: $moderatorsCanBan)
@@ -227,8 +240,6 @@ struct VibeSettingsView: View {
                     Toggle("Comments enabled", isOn: $commentsEnabled)
                 }
             }
-            .scrollContentBackground(.hidden)
-            .background(C.bg)
             .navigationTitle("Vibe Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

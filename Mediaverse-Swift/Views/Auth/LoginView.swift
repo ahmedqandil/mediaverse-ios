@@ -28,7 +28,6 @@ struct LoginView: View {
                         signInCard
                     }
                 }
-                .frame(maxWidth: 390)
                 .padding(.horizontal, C.pagePad)
                 .padding(.top, 76)
                 .padding(.bottom, 32)

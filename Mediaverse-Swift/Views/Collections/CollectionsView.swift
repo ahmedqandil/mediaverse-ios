@@ -536,31 +536,15 @@ private struct CreateCollectionSheet: View {
     }
 
     private func collectionTextField(title label: String, placeholder: String, text: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(label)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(C.textMuted)
-
+        WestreemFormPanel(label) {
             TextField(placeholder, text: text)
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(C.text)
-                .tint(C.watch)
-                .padding(.horizontal, 16)
-                .frame(height: 54)
-                .background(C.elevated.opacity(0.88), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(C.borderSubtle, lineWidth: 1)
-                }
+                .westreemField(minHeight: 52)
         }
     }
 
     private func segmentedSection(title label: String, options: [(String, String)], selection: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(label)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(C.textMuted)
-
+        WestreemFormPanel(label) {
             HStack(spacing: 6) {
                 ForEach(options, id: \.0) { value, title in
                     Button {

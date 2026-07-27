@@ -587,15 +587,19 @@ private struct RippleEditSheet: View {
                 Section("Ripple") {
                     TextField("What’s the energy?", text: $bodyText, axis: .vertical)
                         .lineLimit(4...12)
+                        .westreemField(minHeight: 104)
                     Toggle("Spoiler", isOn: $isSpoiler)
                     Toggle("Disable comments", isOn: $commentsDisabled)
                 }
+                .westreemFormRow()
                 Section {
                     Text("Existing photos, media, polls, and Echo attachments are preserved and cannot be changed here.")
                         .font(.caption)
                         .foregroundStyle(C.textMuted)
                 }
+                .westreemFormRow()
             }
+            .westreemFormStyle()
             .navigationTitle("Edit Ripple")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -656,15 +660,20 @@ private struct RippleReportSheet: View {
             Form {
                 Section("Reason") {
                     TextField("Reason for reporting", text: $reason)
+                        .westreemField()
                     TextField("Optional details", text: $details, axis: .vertical)
                         .lineLimit(3...8)
+                        .westreemField(minHeight: 92)
                 }
+                .westreemFormRow()
                 Section {
                     Text("The Vibe’s moderation team will review this report.")
                         .font(.caption)
                         .foregroundStyle(C.textMuted)
                 }
+                .westreemFormRow()
             }
+            .westreemFormStyle()
             .navigationTitle("Report Ripple")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
