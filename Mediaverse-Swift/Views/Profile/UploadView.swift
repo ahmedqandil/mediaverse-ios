@@ -399,6 +399,7 @@ struct UploadView: View {
                         ) {
                             C.lightHaptic()
                             isCreatingRipple = true
+                            onOptionSelected()
                         }
                     }
 

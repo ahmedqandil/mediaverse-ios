@@ -735,13 +735,20 @@ struct MainTabView: View {
             UploadView(presentationStyle: .createSheet, onOptionSelected: dismissUploadOptionsAfterSelection)
                 .frame(maxWidth: .infinity)
                 .background(C.bg)
-                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .clipShape(
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: 24,
+                        topTrailingRadius: 24
+                    )
+                )
                 .overlay {
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: 24,
+                        topTrailingRadius: 24
+                    )
                         .stroke(C.borderSubtle, lineWidth: 1)
                 }
                 .shadow(color: .black.opacity(0.34), radius: 18, y: 8)
-                .padding(.horizontal, 10)
                 .offset(y: uploadDrawerDragOffset)
                 .gesture(uploadDrawerDismissGesture)
         }
