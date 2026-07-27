@@ -79,7 +79,6 @@ struct StoryTrayView: View {
                         .padding(.horizontal, 12)
                     }
                 }
-                .padding(.top, 18)
                 .padding(.bottom, 8)
             }
         }
