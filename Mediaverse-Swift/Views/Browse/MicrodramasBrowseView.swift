@@ -143,7 +143,7 @@ struct MicrodramasBrowseView: View {
                         .padding(.horizontal, C.pagePad)
                         .shimmering()
 
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    WestreemHorizontalScrollView(showsIndicators: false) {
                         HStack(spacing: 12) {
                             ForEach(0..<5, id: \.self) { _ in
                                 RoundedRectangle(cornerRadius: C.cardRadius)
@@ -324,7 +324,7 @@ private struct MicrodramaCarousel: View {
                 }
                 .padding(.horizontal, C.pagePad)
 
-                ScrollView(.horizontal, showsIndicators: false) {
+                WestreemHorizontalScrollView(showsIndicators: false) {
                     HStack(spacing: CarouselCardMetrics.spacing) {
                         ForEach(shows) { show in
                             NavigationLink(value: AppRoute.microdramaShow(show.id)) {

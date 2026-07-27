@@ -281,6 +281,76 @@ struct WestreemPrimaryButtonStyle: ButtonStyle {
     }
 }
 
+/// Horizontal rails announce gesture ownership so parent section pagers can
+/// yield while a carousel is being dragged.
+struct WestreemHorizontalScrollView<Content: View>: View {
+    let showsIndicators: Bool
+    let content: Content
+
+    init(
+        showsIndicators: Bool = false,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.showsIndicators = showsIndicators
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: showsIndicators) {
+            content
+        }
+        .simultaneousGesture(horizontalOwnershipGesture)
+    }
+
+    private var horizontalOwnershipGesture: some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .local)
+            .onChanged { value in
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                NotificationCenter.default.post(
+                    name: .horizontalCarouselInteractionChanged,
+                    object: true
+                )
+            }
+            .onEnded { _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    NotificationCenter.default.post(
+                        name: .horizontalCarouselInteractionChanged,
+                        object: false
+                    )
+                }
+            }
+    }
+}
+
+private struct HorizontalCarouselGestureOwnership: ViewModifier {
+    func body(content: Content) -> some View {
+        content.simultaneousGesture(
+            DragGesture(minimumDistance: 8, coordinateSpace: .local)
+                .onChanged { value in
+                    guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                    NotificationCenter.default.post(
+                        name: .horizontalCarouselInteractionChanged,
+                        object: true
+                    )
+                }
+                .onEnded { _ in
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                        NotificationCenter.default.post(
+                            name: .horizontalCarouselInteractionChanged,
+                            object: false
+                        )
+                    }
+                }
+        )
+    }
+}
+
+extension View {
+    func ownsHorizontalCarouselGesture() -> some View {
+        modifier(HorizontalCarouselGestureOwnership())
+    }
+}
+
 extension Color {
     init(hex: String) {
         let h = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
@@ -311,4 +381,5 @@ extension Notification.Name {
     static let mainTabScrollToTopRequested = Notification.Name("mainTabScrollToTopRequested")
     static let notificationCountsDidChange = Notification.Name("notificationCountsDidChange")
     static let sessionExpired = Notification.Name("sessionExpired")
+    static let horizontalCarouselInteractionChanged = Notification.Name("horizontalCarouselInteractionChanged")
 }

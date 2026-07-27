@@ -137,7 +137,7 @@ struct VideosBrowseView: View {
     }
 
     private var sectionTabs: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        WestreemHorizontalScrollView(showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(curationSections) { section in
                     GenrePill(label: section.name, selected: selectedSectionID == section.id) {

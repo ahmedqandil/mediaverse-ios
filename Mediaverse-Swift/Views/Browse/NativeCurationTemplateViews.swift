@@ -83,7 +83,7 @@ private struct NativeCurationIdentityTemplate: View {
                         .frame(maxWidth: 680)
                         .padding(.horizontal, C.pagePad)
                 } else if templateType == "carousel" || templateType == "social_rows" {
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    WestreemHorizontalScrollView(showsIndicators: false) {
                         LazyHStack(alignment: .top, spacing: C.gridSpacing) {
                             ForEach(Array(listing.items.enumerated()), id: \.offset) { _, item in
                                 NativeCurationChannelFullCard(item: item)
@@ -119,7 +119,7 @@ private struct NativeCurationContinueWatching: View {
         if !items.isEmpty {
             VStack(alignment: .leading, spacing: listing.curationHeaderSpacing) {
                 NativeCurationHeader(listing: listing, showSeeAll: true)
-                ScrollView(.horizontal, showsIndicators: false) {
+                WestreemHorizontalScrollView(showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: CarouselCardMetrics.spacing) {
                         ForEach(items) { item in
                             if let route = route(for: item) {
@@ -294,7 +294,7 @@ private struct NativeCurationRippleCarousel: View {
         if !listing.items.isEmpty {
             VStack(alignment: .leading, spacing: listing.curationHeaderSpacing) {
                 NativeCurationHeader(listing: listing, showSeeAll: true)
-                ScrollView(.horizontal, showsIndicators: false) {
+                WestreemHorizontalScrollView(showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: C.gridSpacing) {
                         ForEach(Array(listing.items.enumerated()), id: \.offset) { _, item in
                             NativeCurationRippleCard(item: item)
@@ -503,7 +503,7 @@ private struct NativeCurationCarousel: View {
         if !listing.items.isEmpty {
             VStack(alignment: .leading, spacing: listing.curationHeaderSpacing) {
                 NativeCurationHeader(listing: listing, showSeeAll: true)
-                ScrollView(.horizontal, showsIndicators: false) {
+                WestreemHorizontalScrollView(showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: C.rowSpacing) {
                         ForEach(Array(listing.items.enumerated()), id: \.offset) { _, item in
                             NativeCurationEntityCard(item: item, mode: .carousel)
@@ -1262,7 +1262,7 @@ private struct NativeCurationSpotlight: View {
 
                     let supporting = Array(listing.items.dropFirst().prefix(3))
                     if !supporting.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
+                        WestreemHorizontalScrollView(showsIndicators: false) {
                             LazyHStack(alignment: .top, spacing: C.gridSpacing) {
                                 ForEach(Array(supporting.enumerated()), id: \.offset) { _, item in
                                     NavigationLink(value: item.appRoute) {

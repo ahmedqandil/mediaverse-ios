@@ -15,6 +15,7 @@ struct BrowseView: View {
     @State private var discoverListings: [AssembledListing] = []
     @State private var isDiscoverLoading = false
     @State private var discoverError: String?
+    @State private var isHorizontalCarouselInteracting = false
 
     init(isRootActive: Bool = true) {
         self.isRootActive = isRootActive
@@ -109,11 +110,14 @@ struct BrowseView: View {
         .onAppear {
             ensureSelectedSectionIsVisible()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .horizontalCarouselInteractionChanged)) { notification in
+            isHorizontalCarouselInteracting = (notification.object as? Bool) == true
+        }
     }
 
     private var sectionTabs: some View {
         ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
+            WestreemHorizontalScrollView(showsIndicators: false) {
                 MediaverseUnderlineTabStrip(
                     items: browseItems.map {
                         let section = BrowseSection(rawValue: $0.id) ?? .discover
@@ -151,17 +155,13 @@ struct BrowseView: View {
     private var sectionSwipeGesture: some Gesture {
         DragGesture(minimumDistance: 28, coordinateSpace: .local)
             .onEnded { value in
+                guard !isHorizontalCarouselInteracting else { return }
                 let horizontal = value.translation.width
                 let vertical = value.translation.height
                 let predictedHorizontal = value.predictedEndTranslation.width
                 guard abs(horizontal) > abs(vertical) * 1.15,
                       abs(horizontal) > 48 || abs(predictedHorizontal) > 80 else { return }
                 let direction = abs(predictedHorizontal) > abs(horizontal) ? predictedHorizontal : horizontal
-                let screenWidth = UIScreen.main.bounds.width
-                let beganAtNavigationEdge = direction > 0
-                    ? value.startLocation.x <= 24
-                    : value.startLocation.x >= screenWidth - 24
-                guard beganAtNavigationEdge else { return }
                 let sections = browseItems.compactMap { BrowseSection(rawValue: $0.id) }
                 guard let index = sections.firstIndex(of: selectedSection) else { return }
                 let nextIndex = direction < 0 ? index + 1 : index - 1

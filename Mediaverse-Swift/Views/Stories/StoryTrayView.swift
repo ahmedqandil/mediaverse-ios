@@ -59,7 +59,7 @@ struct StoryTrayView: View {
                             .padding(.horizontal, 12)
                     }
 
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    WestreemHorizontalScrollView(showsIndicators: false) {
                         LazyHStack(spacing: 16) {
                             if let activeChannel {
                                 activeChannelTile(activeChannel)

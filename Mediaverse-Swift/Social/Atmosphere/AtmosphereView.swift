@@ -18,6 +18,7 @@ struct AtmosphereView: View {
     @State private var searchPresented = false
     @State private var notificationsPresented = false
     @State private var unreadNotificationCount = 0
+    @State private var isHorizontalCarouselInteracting = false
     private let socialFeatures = SocialFeatureConfiguration.runtime()
 
     private var isCompactWidth: Bool { horizontalSizeClass == .compact }
@@ -90,11 +91,15 @@ struct AtmosphereView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             Task { await loadNotificationCount() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .horizontalCarouselInteractionChanged)) { notification in
+            isHorizontalCarouselInteracting = (notification.object as? Bool) == true
+        }
     }
 
     private var tabSwipeGesture: some Gesture {
         DragGesture(minimumDistance: 28, coordinateSpace: .local)
             .onEnded { value in
+                guard !isHorizontalCarouselInteracting else { return }
                 let horizontal = value.translation.width
                 let vertical = value.translation.height
                 let predictedHorizontal = value.predictedEndTranslation.width
@@ -103,12 +108,6 @@ struct AtmosphereView: View {
                 let tabs = AtmosphereViewModel.Tab.allCases
                 guard let index = tabs.firstIndex(of: model.selectedTab) else { return }
                 let direction = abs(predictedHorizontal) > abs(horizontal) ? predictedHorizontal : horizontal
-                let screenWidth = UIScreen.main.bounds.width
-                let beganAtNavigationEdge = direction > 0
-                    ? value.startLocation.x <= 24
-                    : value.startLocation.x >= screenWidth - 24
-                guard beganAtNavigationEdge else { return }
-
                 if direction > 0, model.selectedTab == .atmosphere {
                     guard auth.isAuthenticated else { return }
                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -763,7 +762,7 @@ private struct AtmospherePublishedVideoCard<MediaCard: View>: View {
     }
 
     private var actionBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        WestreemHorizontalScrollView(showsIndicators: false) {
             HStack(spacing: 0) {
                 actionButton(
                     title: "Add Energy",

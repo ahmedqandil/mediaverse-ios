@@ -827,6 +827,7 @@ private struct RipplePhotoCarousel: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
+            .ownsHorizontalCarouselGesture()
             .overlay(alignment: .topTrailing) {
                 if photos.count > 1 {
                     Text("\(selectedIndex) / \(photos.count)")

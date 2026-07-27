@@ -206,7 +206,7 @@ struct ShowsBrowseView: View {
     }
 
     private var genreSubtabs: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        WestreemHorizontalScrollView(showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(showGenres, id: \.self) { genre in
                     GenrePill(label: genre, selected: selectedGenre == genre) {
@@ -503,7 +503,7 @@ private struct ShowsCarousel: View {
                 }
                 .padding(.horizontal, C.pagePad)
 
-                ScrollView(.horizontal, showsIndicators: false) {
+                WestreemHorizontalScrollView(showsIndicators: false) {
                     HStack(spacing: CarouselCardMetrics.spacing) {
                         ForEach(uniqueShows) { show in
                             NavigationLink(value: AppRoute.show(show.id)) {
