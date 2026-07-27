@@ -32,7 +32,7 @@ struct StoryViewerView: View {
     @State private var tickTask: Task<Void, Never>?
     @State private var viewedTask: Task<Void, Never>?
     @State private var videoRetryTask: Task<Void, Never>?
-    @State private var preloadTask: Task<Void, Never>?
+    @State private var preloadTasks = [String: Task<Void, Never>]()
     @State private var backendRefreshTask: Task<Void, Never>?
     @State private var activeStoryId: String?
     @State private var preloadedStoryIds = Set<String>()
@@ -57,7 +57,7 @@ struct StoryViewerView: View {
     @State private var viewerAccessDeniedStoryIds = Set<String>()
     @State private var energySheetStory: StoryItem?
 
-    private let videoPrewarmLimit = 3
+    private let videoPrewarmLimit = 4
     private var isFlashEnergyEnabled: Bool {
         SocialFeatureConfiguration.runtime().flashesEnergyEnabled
     }
@@ -657,17 +657,15 @@ struct StoryViewerView: View {
     }
 
     private func scheduleStoryPreload() {
-        preloadTask?.cancel()
         let candidates = preloadCandidates()
-        let pending = candidates.filter { !preloadedStoryIds.contains($0.id) }
         trimStoryPreloadState(keeping: candidates)
-        guard !pending.isEmpty else { return }
-
-        preloadTask = Task {
-            for story in pending {
-                guard !Task.isCancelled else { return }
-                guard preloadedStoryIds.insert(story.id).inserted else { continue }
+        for story in candidates {
+            guard preloadedStoryIds.insert(story.id).inserted else { continue }
+            let storyID = story.id
+            preloadTasks[storyID] = Task {
                 await preloadStory(story, priority: preloadPriority(for: story))
+                guard !Task.isCancelled else { return }
+                preloadTasks[storyID] = nil
             }
         }
     }
@@ -677,7 +675,14 @@ struct StoryViewerView: View {
         guard groups.indices.contains(groupIndex) else { return candidates }
 
         let group = groups[groupIndex]
-        for index in [storyIndex, storyIndex + 1, storyIndex + 2, storyIndex + 3, storyIndex - 1] where group.stories.indices.contains(index) {
+        for index in [
+            storyIndex,
+            storyIndex + 1,
+            storyIndex + 2,
+            storyIndex + 3,
+            storyIndex + 4,
+            storyIndex - 1
+        ] where group.stories.indices.contains(index) {
             candidates.append(group.stories[index])
         }
 
@@ -807,6 +812,7 @@ struct StoryViewerView: View {
         warmPlayer.automaticallyWaitsToMinimizeStalling = false
         warmPlayer.isMuted = true
         warmPlayer.volume = 0
+        warmPlayer.preroll(atRate: 1) { _ in }
         prewarmedVideoPlayers[story.id] = warmPlayer
         prewarmedVideoOrder.removeAll { $0 == story.id }
         prewarmedVideoOrder.append(story.id)
@@ -841,6 +847,10 @@ struct StoryViewerView: View {
             prewarmedVideoPlayers[storyId] = nil
         }
         prewarmedVideoOrder.removeAll { !ids.contains($0) }
+        for storyID in preloadTasks.keys where !ids.contains(storyID) {
+            preloadTasks[storyID]?.cancel()
+            preloadTasks[storyID] = nil
+        }
     }
 
     private func clearPrewarmedVideoPlayers() {
