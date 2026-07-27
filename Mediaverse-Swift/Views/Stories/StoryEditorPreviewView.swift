@@ -42,6 +42,12 @@ private enum StoryEditorTool: String, Identifiable, Equatable {
     var id: String { rawValue }
 }
 
+private enum StoryEditorSecondaryPresentation {
+    case musicImporter
+    case mediaPicker
+    case giphyPicker
+}
+
 private enum StoryStickerTool: String, CaseIterable, Identifiable {
     case link
     case location
@@ -360,6 +366,7 @@ struct StoryEditorPreviewView: View {
     @State private var isImportingMusic = false
     @State private var isImportingMediaOverlay = false
     @State private var isShowingGiphyPicker = false
+    @State private var pendingSecondaryPresentation: StoryEditorSecondaryPresentation?
     @State private var mediaOverlaySelection: PhotosPickerItem?
     @State private var isDrawingPresented = false
     @State private var drawing = PKDrawing()
@@ -662,6 +669,7 @@ struct StoryEditorPreviewView: View {
                 clearLiveToolBaselines()
                 toolSheetDismissShouldCancel = true
             }
+            presentPendingSecondaryPresentation()
         }) { tool in
             toolSheet(tool)
                 .presentationDetents([.height(toolSheetHeight(for: tool)), .medium])
@@ -838,8 +846,7 @@ struct StoryEditorPreviewView: View {
                         }
                         Button {
                             stopPlayback()
-                            activeTool = nil
-                            isImportingMediaOverlay = true
+                            requestSecondaryPresentation(.mediaPicker)
                         } label: {
                             Label("Add photo or video", systemImage: "photo.on.rectangle.angled")
                         }
@@ -2872,7 +2879,7 @@ struct StoryEditorPreviewView: View {
                 }
                 Spacer()
                 Button {
-                    isImportingMusic = true
+                    requestSecondaryPresentation(.musicImporter)
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 13, weight: .bold))
@@ -2972,8 +2979,7 @@ struct StoryEditorPreviewView: View {
         case .link:
             beginStickerComposer(.link)
         case .gif:
-            activeTool = nil
-            isShowingGiphyPicker = true
+            requestSecondaryPresentation(.giphyPicker)
         case .mention:
             activeTool = nil
             beginMentionComposer()
@@ -2987,6 +2993,38 @@ struct StoryEditorPreviewView: View {
             beginStickerComposer(.question)
         case .countdown:
             beginStickerComposer(.countdown)
+        }
+    }
+
+    private func requestSecondaryPresentation(_ presentation: StoryEditorSecondaryPresentation) {
+        stopPlayback()
+        guard activeTool != nil else {
+            presentSecondaryPresentation(presentation)
+            return
+        }
+
+        pendingSecondaryPresentation = presentation
+        toolSheetDismissShouldCancel = false
+        Task {
+            await commitLiveToolPreview()
+            activeTool = nil
+        }
+    }
+
+    private func presentPendingSecondaryPresentation() {
+        guard let presentation = pendingSecondaryPresentation else { return }
+        pendingSecondaryPresentation = nil
+        presentSecondaryPresentation(presentation)
+    }
+
+    private func presentSecondaryPresentation(_ presentation: StoryEditorSecondaryPresentation) {
+        switch presentation {
+        case .musicImporter:
+            isImportingMusic = true
+        case .mediaPicker:
+            isImportingMediaOverlay = true
+        case .giphyPicker:
+            isShowingGiphyPicker = true
         }
     }
 
