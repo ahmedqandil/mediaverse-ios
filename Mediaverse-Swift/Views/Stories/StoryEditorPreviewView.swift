@@ -400,6 +400,7 @@ struct StoryEditorPreviewView: View {
     @State private var canvasGestureVisualScale: CGFloat = 1
     @State private var canvasGestureVisualRotation: Angle = .zero
     @State private var canvasGestureVisualOffset: CGSize = .zero
+    @State private var canvasGestureResetAfterRender = false
     @State private var filterBaselineClip: VideoClip?
     @State private var lookSection: StoryLookSection = .filters
     @State private var selectedBeautyControl: StoryBeautyControl = .smooth
@@ -1769,6 +1770,7 @@ struct StoryEditorPreviewView: View {
         canvasGestureVisualScale = 1
         canvasGestureVisualRotation = .zero
         canvasGestureVisualOffset = .zero
+        canvasGestureResetAfterRender = false
     }
 
     private func updateCanvasMediaTransform(
@@ -1804,12 +1806,21 @@ struct StoryEditorPreviewView: View {
         }
         editor.previewSelectedClipTransform(transform)
         canvasTransformBaselineClip = nil
-        canvasGestureVisualScale = 1
-        canvasGestureVisualRotation = .zero
-        canvasGestureVisualOffset = .zero
+        if hasVideoPreviewClip {
+            resetCanvasGestureVisualTransform()
+        } else {
+            canvasGestureResetAfterRender = true
+        }
         Task {
             await editor.commitSelectedClipTransform(transform, baselineClip: baseline)
         }
+    }
+
+    private func resetCanvasGestureVisualTransform() {
+        canvasGestureVisualScale = 1
+        canvasGestureVisualRotation = .zero
+        canvasGestureVisualOffset = .zero
+        canvasGestureResetAfterRender = false
     }
 
     @ViewBuilder
@@ -4443,12 +4454,17 @@ struct StoryEditorPreviewView: View {
                         .resizable()
                         .scaledToFill()
                 } else if let previewPlayer {
-                    StoryEditorPlayerView(player: previewPlayer)
-                        .onAppear {
-                            previewPlayer.play()
-                            isPlaying = true
-                        }
-                        .storyPreviewColorGrade(videoPreviewColorGrade)
+                    GeometryReader { proxy in
+                        StoryEditorPlayerView(player: previewPlayer)
+                            .scaleEffect(selectedClipPreviewScale)
+                            .rotationEffect(selectedClipPreviewRotation)
+                            .offset(selectedClipPreviewOffset(in: proxy.size))
+                            .onAppear {
+                                previewPlayer.play()
+                                isPlaying = true
+                            }
+                            .storyPreviewColorGrade(videoPreviewColorGrade)
+                    }
                 } else if let renderedImage {
                     Image(uiImage: renderedImage)
                         .resizable()
@@ -4539,6 +4555,26 @@ struct StoryEditorPreviewView: View {
             }
         }
         .accessibilityLabel("Flash editor preview")
+    }
+
+    private var selectedClipPreviewScale: CGFloat {
+        CGFloat(editor.selectedClip?.transform.scale ?? 1)
+    }
+
+    private var selectedClipPreviewRotation: Angle {
+        Angle(radians: editor.selectedClip?.transform.rotation ?? 0)
+    }
+
+    private func selectedClipPreviewOffset(in viewportSize: CGSize) -> CGSize {
+        guard let transform = editor.selectedClip?.transform,
+              project.canvas.width > 0,
+              project.canvas.height > 0 else {
+            return .zero
+        }
+        return CGSize(
+            width: CGFloat(transform.tx / Double(project.canvas.width)) * viewportSize.width,
+            height: -CGFloat(transform.ty / Double(project.canvas.height)) * viewportSize.height
+        )
     }
 
     private func previewRenderProject(from project: Project) -> Project {
@@ -4654,9 +4690,15 @@ struct StoryEditorPreviewView: View {
             let image = try makeUIImage(from: buffer)
             guard !Task.isCancelled else { return }
             renderedImage = image
+            if canvasGestureResetAfterRender {
+                resetCanvasGestureVisualTransform()
+            }
             renderError = nil
         } catch {
             guard !Task.isCancelled else { return }
+            if canvasGestureResetAfterRender {
+                resetCanvasGestureVisualTransform()
+            }
             renderError = error.localizedDescription
         }
     }
