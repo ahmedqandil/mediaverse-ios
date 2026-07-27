@@ -371,6 +371,31 @@ struct StoryEnergyAggregate: Decodable {
     let count: Int
     let distribution: [String: Int]
     let topTags: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case avg, count, distribution, topTags
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        avg = try values.decodeIfPresent(Double.self, forKey: .avg)
+        count = try values.decodeIfPresent(Int.self, forKey: .count) ?? 0
+        distribution = try values.decodeIfPresent([String: Int].self, forKey: .distribution) ?? [:]
+        if let strings = try? values.decode([String].self, forKey: .topTags) {
+            topTags = strings
+        } else if let keywords = try? values.decode([StoryEnergyKeyword].self, forKey: .topTags) {
+            topTags = keywords.map(\.tag)
+        } else if let counts = try? values.decode([String: Int].self, forKey: .topTags) {
+            topTags = counts.filter { $0.value > 0 }.sorted { $0.value > $1.value }.map(\.key)
+        } else {
+            topTags = []
+        }
+    }
+}
+
+private struct StoryEnergyKeyword: Decodable {
+    let tag: String
+    let count: Int?
 }
 
 struct StoryEnergyResponse: Decodable {

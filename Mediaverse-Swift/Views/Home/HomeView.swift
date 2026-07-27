@@ -1837,13 +1837,15 @@ struct HomeView: View {
         }
 
         do {
-            async let pageTask = CurationManager.shared.fetchPage(key: "videos")
-            async let feedTask = APIClient.shared.fetchFeed()
+            async let pageTask: AssembledPage? = try? CurationManager.shared.fetchPage(key: "videos")
+            async let feedTask: FeedResponse? = try? APIClient.shared.fetchFeed()
 
-            let page = try await pageTask
-            let feedResponse = try? await feedTask
+            let (page, feedResponse) = await (pageTask, feedTask)
+            guard page != nil || feedResponse != nil else {
+                throw APIError.invalidResponse("home curation and feed unavailable")
+            }
             guard activeHomeLoadID == loadID, !Task.isCancelled else { return }
-            let activeListings = page.activeListings
+            let activeListings = page?.activeListings ?? []
             let feedListing = activeListings.first { $0.normalizedTemplateType == "video_feed" }
             let hero = activeListings.first { $0.normalizedTemplateType == "hero" }
             let curationVideos = (feedListing?.items ?? []).map(\.asFeedVideo)

@@ -274,56 +274,59 @@ struct MainTabView: View {
     @ViewBuilder
     private var activeContextToastOverlay: some View {
         if let context = activeContextToast {
-            GeometryReader { proxy in
-                HStack(spacing: 10) {
-                    MediaverseIcon(
-                        name: contextToastIcon(for: context.type),
-                        fallbackSystemName: contextToastFallbackIcon(for: context.type)
-                    )
-                    .frame(width: 20, height: 20)
-                    .foregroundStyle(C.watch)
-                    .frame(width: 36, height: 36)
-                    .background(C.watch.opacity(0.12), in: Circle())
+            HStack(spacing: 10) {
+                MediaverseIcon(
+                    name: contextToastIcon(for: context.type),
+                    fallbackSystemName: contextToastFallbackIcon(for: context.type)
+                )
+                .frame(width: 20, height: 20)
+                .foregroundStyle(C.watch)
+                .frame(width: 36, height: 36)
+                .background(C.watch.opacity(0.12), in: Circle())
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Active context")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(C.textMuted)
-                        Text(context.name)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(C.text)
-                            .lineLimit(1)
-                    }
-
-                    Spacer(minLength: 8)
-
-                    Button {
-                        dismissContextToast()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(C.textMuted)
-                            .frame(width: 30, height: 30)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Dismiss active context")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Active context")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(C.textMuted)
+                    Text(context.name)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(C.text)
+                        .lineLimit(1)
                 }
-                .padding(.leading, 10)
-                .padding(.trailing, 6)
-                .padding(.vertical, 8)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(C.border, lineWidth: 1)
+
+                Spacer(minLength: 8)
+
+                Button {
+                    dismissContextToast()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(C.textMuted)
+                        .frame(width: 30, height: 30)
                 }
-                .shadow(color: .black.opacity(0.34), radius: 16, y: 8)
-                .padding(.horizontal, 16)
-                .padding(.top, proxy.safeAreaInsets.top + 8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .transition(.move(edge: .top).combined(with: .opacity))
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Active context, \(context.name)")
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss active context")
             }
+            .padding(.leading, 10)
+            .padding(.trailing, 6)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(C.border, lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.34), radius: 16, y: 8)
+            .padding(.horizontal, 16)
+            .padding(
+                .bottom,
+                miniPlayer.item == nil
+                    ? C.bottomMenuClearance
+                    : C.bottomMenuClearance + 86
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Active context, \(context.name)")
             .zIndex(75)
         }
     }
@@ -1072,11 +1075,41 @@ struct MainTabView: View {
         appearance.shadowColor = UIColor(C.borderSubtle)
         appearance.titleTextAttributes = [.foregroundColor: UIColor(C.text)]
         appearance.largeTitleTextAttributes = [.foregroundColor: UIColor(C.text)]
+        let backIndicator = Self.platformBackIndicatorImage()
+        appearance.setBackIndicatorImage(backIndicator, transitionMaskImage: backIndicator)
 
         UINavigationBar.appearance().standardAppearance = appearance
         UINavigationBar.appearance().scrollEdgeAppearance = appearance
         UINavigationBar.appearance().compactAppearance = appearance
         UINavigationBar.appearance().tintColor = UIColor(C.text)
+    }
+
+    private static func platformBackIndicatorImage() -> UIImage {
+        let size = CGSize(width: 36, height: 36)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { context in
+            let bounds = CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1)
+            let cg = context.cgContext
+            cg.setFillColor(UIColor.black.withAlphaComponent(0.46).cgColor)
+            cg.fillEllipse(in: bounds)
+            cg.setStrokeColor(UIColor.white.withAlphaComponent(0.16).cgColor)
+            cg.setLineWidth(1)
+            cg.strokeEllipse(in: bounds)
+
+            let symbol = UIImage(
+                systemName: "chevron.left",
+                withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
+            )?.withTintColor(.white, renderingMode: .alwaysOriginal)
+            symbol?.draw(
+                in: CGRect(
+                    x: (size.width - 15) / 2 - 1,
+                    y: (size.height - 18) / 2,
+                    width: 15,
+                    height: 18
+                )
+            )
+        }
+        .withRenderingMode(.alwaysOriginal)
     }
 
     private func applyTabBarAppearance() {

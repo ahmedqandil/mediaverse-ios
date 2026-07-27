@@ -251,7 +251,9 @@ extension View {
     func westreemFormStyle() -> some View {
         scrollContentBackground(.hidden)
             .background(C.bg)
+            .foregroundStyle(C.text)
             .tint(C.watch)
+            .scrollDismissesKeyboard(.interactively)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -523,6 +525,32 @@ struct WestreemImagePositionEditor: View {
         guard cropRect.width > 0, cropRect.height > 0,
               let cropped = cgImage.cropping(to: cropRect) else { return normalizedImage }
         return UIImage(cgImage: cropped, scale: normalizedImage.scale, orientation: .up)
+    }
+}
+
+/// Canonical in-content back control used by players and immersive detail pages.
+/// Navigation behavior remains owned by the presenting screen.
+struct PlatformBackButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(.black.opacity(0.46))
+                    .overlay {
+                        Circle().stroke(.white.opacity(0.16), lineWidth: 1)
+                    }
+
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Back")
     }
 }
 

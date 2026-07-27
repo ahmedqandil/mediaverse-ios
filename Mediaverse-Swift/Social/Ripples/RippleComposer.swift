@@ -73,6 +73,8 @@ struct RippleComposer: View {
                     .lineLimit(5...12)
                     .focused($isBodyFocused)
                     .textInputAutocapitalization(.sentences)
+                    .foregroundStyle(C.text)
+                    .tint(C.watch)
                     .font(.body)
                     .frame(minHeight: isCompactWidth ? 112 : 132, alignment: .topLeading)
                     .onChange(of: bodyText) { _, value in
@@ -332,6 +334,7 @@ struct RippleComposer: View {
             }
             TextField("Ask a question", text: $pollQuestion)
                 .font(.body.weight(.semibold))
+                .foregroundStyle(C.text)
             ForEach(pollOptions.indices, id: \.self) { index in
                 HStack(spacing: 8) {
                     Text("\(index + 1)")
@@ -343,10 +346,12 @@ struct RippleComposer: View {
                         "Option \(index + 1)\(index > 1 ? " (optional)" : "")",
                         text: $pollOptions[index]
                     )
+                    .foregroundStyle(C.text)
                 }
             }
         }
-        .textFieldStyle(.roundedBorder)
+        .textFieldStyle(.plain)
+        .tint(C.watch)
         .padding(12)
         .background(C.elevated.opacity(0.55))
         .clipShape(RoundedRectangle(cornerRadius: 12))

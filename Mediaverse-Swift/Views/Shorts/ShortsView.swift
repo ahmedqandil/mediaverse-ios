@@ -1341,12 +1341,6 @@ struct ShortsView: View {
             Task { await switchFeed(tab) }
         }
         .frame(maxWidth: 300)
-        .background(Color.black.opacity(0.42))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .padding(.top, 14)
         .padding(.horizontal, 12)
         .zIndex(40)
@@ -1753,7 +1747,7 @@ struct ShortsView: View {
             shorts: shorts,
             shortsAdConfig: shortsAdConfig,
             afterShortIndex: currentShortIndex,
-            lookahead: 3
+            lookahead: 6
         )
 
         for candidate in candidates {
@@ -1950,25 +1944,7 @@ struct ShortsView: View {
     }
 
     private var shortsBackButton: some View {
-        Button {
-            dismiss()
-        } label: {
-            ZStack {
-                Circle()
-                    .fill(.black.opacity(0.46))
-                    .overlay {
-                        Circle().stroke(.white.opacity(0.16), lineWidth: 1)
-                    }
-
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(.white)
-            }
-            .frame(width: 44, height: 44)
-            .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Back")
+        PlatformBackButton { dismiss() }
         .padding(.leading, 14)
         .padding(.top, 12)
         .zIndex(30)
@@ -2771,10 +2747,15 @@ private struct ShortCardView: View {
     }
 
     private var tabBarClearance: CGFloat { C.bottomMenuClearance }
+    // The floating menu extends above its general content-clearance baseline.
+    // Reserve the menu's top lip as well so the complete scrubber stays visible.
+    private var progressBottomClearance: CGFloat { tabBarClearance + 24 }
     private var playerHorizontalInset: CGFloat { 24 }
     private var progressControlHeight: CGFloat { 16 }
     private var playerVerticalGap: CGFloat { 12 }
-    private var metadataBottomClearance: CGFloat { tabBarClearance + progressControlHeight + playerVerticalGap }
+    private var metadataBottomClearance: CGFloat {
+        progressBottomClearance + progressControlHeight + playerVerticalGap
+    }
     private var actionRailWidth: CGFloat { 58 }
     private var actionRailGap: CGFloat { 12 }
     private var metadataTrailingInset: CGFloat { actionRailWidth + actionRailGap }
@@ -2863,8 +2844,9 @@ private struct ShortCardView: View {
             ContentEnergySheet(kind: .video, contentID: short.id) {
                 energyAggregate = $0
             }
-            .presentationDetents([.medium])
+            .presentationDetents([.height(610), .large])
             .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
         }
     }
 
@@ -2952,7 +2934,7 @@ private struct ShortCardView: View {
 
                 shortsProgressBar
                     .padding(.horizontal, progressBarHorizontalInset)
-                    .padding(.bottom, tabBarClearance)
+                    .padding(.bottom, progressBottomClearance)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             }
 
@@ -2962,6 +2944,8 @@ private struct ShortCardView: View {
                     vertical: true,
                     isPaused: playbackManager.serverAdIsPaused(for: short.id),
                     isMuted: isMuted,
+                    bottomContentInset: tabBarClearance,
+                    progressBottomInset: progressBottomClearance,
                     onTogglePause: { playbackManager.toggleServerAdPause(for: short.id) },
                     onToggleMute: {
                         isMuted.toggle()
@@ -2970,7 +2954,6 @@ private struct ShortCardView: View {
                     onSkip: { playbackManager.skipServerAd(for: short.id) },
                     onOpen: { playbackManager.openServerAd(for: short.id) }
                 )
-                .padding(.bottom, tabBarClearance)
                 .zIndex(35)
             }
 
@@ -3218,6 +3201,25 @@ private struct ShortCardView: View {
                         }
                     }
                 }
+            }
+
+            if let aggregate = energyAggregate, aggregate.count > 0 {
+                Button {
+                    if auth.isAuthenticated {
+                        showEnergy = true
+                    } else {
+                        NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+                    }
+                } label: {
+                    SocialEnergyMeter(
+                        total: Int(((aggregate.avg ?? 0) * Double(aggregate.count)).rounded()),
+                        count: aggregate.count,
+                        tags: aggregate.topTags
+                    )
+                    .frame(maxWidth: 270, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("View Short Energy")
             }
 
             if let playlist {
@@ -3787,6 +3789,7 @@ private struct ShortsAdCardView: View {
                         topContentInset: topInset,
                         bottomContentInset: bottomInset,
                         progressHorizontalInset: progressBarHorizontalInset,
+                        progressBottomInset: 0,
                         fillVerticalContainer: true,
                         adPolicy: policy,
                         adRemoval: policy.adRemoval,
@@ -3940,14 +3943,7 @@ private struct ShortsPlaylistPage: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                Button(action: onClose) {
-                    MediaverseIcon(name: "chevron-left", fallbackSystemName: "chevron.left")
-                        .frame(width: 18, height: 18)
-                        .foregroundStyle(.white)
-                        .frame(width: 38, height: 38)
-                        .background(.white.opacity(0.10), in: Circle())
-                }
-                .buttonStyle(.plain)
+                PlatformBackButton(action: onClose)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Playlist")

@@ -109,6 +109,27 @@ final class SocialContractDecodingTests: XCTestCase {
         XCTAssertEqual(response.posts[0].energyTags, ["INSPIRED", "DEEP"])
     }
 
+    func testEnergyAggregateAcceptsDeployedKeywordObjects() throws {
+        let data = Data(
+            """
+            {
+              "userRating":{"overall":4,"tags":["Inspired"],"review":null},
+              "aggregate":{
+                "avg":4.5,
+                "count":2,
+                "distribution":{"4":1,"5":1},
+                "topTags":[{"tag":"Inspired","count":2},{"tag":"Deep","count":1}]
+              }
+            }
+            """.utf8
+        )
+
+        let response = try decoder.decode(RippleEnergyResponse.self, from: data)
+
+        XCTAssertEqual(response.aggregate.topTags, ["Inspired", "Deep"])
+        XCTAssertEqual(response.aggregate.count, 2)
+    }
+
     func testAtmosphereFeedKeepsRipplesAndRegularVideosOnly() throws {
         let data = Data(
             """

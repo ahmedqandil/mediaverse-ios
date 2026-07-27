@@ -236,7 +236,15 @@ actor APIClient: LegacySocialTransport {
         request.httpBody = body
         attachAuth(&request)
         let (data, response) = try await session.data(for: request)
-        try validate(response)
+        do {
+            try validate(response)
+        } catch {
+            if let payload = try? JSONDecoder().decode(SocialAPIErrorPayload.self, from: data),
+               !payload.error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw APIError.invalidResponse(payload.error)
+            }
+            throw error
+        }
         invalidateResponseCache()
         return data
     }
@@ -881,6 +889,41 @@ actor APIClient: LegacySocialTransport {
             "/api/me/profile",
             body: Body(name: name, bio: bio, image: image, bannerUrl: bannerUrl)
         )
+    }
+
+    func completeOnboarding(name: String, handle: String, bio: String?, image: String?) async throws -> ProfileResponse {
+        struct Body: Encodable {
+            let name: String
+            let handle: String
+            let bio: String?
+            let image: String?
+        }
+        let body = Body(name: name, handle: handle, bio: bio, image: image)
+        do {
+            return try await post("/api/me/onboarding", body: body)
+        } catch APIError.notFound {
+            // Keep device builds compatible while the atomic onboarding endpoint
+            // rolls out: both of these profile endpoints already exist in production.
+            struct LegacyProfileBody: Encodable {
+                let name: String
+                let bio: String?
+                let image: String?
+            }
+            struct HandleBody: Encodable { let handle: String }
+            struct HandleResponse: Decodable { let handle: String }
+
+            let _: FullProfile = try await patch(
+                "/api/me/profile",
+                body: LegacyProfileBody(name: name, bio: bio, image: image)
+            )
+            let _: HandleResponse = try await patch(
+                "/api/me/handle",
+                body: HandleBody(handle: handle)
+            )
+            // The deployed POST is the existing idempotent personal-Atmo bootstrap.
+            try await postEmpty("/api/me/personal-vibe")
+            return try await fetchProfile()
+        }
     }
 
     func fetchBackstageChannel(channelId: String) async throws -> BackstageChannelSettings {
@@ -2083,4 +2126,8 @@ enum APIError: LocalizedError {
         case .invalidResponse(let message): return message
         }
     }
+}
+
+private struct SocialAPIErrorPayload: Decodable {
+    let error: String
 }

@@ -54,7 +54,6 @@ struct EpisodeWatchView: View {
     // ── Autoplay
     @State private var autoplayCountdown: Int  = 0
     @State private var autoplayTask:     Task<Void, Never>?
-    @State private var autoplayDest:      AppRoute?
     @State private var showReplayPrompt         = false
 
     // ── Moment likes (heatmap)
@@ -67,7 +66,6 @@ struct EpisodeWatchView: View {
     // ── Timed player markers
     @State private var playerMarkers: [PlayerMarker] = []
     @State private var dismissedMarkerIds: Set<String> = []
-    @State private var markerRoute: AppRoute?
     @State private var isCheckingOut = false
     @State private var checkoutMessage: String?
     @State private var pendingCheckoutRefresh = false
@@ -84,6 +82,8 @@ struct EpisodeWatchView: View {
     @State private var reuseCurrentPlayerForFullscreenSelection = false
     @State private var episodeListExpanded = true
     @State private var selectedSeasonId: String?
+    @State private var selectedContentTab: WatchContentTab = .episodes
+    @State private var clippingCount = 0
     @AppStorage("playerMuted") private var playerMuted = false
 
     @Environment(\.dismiss) private var dismiss
@@ -161,6 +161,9 @@ struct EpisodeWatchView: View {
                 .fetchContentEnergy(contentPath: "episodes", id: currentEpisodeId)
                 .aggregate
         }
+        .task(id: currentEpisodeId) {
+            clippingCount = (try? await APIClient.shared.fetchPosts(episodeId: currentEpisodeId).count) ?? 0
+        }
         .onAppear {
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
         }
@@ -183,8 +186,9 @@ struct EpisodeWatchView: View {
             ContentEnergySheet(kind: .episode, contentID: currentEpisodeId) {
                 energyAggregate = $0
             }
-            .presentationDetents([.medium])
+            .presentationDetents([.height(610), .large])
             .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
         }
         .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification)) { notification in
             handlePlaybackEnded(notification)
@@ -202,12 +206,6 @@ struct EpisodeWatchView: View {
             } else {
                 presentFullscreenPlayerIfNeeded()
             }
-        }
-        .navigationDestination(item: $autoplayDest) { route in
-            routeDestination(route)
-        }
-        .navigationDestination(item: $markerRoute) { route in
-            routeDestination(route)
         }
         .alert("Checkout", isPresented: Binding(
             get: { checkoutMessage != nil },
@@ -235,224 +233,227 @@ struct EpisodeWatchView: View {
                         .background(C.bg)
                 }
 
-                if let panel = underPlayerPanel {
-                    episodeUnderPlayerPanelView(panel, episode: ep)
-                        .id(panel.id)
-                        .transition(underPlayerPanelTransition)
-                } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
-                    // Show + season label
-                    if let show = ep.season.show {
-                        NavigationLink(value: AppRoute.show(show.id)) {
-                            Text(show.title)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(C.watch)
-                        }
-                    }
+                episodeTabbedContent(ep)
+            }
+            .animation(underPlayerPanelAnimation, value: underPlayerPanel?.id)
+            .background(C.bg)
+            .simultaneousGesture(playerCollapseGesture)
+        }
+    }
 
-                    // Episode title
-                    HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("S\(ep.season.seasonNumber) · E\(ep.episodeNumber)")
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(C.textMuted)
-                            Text(ep.title)
-                                .font(.headline)
-                                .foregroundStyle(C.text)
-                        }
-                        Spacer()
-                    }
+    private var availableEpisodeTabs: [WatchContentTab] {
+        var tabs: [WatchContentTab] = [.episodes]
+        if clippingCount > 0 { tabs.append(.clips) }
+        tabs.append(.comments)
+        return tabs
+    }
 
-                    // Rental info bar (PPV users only)
-                    if let rental = ep.rentalInfo {
-                        RentalInfoBar(info: rental)
-                    }
+    private func episodeTabbedContent(_ ep: EpisodeDetail) -> some View {
+        let tabs = availableEpisodeTabs
+        return VStack(spacing: 0) {
+            WatchPinnedTabBar(tabs: tabs, selection: $selectedContentTab) { tab in
+                switch tab {
+                case .episodes:
+                    return episodeSeasons(for: ep).reduce(0) { $0 + $1.episodes.count }
+                case .clips: return clippingCount
+                case .comments: return localComments.totalCommentCount
+                default: return nil
+                }
+            }
 
-                    // Views
-                    if let views = ep.views, views > 0 {
-                        Text(fmtCount(views) + " views")
-                            .font(.caption)
-                            .foregroundStyle(C.textMuted)
-                    }
+            TabView(selection: $selectedContentTab) {
+                ForEach(tabs) { tab in
+                    episodeTabPage(tab, episode: ep)
+                        .tag(tab)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+        }
+        .onChange(of: tabs.map(\.id).joined(separator: "|")) { _, _ in
+            if !tabs.contains(selectedContentTab) {
+                selectedContentTab = .episodes
+            }
+        }
+    }
 
-                    if let aggregate = energyAggregate, aggregate.count > 0 {
-                        Button {
-                            if auth.isAuthenticated {
-                                showEnergy = true
-                            } else {
-                                NotificationCenter.default.post(name: .profileTabRequested, object: nil)
-                            }
-                        } label: {
-                            SocialEnergyMeter(
-                                total: Int(((aggregate.avg ?? 0) * Double(aggregate.count)).rounded()),
-                                count: aggregate.count,
-                                tags: aggregate.topTags
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("View Vibe Meter")
-                    }
-
-                    // Energy replaces content Like/Dislike; comment likes remain unchanged.
-                    if auth.isAuthenticated {
-                        HStack(spacing: 8) {
-                            Button {
-                                showEnergy = true
-                            } label: {
-                                HStack(spacing: 5) {
-                                    Image(systemName: "bolt.fill")
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundStyle(C.watch)
-                                    Text("Add Energy")
-                                        .font(.system(size: 13, weight: .semibold))
-                                    if let count = energyAggregate?.count, count > 0 {
-                                        Text(fmtCount(count))
-                                            .font(.system(size: 12, weight: .medium))
-                                            .foregroundStyle(C.textMuted)
-                                    }
-                                }
-                                .foregroundStyle(C.text)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 9)
-                                .background(C.surface)
-                                .clipShape(Capsule())
-                                .overlay { Capsule().stroke(C.border, lineWidth: 1) }
-                            }
-
-                            Spacer()
-                        }
-                    }
-
-                    Divider().background(C.border)
-
-                    // Follow show
-                    HStack {
-                        if let show = ep.season.show {
-                            NavigationLink(value: AppRoute.show(show.id)) {
-                                HStack(spacing: 8) {
-                                    CachedRemoteImage(
-                                        url: C.mediaURL(show.coverUrl),
-                                        targetSize: CGSize(width: 36, height: 36)
-                                    ) { img in
-                                        img.resizable().scaledToFill()
-                                    } placeholder: { Color.white.opacity(0.08) }
-                                    .frame(width: 36, height: 36)
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
-
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(show.title)
-                                            .font(.caption.weight(.semibold))
-                                            .foregroundStyle(C.text)
-                                        Text(fmtCount(followerCount) + " followers")
-                                            .font(.caption2).foregroundStyle(C.textMuted)
-                                    }
-                                }
-                            }
-                        }
-                        Spacer()
-                        Button {
-                            Task { await toggleFollow(showId: ep.season.show?.id ?? "") }
-                        } label: {
-                            Text(isFollowing ? "Following" : "Follow")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(isFollowing ? C.textMuted : .black)
-                                .padding(.horizontal, 14).padding(.vertical, 7)
-                                .background(isFollowing ? C.surface : C.watch)
-                                .clipShape(Capsule())
-                                .overlay {
-                                    if isFollowing { Capsule().stroke(C.border, lineWidth: 1) }
-                                }
-                        }
-                    }
-
-                    Divider().background(C.border)
-
-                    // Prev / Next navigation + Share + Fullscreen
-                    HStack(spacing: 8) {
-                        if let prev = ep.prevEp {
-                            Button {
-                                playEpisodeInPlace(prev.id)
-                            } label: {
-                                HStack(spacing: 4) {
-                                    MediaverseIcon(name: "chevron-left", fallbackSystemName: "chevron.left")
-                                        .frame(width: 11, height: 11)
-                                    Text("E\(prev.episodeNumber)").font(.system(size: 13, weight: .semibold))
-                                }
-                                .foregroundStyle(C.textMuted)
-                                .padding(.horizontal, 12).padding(.vertical, 8)
-                                .background(C.surface)
-                                .clipShape(Capsule())
-                                .overlay { Capsule().stroke(C.border, lineWidth: 1) }
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!canNavigate(to: prev))
-                            .opacity(canNavigate(to: prev) ? 1 : 0.55)
-                        }
-                        Spacer()
-                        if let next = ep.nextEp {
-                            Button {
-                                playEpisodeInPlace(next.id)
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Text("E\(next.episodeNumber)").font(.system(size: 13, weight: .semibold))
-                                    MediaverseIcon(name: "chevron-right", fallbackSystemName: "chevron.right")
-                                        .frame(width: 11, height: 11)
-                                }
-                                .foregroundStyle(.black)
-                                .padding(.horizontal, 12).padding(.vertical, 8)
-                                .background(C.watch)
-                                .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!canNavigate(to: next))
-                            .opacity(canNavigate(to: next) ? 1 : 0.55)
-                        }
-                        // Share
-                        Button {
-                            shareEpisode(ep)
-                        } label: {
-                            MediaverseIcon(name: "share", fallbackSystemName: "square.and.arrow.up")
-                                .frame(width: 13, height: 13)
-                                .foregroundStyle(C.textMuted)
-                                .frame(width: 36, height: 36)
-                                .background(C.surface)
-                                .clipShape(Circle())
-                                .overlay { Circle().stroke(C.border, lineWidth: 1) }
-                        }
-                    }
-
+    @ViewBuilder
+    private func episodeTabPage(_ tab: WatchContentTab, episode ep: EpisodeDetail) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                switch tab {
+                case .episodes:
+                    episodeDetailsContent(ep)
+                    episodeCommentsPreview(episodeId: ep.id)
                     episodeListSection(ep)
-
-                    // ── Clip reactions (PostSection) ──────────────────────────
+                case .clips:
                     PostSectionView(
                         target: .episode(ep.id),
                         reloadToken: clipReactionReloadToken,
                         insertedPostToken: insertedClipPostToken,
                         insertedPost: insertedClipPost,
-                        previewLimit: 2,
-                        onShowMore: { _ in setUnderPlayerPanel(.reactions) },
-                        onSeek: { seekSeconds in
-                            activeClipRange = nil
-                            seekContentRespectingAds(to: seekSeconds)
-                        },
-                        onPlayClip: { post in
-                            playClipPost(post)
-                        }
+                        startsExpanded: true,
+                        presentation: .fullWidthClippings,
+                        onAvailabilityChanged: { clippingCount = $0 },
+                        onPlayClip: { playClipPost($0) }
                     )
-
-                    // Comments
-                    Divider().background(C.border)
-                    episodeCommentsSection(episodeId: ep.id)
-                        }
-                        .padding(C.pagePad)
-                    }
-                    .transition(.opacity.combined(with: .move(edge: .leading)))
+                case .comments:
+                    CommentThreadView(
+                        target: .episode(ep.id),
+                        initialComments: localComments
+                    )
+                default:
+                    EmptyView()
                 }
             }
-            .animation(underPlayerPanelAnimation, value: underPlayerPanel?.id)
-            .background(C.bg)
-            .simultaneousGesture(playerCollapseGesture)
+            .padding(C.pagePad)
+            .padding(.bottom, 24)
+        }
+    }
+
+    private func episodeCommentsPreview(episodeId: String) -> some View {
+        CommentThreadView(
+            target: .episode(episodeId),
+            initialComments: localComments,
+            previewLimit: 2,
+            onShowMore: { _ in selectedContentTab = .comments }
+        )
+    }
+
+    private func episodeDetailsContent(_ ep: EpisodeDetail) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if let show = ep.season.show {
+                NavigationLink(value: AppRoute.show(show.id)) {
+                    Text(show.title)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(C.watch)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("S\(ep.season.seasonNumber) · E\(ep.episodeNumber)")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(C.textMuted)
+                Text(ep.title)
+                    .font(.headline)
+                    .foregroundStyle(C.text)
+                if let description = ep.description, !description.isEmpty {
+                    Text(description)
+                        .font(.subheadline)
+                        .foregroundStyle(C.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if let rental = ep.rentalInfo {
+                RentalInfoBar(info: rental)
+            }
+
+            if let views = ep.views, views > 0 {
+                Text(fmtCount(views) + " views")
+                    .font(.caption)
+                    .foregroundStyle(C.textMuted)
+            }
+
+            if let aggregate = energyAggregate, aggregate.count > 0 {
+                Button {
+                    if auth.isAuthenticated {
+                        showEnergy = true
+                    } else {
+                        NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+                    }
+                } label: {
+                    SocialEnergyMeter(
+                        total: Int(((aggregate.avg ?? 0) * Double(aggregate.count)).rounded()),
+                        count: aggregate.count,
+                        tags: aggregate.topTags
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 4) {
+                    Button {
+                        if auth.isAuthenticated {
+                            showEnergy = true
+                        } else {
+                            NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+                        }
+                    } label: {
+                        WatchActionItem(
+                            title: "Add Energy",
+                            systemImage: "bolt.fill",
+                            count: energyAggregate.flatMap { $0.count > 0 ? fmtCount($0.count) : nil },
+                            isPrimary: true
+                        )
+                    }
+
+                    Button { shareEpisode(ep) } label: {
+                        WatchActionItem(title: "Share", systemImage: "square.and.arrow.up")
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .buttonStyle(.plain)
+
+            Divider().background(C.border)
+
+            HStack {
+                if let show = ep.season.show {
+                    NavigationLink(value: AppRoute.show(show.id)) {
+                        HStack(spacing: 8) {
+                            CachedRemoteImage(
+                                url: C.mediaURL(show.coverUrl),
+                                targetSize: CGSize(width: 36, height: 36)
+                            ) { $0.resizable().scaledToFill() } placeholder: {
+                                C.surface
+                            }
+                            .frame(width: 36, height: 36)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(show.title).font(.caption.weight(.semibold))
+                                Text(fmtCount(followerCount) + " followers")
+                                    .font(.caption2)
+                                    .foregroundStyle(C.textMuted)
+                            }
+                            .foregroundStyle(C.text)
+                        }
+                    }
+                }
+                Spacer()
+                Button {
+                    Task { await toggleFollow(showId: ep.season.show?.id ?? "") }
+                } label: {
+                    Text(isFollowing ? "Following" : "Follow")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(isFollowing ? C.textMuted : .black)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(isFollowing ? C.surface : C.watch, in: Capsule())
+                }
+            }
+
+            HStack {
+                if let prev = ep.prevEp {
+                    Button { playEpisodeInPlace(prev.id) } label: {
+                        Label("E\(prev.episodeNumber)", systemImage: "chevron.left")
+                    }
+                    .disabled(!canNavigate(to: prev))
+                }
+                Spacer()
+                if let next = ep.nextEp {
+                    Button { playEpisodeInPlace(next.id) } label: {
+                        HStack {
+                            Text("E\(next.episodeNumber)")
+                            Image(systemName: "chevron.right")
+                        }
+                    }
+                    .disabled(!canNavigate(to: next))
+                }
+            }
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(C.watch)
         }
     }
 
@@ -629,18 +630,7 @@ struct EpisodeWatchView: View {
     private var episodePlayerBackButton: some View {
         VStack {
             HStack {
-                Button {
-                    dismiss()
-                } label: {
-                    MediaverseIcon(name: "chevron-down", fallbackSystemName: "chevron.down")
-                        .frame(width: 18, height: 18)
-                        .foregroundStyle(.white)
-                        .frame(width: 42, height: 42)
-                        .background(.black.opacity(0.36))
-                        .clipShape(Circle())
-                        .overlay { Circle().stroke(.white.opacity(0.12), lineWidth: 1) }
-                }
-                .buttonStyle(.plain)
+                PlatformBackButton { dismiss() }
                 Spacer()
             }
             .padding(.top, 48)
@@ -651,9 +641,15 @@ struct EpisodeWatchView: View {
 
     private func collapseToMiniPlayer() {
         guard !isCollapsingToMiniPlayer, let episode else { return }
-        let isAdActive = prerollAdDecision != nil || midrollAdDecision != nil
+        let nativeAdActive = prerollAdDecision != nil || midrollAdDecision != nil
+        let serverAdPresentation = serverAdCoordinator.activeFullscreenPresentation()
+        let serverAdActive = serverAdPresentation != nil
+        let isAdActive = nativeAdActive || serverAdActive
+        let handoffPlayer = nativeAdActive
+            ? activeAdPlayer
+            : (serverAdActive ? serverAdCoordinator.interstitialPlayer : player)
         guard canCollapseCurrentPlayer,
-              let handoffPlayer = isAdActive ? activeAdPlayer : player else {
+              let handoffPlayer else {
             resetPlayerDragOffset()
             return
         }
@@ -666,7 +662,7 @@ struct EpisodeWatchView: View {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
             if isAdActive {
-                miniPlayer.presentAd(player: handoffPlayer, title: "Ad · \(episode.title)", route: .episode(episode.id), presentation: activeAdPresentation, playbackSessionId: playbackSessionId, entryContext: playbackEntryContext)
+                miniPlayer.presentAd(player: handoffPlayer, title: "Ad · \(episode.title)", route: .episode(episode.id), presentation: nativeAdActive ? activeAdPresentation : serverAdPresentation, playbackSessionId: playbackSessionId, entryContext: playbackEntryContext)
             } else {
                 miniPlayer.present(player: handoffPlayer, title: episode.title, route: .episode(episode.id), playbackSessionId: playbackSessionId, entryContext: playbackEntryContext)
             }
@@ -677,6 +673,9 @@ struct EpisodeWatchView: View {
     private var canCollapseCurrentPlayer: Bool {
         if prerollAdDecision != nil || midrollAdDecision != nil {
             return activeAdPlayer != nil
+        }
+        if serverAdCoordinator.presentation != nil {
+            return serverAdCoordinator.interstitialPlayer != nil
         }
         guard let episode,
               player != nil,
@@ -711,6 +710,14 @@ struct EpisodeWatchView: View {
         }
     }
 
+    private func isPlayerHorizontalDismiss(_ value: DragGesture.Value) -> Bool {
+        let playerHeight = UIScreen.main.bounds.width * 9 / 16
+        guard value.startLocation.y >= 0,
+              value.startLocation.y < playerHeight - 64 else { return false }
+        return abs(value.translation.width) > 64
+            || abs(value.predictedEndTranslation.width) > 118
+    }
+
     private var playerCollapseGesture: some Gesture {
         DragGesture(minimumDistance: 10, coordinateSpace: .local)
             .onChanged { value in
@@ -732,6 +739,14 @@ struct EpisodeWatchView: View {
                 guard !isCollapsingToMiniPlayer else { return }
                 guard canCollapseCurrentPlayer || canDismissCurrentPlayerWithoutMiniPlayer else {
                     resetPlayerDragOffset()
+                    return
+                }
+                if isPlayerHorizontalDismiss(value) {
+                    if canCollapseCurrentPlayer {
+                        collapseToMiniPlayer()
+                    } else {
+                        dismissPlayerWithoutMiniPlayer()
+                    }
                     return
                 }
                 let translation = max(0, value.translation.height)
@@ -780,17 +795,7 @@ struct EpisodeWatchView: View {
 
     private func underPlayerPanelHeader(_ panel: WatchUnderPlayerPanel) -> some View {
         HStack(spacing: 12) {
-            Button {
-                setUnderPlayerPanel(nil)
-            } label: {
-                MediaverseIcon(name: "chevron-left", fallbackSystemName: "chevron.left")
-                    .frame(width: 15, height: 15)
-                    .foregroundStyle(C.text)
-                    .frame(width: 36, height: 36)
-                    .background(C.surface)
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
+            PlatformBackButton { setUnderPlayerPanel(nil) }
 
             Text("Clip reactions")
                 .font(.system(size: 18, weight: .bold))
@@ -1459,6 +1464,7 @@ struct EpisodeWatchView: View {
     }
 
     private func load() async {
+        SGAIConnectionWarmer.warm()
         let loadId = currentEpisodeId
         let loadUserId = auth.currentUser?.id
         let loadGeneration = UUID()
@@ -1596,6 +1602,7 @@ struct EpisodeWatchView: View {
                 )
                 adDeliveryMode = deliveryPlan.mode
                 serverFallbackSourceURL = deliveryPlan.usesServerDelivery ? originalURL : nil
+                let bootstrapStartedAt = Date()
                 let bootstrapTask = deliveryPlan.mode == .sgai
                     ? Task {
                         await SGAIBootstrapClient.load(
@@ -1624,14 +1631,6 @@ struct EpisodeWatchView: View {
                     playbackPlayer = p
                 }
                 if deliveryPlan.mode == .sgai {
-                    let bootstrap = await bootstrapTask?.value
-                    guard playbackLoadGeneration == loadGeneration,
-                          loadId == currentEpisodeId,
-                          auth.currentUser?.id == loadUserId else { return }
-                    debugAd(
-                        "sgai bootstrap ready=\(bootstrap?.ready == true) "
-                        + "assets=\(bootstrap?.assets.count ?? 0)"
-                    )
                     let monitor = AVPlayerInterstitialEventMonitor(primaryPlayer: playbackPlayer)
                     serverInterstitialMonitor = monitor
                     serverAdCoordinator.configure(
@@ -1639,8 +1638,31 @@ struct EpisodeWatchView: View {
                         monitor: monitor,
                         context: playbackContext,
                         policy: policy,
-                        bootstrap: bootstrap
+                        bootstrap: nil
                     )
+                    Task {
+                        let bootstrapLoad = await bootstrapTask?.value
+                        guard playbackLoadGeneration == loadGeneration,
+                              loadId == currentEpisodeId,
+                              auth.currentUser?.id == loadUserId else { return }
+                        let elapsedMs = Int(Date().timeIntervalSince(bootstrapStartedAt) * 1_000)
+                        let bootstrap = bootstrapLoad?.payload
+                        debugAd(
+                            "sgai bootstrap ready=\(bootstrap?.ready == true) "
+                            + "assets=\(bootstrap?.assets.count ?? 0) elapsedMs=\(elapsedMs) "
+                            + "serverTiming=\(bootstrapLoad?.serverTiming ?? "missing") "
+                            + "cfRay=\(bootstrapLoad?.cfRay ?? "missing") "
+                            + "\(bootstrapLoad?.networkTiming ?? "networkMetrics=missing")"
+                        )
+                        if let bootstrap {
+                            serverAdCoordinator.acceptBootstrap(bootstrap, context: playbackContext)
+                            Task {
+                                for timing in await SGAICreativeWarmer.warm(bootstrap.assets) {
+                                    debugAd(timing)
+                                }
+                            }
+                        }
+                    }
                 } else if deliveryPlan.mode == .ssai {
                     serverInterstitialMonitor = nil
                     serverAdCoordinator.configureSSAI(
@@ -1681,12 +1703,20 @@ struct EpisodeWatchView: View {
                     restoreExpandedAd(player: expandedItem.player, presentation: presentation)
                     Task { await loadEpisodeAdBreaks(contentId: loadId, duration: ep.duration) }
                 } else {
+                    // Attach the content player immediately so its asset can begin
+                    // preparing while the bounded CSAI preroll decision races.
+                    attachPlayer(playbackPlayer, episodeId: loadId, autoplay: false)
                     let preroll = await prerollTask.value
                     guard playbackLoadGeneration == loadGeneration,
                           loadId == currentEpisodeId,
                           auth.currentUser?.id == loadUserId else { return }
-                    attachPlayer(playbackPlayer, episodeId: loadId, autoplay: preroll == nil)
                     prerollAdDecision = preroll
+                    if preroll == nil {
+                        playbackPlayer.playImmediately(atRate: 1)
+                        startProgress(episodeId: loadId, player: playbackPlayer)
+                        recordPPVPlaybackStartIfNeeded(episodeId: loadId)
+                        scheduleServerPlaybackWatchdog(playbackPlayer)
+                    }
                     Task { await loadEpisodeAdBreaks(contentId: loadId, duration: ep.duration) }
                 }
             }
@@ -1953,7 +1983,8 @@ struct EpisodeWatchView: View {
                     orientation: "HORIZONTAL",
                     breakId: "preroll",
                     userId: auth.currentUser?.id
-                )
+                ),
+                timeout: 1.5
             )
             guard decision.filled, !decision.ads.isEmpty else {
                 debugAd("preroll no-fill contentId=\(contentId) reason=\(decision.noFillReason ?? "none")")
@@ -2032,7 +2063,6 @@ struct EpisodeWatchView: View {
         }
 
         pendingAdBreakIds.insert(adBreak.id)
-        player?.pause()
         let requestGeneration = playbackLoadGeneration
         let requestContentId = currentEpisodeId
         let requestUserId = auth.currentUser?.id
@@ -2051,7 +2081,8 @@ struct EpisodeWatchView: View {
                     orientation: "HORIZONTAL",
                     breakId: adBreak.breakId,
                     userId: requestUserId
-                )
+                ),
+                timeout: 1.0
             )
         } catch {
             debugAd("midroll failed contentId=\(requestContentId) breakId=\(adBreak.breakId): \(error.localizedDescription)")
@@ -2069,6 +2100,9 @@ struct EpisodeWatchView: View {
             return
         }
 
+        // Content remains active while decisioning. Switch only after a filled
+        // decision is ready, eliminating a network-sized midroll freeze.
+        player?.pause()
         activeAdBreak = adBreak
         midrollAdDecision = decision
     }
@@ -2206,7 +2240,8 @@ struct EpisodeWatchView: View {
         cancelAutoplay()
         showReplayPrompt = false
         underPlayerPanel = nil
-        markerRoute = nil
+        selectedContentTab = .episodes
+        clippingCount = 0
         playerMarkers = []
         dismissedMarkerIds.removeAll()
         heatmapBuckets = []
@@ -2546,7 +2581,7 @@ struct EpisodeWatchView: View {
 
     private func activateMarker(_ marker: PlayerMarker) {
         if let route = route(forMarkerURL: marker.url) {
-            markerRoute = route
+            NotificationCenter.default.post(name: .mentionNavigationRequested, object: route)
             return
         }
         if let url = URL(string: marker.url) {

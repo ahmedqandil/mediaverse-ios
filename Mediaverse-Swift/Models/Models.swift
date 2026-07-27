@@ -1847,17 +1847,110 @@ struct SearchResultVideo: Codable, Identifiable {
     let channel: ChannelStub?
 }
 
+struct SearchResultPerson: Decodable, Identifiable {
+    let id: String
+    let name: String?
+    let handle: String?
+    let image: String?
+    let bio: String?
+}
+
+struct SearchResultVibe: Decodable, Identifiable {
+    let id: String
+    let slug: String
+    let name: String
+    let description: String?
+    let avatarUrl: String?
+    let followerCount: Int?
+    let postCount: Int?
+}
+
+struct SearchResultRippleAuthor: Decodable {
+    let name: String?
+    let handle: String?
+    let image: String?
+}
+
+struct SearchResultRippleClub: Decodable {
+    let name: String
+    let slug: String
+}
+
+struct SearchResultRipple: Decodable, Identifiable {
+    let id: String
+    let body: String?
+    let energyCount: Int?
+    let commentCount: Int?
+    let author: SearchResultRippleAuthor
+    let club: SearchResultRippleClub
+    let href: String?
+    let imageUrl: String?
+}
+
+struct SearchResultCollectionOwner: Decodable {
+    let name: String?
+    let handle: String?
+    let image: String?
+}
+
+struct SearchResultCollection: Decodable, Identifiable {
+    struct Count: Decodable {
+        let items: Int?
+        let followers: Int?
+    }
+
+    let id: String
+    let title: String
+    let description: String?
+    let type: String?
+    let user: SearchResultCollectionOwner?
+    let count: Count?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, description, type, user
+        case count = "_count"
+    }
+}
+
 struct SearchResults: Decodable {
     let channels: [SearchResultChannel]?
     let shows: [SearchResultShow]?
     let episodes: [SearchResultEpisode]?
     let videos: [SearchResultVideo]?
+    let people: [SearchResultPerson]?
+    let vibes: [SearchResultVibe]?
+    let ripples: [SearchResultRipple]?
+    let collections: [SearchResultCollection]?
+
+    init(
+        channels: [SearchResultChannel]? = nil,
+        shows: [SearchResultShow]? = nil,
+        episodes: [SearchResultEpisode]? = nil,
+        videos: [SearchResultVideo]? = nil,
+        people: [SearchResultPerson]? = nil,
+        vibes: [SearchResultVibe]? = nil,
+        ripples: [SearchResultRipple]? = nil,
+        collections: [SearchResultCollection]? = nil
+    ) {
+        self.channels = channels
+        self.shows = shows
+        self.episodes = episodes
+        self.videos = videos
+        self.people = people
+        self.vibes = vibes
+        self.ripples = ripples
+        self.collections = collections
+    }
 
     var isEmpty: Bool {
         (channels?.isEmpty ?? true)
             && (shows?.isEmpty ?? true)
             && (episodes?.isEmpty ?? true)
             && (videos?.isEmpty ?? true)
+            && (people?.isEmpty ?? true)
+            && (vibes?.isEmpty ?? true)
+            && (ripples?.isEmpty ?? true)
+            && (collections?.isEmpty ?? true)
     }
 
     var totalCount: Int {
@@ -1865,6 +1958,10 @@ struct SearchResults: Decodable {
             + (shows?.count ?? 0)
             + (episodes?.count ?? 0)
             + (videos?.count ?? 0)
+            + (people?.count ?? 0)
+            + (vibes?.count ?? 0)
+            + (ripples?.count ?? 0)
+            + (collections?.count ?? 0)
     }
 }
 
@@ -1897,8 +1994,21 @@ struct ContentEnergyAggregate: Decodable {
         avg = try values.decodeIfPresent(Double.self, forKey: .avg)
         count = try values.decodeIfPresent(Int.self, forKey: .count) ?? 0
         distribution = try values.decodeIfPresent([String: Int].self, forKey: .distribution)
-        topTags = try values.decodeIfPresent([String].self, forKey: .topTags) ?? []
+        if let strings = try? values.decode([String].self, forKey: .topTags) {
+            topTags = strings
+        } else if let keywords = try? values.decode([ContentEnergyKeyword].self, forKey: .topTags) {
+            topTags = keywords.map(\.tag)
+        } else if let counts = try? values.decode([String: Int].self, forKey: .topTags) {
+            topTags = counts.filter { $0.value > 0 }.sorted { $0.value > $1.value }.map(\.key)
+        } else {
+            topTags = []
+        }
     }
+}
+
+private struct ContentEnergyKeyword: Decodable {
+    let tag: String
+    let count: Int?
 }
 
 struct ContentEnergyResponse: Decodable {

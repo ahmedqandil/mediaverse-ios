@@ -142,8 +142,9 @@ struct StoryViewerView: View {
             StoryEnergySheet(story: story) { aggregate in
                 repository.applyEnergy(storyId: story.id, aggregate: aggregate)
             }
-            .presentationDetents([.medium, .large])
+            .presentationDetents([.height(610), .large])
             .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
         }
         .accessibilityElement(children: .contain)
     }
@@ -1074,12 +1075,12 @@ struct StoryViewerView: View {
         tickTask?.cancel()
         viewedTask?.cancel()
         videoRetryTask?.cancel()
-        preloadTask?.cancel()
+        preloadTasks.values.forEach { $0.cancel() }
         backendRefreshTask?.cancel()
         tickTask = nil
         viewedTask = nil
         videoRetryTask = nil
-        preloadTask = nil
+        preloadTasks.removeAll()
         backendRefreshTask = nil
         activeStoryId = nil
         clearVideoObservers()
@@ -1192,12 +1193,13 @@ private struct StoryEnergySheet: View {
     let onSaved: (StoryEnergyAggregate) -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var overall = 3
+    @State private var overall = 0
     @State private var selectedTags = Set<String>()
     @State private var isLoading = false
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var hasExistingEnergy = false
+    @State private var confirmationMessage: String?
 
     var body: some View {
         SocialEnergyForm(
@@ -1207,6 +1209,7 @@ private struct StoryEnergySheet: View {
             selectedTags: $selectedTags,
             isSaving: isSaving || isLoading,
             errorMessage: errorMessage,
+            confirmationMessage: confirmationMessage,
             onClose: { dismiss() },
             onSubmit: { Task { await save() } },
             onRemove: hasExistingEnergy ? { Task { await remove() } } : nil
@@ -1223,7 +1226,7 @@ private struct StoryEnergySheet: View {
             let response = try await StoriesAPIClient.shared.fetchEnergy(storyId: story.id)
             if let current = response.userRating {
                 overall = current.overall
-                selectedTags = Set(current.tags)
+                selectedTags = Set(current.tags.map(flashEnergyLabel))
                 hasExistingEnergy = true
             }
         } catch {
@@ -1243,6 +1246,11 @@ private struct StoryEnergySheet: View {
             )
             let refreshed = try await StoriesAPIClient.shared.fetchEnergy(storyId: story.id)
             onSaved(refreshed.aggregate)
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) {
+                confirmationMessage = storyEnergyFeeling(tags: selectedTags, overall: overall)
+            }
+            try? await Task.sleep(for: .milliseconds(1_200))
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
@@ -1266,6 +1274,14 @@ private struct StoryEnergySheet: View {
         }
     }
 
+}
+
+private func storyEnergyFeeling(tags: Set<String>, overall: Int) -> String {
+    let feelings = tags.sorted().map(flashEnergyLabel)
+    if feelings.isEmpty {
+        return ["", "Low key", "Warm", "Charged", "High energy", "Electric"][min(max(overall, 0), 5)]
+    }
+    return feelings.joined(separator: " · ")
 }
 
 private func flashEnergyLabel(_ value: String) -> String {

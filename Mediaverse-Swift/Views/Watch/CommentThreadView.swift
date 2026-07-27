@@ -124,6 +124,7 @@ struct CommentThreadView: View {
     @State private var likedCommentIds = Set<String>()
     @State private var flaggedCommentIds = Set<String>()
     @State private var loadError: String? = nil
+    @State private var submitError: String? = nil
     @State private var replyTarget: Comment? = nil
     @FocusState private var isComposerFocused: Bool
 
@@ -296,6 +297,13 @@ struct CommentThreadView: View {
 
                 MentionAutocompletePanel(text: $commentText)
                     .zIndex(1)
+
+                if let submitError {
+                    Text(submitError)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.red.opacity(0.9))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
     }
@@ -438,9 +446,9 @@ struct CommentThreadView: View {
 
     @MainActor
     private func focusComposerAfterSheetPresentation() async {
-        guard inputPosition == .bottom, auth.isAuthenticated else { return }
-        try? await Task.sleep(nanoseconds: 120_000_000)
-        guard inputPosition == .bottom, auth.isAuthenticated else { return }
+        guard auth.isAuthenticated else { return }
+        try? await Task.sleep(nanoseconds: inputPosition == .bottom ? 120_000_000 : 220_000_000)
+        guard auth.isAuthenticated else { return }
         isComposerFocused = true
     }
 
@@ -493,6 +501,7 @@ struct CommentThreadView: View {
         let text = commentText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard auth.isAuthenticated, !text.isEmpty, !isSubmitting else { return }
         isSubmitting = true
+        submitError = nil
         do {
             if let replyTarget {
                 let reply = try await postTargetComment(content: text, parentId: replyTarget.id)
@@ -509,7 +518,10 @@ struct CommentThreadView: View {
             commentText = ""
             isComposerFocused = false
             onCountChange?(commentCount)
-        } catch {}
+        } catch {
+            submitError = error.localizedDescription
+            isComposerFocused = true
+        }
         isSubmitting = false
     }
 

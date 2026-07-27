@@ -21,6 +21,11 @@ enum PostSectionTarget {
     }
 }
 
+enum PostSectionPresentation: Equatable {
+    case compact
+    case fullWidthClippings
+}
+
 // MARK: - Helpers
 
 private func timeAgo(_ isoString: String) -> String {
@@ -71,6 +76,7 @@ private struct PostCard: View {
     let onPlayClip: ((UserPost) -> Void)?
     let onDelete: (String) -> Void
     let onLikeToggle: (String) -> Void
+    let presentation: PostSectionPresentation
 
     @State private var showComments = false
     @State private var showEcho = false
@@ -85,17 +91,21 @@ private struct PostCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // ── Main row ─────────────────────────────────────────────────────
-            HStack(alignment: .top, spacing: 0) {
-                // Thumbnail
+            if presentation == .fullWidthClippings {
                 thumbnailArea
-                    .frame(width: thumbW, height: thumbH)
-                    .clipShape(RoundedRectangle(cornerRadius: 0))
-
-                // Content: user + caption + actions
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .clipped()
+                clipRangeTimeline
                 contentArea
+            } else {
+                HStack(alignment: .top, spacing: 0) {
+                    thumbnailArea
+                        .frame(width: thumbW, height: thumbH)
+                        .clipShape(RoundedRectangle(cornerRadius: 0))
+                    contentArea
+                }
             }
-
         }
         .background(C.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -133,6 +143,36 @@ private struct PostCard: View {
         .onChange(of: post.commentCount) { _, newValue in
             displayedCommentCount = newValue
         }
+    }
+
+    private var clipRangeTimeline: some View {
+        VStack(spacing: 6) {
+            GeometryReader { proxy in
+                let duration = max(Double(post.markOut) * 1.25, Double(post.markOut + 30))
+                let start = min(max(Double(post.markIn) / duration, 0), 1)
+                let end = min(max(Double(post.markOut) / duration, start), 1)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(C.border)
+                    Capsule()
+                        .fill(C.watch)
+                        .frame(width: max(8, proxy.size.width * (end - start)))
+                        .offset(x: proxy.size.width * start)
+                }
+            }
+            .frame(height: 6)
+
+            HStack {
+                Text(fmtSec(post.markIn))
+                Spacer()
+                Text("Clipped range · \(fmtSec(max(0, post.markOut - post.markIn)))")
+                Spacer()
+                Text(fmtSec(post.markOut))
+            }
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .foregroundStyle(C.textMuted)
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
     }
 
     // MARK: Thumbnail
@@ -455,6 +495,8 @@ struct PostSectionView: View {
     var insertedPost: UserPost?
     var previewLimit: Int? = nil
     var startsExpanded: Bool = false
+    var presentation: PostSectionPresentation = .compact
+    var onAvailabilityChanged: ((Int) -> Void)? = nil
     var onShowMore: ((Int) -> Void)? = nil
     let onPlayClip: ((UserPost) -> Void)?
 
@@ -479,6 +521,8 @@ struct PostSectionView: View {
         insertedPost: UserPost? = nil,
         previewLimit: Int? = nil,
         startsExpanded: Bool = false,
+        presentation: PostSectionPresentation = .compact,
+        onAvailabilityChanged: ((Int) -> Void)? = nil,
         onShowMore: ((Int) -> Void)? = nil,
         onSeek: ((Double) -> Void)? = nil,
         onPlayClip: ((UserPost) -> Void)? = nil
@@ -489,6 +533,8 @@ struct PostSectionView: View {
         self.insertedPost = insertedPost
         self.previewLimit = previewLimit
         self.startsExpanded = startsExpanded
+        self.presentation = presentation
+        self.onAvailabilityChanged = onAvailabilityChanged
         self.onShowMore = onShowMore
         if let onPlayClip {
             self.onPlayClip = onPlayClip
@@ -504,11 +550,11 @@ struct PostSectionView: View {
         // Hidden while loading resolves to empty (matching web: returns null)
         if loading || !posts.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
-                Divider().background(C.border)
-                    .padding(.bottom, 16)
+                if presentation == .compact {
+                    Divider().background(C.border)
+                        .padding(.bottom, 16)
 
-                // ── Toggle header ────────────────────────────────────────────
-                HStack(spacing: 8) {
+                    HStack(spacing: 8) {
                     Button {
                         guard !loading && !posts.isEmpty else { return }
                         withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
@@ -550,6 +596,21 @@ struct PostSectionView: View {
                         }
                         .buttonStyle(.plain)
                     }
+                    }
+                } else if !loading {
+                    HStack {
+                        Text("Clippings")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(C.text)
+                        Spacer()
+                        Text("\(posts.count)")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(C.bg)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(C.watch, in: Capsule())
+                    }
+                    .padding(.bottom, 14)
                 }
 
                 // ── Expanded content ─────────────────────────────────────────
@@ -566,7 +627,14 @@ struct PostSectionView: View {
                             .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
                         } else {
                             ForEach(visiblePosts) { post in
-                                PostCard(post: post, target: target, onPlayClip: onPlayClip, onDelete: deletePost, onLikeToggle: toggleLike)
+                                PostCard(
+                                    post: post,
+                                    target: target,
+                                    onPlayClip: onPlayClip,
+                                    onDelete: deletePost,
+                                    onLikeToggle: toggleLike,
+                                    presentation: presentation
+                                )
                                     .transition(.asymmetric(
                                         insertion: .move(edge: .bottom).combined(with: .opacity),
                                         removal: .opacity
@@ -656,6 +724,7 @@ struct PostSectionView: View {
             guard generation == loadGeneration else { return }
             withAnimation(contentAnimation) {
                 posts = fetchedPosts
+                onAvailabilityChanged?(fetchedPosts.count)
                 if expandAfterLoad, !fetchedPosts.isEmpty {
                     expanded = true
                     visibleCount = max(visibleCount, min(pageSize, fetchedPosts.count))
@@ -666,6 +735,7 @@ struct PostSectionView: View {
             guard generation == loadGeneration else { return }
             withAnimation(contentAnimation) {
                 loading = false
+                onAvailabilityChanged?(0)
             }
         }
     }
@@ -676,6 +746,7 @@ struct PostSectionView: View {
             await MainActor.run {
                 withAnimation(contentAnimation) {
                     posts.removeAll { $0.id == id }
+                    onAvailabilityChanged?(posts.count)
                 }
             }
         }
@@ -730,6 +801,7 @@ struct PostSectionView: View {
             expanded = true
             visibleCount = max(visibleCount, min(pageSize, posts.count))
             loading = false
+            onAvailabilityChanged?(posts.count)
         }
     }
 }

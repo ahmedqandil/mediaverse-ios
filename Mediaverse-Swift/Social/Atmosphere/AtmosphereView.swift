@@ -303,7 +303,7 @@ struct AtmosphereView: View {
             ScrollView {
                 LazyVStack(spacing: 12) {
                     Color.clear.frame(height: 0).id("atmosphere-feed-top")
-                    atmosphereBoundaryListings(model.beforeFeedListings)
+                    atmosphereBoundaryListings(model.beforeFeedListings, allowsFlashes: true)
                     ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                         switch item {
                         case .ripple(let ripple):
@@ -333,7 +333,7 @@ struct AtmosphereView: View {
                                 .padding(.vertical, 6)
                         }
                     }
-                    atmosphereBoundaryListings(model.afterFeedListings)
+                    atmosphereBoundaryListings(model.afterFeedListings, allowsFlashes: true)
                 }
                 .padding(.vertical, C.pagePad)
                 .padding(.bottom, C.bottomMenuClearance)
@@ -510,7 +510,7 @@ struct AtmosphereView: View {
             ScrollView {
                 LazyVStack(spacing: 12) {
                     Color.clear.frame(height: 0).id("atmosphere-discover-top")
-                    atmosphereBoundaryListings(model.beforeFeedListings)
+                    atmosphereBoundaryListings(model.beforeFeedListings, allowsFlashes: false)
                     ForEach(ripples) {
                         RippleCard(
                             ripple: $0,
@@ -528,7 +528,7 @@ struct AtmosphereView: View {
                             }
                         )
                     }
-                    atmosphereBoundaryListings(model.afterFeedListings)
+                    atmosphereBoundaryListings(model.afterFeedListings, allowsFlashes: false)
                 }
                 .padding(.vertical, C.pagePad)
                 .padding(.horizontal, feedCardInset)
@@ -557,7 +557,7 @@ struct AtmosphereView: View {
             ScrollView {
                 LazyVStack(spacing: 10) {
                     Color.clear.frame(height: 0).id("atmosphere-vibes-top")
-                    atmosphereBoundaryListings(model.beforeFeedListings)
+                    atmosphereBoundaryListings(model.beforeFeedListings, allowsFlashes: false)
                     HStack {
                         Spacer()
                         Button {
@@ -605,7 +605,7 @@ struct AtmosphereView: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    atmosphereBoundaryListings(model.afterFeedListings)
+                    atmosphereBoundaryListings(model.afterFeedListings, allowsFlashes: false)
                 }
                 .padding(C.pagePad)
                 .padding(.bottom, C.bottomMenuClearance)
@@ -621,8 +621,11 @@ struct AtmosphereView: View {
     }
 
     @ViewBuilder
-    private func atmosphereBoundaryListings(_ listings: [AssembledListing]) -> some View {
-        ForEach(listings) { listing in
+    private func atmosphereBoundaryListings(
+        _ listings: [AssembledListing],
+        allowsFlashes: Bool
+    ) -> some View {
+        ForEach(listings.filter { allowsFlashes || $0.normalizedTemplateType != "stories" }) { listing in
             NativeCurationListingView(listing: listing)
                 .padding(.vertical, 6)
         }
@@ -717,8 +720,9 @@ private struct AtmospherePublishedVideoCard<MediaCard: View>: View {
                 energyAggregate = aggregate
                 energyCount = aggregate.count
             }
-            .presentationDetents([.medium])
+            .presentationDetents([.height(610), .large])
             .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
         }
         .sheet(isPresented: $showComments) {
             StandardCommentsSheet(

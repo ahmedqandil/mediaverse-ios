@@ -267,9 +267,7 @@ struct EchoVibeSheet: View {
             TextField("Search by Vibe name", text: $query)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .padding(12)
-                .background(C.elevated)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .westreemField(minHeight: 48)
 
             if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text("Vibes appear after you start typing.")
@@ -304,20 +302,37 @@ struct EchoVibeSheet: View {
 
     private var echoMode: some View {
         VStack(spacing: 10) {
-            Picker("Echo mode", selection: $isQuoteEcho) {
-                Text("Echo").tag(false)
-                Text("Quote Echo").tag(true)
+            HStack(spacing: 6) {
+                echoModeButton("Echo", selected: !isQuoteEcho) { isQuoteEcho = false }
+                echoModeButton("Quote Echo", selected: isQuoteEcho) { isQuoteEcho = true }
             }
-            .pickerStyle(.segmented)
+            .padding(4)
+            .background(C.elevated)
+            .clipShape(RoundedRectangle(cornerRadius: 11))
 
             if isQuoteEcho {
                 TextField("Add your take…", text: $quote, axis: .vertical)
                     .lineLimit(3...6)
-                    .padding(12)
-                    .background(C.elevated)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .westreemField(minHeight: 104)
             }
         }
+    }
+
+    private func echoModeButton(
+        _ title: String,
+        selected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(selected ? C.bg : C.text.opacity(0.78))
+                .frame(maxWidth: .infinity)
+                .frame(height: 36)
+                .background(selected ? C.watch : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
     }
 
     private var publishButton: some View {

@@ -2,6 +2,28 @@ import AVFoundation
 import Foundation
 import SwiftUI
 
+private extension AVPlayer.TimeControlStatus {
+    var debugName: String {
+        switch self {
+        case .paused: "paused"
+        case .waitingToPlayAtSpecifiedRate: "waiting"
+        case .playing: "playing"
+        @unknown default: "unknown"
+        }
+    }
+}
+
+private extension AVPlayerItem.Status {
+    var debugName: String {
+        switch self {
+        case .unknown: "unknown"
+        case .readyToPlay: "ready"
+        case .failed: "failed"
+        @unknown default: "unknown"
+        }
+    }
+}
+
 enum AdDeliveryMode: String, Equatable {
     case none
     case csai
@@ -182,7 +204,7 @@ struct SGAIPlaybackContext: Equatable {
 }
 
 enum SGAIPlaybackURLBuilder {
-    static let productionWorker = URL(string: "https://westreem-sgai.ssdai.workers.dev")!
+    static let productionWorker = URL(string: "https://ads.westreem.com")!
 
     static func makeURL(
         streamMaster: URL,
@@ -380,24 +402,237 @@ struct SGAIBootstrapResponse: Decodable {
     }
 }
 
+struct SGAIBootstrapLoad {
+    let payload: SGAIBootstrapResponse
+    let serverTiming: String?
+    let cfRay: String?
+    let networkTiming: String
+}
+
+private final class SGAIBootstrapMetricsDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var collectedMetrics: URLSessionTaskMetrics?
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didFinishCollecting metrics: URLSessionTaskMetrics
+    ) {
+        lock.lock()
+        collectedMetrics = metrics
+        lock.unlock()
+    }
+
+    func summary() -> String {
+        lock.lock()
+        let metrics = collectedMetrics
+        lock.unlock()
+        guard let metrics, let transaction = metrics.transactionMetrics.last else {
+            return "networkMetrics=missing"
+        }
+
+        func milliseconds(_ start: Date?, _ end: Date?) -> Int {
+            guard let start, let end else { return 0 }
+            return max(0, Int(end.timeIntervalSince(start) * 1_000))
+        }
+
+        return [
+            "dnsMs=\(milliseconds(transaction.domainLookupStartDate, transaction.domainLookupEndDate))",
+            "connectMs=\(milliseconds(transaction.connectStartDate, transaction.connectEndDate))",
+            "tlsMs=\(milliseconds(transaction.secureConnectionStartDate, transaction.secureConnectionEndDate))",
+            "requestMs=\(milliseconds(transaction.requestStartDate, transaction.requestEndDate))",
+            "firstByteMs=\(milliseconds(transaction.requestEndDate, transaction.responseStartDate))",
+            "responseMs=\(milliseconds(transaction.responseStartDate, transaction.responseEndDate))",
+            "taskMs=\(max(0, Int(metrics.taskInterval.duration * 1_000)))",
+            "protocol=\(transaction.networkProtocolName ?? "unknown")",
+            "reused=\(transaction.isReusedConnection)",
+            "proxy=\(transaction.isProxyConnection)"
+        ].joined(separator: " ")
+    }
+}
+
 enum SGAIBootstrapClient {
     static func load(
         streamMaster: URL,
         context: SGAIPlaybackContext,
         policy: EffectiveAdPolicy
-    ) async -> SGAIBootstrapResponse? {
+    ) async -> SGAIBootstrapLoad? {
         guard let url = SGAIPlaybackURLBuilder.bootstrapURL(
             streamMaster: streamMaster,
             context: context,
             policy: policy
         ) else { return nil }
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-            return try JSONDecoder().decode(SGAIBootstrapResponse.self, from: data)
+            // Give an almost-ready same-origin warm-up a brief chance to finish,
+            // but never serialize the full health request ahead of bootstrap.
+            // If the connection is still cold, both requests continue in
+            // parallel and bootstrap remains on the critical path.
+            let preconnectWaitMs = await SGAIConnectionWarmer.waitUntilReady(
+                maxWait: .milliseconds(250)
+            )
+            let metricsDelegate = SGAIBootstrapMetricsDelegate()
+            let (data, response) = try await URLSession.shared.data(
+                for: URLRequest(url: url),
+                delegate: metricsDelegate
+            )
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+            return SGAIBootstrapLoad(
+                payload: try JSONDecoder().decode(SGAIBootstrapResponse.self, from: data),
+                serverTiming: http.value(forHTTPHeaderField: "Server-Timing"),
+                cfRay: http.value(forHTTPHeaderField: "CF-Ray"),
+                networkTiming: "preconnectWaitMs=\(preconnectWaitMs) " + metricsDelegate.summary()
+            )
         } catch {
             return nil
         }
+    }
+}
+
+@MainActor
+enum SGAIConnectionWarmer {
+    private static var task: Task<Void, Never>?
+    private static var startedAt: Date?
+
+    static func warm() {
+        if let startedAt, Date().timeIntervalSince(startedAt) < 20 {
+            return
+        }
+        startedAt = Date()
+        task = Task {
+            var request = URLRequest(
+                url: SGAIPlaybackURLBuilder.productionWorker.appendingPathComponent("health")
+            )
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.timeoutInterval = 4
+            _ = try? await URLSession.shared.data(for: request)
+        }
+    }
+
+    static func waitUntilReady(maxWait: Duration) async -> Int {
+        guard let task else { return 0 }
+        let startedAt = ContinuousClock.now
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await task.value
+            }
+            group.addTask {
+                try? await Task.sleep(for: maxWait)
+            }
+            _ = await group.next()
+            group.cancelAll()
+        }
+        let elapsed = startedAt.duration(to: .now).components
+        return Int(elapsed.seconds) * 1_000
+            + Int(elapsed.attoseconds / 1_000_000_000_000_000)
+    }
+}
+
+enum SGAICreativeWarmer {
+    private static let warmed = NSCache<NSURL, NSNumber>()
+
+    static func warm(_ assets: [SGAIAsset]) async -> [String] {
+        await withTaskGroup(of: String?.self, returning: [String].self) { group in
+            for (index, asset) in assets.prefix(2).enumerated() {
+                guard let url = URL(string: asset.uri),
+                      warmed.object(forKey: url as NSURL) == nil else { continue }
+                warmed.setObject(1, forKey: url as NSURL)
+                group.addTask { await warmHLS(at: url, index: index) }
+            }
+            var results: [String] = []
+            for await result in group {
+                if let result { results.append(result) }
+            }
+            return results.sorted()
+        }
+    }
+
+    private static func warmHLS(at masterURL: URL, index: Int) async -> String? {
+        let totalStartedAt = Date()
+        var masterMs = 0
+        var renditionMs = 0
+        var firstMediaMs = 0
+        guard masterURL.path.lowercased().hasSuffix(".m3u8") else {
+            return timing(index, masterURL, totalStartedAt, masterMs, renditionMs, firstMediaMs, "unsupported-non-hls")
+        }
+        do {
+            var masterRequest = URLRequest(url: masterURL)
+            masterRequest.cachePolicy = .returnCacheDataElseLoad
+            masterRequest.timeoutInterval = 4
+            let masterStartedAt = Date()
+            let (masterData, masterResponse) = try await URLSession.shared.data(for: masterRequest)
+            masterMs = Int(Date().timeIntervalSince(masterStartedAt) * 1_000)
+            guard (masterResponse as? HTTPURLResponse)?.statusCode == 200,
+                  let master = String(data: masterData, encoding: .utf8),
+                  let renditionURL = firstPlaylistURL(in: master, relativeTo: masterURL) else {
+                return timing(index, masterURL, totalStartedAt, masterMs, renditionMs, firstMediaMs, "master-invalid")
+            }
+
+            var renditionRequest = URLRequest(url: renditionURL)
+            renditionRequest.cachePolicy = .returnCacheDataElseLoad
+            renditionRequest.timeoutInterval = 4
+            let renditionStartedAt = Date()
+            let (renditionData, renditionResponse) = try await URLSession.shared.data(for: renditionRequest)
+            renditionMs = Int(Date().timeIntervalSince(renditionStartedAt) * 1_000)
+            guard (renditionResponse as? HTTPURLResponse)?.statusCode == 200,
+                  let rendition = String(data: renditionData, encoding: .utf8),
+                  let firstMediaURL = firstMediaURL(in: rendition, relativeTo: renditionURL) else {
+                return timing(index, masterURL, totalStartedAt, masterMs, renditionMs, firstMediaMs, "rendition-invalid")
+            }
+
+            // Establish the CDN path without downloading a segment twice. AVPlayer
+            // remains the owner of media bytes and playback.
+            var request = URLRequest(url: firstMediaURL)
+            request.httpMethod = "HEAD"
+            request.cachePolicy = .returnCacheDataElseLoad
+            request.timeoutInterval = 3
+            let firstMediaStartedAt = Date()
+            _ = try? await URLSession.shared.data(for: request)
+            firstMediaMs = Int(Date().timeIntervalSince(firstMediaStartedAt) * 1_000)
+            return timing(index, masterURL, totalStartedAt, masterMs, renditionMs, firstMediaMs, "ready")
+        } catch {
+            // Warming is opportunistic and must never affect playback.
+            return timing(index, masterURL, totalStartedAt, masterMs, renditionMs, firstMediaMs, "failed")
+        }
+    }
+
+    private static func timing(
+        _ index: Int,
+        _ masterURL: URL,
+        _ startedAt: Date,
+        _ masterMs: Int,
+        _ renditionMs: Int,
+        _ firstMediaMs: Int,
+        _ status: String
+    ) -> String {
+        let totalMs = Int(Date().timeIntervalSince(startedAt) * 1_000)
+        return "creative_warm index=\(index) host=\(masterURL.host ?? "unknown") "
+            + "masterMs=\(masterMs) renditionMs=\(renditionMs) firstMediaMs=\(firstMediaMs) "
+            + "totalMs=\(totalMs) status=\(status)"
+    }
+
+    private static func firstPlaylistURL(in playlist: String, relativeTo base: URL) -> URL? {
+        for line in playlist.split(whereSeparator: \.isNewline) {
+            let value = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty, !value.hasPrefix("#"), value.contains(".m3u8") else { continue }
+            return URL(string: value, relativeTo: base)?.absoluteURL
+        }
+        return nil
+    }
+
+    private static func firstMediaURL(in playlist: String, relativeTo base: URL) -> URL? {
+        for line in playlist.split(whereSeparator: \.isNewline) {
+            let value = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value.hasPrefix("#EXT-X-MAP"),
+               let range = value.range(of: #"URI="([^"]+)""#, options: .regularExpression) {
+                let matched = String(value[range])
+                    .replacingOccurrences(of: "URI=\"", with: "")
+                    .replacingOccurrences(of: "\"", with: "")
+                return URL(string: matched, relativeTo: base)?.absoluteURL
+            }
+            guard !value.isEmpty, !value.hasPrefix("#") else { continue }
+            return URL(string: value, relativeTo: base)?.absoluteURL
+        }
+        return nil
     }
 }
 
@@ -502,6 +737,8 @@ final class ServerAdPlaybackCoordinator: ObservableObject {
     private var lastSSAIPlaybackTime: Double?
     private var isCorrectingSSAISeek = false
     private var scheduleTask: Task<Void, Never>?
+    private var interstitialStartTask: Task<Void, Never>?
+    private var hasLoggedInterstitialProgress = false
     private var firedEvents = Set<String>()
 
     var interstitialPlayer: AVPlayer? {
@@ -627,6 +864,17 @@ final class ServerAdPlaybackCoordinator: ObservableObject {
             }
         }
         timeObserverPlayer = monitor.interstitialPlayer
+        monitor.interstitialPlayer.automaticallyWaitsToMinimizeStalling = false
+        monitor.interstitialPlayer.currentItem?.preferredForwardBufferDuration = 2
+        debugPlayback(
+            "monitor_configured primaryStatus=\(player.timeControlStatus.debugName) "
+            + "interstitialStatus=\(monitor.interstitialPlayer.timeControlStatus.debugName)"
+        )
+    }
+
+    func acceptBootstrap(_ bootstrap: SGAIBootstrapResponse, context: SGAIPlaybackContext) {
+        guard self.context == context, !bootstrap.assets.isEmpty else { return }
+        bootstrapAssetsByBreak[bootstrap.breakId] = bootstrap.assets
     }
 
     func configureSSAI(
@@ -717,6 +965,10 @@ final class ServerAdPlaybackCoordinator: ObservableObject {
         } else if let monitor {
             track("skip")
             monitor.interstitialPlayer.advanceToNextItem()
+            // AVFoundation does not consistently restart the primary timeline
+            // after an interstitial is skipped. Resume it explicitly so the ad
+            // overlay cannot leave the watch screen on a frozen final frame.
+            primaryPlayer?.playImmediately(atRate: 1)
         }
     }
 
@@ -745,6 +997,8 @@ final class ServerAdPlaybackCoordinator: ObservableObject {
     func reset() {
         scheduleTask?.cancel()
         scheduleTask = nil
+        interstitialStartTask?.cancel()
+        interstitialStartTask = nil
         if let timeObserverPlayer, let timeObserver {
             timeObserverPlayer.removeTimeObserver(timeObserver)
         }
@@ -763,6 +1017,7 @@ final class ServerAdPlaybackCoordinator: ObservableObject {
         lastSSAIPlaybackTime = nil
         isCorrectingSSAISeek = false
         firedEvents = []
+        hasLoggedInterstitialProgress = false
         presentation = nil
         isPaused = false
     }
@@ -837,12 +1092,28 @@ final class ServerAdPlaybackCoordinator: ObservableObject {
     private func handleEventChange(monitor: AVPlayerInterstitialEventMonitor?) {
         guard let monitor else { return }
         guard let event = monitor.currentEvent else {
+            debugPlayback("event_inactive")
+            interstitialStartTask?.cancel()
+            interstitialStartTask = nil
             if presentation != nil { track("complete") }
             presentation = nil
             assets = []
             firedEvents = []
+            isPaused = false
+            primaryPlayer?.playImmediately(atRate: 1)
+            debugPlayback(
+                "content_resume_requested primary=\(primaryPlayer?.timeControlStatus.debugName ?? "missing")"
+            )
             return
         }
+        monitor.interstitialPlayer.automaticallyWaitsToMinimizeStalling = false
+        monitor.interstitialPlayer.currentItem?.preferredForwardBufferDuration = 2
+        debugPlayback(
+            "event_active id=\(event.identifier) "
+            + "itemStatus=\(monitor.interstitialPlayer.currentItem?.status.debugName ?? "missing") "
+            + "timeControl=\(monitor.interstitialPlayer.timeControlStatus.debugName)"
+        )
+        resumeActiveInterstitial()
 
         let breakId = SGAIBreakIdentifier.breakId(from: event.identifier)
         if let bootstrapAssets = bootstrapAssetsByBreak.removeValue(forKey: breakId),
@@ -903,6 +1174,18 @@ final class ServerAdPlaybackCoordinator: ObservableObject {
         elapsed: Double
     ) {
         guard monitor?.currentEvent != nil, let current = presentation else { return }
+        if elapsed.isFinite, elapsed > 0.05 {
+            if !hasLoggedInterstitialProgress {
+                hasLoggedInterstitialProgress = true
+                debugPlayback(
+                    "playback_started elapsedMs=\(Int(elapsed * 1_000)) "
+                    + "timeControl=\(monitor?.interstitialPlayer.timeControlStatus.debugName ?? "missing")"
+                )
+            }
+            interstitialStartTask?.cancel()
+            interstitialStartTask = nil
+            isPaused = false
+        }
         let itemURL = (monitor?.interstitialPlayer.currentItem?.asset as? AVURLAsset)?.url
         let matched = assets.first {
             guard let assetURL = URL(string: $0.uri), let itemURL else { return false }
@@ -947,6 +1230,70 @@ final class ServerAdPlaybackCoordinator: ObservableObject {
         if progress >= 0.25 { track("firstQuartile") }
         if progress >= 0.50 { track("midpoint") }
         if progress >= 0.75 { track("thirdQuartile") }
+    }
+
+    private func resumeActiveInterstitial() {
+        interstitialStartTask?.cancel()
+        isPaused = false
+
+        // The primary player's play state drives AVFoundation's interstitial
+        // timeline. Starting only the dedicated interstitial player can leave a
+        // ready preroll paused until another UI transition calls play().
+        primaryPlayer?.play()
+        monitor?.interstitialPlayer.playImmediately(atRate: 1)
+        debugPlayback(
+            "play_requested primary=\(primaryPlayer?.timeControlStatus.debugName ?? "missing") "
+            + "interstitial=\(monitor?.interstitialPlayer.timeControlStatus.debugName ?? "missing") "
+            + "itemStatus=\(monitor?.interstitialPlayer.currentItem?.status.debugName ?? "missing")"
+        )
+
+        // The event notification can arrive before AVFoundation has attached
+        // the interstitial item. Retry briefly until playback advances; this is
+        // bounded and stops as soon as the event starts or ends.
+        interstitialStartTask = Task { [weak self] in
+            for _ in 0..<20 {
+                do {
+                    try await Task.sleep(for: .milliseconds(100))
+                } catch {
+                    return
+                }
+                guard let self,
+                      !Task.isCancelled,
+                      let monitor = self.monitor,
+                      monitor.currentEvent != nil else { return }
+                let elapsed = monitor.interstitialPlayer.currentTime().seconds
+                if elapsed.isFinite, elapsed > 0.05 {
+                    self.interstitialStartTask = nil
+                    return
+                }
+                self.primaryPlayer?.play()
+                monitor.interstitialPlayer.playImmediately(atRate: 1)
+            }
+            if let self {
+                let item = self.monitor?.interstitialPlayer.currentItem
+                let errorEvent = item?.errorLog()?.events.last
+                self.debugPlayback(
+                    "play_retry_exhausted primary=\(self.primaryPlayer?.timeControlStatus.debugName ?? "missing") "
+                    + "interstitial=\(self.monitor?.interstitialPlayer.timeControlStatus.debugName ?? "missing") "
+                    + "waiting=\(self.monitor?.interstitialPlayer.reasonForWaitingToPlay?.rawValue ?? "none") "
+                    + "itemStatus=\(item?.status.debugName ?? "missing") "
+                    + "likelyToKeepUp=\(item?.isPlaybackLikelyToKeepUp ?? false) "
+                    + "bufferEmpty=\(item?.isPlaybackBufferEmpty ?? true) "
+                    + "loadedRanges=\(item?.loadedTimeRanges.count ?? 0) "
+                    + "itemError=\(item?.error?.localizedDescription ?? "none") "
+                    + "errorLogStatus=\(errorEvent?.errorStatusCode ?? 0) "
+                    + "errorLog=\(errorEvent?.errorComment ?? "none") "
+                    + "errorURI=\(errorEvent?.uri ?? "none")"
+                )
+            }
+            self?.interstitialStartTask = nil
+        }
+    }
+
+    private func debugPlayback(_ message: String) {
+#if DEBUG
+        print("[Ads][Video][SGAI] \(message)")
+#endif
     }
 
     fileprivate func track(_ event: String) {
@@ -1037,6 +1384,8 @@ struct ServerAdOverlay: View {
     var isPaused = false
     var isMuted = false
     var showBrandCard = true
+    var bottomContentInset: CGFloat = 0
+    var progressBottomInset: CGFloat? = nil
     var onTogglePause: (() -> Void)?
     var onToggleMute: (() -> Void)?
     var onFullscreen: (() -> Void)?
@@ -1187,12 +1536,20 @@ struct ServerAdOverlay: View {
                     .padding(.bottom, 10)
                 }
 
-                GeometryReader { geo in
-                    Color.yellow
-                        .frame(width: geo.size.width * min(max(presentation.progress, 0), 1))
-                }
-                .frame(height: 3)
             }
+            .padding(.bottom, vertical ? bottomContentInset : 0)
+
+            GeometryReader { geo in
+                Color.yellow
+                    .frame(width: geo.size.width * min(max(presentation.progress, 0), 1))
+            }
+            .frame(height: 3)
+            .padding(
+                .bottom,
+                vertical ? (progressBottomInset ?? bottomContentInset) : 0
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .zIndex(2)
         }
         .background(Color.black.opacity(0.05))
     }

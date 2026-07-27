@@ -260,6 +260,14 @@ struct MicrodramaWatchView: View {
     @Environment(\.scenePhase) private var scenePhase
     private var currentEp: MicrodramaEpisode? { episodes.indices.contains(currentIdx) ? episodes[currentIdx] : nil }
 
+    private var activeWindowSafeAreaInsets: UIEdgeInsets {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)?
+            .safeAreaInsets ?? .zero
+    }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -281,7 +289,7 @@ struct MicrodramaWatchView: View {
         }
         .navigationBarHidden(true)
         .navigationBarBackButtonHidden(true)
-        .disablesInteractiveSwipeBack()
+        .enablesInteractiveSwipeBack()
         .task { await load() }
         .alert("Unlock unavailable", isPresented: Binding(
             get: { unlockMessage != nil },
@@ -602,43 +610,59 @@ struct MicrodramaWatchView: View {
     }
 
     private func rewardedAdOverlay(decision: AdDecision, episodeID: String) -> some View {
-        ZStack(alignment: .topTrailing) {
-            Color.black.ignoresSafeArea()
-            NativeAdPlayerView(
-                decision: decision,
-                contentId: episodeID,
-                placement: adUnlockPolicy?.placement ?? adUnlockPlacement ?? "microdrama_unlock",
-                userId: auth.currentUser?.id,
-                aspectRatio: 9 / 16,
-                fillVerticalContainer: true,
-                overrideSkippable: adUnlockPolicy?.skippable,
-                overrideSkipAfterSec: adUnlockPolicy?.skipAfterSec,
-                onSkip: {
-                    rewardedAdCompleted = false
-                },
-                onComplete: {
-                    rewardedAdCompleted = true
-                }
-            ) {
-                Task { await finishRewardedAd(for: episodeID) }
-            }
-            .ignoresSafeArea()
+        GeometryReader { geo in
+            // A full-screen ignored-safe-area container can report zero here.
+            // Fall back to the active window so Dynamic Island/status-bar and
+            // home-indicator devices always receive real chrome clearance.
+            let topSafeArea = max(geo.safeAreaInsets.top, activeWindowSafeAreaInsets.top)
+            let bottomSafeArea = max(geo.safeAreaInsets.bottom, activeWindowSafeAreaInsets.bottom)
+            let topInset = max(20, topSafeArea + 12)
+            let bottomInset = max(20, bottomSafeArea + 16)
 
-            Button {
-                rewardedAdCompleted = false
-                rewardedAdDecision = nil
-                rewardedEpisodeID = nil
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
-                    .background(.black.opacity(0.55), in: Circle())
-                    .overlay { Circle().stroke(.white.opacity(0.20), lineWidth: 1) }
+            ZStack(alignment: .topTrailing) {
+                Color.black.ignoresSafeArea()
+                NativeAdPlayerView(
+                    decision: decision,
+                    contentId: episodeID,
+                    placement: adUnlockPolicy?.placement ?? adUnlockPlacement ?? "microdrama_unlock",
+                    userId: auth.currentUser?.id,
+                    aspectRatio: 9 / 16,
+                    topContentInset: topInset,
+                    bottomContentInset: bottomInset,
+                    topTrailingContentInset: 52,
+                    progressBottomInset: 0,
+                    fillVerticalContainer: true,
+                    overrideSkippable: adUnlockPolicy?.skippable,
+                    overrideSkipAfterSec: adUnlockPolicy?.skipAfterSec,
+                    onSkip: {
+                        rewardedAdCompleted = false
+                    },
+                    onComplete: {
+                        rewardedAdCompleted = true
+                    }
+                ) {
+                    Task { await finishRewardedAd(for: episodeID) }
+                }
+                .ignoresSafeArea()
+
+                Button {
+                    rewardedAdCompleted = false
+                    rewardedAdDecision = nil
+                    rewardedEpisodeID = nil
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(.black.opacity(0.55), in: Circle())
+                        .overlay { Circle().stroke(.white.opacity(0.20), lineWidth: 1) }
+                }
+                .padding(.top, topInset)
+                .padding(.trailing, 14)
+                .accessibilityLabel("Close ad")
             }
-            .padding(.top, 12)
-            .padding(.trailing, 56)
         }
+        .ignoresSafeArea()
     }
 
     @MainActor
@@ -810,7 +834,8 @@ private struct EpisodePlayerSlide: View {
             if canPlay {
                 Color.clear
                     .contentShape(Rectangle())
-                    .onTapGesture { playbackManager.togglePlayback(episode.id) }
+                    .onTapGesture(count: 2) { handleDoubleTapEnergy() }
+                    .onTapGesture(count: 1) { playbackManager.togglePlayback(episode.id) }
 
                 playbackStatusOverlay
             }
@@ -867,8 +892,9 @@ private struct EpisodePlayerSlide: View {
             ContentEnergySheet(kind: .episode, contentID: episode.id) {
                 energyAggregate = $0
             }
-            .presentationDetents([.medium])
+            .presentationDetents([.height(610), .large])
             .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
         }
         .task(id: episode.id + "_\(shouldPrepare)") {
             if shouldPrepare {
@@ -1033,14 +1059,7 @@ private struct EpisodePlayerSlide: View {
 
     private func topBar(topInset: CGFloat) -> some View {
         HStack {
-            Button(action: onBack) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(10)
-                    .background(Color.black.opacity(0.4))
-                    .clipShape(Circle())
-            }
+            PlatformBackButton(action: onBack)
 
             Spacer()
 
@@ -1121,6 +1140,22 @@ private struct EpisodePlayerSlide: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.58))
             }
+
+            if let aggregate = energyAggregate, aggregate.count > 0 {
+                Button {
+                    presentEnergy()
+                } label: {
+                    SocialEnergyMeter(
+                        total: Int(((aggregate.avg ?? 0) * Double(aggregate.count)).rounded()),
+                        count: aggregate.count,
+                        tags: aggregate.topTags
+                    )
+                    .frame(maxWidth: 270, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("View Microdrama Energy")
+                .padding(.bottom, 18)
+            }
         }
         .padding(.leading, horizontalInset)
         .padding(.trailing, horizontalInset + trailingInset)
@@ -1171,11 +1206,7 @@ private struct EpisodePlayerSlide: View {
                 }(),
                 labelColor: .white
             ) {
-                if isAuthenticated {
-                    showEnergy = true
-                } else {
-                    NotificationCenter.default.post(name: .profileTabRequested, object: nil)
-                }
+                presentEnergy()
             }
 
             railButton(icon: "message-square", fallback: "bubble.left", label: commentCount > 0 ? formatCount(commentCount) : "Comment") {
@@ -1231,6 +1262,18 @@ private struct EpisodePlayerSlide: View {
         guard let url = URL(string: "\(C.baseURL)/microdramas/watch/\(show?.id ?? episode.id)?episode=\(episode.episodeNumber)") else { return }
         let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
         activity.presentFromRoot()
+    }
+
+    private func handleDoubleTapEnergy() {
+        presentEnergy()
+    }
+
+    private func presentEnergy() {
+        if isAuthenticated {
+            showEnergy = true
+        } else {
+            NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+        }
     }
 
     @MainActor

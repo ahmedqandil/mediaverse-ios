@@ -271,18 +271,7 @@ struct WatchPlayerChrome<MarkerOverlay: View>: View {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
                     if let onBack {
-                        Button {
-                            onBack()
-                        } label: {
-                            MediaverseIcon(name: "chevron-down", fallbackSystemName: "chevron.down")
-                                .frame(width: 18, height: 18)
-                                .foregroundStyle(.white)
-                                .frame(width: 42, height: 42)
-                                .background(.black.opacity(0.36))
-                                .clipShape(Circle())
-                                .overlay { Circle().stroke(.white.opacity(0.12), lineWidth: 1) }
-                        }
-                        .buttonStyle(.plain)
+                        PlatformBackButton(action: onBack)
                     }
 
                     if let onPrevious {

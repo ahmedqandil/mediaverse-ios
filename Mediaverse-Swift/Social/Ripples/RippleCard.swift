@@ -264,8 +264,9 @@ struct RippleCard: View {
         .accessibilityElement(children: .contain)
         .sheet(isPresented: $showsEnergy) {
             RippleEnergySheet(controller: engagement)
-                .presentationDetents([.medium])
+                .presentationDetents([.height(610), .large])
                 .presentationDragIndicator(.visible)
+                .presentationCornerRadius(28)
         }
         .sheet(isPresented: $showsShare) {
             if let shareURL {
@@ -280,7 +281,7 @@ struct RippleCard: View {
             EchoVibeSheet(ripple: ripple) { added in
                 engagement.addEchoes(added)
             }
-            .presentationDetents([.large])
+            .presentationDetents([.height(610), .large])
             .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showsEdit) {
@@ -1082,8 +1083,9 @@ private struct RipplePhotoViewerPage: View {
             RipplePhotoEnergySheet(attachmentId: photo.id) { aggregate in
                 apply(aggregate)
             }
-            .presentationDetents([.medium, .large])
+            .presentationDetents([.large])
             .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
         }
         .sheet(isPresented: $showsComments) {
             StandardCommentsSheet(
@@ -1142,12 +1144,13 @@ private struct RipplePhotoEnergySheet: View {
     let attachmentId: String
     let onSaved: (RippleEnergyAggregate) -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var overall = 3
+    @State private var overall = 0
     @State private var tags = Set<String>()
     @State private var isLoading = false
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var hasExistingEnergy = false
+    @State private var confirmationMessage: String?
 
     var body: some View {
         SocialEnergyForm(
@@ -1157,6 +1160,7 @@ private struct RipplePhotoEnergySheet: View {
             selectedTags: $tags,
             isSaving: isSaving || isLoading,
             errorMessage: errorMessage,
+            confirmationMessage: confirmationMessage,
             onClose: { dismiss() },
             onSubmit: { Task { await save() } },
             onRemove: hasExistingEnergy ? { Task { await remove() } } : nil
@@ -1175,7 +1179,7 @@ private struct RipplePhotoEnergySheet: View {
             ).ripplePhotoEnergy(attachmentId: attachmentId)
             if let current = response.userRating {
                 overall = current.overall
-                tags = Set(current.tags)
+                tags = Set(current.tags.map(canonicalEnergyTag))
                 hasExistingEnergy = true
             }
         } catch {
@@ -1196,6 +1200,11 @@ private struct RipplePhotoEnergySheet: View {
             )
             let refreshed = try await api.ripplePhotoEnergy(attachmentId: attachmentId)
             onSaved(refreshed.aggregate)
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) {
+                confirmationMessage = personalEnergyFeeling(tags: tags, overall: overall)
+            }
+            try? await Task.sleep(for: .milliseconds(1_200))
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
@@ -1268,7 +1277,7 @@ private struct RippleLinkAttachment: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(attachment.linkTitle ?? attachment.linkDomain ?? "Open link")
                     .font(.subheadline.bold())
-                    .foregroundStyle(C.text)
+                    .foregroundStyle(C.textMuted)
                     .lineLimit(1)
                 if let description = attachment.linkDescription {
                     Text(description)
@@ -1718,8 +1727,9 @@ private struct RipplePollCard: View {
 private struct RippleEnergySheet: View {
     @ObservedObject var controller: RippleEngagementController
     @Environment(\.dismiss) private var dismiss
-    @State private var overall = 3
+    @State private var overall = 0
     @State private var tags: Set<String> = []
+    @State private var confirmationMessage: String?
 
     var body: some View {
         SocialEnergyForm(
@@ -1729,10 +1739,16 @@ private struct RippleEnergySheet: View {
             selectedTags: $tags,
             isSaving: controller.isBusy,
             errorMessage: controller.errorMessage,
+            confirmationMessage: confirmationMessage,
             onClose: { dismiss() },
             onSubmit: {
                 Task {
                     if await controller.submitEnergy(overall: overall, tags: Array(tags)) {
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                        withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) {
+                            confirmationMessage = personalEnergyFeeling(tags: tags, overall: overall)
+                        }
+                        try? await Task.sleep(for: .milliseconds(1_200))
                         dismiss()
                     }
                 }
@@ -1748,7 +1764,7 @@ private struct RippleEnergySheet: View {
         .onAppear {
             if let current = controller.currentEnergy {
                 overall = current.overall
-                tags = Set(current.tags)
+                tags = Set(current.tags.map(canonicalEnergyTag))
             }
         }
     }
@@ -1782,11 +1798,12 @@ struct ContentEnergySheet: View {
     var onSaved: ((ContentEnergyAggregate) -> Void)?
 
     @Environment(\.dismiss) private var dismiss
-    @State private var overall = 3
+    @State private var overall = 0
     @State private var tags: Set<String> = []
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var hasExistingEnergy = false
+    @State private var confirmationMessage: String?
 
     var body: some View {
         SocialEnergyForm(
@@ -1796,6 +1813,7 @@ struct ContentEnergySheet: View {
             selectedTags: $tags,
             isSaving: isSaving,
             errorMessage: errorMessage,
+            confirmationMessage: confirmationMessage,
             onClose: { dismiss() },
             onSubmit: { Task { await save() } },
             onRemove: hasExistingEnergy ? { Task { await remove() } } : nil
@@ -1811,7 +1829,7 @@ struct ContentEnergySheet: View {
             id: contentID
         ), let current = response.userRating {
             overall = current.overall
-            tags = Set(current.tags)
+            tags = Set(current.tags.map(canonicalEnergyTag))
             hasExistingEnergy = true
         }
     }
@@ -1834,6 +1852,11 @@ struct ContentEnergySheet: View {
                 id: contentID
             )
             onSaved?(updated.aggregate)
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) {
+                confirmationMessage = personalEnergyFeeling(tags: tags, overall: overall)
+            }
+            try? await Task.sleep(for: .milliseconds(1_200))
             dismiss()
         } catch {
             errorMessage = "Energy could not be saved. Please try again."
@@ -1930,19 +1953,31 @@ struct SocialEnergyForm: View {
     @Binding var selectedTags: Set<String>
     let isSaving: Bool
     let errorMessage: String?
+    var confirmationMessage: String? = nil
     let onClose: () -> Void
     let onSubmit: () -> Void
     var onRemove: (() -> Void)? = nil
     @State private var confirmsRemoval = false
 
-    private let choices = ["HITS", "INSPIRED", "REAL", "DEEP", "CHILL", "CLUTCH"]
+    private let choices = ["Hits", "Inspired", "Real", "Deep", "Chill", "Clutch"]
+    private let signalColumns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
-                Text(isUpdate ? "Update your Energy" : "Add Energy to this \(contentLabel)")
-                    .font(.headline)
-                    .foregroundStyle(C.text)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(isUpdate ? "Your signal" : "Add Energy")
+                        .font(.system(size: 10, weight: .bold))
+                        .tracking(2.2)
+                        .textCase(.uppercase)
+                        .foregroundStyle(C.watch)
+                    Text("What energy is this giving?")
+                        .font(.title3.bold())
+                        .foregroundStyle(C.text)
+                    Text("Tap the level, then choose every signal that fits this \(contentLabel).")
+                        .font(.caption)
+                        .foregroundStyle(C.textMuted)
+                }
                 Spacer()
                 Button(action: onClose) {
                     Image(systemName: "xmark")
@@ -1955,87 +1990,162 @@ struct SocialEnergyForm: View {
                 .accessibilityLabel("Close")
             }
 
-            SocialEnergyLevelPicker(value: $overall)
-                .padding(14)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(C.borderSubtle, lineWidth: 1)
+            if confirmationMessage == nil {
+                SocialEnergyLevelPicker(value: $overall)
+                    .padding(14)
+                    .background(Color.black.opacity(0.20), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(C.borderSubtle, lineWidth: 1)
+                    }
+
+                HStack {
+                    Text("Add a signal")
+                        .font(.subheadline.bold())
+                    Spacer()
+                    Text("CHOOSE ANY")
+                        .font(.system(size: 10, weight: .medium))
+                        .tracking(1.4)
+                        .foregroundStyle(C.textTertiary)
                 }
 
-            Text(energyLevelDescription(overall))
-                .font(.caption)
-                .foregroundStyle(C.textMuted)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .accessibilityLabel("Energy level \(overall), \(energyLevelDescription(overall))")
-
-            FlowLayout(spacing: 7) {
-                ForEach(choices, id: \.self) { choice in
-                    let selected = selectedTags.contains(choice)
-                    Button {
-                        if selected { selectedTags.remove(choice) }
-                        else { selectedTags.insert(choice) }
-                    } label: {
-                        Label(energyLabel(choice), systemImage: energySymbol(choice))
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(selected ? C.bg : C.textMuted)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 7)
-                            .background(selected ? C.watch : Color.clear, in: Capsule())
-                            .overlay {
-                                Capsule()
-                                    .stroke(selected ? Color.clear : C.border, lineWidth: 1)
+                LazyVGrid(columns: signalColumns, spacing: 8) {
+                    ForEach(choices, id: \.self) { choice in
+                        let selected = selectedTags.contains(choice)
+                        Button {
+                            if selected { selectedTags.remove(choice) }
+                            else { selectedTags.insert(choice) }
+                            UISelectionFeedbackGenerator().selectionChanged()
+                        } label: {
+                            VStack(spacing: 8) {
+                                Image(systemName: energySymbol(choice))
+                                    .font(.system(size: 20, weight: .semibold))
+                                Text(energyLabel(choice))
+                                    .font(.system(size: 12, weight: .bold))
                             }
+                                .foregroundStyle(selected ? C.bg : C.textMuted)
+                                .frame(maxWidth: .infinity, minHeight: 72)
+                                .background(
+                                    selected ? AnyShapeStyle(energyGradient) : AnyShapeStyle(Color.white.opacity(0.035)),
+                                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                )
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        .stroke(selected ? Color.white.opacity(0.30) : C.borderSubtle, lineWidth: 1)
+                                }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(selected ? .isSelected : [])
+                    }
+                }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+
+                HStack(spacing: 8) {
+                    Button(action: onSubmit) {
+                        HStack(spacing: 8) {
+                            if isSaving {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .tint(C.bg)
+                            }
+                            Text(isSaving ? "Sending…" : isUpdate ? "Update Energy" : "Send Energy")
+                                .font(.subheadline.bold())
+                        }
+                        .foregroundStyle(C.bg)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .background(energyGradient, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
                     .buttonStyle(.plain)
-                    .accessibilityAddTraits(selected ? .isSelected : [])
-                }
-            }
+                    .disabled(isSaving || overall < 1)
+                    .opacity(isSaving || overall < 1 ? 0.45 : 1)
 
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .center)
-            }
-
-            Button(action: onSubmit) {
-                HStack(spacing: 8) {
-                    if isSaving {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(C.bg)
+                    if isUpdate, onRemove != nil {
+                        Button(role: .destructive) {
+                            confirmsRemoval = true
+                        } label: {
+                            VStack(spacing: 3) {
+                                Image(systemName: "bolt.slash")
+                                    .font(.system(size: 14, weight: .semibold))
+                                Text("Remove")
+                                    .font(.system(size: 10, weight: .bold))
+                            }
+                            .foregroundStyle(.red.opacity(0.92))
+                            .frame(width: 74, height: 48)
+                            .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(Color.red.opacity(0.20), lineWidth: 1)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isSaving)
+                        .accessibilityLabel("Remove Energy")
                     }
-                    Text(isSaving ? "Saving…" : isUpdate ? "Update Energy" : "Add Energy")
-                        .font(.subheadline.bold())
                 }
-                .foregroundStyle(C.bg)
-                .frame(maxWidth: .infinity)
-                .frame(height: 46)
-                .background(C.watch, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .disabled(isSaving || overall < 1)
-            .opacity(isSaving || overall < 1 ? 0.45 : 1)
-
-            if isUpdate, onRemove != nil {
-                Button(role: .destructive) {
-                    confirmsRemoval = true
-                } label: {
-                    Label("Remove Energy", systemImage: "bolt.slash")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.red.opacity(0.88))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 40)
-                }
-                .buttonStyle(.plain)
-                .disabled(isSaving)
             }
         }
         .padding(.horizontal, 20)
         .padding(.top, 18)
         .padding(.bottom, 22)
-        .background(C.bg.ignoresSafeArea())
-        .presentationBackground(C.bg)
+        .background {
+            ZStack {
+                Color(hex: "#0E0E16")
+                RadialGradient(
+                    colors: [Color(hex: "#A780D7").opacity(0.16), .clear],
+                    center: .topTrailing,
+                    startRadius: 0,
+                    endRadius: 260
+                )
+                RadialGradient(
+                    colors: [Color(hex: "#6AE383").opacity(0.10), .clear],
+                    center: UnitPoint(x: 0.08, y: 0.22),
+                    startRadius: 0,
+                    endRadius: 220
+                )
+            }
+            .ignoresSafeArea()
+        }
+        .overlay {
+            if let confirmationMessage {
+                ZStack {
+                    Color(hex: "#0E0E16").opacity(0.96)
+                    VStack(spacing: 12) {
+                        Image(systemName: energySymbol(selectedTags.sorted().first ?? "CLUTCH"))
+                            .font(.system(size: 26, weight: .bold))
+                            .foregroundStyle(C.bg)
+                            .frame(width: 64, height: 64)
+                            .background(energyGradient, in: Circle())
+                            .shadow(color: Color(hex: "#A780D7").opacity(0.42), radius: 22)
+                            .symbolEffect(.bounce, value: confirmationMessage)
+                        Text("ENERGY SENT")
+                            .font(.system(size: 10, weight: .bold))
+                            .tracking(2.2)
+                            .foregroundStyle(C.textMuted)
+                        Text("This made you feel")
+                            .font(.title2.bold())
+                            .foregroundStyle(C.text)
+                        Text(confirmationMessage)
+                            .font(.title3.bold())
+                            .foregroundStyle(C.watch)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(24)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .transition(.scale.combined(with: .opacity))
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isStaticText)
+            }
+        }
+        .presentationBackground(Color(hex: "#0E0E16"))
         .foregroundStyle(C.text)
         .confirmationDialog(
             "Remove your Energy?",
@@ -2052,8 +2162,31 @@ struct SocialEnergyForm: View {
     }
 
     private func energyLevelDescription(_ level: Int) -> String {
-        ["", "Terrible", "Poor", "Okay", "Good", "Excellent"][min(max(level, 1), 5)]
+        ["", "Low key", "Warm", "Charged", "High energy", "Electric"][min(max(level, 0), 5)]
     }
+}
+
+private let energyGradient = LinearGradient(
+    colors: [
+        Color(hex: "#6AE383"),
+        Color(hex: "#B7E875"),
+        Color(hex: "#F2D36B"),
+        Color(hex: "#E8A15F"),
+        Color(hex: "#A780D7"),
+        Color(hex: "#5967C9")
+    ],
+    startPoint: .leading,
+    endPoint: .trailing
+)
+
+private func personalEnergyFeeling(tags: Set<String>, overall: Int) -> String {
+    let feelings = tags
+        .sorted()
+        .map(energyLabel)
+    if feelings.isEmpty {
+        return ["", "Low key", "Warm", "Charged", "High energy", "Electric"][min(max(overall, 0), 5)]
+    }
+    return feelings.joined(separator: " · ")
 }
 
 struct SocialEnergyMeter: View {
@@ -2123,26 +2256,33 @@ struct SocialEnergyLevelPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Vibe Meter")
-                    .font(.system(size: 12, weight: .semibold))
-                    .tracking(1.8)
-                    .textCase(.uppercase)
-                    .foregroundStyle(C.textMuted)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Intensity")
+                        .font(.system(size: 10, weight: .semibold))
+                        .tracking(1.8)
+                        .textCase(.uppercase)
+                        .foregroundStyle(C.textMuted)
+                    Text(value > 0 ? energyIntensityLabel(value) : "Pick your level")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(C.text)
+                }
                 Spacer()
-                Text(String(format: "%.1f", Double(value)))
-                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(C.text.opacity(0.72))
+                if value > 0 {
+                    Text("\(value)/5")
+                        .font(.system(size: 14, weight: .bold).monospacedDigit())
+                        .foregroundStyle(C.text.opacity(0.50))
+                }
             }
 
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
                     Capsule()
                         .fill(Color.white.opacity(0.10))
-                        .frame(height: 4)
+                        .frame(height: 10)
                     Capsule()
                         .fill(LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing))
                         .frame(width: proxy.size.width * CGFloat(value) / 5)
-                        .frame(height: 4)
+                        .frame(height: 10)
                         .shadow(color: Color(hex: "#5967C9").opacity(0.26), radius: 4)
                     Circle()
                         .fill(.white)
@@ -2163,7 +2303,7 @@ struct SocialEnergyLevelPicker: View {
                         }
                 )
             }
-            .frame(height: 28)
+            .frame(height: 30)
             .accessibilityElement()
             .accessibilityLabel("Energy")
             .accessibilityValue("\(value) of 5")
@@ -2183,25 +2323,38 @@ struct SocialEnergyLevelPicker: View {
             .font(.system(size: 10, weight: .medium))
             .foregroundStyle(C.textTertiary)
 
-            HStack(spacing: 4) {
-                ForEach(1...5, id: \.self) { level in
-                    Button {
-                        value = level
-                    } label: {
-                        Text("\(level)")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(level == value ? C.text : C.textMuted)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 28)
-                            .background(
-                                level == value ? Color.white.opacity(0.10) : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 7)
-                            )
+            GeometryReader { proxy in
+                HStack(spacing: 4) {
+                    ForEach(1...5, id: \.self) { level in
+                        Button {
+                            selectLevel(level)
+                        } label: {
+                            Text("\(level)")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(level == value ? C.text : C.textMuted)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 28)
+                                .background(
+                                    level == value ? Color.white.opacity(0.10) : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 7)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Energy \(level)")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Energy \(level)")
                 }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                        .onChanged { gesture in
+                            updateValue(at: gesture.location.x, width: proxy.size.width)
+                        }
+                        .onEnded { _ in
+                            lastHapticValue = nil
+                        }
+                )
             }
+            .frame(height: 28)
         }
     }
 
@@ -2216,6 +2369,15 @@ struct SocialEnergyLevelPicker: View {
             lastHapticValue = nextValue
         }
     }
+
+    private func selectLevel(_ level: Int) {
+        value = min(max(level, 1), 5)
+        UISelectionFeedbackGenerator().selectionChanged()
+    }
+}
+
+private func energyIntensityLabel(_ value: Int) -> String {
+    ["", "Low key", "Warm", "Charged", "High energy", "Electric"][min(max(value, 0), 5)]
 }
 
 private func energyLabel(_ value: String) -> String {
@@ -2228,6 +2390,10 @@ private func energyLabel(_ value: String) -> String {
     case "CLUTCH": "Clutch"
     default: value.capitalized
     }
+}
+
+private func canonicalEnergyTag(_ value: String) -> String {
+    energyLabel(value)
 }
 
 private func energySymbol(_ value: String) -> String {

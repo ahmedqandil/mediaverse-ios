@@ -80,6 +80,8 @@ struct VibeAffiliationsView: View {
                 )
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .foregroundStyle(C.text)
+                .tint(C.watch)
                 if isSearching {
                     ProgressView().controlSize(.small).tint(C.watch)
                 }
@@ -128,6 +130,8 @@ struct VibeAffiliationsView: View {
                         .font(.subheadline.bold())
                     TextField("Optional message to the owner", text: $requestMessage, axis: .vertical)
                         .lineLimit(2...5)
+                        .foregroundStyle(C.text)
+                        .tint(C.watch)
                         .padding(10)
                         .background(C.elevated, in: RoundedRectangle(cornerRadius: 9))
                     Toggle("Primary affiliation", isOn: $isPrimary)

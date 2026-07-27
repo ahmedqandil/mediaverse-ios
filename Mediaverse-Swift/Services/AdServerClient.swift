@@ -329,7 +329,10 @@ actor AdServerClient {
         return created
     }
 
-    func requestAd(_ context: AdRequestContext) async throws -> AdDecision {
+    func requestAd(
+        _ context: AdRequestContext,
+        timeout: TimeInterval = 1.5
+    ) async throws -> AdDecision {
         let requestStartedAt = Date()
         scheduleTrackingQueueFlush()
         let deviceKind = await MainActor.run {
@@ -380,9 +383,46 @@ actor AdServerClient {
         }
 
         Self.debugLog("request_started \(url.absoluteString)")
-        let (data, response) = try await session.data(from: url)
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await withThrowingTaskGroup(
+                of: (Data, URLResponse).self
+            ) { group in
+                group.addTask {
+                    try await self.session.data(from: url)
+                }
+                group.addTask {
+                    try await Task.sleep(
+                        nanoseconds: UInt64(max(0.1, timeout) * 1_000_000_000)
+                    )
+                    throw URLError(.timedOut)
+                }
+                guard let first = try await group.next() else {
+                    throw URLError(.unknown)
+                }
+                group.cancelAll()
+                return first
+            }
+        } catch {
+            Self.debugLog(
+                "decision_failed elapsedMs=\(Int(Date().timeIntervalSince(requestStartedAt) * 1_000)) "
+                + "timeoutMs=\(Int(timeout * 1_000)) contentId=\(context.contentId) "
+                + "breakId=\(context.breakId ?? "none") error=\(error.localizedDescription)"
+            )
+            throw error
+        }
         try validate(response)
         let decision = try decoder.decode(AdDecision.self, from: data)
+        if decision.filled,
+           let firstURL = decision.ads.first.flatMap({ C.mediaURL($0.mediaUrl) }) {
+            // Start the first creative's AVURLAsset preparation before SwiftUI
+            // replaces the content area with NativeAdPlayerView. Playback still
+            // uses its direct AVPlayerItem URL path, avoiding the prior cached-
+            // asset `.unknown` regression while warming the CDN/manifest chain.
+            await MainActor.run {
+                NativeAdMediaCache.shared.prefetch([firstURL])
+            }
+        }
         Self.debugLog(
             "decision_received elapsedMs=\(Int(Date().timeIntervalSince(requestStartedAt) * 1_000)) "
             + "contentId=\(context.contentId) placement=\(context.placement ?? "linear") "
@@ -723,7 +763,9 @@ struct NativeAdPlayerView: View {
     var aspectRatio: CGFloat = 16 / 9
     var topContentInset: CGFloat = 0
     var bottomContentInset: CGFloat = 0
+    var topTrailingContentInset: CGFloat = 0
     var progressHorizontalInset: CGFloat = 0
+    var progressBottomInset: CGFloat? = nil
     var fillVerticalContainer: Bool = false
     var onFullscreen: (() -> Void)? = nil
     var preservePlaybackOnDisappear = false
@@ -968,13 +1010,19 @@ struct NativeAdPlayerView: View {
                         .padding(.horizontal, 10)
                         .padding(.bottom, 10)
                 }
-
-                progressBar
-                    .frame(height: 3)
-                    .padding(.horizontal, progressHorizontalInset)
             }
             .padding(.top, aspectRatio < 1 ? topContentInset : 0)
             .padding(.bottom, aspectRatio < 1 ? bottomContentInset : 0)
+
+            progressBar
+                .frame(height: 3)
+                .padding(.horizontal, progressHorizontalInset)
+                .padding(
+                    .bottom,
+                    aspectRatio < 1 ? (progressBottomInset ?? bottomContentInset) : 0
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .zIndex(2)
         }
         .contentShape(Rectangle())
         .onTapGesture {
@@ -1090,7 +1138,8 @@ struct NativeAdPlayerView: View {
                 }
             }
         }
-        .padding(.horizontal, aspectRatio < 1 ? 12 : 8)
+        .padding(.leading, aspectRatio < 1 ? 12 : 8)
+        .padding(.trailing, (aspectRatio < 1 ? 12 : 8) + topTrailingContentInset)
     }
 
     private var progressBar: some View {
@@ -1367,6 +1416,12 @@ struct NativeAdPlayerView: View {
                 switch observedItem.status {
                 case .readyToPlay:
                     debugPlayback("creative_ready_to_play index=\(currentAdIndex)")
+                    if !isPaused,
+                       UIApplication.shared.applicationState == .active,
+                       nextPlayer.timeControlStatus == .paused {
+                        debugPlayback("creative_resume_requested index=\(currentAdIndex) reason=item_ready")
+                        nextPlayer.playImmediately(atRate: 1)
+                    }
                 case .failed:
                     debugPlayback(
                         "creative_failed index=\(currentAdIndex) "
@@ -1380,7 +1435,7 @@ struct NativeAdPlayerView: View {
             }
         }
 
-        nextPlayer.play()
+        nextPlayer.playImmediately(atRate: 1)
         schedulePlaybackStartTracking(for: nextPlayer)
         schedulePlaybackWatchdog(for: nextPlayer)
         onCanSkipChanged?(canSkip)
@@ -1495,7 +1550,7 @@ struct NativeAdPlayerView: View {
             }
         }
         isPaused = externalPlayer.timeControlStatus == .paused
-        externalPlayer.play()
+        externalPlayer.playImmediately(atRate: 1)
         if !suppressTracking {
             schedulePlaybackStartTracking(for: externalPlayer)
             schedulePlaybackWatchdog(for: externalPlayer)
@@ -1505,11 +1560,27 @@ struct NativeAdPlayerView: View {
     private func schedulePlaybackStartTracking(for player: AVPlayer) {
         playbackStartTask?.cancel()
         playbackStartTask = Task { @MainActor in
+            var hasRetriedPausedHandoff = false
             while !Task.isCancelled {
                 if player.currentTime().seconds > 0.05 {
                     recordPlaybackStartIfNeeded()
                     playbackStartTask = nil
                     return
+                }
+                // A feed/mini-player expansion can leave the newly attached ad
+                // player paused even though this presentation is meant to
+                // autoplay. Reassert playback until the creative clock starts;
+                // explicit user pauses remain respected through `isPaused`.
+                if !isPaused,
+                   UIApplication.shared.applicationState == .active,
+                   player.timeControlStatus == .paused {
+                    if !hasRetriedPausedHandoff {
+                        debugPlayback(
+                            "creative_resume_requested index=\(currentAdIndex) reason=paused_handoff"
+                        )
+                        hasRetriedPausedHandoff = true
+                    }
+                    player.playImmediately(atRate: 1)
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
