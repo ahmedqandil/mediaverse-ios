@@ -148,12 +148,16 @@ struct StoryCreatorCoordinator: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                C.bg.ignoresSafeArea()
-                content
+                if isCameraPresented {
+                    camera
+                } else {
+                    C.bg.ignoresSafeArea()
+                    content
+                }
             }
             .navigationTitle("Flash")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar(step == .editor || step == .media ? .hidden : .visible, for: .navigationBar)
+            .toolbar(isCameraPresented || step == .editor || step == .media ? .hidden : .visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Close") {
@@ -165,23 +169,6 @@ struct StoryCreatorCoordinator: View {
                     }
                     .foregroundStyle(C.text)
                 }
-            }
-        }
-        .fullScreenCover(isPresented: $isCameraPresented) {
-            StoryCameraView(maxDuration: storyMaxDurationSeconds) {
-                handleCameraCancel()
-            } onPhoto: { photo in
-                shouldDismissOnCameraCancel = false
-                isCameraPresented = false
-                Task { await importCameraPhoto(photo) }
-            } onLibraryVideo: { url in
-                shouldDismissOnCameraCancel = false
-                isCameraPresented = false
-                Task { await importLibraryVideo(url) }
-            } onComplete: { segments in
-                shouldDismissOnCameraCancel = false
-                isCameraPresented = false
-                Task { await importCameraSegments(segments) }
             }
         }
         .sheet(isPresented: $isShowingPostDrawer) {
@@ -218,6 +205,25 @@ struct StoryCreatorCoordinator: View {
             await loadPublishers()
             await loadSavedDrafts()
         }
+    }
+
+    private var camera: some View {
+        StoryCameraView(maxDuration: storyMaxDurationSeconds) {
+            handleCameraCancel()
+        } onPhoto: { photo in
+            shouldDismissOnCameraCancel = false
+            isCameraPresented = false
+            Task { await importCameraPhoto(photo) }
+        } onLibraryVideo: { url in
+            shouldDismissOnCameraCancel = false
+            isCameraPresented = false
+            Task { await importLibraryVideo(url) }
+        } onComplete: { segments in
+            shouldDismissOnCameraCancel = false
+            isCameraPresented = false
+            Task { await importCameraSegments(segments) }
+        }
+        .ignoresSafeArea()
     }
 
     @ViewBuilder
