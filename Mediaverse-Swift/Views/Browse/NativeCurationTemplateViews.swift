@@ -76,7 +76,7 @@ private struct NativeCurationIdentityTemplate: View {
 
     var body: some View {
         if !listing.items.isEmpty {
-            VStack(alignment: .leading, spacing: C.rowSpacing) {
+            VStack(alignment: .leading, spacing: listing.curationHeaderSpacing) {
                 NativeCurationHeader(listing: listing, showSeeAll: true)
                 if templateType == "hero" || templateType == "banner" {
                     NativeCurationChannelFullCard(item: listing.items[0])
@@ -117,7 +117,7 @@ private struct NativeCurationContinueWatching: View {
 
     var body: some View {
         if !items.isEmpty {
-            VStack(alignment: .leading, spacing: C.rowSpacing) {
+            VStack(alignment: .leading, spacing: listing.curationHeaderSpacing) {
                 NativeCurationHeader(listing: listing, showSeeAll: true)
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: CarouselCardMetrics.spacing) {
@@ -193,7 +193,7 @@ private struct NativeCurationFlashesTray: View {
         StoryTrayView(
             repository: repository,
             activeChannel: nil,
-            title: listing.listingTitle ?? "Flashes",
+            title: listing.listingTitle ?? "",
             onAddStory: {}
         ) { group in
             viewerGroupID = group.id
@@ -227,7 +227,7 @@ private struct NativeCurationRippleList: View {
 
     var body: some View {
         if !listing.items.isEmpty {
-            VStack(alignment: .leading, spacing: C.rowSpacing) {
+            VStack(alignment: .leading, spacing: listing.curationHeaderSpacing) {
                 NativeCurationHeader(listing: listing, showSeeAll: true)
                 LazyVStack(spacing: C.rowSpacing) {
                     ForEach(Array(listing.items.enumerated()), id: \.offset) { _, item in
@@ -245,7 +245,7 @@ private struct NativeCurationRippleCarousel: View {
 
     var body: some View {
         if !listing.items.isEmpty {
-            VStack(alignment: .leading, spacing: C.rowSpacing) {
+            VStack(alignment: .leading, spacing: listing.curationHeaderSpacing) {
                 NativeCurationHeader(listing: listing, showSeeAll: true)
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: C.gridSpacing) {
@@ -437,12 +437,24 @@ private struct NativeCurationHeader: View {
     }
 }
 
+private extension AssembledListing {
+    var hasVisibleCurationHeader: Bool {
+        let title = listingTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let badge = badge?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title?.isEmpty == false || badge?.isEmpty == false
+    }
+
+    var curationHeaderSpacing: CGFloat {
+        hasVisibleCurationHeader ? C.rowSpacing : 0
+    }
+}
+
 private struct NativeCurationCarousel: View {
     let listing: AssembledListing
 
     var body: some View {
         if !listing.items.isEmpty {
-            VStack(alignment: .leading, spacing: C.rowSpacing) {
+            VStack(alignment: .leading, spacing: listing.curationHeaderSpacing) {
                 NativeCurationHeader(listing: listing, showSeeAll: true)
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: C.rowSpacing) {
@@ -508,7 +520,7 @@ private struct NativeCurationGrid: View {
 
     var body: some View {
         if !displayItems.isEmpty {
-            VStack(alignment: .leading, spacing: C.rowSpacing) {
+            VStack(alignment: .leading, spacing: listing.curationHeaderSpacing) {
                 NativeCurationHeader(listing: listing, showSeeAll: true)
                 if shouldShowFilter {
                     NativeCurationInlineSearchField(query: $filterQuery, placeholder: searchPlaceholder)
@@ -574,7 +586,7 @@ private struct NativeCurationChannelList: View {
 
     var body: some View {
         if !displayItems.isEmpty {
-            VStack(alignment: .leading, spacing: C.rowSpacing) {
+            VStack(alignment: .leading, spacing: listing.curationHeaderSpacing) {
                 NativeCurationHeader(listing: listing, showSeeAll: true)
                 if shouldShowFilter {
                     NativeCurationInlineSearchField(query: $filterQuery, placeholder: searchPlaceholder)
@@ -630,7 +642,7 @@ private struct NativeCurationSocialRows: View {
 
     var body: some View {
         if !listing.items.isEmpty {
-            VStack(alignment: .leading, spacing: C.rowSpacing) {
+            VStack(alignment: .leading, spacing: listing.curationHeaderSpacing) {
                 NativeCurationHeader(listing: listing, showSeeAll: true)
                 LazyVStack(spacing: 0) {
                     ForEach(Array(listing.items.enumerated()), id: \.offset) { index, item in
@@ -1163,7 +1175,7 @@ private struct NativeCurationSpotlight: View {
 
     var body: some View {
         if let featured = listing.items.first {
-            VStack(alignment: .leading, spacing: C.rowSpacing) {
+            VStack(alignment: .leading, spacing: listing.curationHeaderSpacing) {
                 NativeCurationHeader(listing: listing, showSeeAll: true)
                 VStack(spacing: C.gridSpacing) {
                     NavigationLink(value: featured.appRoute) {

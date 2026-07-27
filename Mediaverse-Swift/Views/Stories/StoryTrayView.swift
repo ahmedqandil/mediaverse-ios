@@ -49,11 +49,14 @@ struct StoryTrayView: View {
         Group {
             if hasVisibleContent {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(title)
-                        .font(.system(size: 10, weight: .semibold))
-                        .tracking(3)
-                        .foregroundStyle(C.textMuted)
-                        .padding(.horizontal, 12)
+                    let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !normalizedTitle.isEmpty {
+                        Text(normalizedTitle)
+                            .font(.system(size: 10, weight: .semibold))
+                            .tracking(3)
+                            .foregroundStyle(C.textMuted)
+                            .padding(.horizontal, 12)
+                    }
 
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(spacing: 16) {
