@@ -5487,6 +5487,8 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
         var mediaScale = 1.0
         var mediaRotation = 0.0
         var mediaTranslation = CGSize.zero
+        var mediaLastPanLocation: CGPoint?
+        var mediaPanTouchCount = 0
         var lastMagnification: Double = 1
         var lastRotation: Double = 0
         weak var pan: UIPanGestureRecognizer?
@@ -5530,6 +5532,8 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
                     mediaScale = 1
                     mediaRotation = 0
                     mediaTranslation = .zero
+                    mediaLastPanLocation = nil
+                    mediaPanTouchCount = 0
                     UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.55)
                     onMediaBegin()
                 } else {
@@ -5545,13 +5549,21 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
                     mediaRotation = Double(rotation.rotation)
                 }
                 if let pan, pan.state == .began || pan.state == .changed {
-                    let translation = pan.translation(in: recognizer.view)
-                    mediaTranslation = CGSize(width: translation.x, height: translation.y)
+                    let touchCount = pan.numberOfTouches
+                    let location = pan.location(in: recognizer.view)
+                    if mediaPanTouchCount == touchCount, let previous = mediaLastPanLocation {
+                        mediaTranslation.width += location.x - previous.x
+                        mediaTranslation.height += location.y - previous.y
+                    }
+                    mediaLastPanLocation = location
+                    mediaPanTouchCount = touchCount
                 }
                 let viewportSize = recognizer.view?.bounds.size ?? .zero
                 onMediaChange(mediaScale, mediaRotation, mediaTranslation, viewportSize)
                 if interactionsEnded {
                     isTransformingMedia = false
+                    mediaLastPanLocation = nil
+                    mediaPanTouchCount = 0
                     onMediaEnd(mediaScale, mediaRotation, mediaTranslation, viewportSize)
                     UISelectionFeedbackGenerator().selectionChanged()
                 }
