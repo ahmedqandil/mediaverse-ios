@@ -558,16 +558,20 @@ struct AtmosphereView: View {
                 LazyVStack(spacing: 10) {
                     Color.clear.frame(height: 0).id("atmosphere-vibes-top")
                     atmosphereBoundaryListings(model.beforeFeedListings)
-                    Button {
-                        showsCreateVibe = true
-                    } label: {
-                        Label("Create Vibe", systemImage: "plus.circle.fill")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
+                    HStack {
+                        Spacer()
+                        Button {
+                            showsCreateVibe = true
+                        } label: {
+                            Label("Create Vibe", systemImage: "plus")
+                                .font(.system(size: 13, weight: .semibold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .buttonBorderShape(.capsule)
+                        .tint(C.watch)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(C.watch)
                     ForEach(vibes) { vibe in
                         NavigationLink(value: AppRoute.vibe(vibe.slug)) {
                             HStack(spacing: 12) {
