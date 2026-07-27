@@ -23,7 +23,7 @@ struct BrowseView: View {
 
     private var platformBrowseItems: [PlatformBrowseItem] {
         let configured = platformConfig.browseSections.filter { BrowseSection(rawValue: $0.id) != nil }
-        return configured.isEmpty ? PlatformBrowseItem.defaults : configured
+        return platformConfig.isLoaded ? configured : PlatformBrowseItem.defaults
     }
 
     private var browseItems: [PlatformBrowseItem] {
@@ -43,7 +43,7 @@ struct BrowseView: View {
         return [PlatformBrowseItem(id: "discover", label: "Discover", enabled: true)]
             + serverDestinations.compactMap { id, label in
                 if let item = configured[id], item.enabled { return item }
-                return PlatformBrowseItem(id: id, label: label, enabled: true)
+                return nil
             }
     }
 

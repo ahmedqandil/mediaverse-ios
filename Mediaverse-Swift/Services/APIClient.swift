@@ -610,7 +610,8 @@ actor APIClient: LegacySocialTransport {
     /// GET /api/platform-config — mirrors the web PlatformConfig gate.
     /// Stories default to visible if the endpoint is unavailable so older backends keep working.
     func fetchPlatformConfig() async throws -> PlatformConfig {
-        return try await get("/api/platform-config")
+        let revision = Int(Date().timeIntervalSince1970)
+        return try await get("/api/platform-config?platform=ios&revision=\(revision)")
     }
 
     func fetchAdminAdConfig() async throws -> AdminAdConfig {
@@ -620,15 +621,25 @@ actor APIClient: LegacySocialTransport {
     // MARK: - Feed
 
     func fetchFeed(cursor: String? = nil) async throws -> FeedResponse {
-        var path = "/api/feed"
-        if let c = cursor { path += "?cursor=\(c.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? c)" }
+        var components = URLComponents()
+        components.path = "/api/feed"
+        components.queryItems = [URLQueryItem(name: "platform", value: "ios")]
+        if let cursor {
+            components.queryItems?.append(URLQueryItem(name: "cursor", value: cursor))
+        }
+        guard let path = components.url?.absoluteString else {
+            throw APIError.badURL("/api/feed")
+        }
         return try await get(path)
     }
 
     func fetchCurationPage(key: String, section: String? = nil) async throws -> AssembledPage {
         var components = URLComponents()
         components.path = "/api/curation/page/\(C.pathSegment(key))"
-        components.queryItems = [URLQueryItem(name: "device", value: "mobile")]
+        components.queryItems = [
+            URLQueryItem(name: "device", value: "mobile"),
+            URLQueryItem(name: "platform", value: "ios")
+        ]
         if let section, !section.isEmpty {
             components.queryItems?.append(URLQueryItem(name: "section", value: section))
         }
@@ -696,7 +707,8 @@ actor APIClient: LegacySocialTransport {
         components.queryItems = [
             URLQueryItem(name: "feed", value: normalizedFeed),
             URLQueryItem(name: "limit", value: String(cappedLimit)),
-            URLQueryItem(name: "seed", value: requestSeed)
+            URLQueryItem(name: "seed", value: requestSeed),
+            URLQueryItem(name: "platform", value: "ios")
         ]
 
         if let cursor = cursor?.trimmingCharacters(in: .whitespacesAndNewlines), !cursor.isEmpty {
@@ -1437,7 +1449,7 @@ actor APIClient: LegacySocialTransport {
 
         CacheMetrics.shared.recordMiss("search.suggest")
         let enc = normalized.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? normalized
-        let items: [SuggestItem] = try await get("/api/search/suggest?q=\(enc)")
+        let items: [SuggestItem] = try await get("/api/search/suggest?q=\(enc)&platform=ios")
         searchSuggestCache[cacheKey] = CachedSuggestResponse(items: items, cachedAt: Date())
         CacheMetrics.shared.recordStore("search.suggest")
         return items
@@ -1451,7 +1463,7 @@ actor APIClient: LegacySocialTransport {
         }
 
         CacheMetrics.shared.recordMiss("search.suggest")
-        let items: [SuggestItem] = try await get("/api/search/suggest?trending=1")
+        let items: [SuggestItem] = try await get("/api/search/suggest?trending=1&platform=ios")
         searchSuggestCache[cacheKey] = CachedSuggestResponse(items: items, cachedAt: Date())
         CacheMetrics.shared.recordStore("search.suggest")
         return items
@@ -1537,7 +1549,7 @@ actor APIClient: LegacySocialTransport {
     func search(q: String, type: String = "all") async throws -> SearchResults {
         let enc = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q
         let encodedType = type.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? type
-        return try await get("/api/search?q=\(enc)&type=\(encodedType)")
+        return try await get("/api/search?q=\(enc)&type=\(encodedType)&platform=ios")
     }
 
     // MARK: - Browse: Shows

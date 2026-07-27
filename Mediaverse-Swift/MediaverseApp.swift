@@ -98,6 +98,7 @@ struct MediaverseApp: App {
                 if newPhase == .active {
                     auth.refreshSessionIfNeeded()
                     incomingLinks.resumePendingAfterAuthentication()
+                    Task { await platformConfig.refresh() }
                 }
             }
             .onChange(of: auth.isAuthenticated) { _, isAuthenticated in

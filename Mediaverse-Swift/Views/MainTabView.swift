@@ -11,6 +11,7 @@ struct MainTabView: View {
     @EnvironmentObject private var auth: AuthManager
     @EnvironmentObject private var miniPlayer: MiniPlayerManager
     @EnvironmentObject private var globalUploads: GlobalUploadProgressManager
+    @EnvironmentObject private var platformConfig: PlatformConfigManager
     @AppStorage("playerMuted") private var isMuted: Bool = false
     @StateObject private var shortsPlaybackManager = ShortsPlaybackManager()
     @State private var selectedTab: AppTab = .home
@@ -352,27 +353,43 @@ struct MainTabView: View {
             }
             .tag(AppTab.home)
 
-            NavigationStack(path: $videosPath) {
-                HomeView(headerStyle: .videos)
-                    .navigationDestination(for: AppRoute.self) { route in
-                        routeDestination(route)
+            if platformConfig.isEnabled("videos", aspect: .nav) {
+                NavigationStack(path: $videosPath) {
+                    Group {
+                        if platformConfig.isEnabled("videos", aspect: .page) {
+                            HomeView(headerStyle: .videos)
+                        } else {
+                            PlatformSectionUnavailableView(item: platformConfig.browseItem(id: "videos"))
+                        }
                     }
+                        .navigationDestination(for: AppRoute.self) { route in
+                            routeDestination(route)
+                        }
+                }
+                .ignoresSafeArea(edges: .bottom)
+                .toolbar(.hidden, for: .tabBar)
+                .tabItem { appTabLabel("Videos", icon: "play", fallback: "play.rectangle") }
+                .tag(AppTab.videos)
             }
-            .ignoresSafeArea(edges: .bottom)
-            .toolbar(.hidden, for: .tabBar)
-            .tabItem { appTabLabel("Videos", icon: "play", fallback: "play.rectangle") }
-            .tag(AppTab.videos)
 
-            NavigationStack(path: $shortsPath) {
-                ShortsView(isRootActive: selectedTab == .shorts, playbackManager: shortsPlaybackManager)
-                    .navigationDestination(for: AppRoute.self) { route in
-                        routeDestination(route)
+            if platformConfig.isEnabled("shorts", aspect: .nav) {
+                NavigationStack(path: $shortsPath) {
+                    Group {
+                        if platformConfig.isEnabled("shorts", aspect: .page) {
+                            ShortsView(isRootActive: selectedTab == .shorts, playbackManager: shortsPlaybackManager)
+                        } else {
+                            PlatformSectionUnavailableView(item: platformConfig.browseItem(id: "shorts"))
+                        }
                     }
+                        .navigationDestination(for: AppRoute.self) { route in
+                            routeDestination(route)
+                        }
+                }
+                .ignoresSafeArea(edges: .bottom)
+                .toolbar(.hidden, for: .tabBar)
+                .tabItem { appTabLabel("Shorts", icon: "short", fallback: "play.rectangle.on.rectangle") }
+                .tag(AppTab.shorts)
             }
-            .ignoresSafeArea(edges: .bottom)
-            .toolbar(.hidden, for: .tabBar)
-            .tabItem { appTabLabel("Shorts", icon: "short", fallback: "play.rectangle.on.rectangle") }
-            .tag(AppTab.shorts)
 
             NavigationStack(path: $explorePath) {
                 BrowseView(isRootActive: selectedTab == .explore)
@@ -412,7 +429,13 @@ struct MainTabView: View {
     }
 
     private var canAccessCreateFlow: Bool {
-        auth.isAuthenticated && (isUploadEligible || socialFeatures.rippleComposerEnabled)
+        let mediaEnabled =
+            platformConfig.isEnabled("videos", aspect: .creation)
+            || platformConfig.isEnabled("shorts", aspect: .creation)
+        let ripplesEnabled =
+            socialFeatures.rippleComposerEnabled
+            && platformConfig.isEnabled("vibes", aspect: .creation)
+        return auth.isAuthenticated && ((isUploadEligible && mediaEnabled) || ripplesEnabled)
     }
 
     private func handleShortsAdPlaybackVisibilityChanged(_ notification: Notification) {
@@ -592,8 +615,12 @@ struct MainTabView: View {
                         icon: "home",
                         fallback: "house"
                     )
-                    bottomTabButton(.videos, title: "Videos", icon: "play", fallback: "play.rectangle")
-                    bottomTabButton(.shorts, title: "Shorts", icon: "short", fallback: "bolt")
+                    if platformConfig.isEnabled("videos", aspect: .nav) {
+                        bottomTabButton(.videos, title: "Videos", icon: "play", fallback: "play.rectangle")
+                    }
+                    if platformConfig.isEnabled("shorts", aspect: .nav) {
+                        bottomTabButton(.shorts, title: "Shorts", icon: "short", fallback: "bolt")
+                    }
                     bottomTabButton(.explore, title: "Discover", icon: "explore", fallback: "safari")
                     bottomTabButton(.profile, title: "Profile", icon: "user", fallback: "person")
                 }
@@ -960,7 +987,11 @@ struct MainTabView: View {
 
     @ViewBuilder
     private func routeDestination(_ route: AppRoute) -> some View {
-        switch route {
+        if let section = controlledSection(for: route),
+           !platformConfig.isEnabled(section, aspect: .page) {
+            PlatformSectionUnavailableView(item: platformConfig.browseItem(id: section))
+        } else {
+          switch route {
         case .video(let id):
             VideoWatchView(videoId: id)
                 .id(id)
@@ -1007,6 +1038,28 @@ struct MainTabView: View {
             AtmoProfileView(handle: handle)
         case .search(let query):
             SearchView(initialQuery: query)
+          }
+        }
+    }
+
+    private func controlledSection(for route: AppRoute) -> String? {
+        switch route {
+        case .video:
+            return "videos"
+        case .short:
+            return "shorts"
+        case .episode, .show, .showSeason, .showAccess:
+            return "shows"
+        case .channel:
+            return "channels"
+        case .microdramaShow, .microdramaWatch, .microdramaWatchEp:
+            return "microdramas"
+        case .collection:
+            return "collections"
+        case .vibe, .vibeManagement, .vibeInvite, .ripple, .atmo:
+            return "vibes"
+        case .handoff, .playlist, .search:
+            return nil
         }
     }
 

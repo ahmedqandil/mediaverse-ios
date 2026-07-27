@@ -24,11 +24,17 @@ final class PlatformConfigManager: ObservableObject {
         browseItem(id: id).enabled
     }
 
+    func isEnabled(_ id: String, aspect: PlatformSectionAspect) -> Bool {
+        browseItem(id: id).isEnabled(aspect)
+    }
+
     func refresh() async {
         do {
             config = try await APIClient.shared.fetchPlatformConfig()
         } catch {
-            config = .default
+            if !isLoaded {
+                config = .default
+            }
         }
         isLoaded = true
     }
