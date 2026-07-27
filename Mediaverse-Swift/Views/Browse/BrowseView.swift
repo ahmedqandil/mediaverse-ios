@@ -112,26 +112,36 @@ struct BrowseView: View {
     }
 
     private var sectionTabs: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            MediaverseUnderlineTabStrip(
-                items: browseItems.map {
-                    let section = BrowseSection(rawValue: $0.id) ?? .discover
-                    return MediaverseTabItem(
-                        id: $0.id,
-                        label: $0.label,
-                        iconName: section.assetIcon,
-                        fallbackSystemName: section.fallbackIcon
-                    )
-                },
-                selectedID: selectedSection.rawValue,
-                fillsWidth: false,
-                horizontalPadding: C.pagePad,
-                verticalPadding: 11,
-                background: C.bg
-            ) { id in
-                guard let section = BrowseSection(rawValue: id) else { return }
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    selectedSection = section
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                MediaverseUnderlineTabStrip(
+                    items: browseItems.map {
+                        let section = BrowseSection(rawValue: $0.id) ?? .discover
+                        return MediaverseTabItem(
+                            id: $0.id,
+                            label: $0.label,
+                            iconName: section.assetIcon,
+                            fallbackSystemName: section.fallbackIcon
+                        )
+                    },
+                    selectedID: selectedSection.rawValue,
+                    fillsWidth: false,
+                    horizontalPadding: C.pagePad,
+                    verticalPadding: 11,
+                    background: C.bg
+                ) { id in
+                    guard let section = BrowseSection(rawValue: id) else { return }
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        selectedSection = section
+                    }
+                }
+            }
+            .onAppear {
+                proxy.scrollTo(selectedSection.rawValue, anchor: .center)
+            }
+            .onChange(of: selectedSection) { _, section in
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    proxy.scrollTo(section.rawValue, anchor: .center)
                 }
             }
         }

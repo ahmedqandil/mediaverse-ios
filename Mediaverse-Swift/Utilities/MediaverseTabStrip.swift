@@ -69,6 +69,7 @@ struct MediaverseUnderlineTabStrip: View {
                 }
                 .frame(maxWidth: fillsWidth ? .infinity : nil)
                 .buttonStyle(.plain)
+                .id(item.id)
             }
 
             if !fillsWidth {
