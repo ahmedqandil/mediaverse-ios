@@ -30,7 +30,8 @@ struct StoryTrayView: View {
     private var activeGroup: StoryGroup? {
         guard let activeChannel else { return nil }
         return repository.groups.first { group in
-            group.publisherType == "channel" && group.publisherId == activeChannel.id
+            group.publisherType.caseInsensitiveCompare(activeChannel.type) == .orderedSame
+                && group.publisherId == activeChannel.id
         }
     }
 
@@ -104,7 +105,7 @@ struct StoryTrayView: View {
                     onSelect(displayGroup)
                 }
                 .accessibilityAddTraits(.isButton)
-                .accessibilityLabel("Your channel flash")
+                .accessibilityLabel("Your \(channel.type) flash")
                 .accessibilityHint(activeGroup.hasUnseen ? "Unseen flashes" : "Seen flashes")
         } else {
             StoryAddAvatarView(channel: channel)

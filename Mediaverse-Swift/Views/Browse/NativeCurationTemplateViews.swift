@@ -186,17 +186,35 @@ private struct NativeCurationContinueWatching: View {
 private struct NativeCurationFlashesTray: View {
     let listing: AssembledListing
 
+    @EnvironmentObject private var auth: AuthManager
     @StateObject private var repository = StoriesRepository()
     @State private var viewerGroupID: String?
+    @State private var activePublisher: UploadContext?
+    @State private var isCreatingFlash = false
 
     var body: some View {
         StoryTrayView(
             repository: repository,
-            activeChannel: nil,
+            activeChannel: activePublisher,
             title: listing.listingTitle ?? "",
-            onAddStory: {}
+            onAddStory: { isCreatingFlash = true }
         ) { group in
             viewerGroupID = group.id
+        }
+        .onAppear {
+            refreshActivePublisher()
+        }
+        .onChange(of: auth.isAuthenticated) { _, _ in
+            refreshActivePublisher()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .appContextDidChange)) { _ in
+            refreshActivePublisher()
+        }
+        .fullScreenCover(isPresented: $isCreatingFlash) {
+            StoryCreatorCoordinator(preselectedPublisher: activePublisher) {
+                isCreatingFlash = false
+                Task { await repository.refresh(force: true) }
+            }
         }
         .fullScreenCover(
             isPresented: Binding(
@@ -208,6 +226,33 @@ private struct NativeCurationFlashesTray: View {
                 StoryViewerView(repository: repository, initialGroupId: viewerGroupID)
             }
         }
+    }
+
+    private func refreshActivePublisher() {
+        guard auth.isAuthenticated,
+              let context = SessionStorage.activeContext else {
+            activePublisher = nil
+            return
+        }
+
+        let type = context.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard type == "channel" || type == "show" else {
+            activePublisher = nil
+            return
+        }
+
+        activePublisher = UploadContext(
+            type: type,
+            id: type == "channel"
+                ? (context.channelId ?? context.id)
+                : (context.showId ?? context.id),
+            name: context.name,
+            avatarUrl: context.avatarUrl ?? context.image,
+            channelId: context.channelId,
+            showId: context.showId,
+            networkId: context.networkId,
+            networkName: context.networkName
+        )
     }
 }
 
