@@ -650,11 +650,14 @@ struct HomeView: View {
         default:
             publisherID = activeContext.id
         }
+        let publisherAvatar = activeContext.avatarUrl
+            ?? activeContext.image
+            ?? (type == "user" ? auth.currentUser?.image : nil)
         return UploadContext(
             type: type,
             id: publisherID,
             name: activeContext.name,
-            avatarUrl: activeContext.avatarUrl ?? activeContext.image,
+            avatarUrl: publisherAvatar,
             channelId: activeContext.channelId,
             showId: activeContext.showId,
             networkId: activeContext.networkId,
