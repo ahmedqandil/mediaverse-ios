@@ -21,6 +21,21 @@ actor APIClient: LegacySocialTransport {
         return URLSession(configuration: cfg)
     }()
 
+    /// Direct-to-storage transfers need a longer budget than interactive API calls,
+    /// especially over cellular or when iOS has to resume an interrupted upload.
+    private let uploadSession: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 120
+        cfg.timeoutIntervalForResource = 300
+        cfg.waitsForConnectivity = true
+        cfg.allowsCellularAccess = true
+        cfg.allowsExpensiveNetworkAccess = true
+        cfg.allowsConstrainedNetworkAccess = true
+        cfg.httpCookieStorage = nil
+        cfg.httpShouldSetCookies = false
+        return URLSession(configuration: cfg)
+    }()
+
     private let decoder: JSONDecoder = {
         let d = JSONDecoder()
         return d
@@ -960,16 +975,18 @@ actor APIClient: LegacySocialTransport {
 
         var uploadRequest = URLRequest(url: uploadURL)
         uploadRequest.httpMethod = "PUT"
+        uploadRequest.timeoutInterval = 120
         uploadRequest.setValue("Bearer \(clientToken)", forHTTPHeaderField: "Authorization")
         uploadRequest.setValue("public", forHTTPHeaderField: "x-vercel-blob-access")
         uploadRequest.setValue("image/jpeg", forHTTPHeaderField: "x-content-type")
         uploadRequest.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        uploadRequest.setValue(String(imageData.count), forHTTPHeaderField: "x-content-length")
         uploadRequest.setValue(storeId, forHTTPHeaderField: "x-vercel-blob-store-id")
         uploadRequest.setValue("12", forHTTPHeaderField: "x-api-version")
         uploadRequest.setValue("\(storeId):\(Int(Date().timeIntervalSince1970 * 1000)):\(UUID().uuidString)", forHTTPHeaderField: "x-api-blob-request-id")
         uploadRequest.setValue("0", forHTTPHeaderField: "x-api-blob-request-attempt")
 
-        let (blobData, blobResp) = try await session.upload(for: uploadRequest, from: imageData)
+        let (blobData, blobResp) = try await uploadSession.upload(for: uploadRequest, from: imageData)
         try validateBlobUploadResponse(blobResp)
         let decoded = try decoder.decode(BlobResponse.self, from: blobData)
         return decoded.url
