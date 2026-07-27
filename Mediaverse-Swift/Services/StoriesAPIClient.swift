@@ -66,9 +66,25 @@ actor StoriesAPIClient {
         return URLSession(configuration: configuration)
     }
 
-    func fetchGroups(myChannelId: String? = nil) async throws -> [StoryGroup] {
+    func fetchGroups(
+        myChannelId: String? = nil,
+        myPublisherType: String? = nil,
+        myPublisherId: String? = nil
+    ) async throws -> [StoryGroup] {
         var path = "/api/stories"
-        if let myChannelId,
+        if let myPublisherType,
+           let myPublisherId,
+           !myPublisherType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !myPublisherId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            var components = URLComponents()
+            components.queryItems = [
+                URLQueryItem(name: "myPublisherType", value: myPublisherType),
+                URLQueryItem(name: "myPublisherId", value: myPublisherId)
+            ]
+            if let query = components.percentEncodedQuery {
+                path += "?\(query)"
+            }
+        } else if let myChannelId,
            !myChannelId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            let encoded = myChannelId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
             path += "?myChannelId=\(encoded)"

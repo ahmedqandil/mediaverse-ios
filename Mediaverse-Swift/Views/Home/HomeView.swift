@@ -636,15 +636,29 @@ struct HomeView: View {
         }
     }
 
-    private var activeChannelUploadContext: UploadContext? {
+    private var activeFlashPublisher: UploadContext? {
         guard auth.isAuthenticated else { return nil }
-        guard let activeContext, activeContext.type == "channel" else { return nil }
+        guard let activeContext else { return nil }
+        let type = activeContext.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard ["user", "channel", "show"].contains(type) else { return nil }
+        let publisherID: String
+        switch type {
+        case "channel":
+            publisherID = activeContext.channelId ?? activeContext.id
+        case "show":
+            publisherID = activeContext.showId ?? activeContext.id
+        default:
+            publisherID = activeContext.id
+        }
         return UploadContext(
-            type: "channel",
-            id: activeContext.channelId ?? activeContext.id,
+            type: type,
+            id: publisherID,
             name: activeContext.name,
             avatarUrl: activeContext.avatarUrl ?? activeContext.image,
-            networkName: nil
+            channelId: activeContext.channelId,
+            showId: activeContext.showId,
+            networkId: activeContext.networkId,
+            networkName: activeContext.networkName
         )
     }
 
@@ -874,7 +888,7 @@ struct HomeView: View {
             }
         }
         .fullScreenCover(isPresented: $isCreatingStory) {
-            StoryCreatorCoordinator(preselectedPublisher: activeChannelUploadContext) {
+            StoryCreatorCoordinator(preselectedPublisher: activeFlashPublisher) {
                 isCreatingStory = false
                 Task { await storiesRepository.refresh(force: true) }
             }
@@ -1158,7 +1172,7 @@ struct HomeView: View {
 
     @ViewBuilder
     private var feedBodyContent: some View {
-        if pageListings.isEmpty && feed.isEmpty && featuredShows.isEmpty && continueItems.isEmpty && storiesRepository.groups.isEmpty && activeChannelUploadContext == nil {
+        if pageListings.isEmpty && feed.isEmpty && featuredShows.isEmpty && continueItems.isEmpty && storiesRepository.groups.isEmpty && activeFlashPublisher == nil {
             emptyState
         } else if !pageListings.isEmpty {
             ForEach(pageListings) { listing in
@@ -1240,7 +1254,7 @@ struct HomeView: View {
         if platformConfig.storiesFeedEnabled && auth.isAuthenticated {
             StoryTrayView(
                 repository: storiesRepository,
-                activeChannel: activeChannelUploadContext,
+                activeChannel: activeFlashPublisher,
                 onAddStory: { isCreatingStory = true }
             ) { group in
                 presentStoryViewer(groupId: group.id)

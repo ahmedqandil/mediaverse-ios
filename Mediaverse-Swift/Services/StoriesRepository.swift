@@ -96,7 +96,11 @@ final class StoriesRepository: ObservableObject {
         isLoading = true
 
         do {
-            let fetched = try await client.fetchGroups(myChannelId: activeStoryChannelId)
+            let publisher = activeStoryPublisher
+            let fetched = try await client.fetchGroups(
+                myPublisherType: publisher?.type,
+                myPublisherId: publisher?.id
+            )
             guard generation == refreshGeneration else { return }
             let locallySeenStoryIds = Set(
                 groups.flatMap(\.stories).filter(\.seen).map(\.id)
@@ -120,12 +124,22 @@ final class StoriesRepository: ObservableObject {
         }
     }
 
-    private var activeStoryChannelId: String? {
+    private var activeStoryPublisher: (type: String, id: String)? {
         guard let activeContext = SessionStorage.activeContext else { return nil }
-        if let channelId = activeContext.channelId, !channelId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return channelId
+        let type = activeContext.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let id: String?
+        switch type {
+        case "channel":
+            id = activeContext.channelId ?? activeContext.id
+        case "show":
+            id = activeContext.showId ?? activeContext.id
+        case "user":
+            id = activeContext.id
+        default:
+            id = nil
         }
-        return activeContext.type == "channel" ? activeContext.id : nil
+        guard let id, !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return (type, id)
     }
 
     private func observeFollowChanges() {

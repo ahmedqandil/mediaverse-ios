@@ -323,7 +323,6 @@ struct MainTabView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Active context, \(context.name)")
             }
-            .ignoresSafeArea()
             .zIndex(75)
         }
     }

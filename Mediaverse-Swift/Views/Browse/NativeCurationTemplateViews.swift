@@ -236,7 +236,7 @@ private struct NativeCurationFlashesTray: View {
         }
 
         let type = context.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard type == "channel" || type == "show" else {
+        guard type == "user" || type == "channel" || type == "show" else {
             activePublisher = nil
             return
         }
@@ -245,7 +245,9 @@ private struct NativeCurationFlashesTray: View {
             type: type,
             id: type == "channel"
                 ? (context.channelId ?? context.id)
-                : (context.showId ?? context.id),
+                : type == "show"
+                    ? (context.showId ?? context.id)
+                    : context.id,
             name: context.name,
             avatarUrl: context.avatarUrl ?? context.image,
             channelId: context.channelId,
