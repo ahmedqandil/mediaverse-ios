@@ -526,7 +526,7 @@ struct StoryEditorPreviewView: View {
                         value: activeTool?.id
                     )
                     .overlay {
-                        if activeTool != nil,
+                        if activeTool == .transform,
                            !isDrawingPresented,
                            !isTextComposerPresented,
                            editor.selectedOverlayID == nil {
@@ -811,6 +811,9 @@ struct StoryEditorPreviewView: View {
                     creationToolbarButton("Beauty", systemImage: "wand.and.stars") {
                         openTool(.beauty)
                     }
+                    creationToolbarButton("Position", systemImage: "viewfinder") {
+                        openTool(.transform)
+                    }
                     creationToolbarButton("Music", systemImage: "music.note") {
                         openTool(.music)
                     }
@@ -820,11 +823,6 @@ struct StoryEditorPreviewView: View {
                             beginDrawing()
                         } label: {
                             Label("Draw", systemImage: "pencil.tip")
-                        }
-                        Button {
-                            openTool(.transform)
-                        } label: {
-                            Label("Move and resize", systemImage: "arrow.up.left.and.arrow.down.right")
                         }
                         Button {
                             openTool(.clip)
@@ -1924,7 +1922,7 @@ struct StoryEditorPreviewView: View {
     private func toolDrawerTitle(_ tool: StoryEditorTool) -> String {
         switch tool {
         case .clip: return "Clip"
-        case .transform: return "Move & Resize"
+        case .transform: return "Position"
         case .look: return "Look"
         case .beauty: return "Beauty"
         case .audio: return "Audio"
@@ -1936,9 +1934,14 @@ struct StoryEditorPreviewView: View {
 
     private var mediaTransformControls: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label("Drag to move", systemImage: "hand.draw")
-            Label("Pinch to zoom", systemImage: "arrow.up.left.and.arrow.down.right")
-            Label("Twist two fingers to rotate", systemImage: "rotate.right")
+            Text("Position the selected photo or video directly on the canvas.")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white.opacity(0.68))
+            HStack(spacing: 18) {
+                Label("Drag", systemImage: "hand.draw")
+                Label("Pinch", systemImage: "arrow.up.left.and.arrow.down.right")
+                Label("Rotate", systemImage: "rotate.right")
+            }
         }
         .font(.system(size: 13, weight: .semibold))
         .foregroundStyle(.white.opacity(0.82))
