@@ -579,6 +579,15 @@ struct AtmosphereView: View {
                                 )
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(vibe.name).font(.headline)
+                                    if let description = vibe.description?
+                                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                                       !description.isEmpty {
+                                        Text(description)
+                                            .font(.subheadline)
+                                            .foregroundStyle(C.textMuted)
+                                            .lineLimit(2)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
                                     Text("\(vibe.memberCount) members · \(vibe.postCount) Ripples")
                                         .font(.caption)
                                         .foregroundStyle(C.textMuted)
