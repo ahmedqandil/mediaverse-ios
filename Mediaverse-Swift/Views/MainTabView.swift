@@ -33,6 +33,9 @@ struct MainTabView: View {
     @State private var isShortsAdPlaybackActive = false
     @State private var isRoutedShortsPresented = false
     @State private var isUploadEligible = false
+    @State private var activeContextToast: ActiveContext?
+    @State private var contextToastUserID: String?
+    @State private var contextToastDismissTask: Task<Void, Never>?
     private let socialFeatures = SocialFeatureConfiguration.runtime()
 
     enum AppTab: Int, Hashable {
@@ -94,6 +97,7 @@ struct MainTabView: View {
         .simultaneousGesture(mainScrollActivityGesture)
         .animation(.spring(response: 0.26, dampingFraction: 0.88), value: isUploadSheetPresented)
         .animation(.spring(response: 0.24, dampingFraction: 0.86), value: isBottomTabBarCompressed)
+        .animation(.spring(response: 0.28, dampingFraction: 0.88), value: activeContextToast?.id)
         .onAppear {
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
             applyNavigationBarAppearance()
@@ -120,6 +124,7 @@ struct MainTabView: View {
             explorePath = []
             shortsPath = []
             profilePath = []
+            dismissContextToast()
             selectedTab = .home
             lastContentTab = .home
             if let context = notification.object as? ActiveContext {
@@ -194,6 +199,7 @@ struct MainTabView: View {
             uploadProgressOverlay
             expandingMiniPlayerOverlay
             uploadOptionsOverlay
+            activeContextToastOverlay
         }
     }
 
@@ -261,6 +267,64 @@ struct MainTabView: View {
             uploadDrawerOverlay
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .zIndex(90)
+        }
+    }
+
+    @ViewBuilder
+    private var activeContextToastOverlay: some View {
+        if let context = activeContextToast {
+            GeometryReader { proxy in
+                HStack(spacing: 10) {
+                    MediaverseIcon(
+                        name: contextToastIcon(for: context.type),
+                        fallbackSystemName: contextToastFallbackIcon(for: context.type)
+                    )
+                    .frame(width: 20, height: 20)
+                    .foregroundStyle(C.watch)
+                    .frame(width: 36, height: 36)
+                    .background(C.watch.opacity(0.12), in: Circle())
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Active context")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(C.textMuted)
+                        Text(context.name)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(C.text)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Button {
+                        dismissContextToast()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(C.textMuted)
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Dismiss active context")
+                }
+                .padding(.leading, 10)
+                .padding(.trailing, 6)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(C.border, lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(0.34), radius: 16, y: 8)
+                .padding(.horizontal, 16)
+                .padding(.top, proxy.safeAreaInsets.top + 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Active context, \(context.name)")
+            }
+            .ignoresSafeArea()
+            .zIndex(75)
         }
     }
 
@@ -359,6 +423,7 @@ struct MainTabView: View {
     private func scheduleDeferredStartupWork() {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 700_000_000)
+            await presentStartupContextIfNeeded()
             await refreshUploadEligibility()
 
             try? await Task.sleep(nanoseconds: 250_000_000)
@@ -437,7 +502,70 @@ struct MainTabView: View {
 
     private func handleAuthenticationChange(oldValue: String?, newValue: String?) {
         shortsPlaybackManager.resetForIdentityChange()
+        dismissContextToast()
+        if newValue == nil {
+            contextToastUserID = nil
+        } else if newValue != oldValue {
+            contextToastUserID = nil
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(550))
+                await presentStartupContextIfNeeded()
+            }
+        }
         scheduleDeferredContextRefresh(isAuthenticated: newValue != nil)
+    }
+
+    @MainActor
+    private func presentStartupContextIfNeeded() async {
+        guard auth.isAuthenticated, let userID = auth.currentUser?.id else { return }
+        guard contextToastUserID != userID else { return }
+
+        do {
+            let response = try await APIClient.shared.fetchContexts()
+            contextToastUserID = userID
+            guard response.contexts.count > 1 else { return }
+            let active = SessionStorage.activeContext ?? response.active
+            activeContextToast = active
+            scheduleContextToastDismiss()
+        } catch {
+            // Startup context visibility is optional and must never block app loading.
+        }
+    }
+
+    private func scheduleContextToastDismiss() {
+        contextToastDismissTask?.cancel()
+        contextToastDismissTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.2)) {
+                activeContextToast = nil
+            }
+            contextToastDismissTask = nil
+        }
+    }
+
+    private func dismissContextToast() {
+        contextToastDismissTask?.cancel()
+        contextToastDismissTask = nil
+        activeContextToast = nil
+    }
+
+    private func contextToastIcon(for type: String) -> String {
+        switch type.lowercased() {
+        case "channel": return "users"
+        case "show": return "tv"
+        case "network": return "network"
+        default: return "user"
+        }
+    }
+
+    private func contextToastFallbackIcon(for type: String) -> String {
+        switch type.lowercased() {
+        case "channel": return "rectangle.stack.person.crop"
+        case "show": return "tv"
+        case "network": return "point.3.connected.trianglepath.dotted"
+        default: return "person"
+        }
     }
 
     private func dismissUploadOptionsAfterSelection() {
