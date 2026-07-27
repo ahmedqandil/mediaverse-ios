@@ -78,6 +78,14 @@ struct StoryCreatorCoordinator: View {
     let preselectedPublisher: UploadContext?
     let onComplete: () -> Void
 
+    init(preselectedPublisher: UploadContext?, onComplete: @escaping () -> Void) {
+        self.preselectedPublisher = preselectedPublisher
+        self.onComplete = onComplete
+        _selectedPublisher = State(initialValue: preselectedPublisher)
+        _isCameraPresented = State(initialValue: preselectedPublisher != nil)
+        _shouldDismissOnCameraCancel = State(initialValue: preselectedPublisher != nil)
+    }
+
     @Environment(\.dismiss) private var dismiss
     @State private var step: StoryCreatorStep = .media
     @State private var contexts: UploadContextsResponse?
