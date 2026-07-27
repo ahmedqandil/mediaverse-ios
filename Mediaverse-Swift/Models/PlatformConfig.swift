@@ -497,7 +497,7 @@ struct PlatformSections: Decodable {
     static let `default` = PlatformSections(stories: .default, browse: .default)
 
     enum CodingKeys: String, CodingKey {
-        case stories, browse, shows, videos, movies, microdramas, channels, following, collections
+        case stories, browse, shows, videos, movies, microdramas, channels, following, people, vibes, collections
     }
 
     init(stories: PlatformStorySection, browse: PlatformBrowseSection) {
@@ -508,27 +508,33 @@ struct PlatformSections: Decodable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         stories = try container.decodeIfPresent(PlatformStorySection.self, forKey: .stories) ?? .default
-        let decodedBrowse = try container.decodeIfPresent(PlatformBrowseSection.self, forKey: .browse) ?? .default
-        browse = decodedBrowse.applyingOverrides(from: container)
+        if let decodedBrowse = try container.decodeIfPresent(PlatformBrowseSection.self, forKey: .browse) {
+            browse = decodedBrowse
+        } else {
+            browse = PlatformBrowseSection.default.applyingOverrides(from: container)
+        }
     }
 }
 
 struct PlatformStorySection: Decodable {
     let feed: Bool
+    let creation: Bool
 
-    static let `default` = PlatformStorySection(feed: true)
+    static let `default` = PlatformStorySection(feed: true, creation: true)
 
     private enum CodingKeys: String, CodingKey {
-        case feed
+        case feed, creation
     }
 
-    init(feed: Bool) {
+    init(feed: Bool, creation: Bool = true) {
         self.feed = feed
+        self.creation = creation
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         feed = try container.decodeIfPresent(Bool.self, forKey: .feed) ?? true
+        creation = try container.decodeIfPresent(Bool.self, forKey: .creation) ?? true
     }
 }
 
@@ -564,7 +570,8 @@ struct PlatformBrowseSection: Decodable {
 
     func applyingOverrides(from container: KeyedDecodingContainer<PlatformSections.CodingKeys>) -> PlatformBrowseSection {
         let mapped = sections.compactMap { item -> PlatformBrowseItem? in
-            guard let override = try? container.decodeIfPresent(PlatformSectionToggle.self, forKey: PlatformSections.CodingKeys(stringValue: item.id) ?? .shows) else {
+            guard let key = PlatformSections.CodingKeys(stringValue: item.id),
+                  let override = try? container.decodeIfPresent(PlatformSectionToggle.self, forKey: key) else {
                 return item
             }
             return item.withOverride(override)
@@ -585,7 +592,6 @@ struct PlatformBrowseSection: Decodable {
     private static func normalized(_ sections: [PlatformBrowseItem]) -> [PlatformBrowseItem] {
         var seen = Set<String>()
         return sections
-            .filter(\.enabled)
             .compactMap { item in
                 guard PlatformBrowseItem.defaultItem(for: item.id) != nil, !seen.contains(item.id) else { return nil }
                 seen.insert(item.id)
@@ -598,25 +604,49 @@ struct PlatformBrowseItem: Decodable, Identifiable, Hashable {
     let id: String
     let label: String
     let enabled: Bool
+    let nav: Bool
+    let page: Bool
+    let feed: Bool
+    let search: Bool
+    let creation: Bool
 
     static let defaults: [PlatformBrowseItem] = [
+        PlatformBrowseItem(id: "shorts", label: "Shorts", enabled: true),
         PlatformBrowseItem(id: "shows", label: "Shows", enabled: true),
         PlatformBrowseItem(id: "videos", label: "Videos", enabled: true),
         PlatformBrowseItem(id: "movies", label: "Movies", enabled: true),
         PlatformBrowseItem(id: "microdramas", label: "Microdramas", enabled: true),
         PlatformBrowseItem(id: "channels", label: "Channels", enabled: true),
         PlatformBrowseItem(id: "following", label: "Following", enabled: true),
+        PlatformBrowseItem(id: "people", label: "People", enabled: true),
+        PlatformBrowseItem(id: "vibes", label: "Vibes", enabled: true),
         PlatformBrowseItem(id: "collections", label: "Collections", enabled: true),
+        PlatformBrowseItem(id: "stories", label: "Flashes", enabled: true),
     ]
 
     private enum CodingKeys: String, CodingKey {
-        case id, type, key, slug, label, title, name, enabled, visible, page, feed
+        case id, type, key, slug, label, title, name, enabled, visible
+        case nav, page, feed, search, creation
     }
 
-    init(id: String, label: String, enabled: Bool) {
+    init(
+        id: String,
+        label: String,
+        enabled: Bool,
+        nav: Bool? = nil,
+        page: Bool? = nil,
+        feed: Bool? = nil,
+        search: Bool? = nil,
+        creation: Bool? = nil
+    ) {
         self.id = Self.normalizedId(id)
         self.label = label
         self.enabled = enabled
+        self.nav = nav ?? enabled
+        self.page = page ?? enabled
+        self.feed = feed ?? enabled
+        self.search = search ?? enabled
+        self.creation = creation ?? enabled
     }
 
     init(from decoder: Decoder) throws {
@@ -645,13 +675,32 @@ struct PlatformBrowseItem: Decodable, Identifiable, Hashable {
             ?? container.decodeIfPresent(Bool.self, forKey: .page)
             ?? container.decodeIfPresent(Bool.self, forKey: .feed)
             ?? true
-        self.init(id: normalizedId, label: label, enabled: enabled)
+        self.init(
+            id: normalizedId,
+            label: label,
+            enabled: enabled,
+            nav: try container.decodeIfPresent(Bool.self, forKey: .nav),
+            page: try container.decodeIfPresent(Bool.self, forKey: .page),
+            feed: try container.decodeIfPresent(Bool.self, forKey: .feed),
+            search: try container.decodeIfPresent(Bool.self, forKey: .search),
+            creation: try container.decodeIfPresent(Bool.self, forKey: .creation)
+        )
     }
 
     func withOverride(_ override: PlatformSectionToggle?) -> PlatformBrowseItem? {
         guard let override else { return self }
         let nextLabel = override.label ?? label
         return PlatformBrowseItem(id: id, label: nextLabel, enabled: override.enabled)
+    }
+
+    func isEnabled(_ aspect: PlatformSectionAspect) -> Bool {
+        switch aspect {
+        case .nav: nav
+        case .page: page
+        case .feed: feed
+        case .search: search
+        case .creation: creation
+        }
     }
 
     static func normalizedId(_ raw: String) -> String {
@@ -669,6 +718,10 @@ struct PlatformBrowseItem: Decodable, Identifiable, Hashable {
             return "channels"
         case "followed", "subscriptions":
             return "following"
+        case "person", "users":
+            return "people"
+        case "vibe", "clubs", "communities":
+            return "vibes"
         case "collection", "library":
             return "collections"
         default:
@@ -679,6 +732,14 @@ struct PlatformBrowseItem: Decodable, Identifiable, Hashable {
     static func defaultItem(for id: String) -> PlatformBrowseItem? {
         defaults.first { $0.id == normalizedId(id) }
     }
+}
+
+enum PlatformSectionAspect {
+    case nav
+    case page
+    case feed
+    case search
+    case creation
 }
 
 struct PlatformSectionToggle: Decodable {

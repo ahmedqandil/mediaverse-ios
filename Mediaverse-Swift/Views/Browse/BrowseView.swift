@@ -19,11 +19,11 @@ struct BrowseView: View {
 
     private var platformBrowseItems: [PlatformBrowseItem] {
         let configured = platformConfig.browseSections.filter { BrowseSection(rawValue: $0.id) != nil }
-        return configured.isEmpty ? PlatformBrowseItem.defaults : configured
+        return platformConfig.isLoaded ? configured : PlatformBrowseItem.defaults
     }
 
     private var browseItems: [PlatformBrowseItem] {
-        curatedBrowseItems ?? platformBrowseItems
+        (curatedBrowseItems ?? platformBrowseItems).filter(\.enabled)
     }
 
     var body: some View {
