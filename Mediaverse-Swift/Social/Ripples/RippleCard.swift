@@ -734,7 +734,7 @@ private struct RippleAttachmentsView: View {
     var body: some View {
         VStack(spacing: 10) {
             if !photos.isEmpty {
-                RipplePhotoGrid(photos: photos)
+                RipplePhotoCarousel(photos: photos)
             }
             ForEach(other) { attachment in
                 attachmentView(attachment)
@@ -781,51 +781,57 @@ private struct RippleAttachmentsView: View {
     }
 }
 
-private struct RipplePhotoGrid: View {
+private struct RipplePhotoCarousel: View {
     let photos: [RippleAttachment]
     @State private var selectedPhoto: RippleAttachment?
     @State private var energyPhoto: RippleAttachment?
+    @State private var selectedPhotoID: String
+
+    init(photos: [RippleAttachment]) {
+        self.photos = photos
+        _selectedPhotoID = State(initialValue: photos.first?.id ?? "")
+    }
 
     var body: some View {
         GeometryReader { proxy in
-            let spacing: CGFloat = 2
-            let columns = photos.count == 1 ? 1 : 2
-            let width = (proxy.size.width - CGFloat(columns - 1) * spacing) / CGFloat(columns)
-            LazyVGrid(
-                columns: Array(repeating: GridItem(.fixed(width), spacing: spacing), count: columns),
-                spacing: spacing
-            ) {
-                ForEach(Array(photos.prefix(4).enumerated()), id: \.element.id) { index, photo in
+            TabView(selection: $selectedPhotoID) {
+                ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
                     CachedRemoteImage(
                         url: C.mediaURL(photo.imageURL),
-                        targetSize: CGSize(width: width, height: photos.count == 1 ? width : width * 0.9)
+                        targetSize: CGSize(width: proxy.size.width, height: proxy.size.width)
                     ) { image in
                         image.resizable().scaledToFill()
                     } placeholder: {
                         C.elevated
                     }
-                    .frame(width: width, height: photos.count == 1 ? width : width * 0.9)
+                    .frame(width: proxy.size.width, height: proxy.size.width)
                     .clipped()
-                    .overlay {
-                        if index == 3, photos.count > 4 {
-                            Color.black.opacity(0.55)
-                            Text("+\(photos.count - 3)")
-                                .font(.title.bold())
-                                .foregroundStyle(.white)
-                        }
-                    }
                     .contentShape(Rectangle())
                     .gesture(photoTapGesture(photo))
                     .accessibilityAddTraits(.isButton)
                     .accessibilityLabel("Open photo \(index + 1) of \(photos.count)")
-                    .accessibilityHint("Double tap to open")
+                    .accessibilityHint("Double tap to add Energy")
                     .accessibilityAction(named: "Add Energy") {
                         energyPhoto = photo
                     }
+                    .tag(photo.id)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .overlay(alignment: .topTrailing) {
+                if photos.count > 1 {
+                    Text("\(selectedIndex) / \(photos.count)")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .frame(height: 30)
+                        .background(.black.opacity(0.62), in: Capsule())
+                        .padding(10)
+                        .allowsHitTesting(false)
                 }
             }
         }
-        .aspectRatio(photos.count == 1 ? 1 : (photos.count == 2 ? 1.7 : 1.1), contentMode: .fit)
+        .aspectRatio(1, contentMode: .fit)
         .fullScreenCover(item: $selectedPhoto) { selected in
             RipplePhotoViewer(
                 photos: photos,
@@ -840,6 +846,10 @@ private struct RipplePhotoGrid: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
+    }
+
+    private var selectedIndex: Int {
+        (photos.firstIndex { $0.id == selectedPhotoID } ?? 0) + 1
     }
 
     private func photoTapGesture(
