@@ -80,8 +80,6 @@ struct VibeAffiliationsView: View {
                 )
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .foregroundStyle(C.text)
-                .tint(C.watch)
                 if isSearching {
                     ProgressView().controlSize(.small).tint(C.watch)
                 }
@@ -89,6 +87,7 @@ struct VibeAffiliationsView: View {
             .padding(.horizontal, 12)
             .frame(height: 42)
             .background(C.elevated, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(C.border, lineWidth: 1))
             .onChange(of: query) { _, value in scheduleSearch(value) }
 
             if !results.isEmpty {
@@ -130,10 +129,7 @@ struct VibeAffiliationsView: View {
                         .font(.subheadline.bold())
                     TextField("Optional message to the owner", text: $requestMessage, axis: .vertical)
                         .lineLimit(2...5)
-                        .foregroundStyle(C.text)
-                        .tint(C.watch)
-                        .padding(10)
-                        .background(C.elevated, in: RoundedRectangle(cornerRadius: 9))
+                        .westreemField(minHeight: 82)
                     Toggle("Primary affiliation", isOn: $isPrimary)
                         .font(.subheadline)
                     Button {
@@ -461,6 +457,7 @@ struct AffiliationReviewView: View {
                         axis: .vertical
                     )
                     .lineLimit(2...5)
+                    .westreemField(minHeight: 82)
                 }
             }
             .westreemFormStyle()
@@ -782,6 +779,7 @@ private struct MemberModerationSheet: View {
                         if status != "ACTIVE" {
                             TextField("Moderation reason (required)", text: $reason, axis: .vertical)
                                 .lineLimit(2...5)
+                                .westreemField(minHeight: 82)
                         }
                     }
                 }
@@ -868,6 +866,8 @@ private struct RippleModerationDecisionSheet: View {
                     }
                     if !["approve", "restore"].contains(action) {
                         TextField("Reason (required)", text: $reason, axis: .vertical)
+                            .lineLimit(2...5)
+                            .westreemField(minHeight: 82)
                     }
                 }
             }
@@ -923,6 +923,8 @@ private struct ReportResolutionSheet: View {
                         Text("Resolved — no action").tag("RESOLVED_NO_ACTION")
                     }
                     TextField("Resolution note", text: $note, axis: .vertical)
+                        .lineLimit(2...5)
+                        .westreemField(minHeight: 82)
                 }
                 if status == "RESOLVED_ACTIONED" {
                     Text("Resolve the report after separately applying the appropriate Ripple or member action.")
@@ -975,6 +977,8 @@ private struct JoinRequestDecisionSheet: View {
                 }
                 Section("Optional note") {
                     TextField("Message to the requester", text: $note, axis: .vertical)
+                        .lineLimit(2...5)
+                        .westreemField(minHeight: 82)
                 }
             }
             .westreemFormStyle()

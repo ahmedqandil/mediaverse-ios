@@ -36,6 +36,11 @@ struct FollowingView: View {
         }
     }
 
+    private var availableTabs: [Tab] {
+        guard !isLoading else { return Tab.allCases }
+        return Tab.allCases.filter { !tabItems($0).isEmpty }
+    }
+
     var body: some View {
         ZStack {
             C.bg.ignoresSafeArea()
@@ -43,7 +48,9 @@ struct FollowingView: View {
                 PlatformSectionUnavailableView(item: pageConfig)
             } else {
                 VStack(spacing: 0) {
-                tabBar
+                if availableTabs.count > 1 {
+                    tabBar
+                }
 
                 if !auth.isAuthenticated {
                     unauthState
@@ -87,14 +94,14 @@ struct FollowingView: View {
 
     private var tabBar: some View {
         MediaverseUnderlineTabStrip(
-            items: Tab.allCases.map { tab in
+            items: availableTabs.map { tab in
                 MediaverseTabItem(id: tab.id, label: tab.label, count: tabItems(tab).count)
             },
             selectedID: selectedTab.id,
             fillsWidth: true,
             background: C.surface
         ) { id in
-            guard let tab = Tab.allCases.first(where: { $0.id == id }) else { return }
+            guard let tab = availableTabs.first(where: { $0.id == id }) else { return }
             selectedTab = tab
         }
     }
@@ -212,6 +219,9 @@ struct FollowingView: View {
         guard generation == accountGeneration, auth.isAuthenticated else { return }
         items = refreshedItems
         isLoading = false
+        if !availableTabs.contains(selectedTab), let first = availableTabs.first {
+            selectedTab = first
+        }
     }
 }
 

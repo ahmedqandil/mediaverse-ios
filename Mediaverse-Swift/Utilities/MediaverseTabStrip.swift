@@ -29,6 +29,7 @@ struct MediaverseUnderlineTabStrip: View {
     var horizontalPadding: CGFloat = C.pagePad
     var verticalPadding: CGFloat = 12
     var background: Color = C.bg
+    var loadingID: String? = nil
     let onSelect: (String) -> Void
 
     var body: some View {
@@ -52,6 +53,12 @@ struct MediaverseUnderlineTabStrip: View {
                                 .font(.caption2)
                                 .foregroundStyle(C.textMuted)
                         }
+                        if loadingID == item.id {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .tint(C.watch)
+                                .accessibilityHidden(true)
+                        }
                     }
                     .foregroundStyle(isSelected(item) ? C.text : C.textMuted)
                     .lineLimit(1)
@@ -69,6 +76,7 @@ struct MediaverseUnderlineTabStrip: View {
                 }
                 .frame(maxWidth: fillsWidth ? .infinity : nil)
                 .buttonStyle(.plain)
+                .disabled(loadingID == item.id)
                 .id(item.id)
             }
 

@@ -1070,16 +1070,9 @@ private struct PartnerRequestSheet: View {
                                         .padding(.top, 14)
                                 }
                                 TextEditor(text: $reason)
-                                    .frame(minHeight: 160)
-                                    .foregroundStyle(C.text)
-                                    .scrollContentBackground(.hidden)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 6)
+                                    .westreemEditor(minHeight: 160)
                                     .disabled(isSubmitting || didSubmit)
                             }
-                            .background(Color.white.opacity(0.05))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .overlay { RoundedRectangle(cornerRadius: 10).stroke(C.border, lineWidth: 1) }
                             }
                         } else {
                             partnerOverview
@@ -1301,12 +1294,7 @@ private struct EditProfileSheet: View {
                     VStack(alignment: .leading, spacing: 18) {
                         fieldGroup("Display name") {
                             TextField("Your name", text: $name)
-                                .textFieldStyle(.plain)
-                                .foregroundStyle(C.text)
-                                .padding(12)
-                                .background(Color.white.opacity(0.05))
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                .overlay { RoundedRectangle(cornerRadius: 10).stroke(C.border, lineWidth: 1) }
+                                .westreemField()
                         }
 
                         fieldGroup("Bio") {
@@ -1318,15 +1306,8 @@ private struct EditProfileSheet: View {
                                         .padding(.top, 14)
                                 }
                                 TextEditor(text: $bio)
-                                    .frame(minHeight: 120)
-                                    .foregroundStyle(C.text)
-                                    .scrollContentBackground(.hidden)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 6)
+                                    .westreemEditor(minHeight: 120)
                             }
-                            .background(Color.white.opacity(0.05))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .overlay { RoundedRectangle(cornerRadius: 10).stroke(C.border, lineWidth: 1) }
                         }
 
                         fieldGroup("Profile image") {
@@ -1370,9 +1351,7 @@ private struct EditProfileSheet: View {
                         }
 
                         if let errorMessage {
-                            Text(errorMessage)
-                                .font(.caption)
-                                .foregroundStyle(.red)
+                            WestreemFeedbackBanner(message: errorMessage)
                         }
                     }
                     .padding(C.pagePad)

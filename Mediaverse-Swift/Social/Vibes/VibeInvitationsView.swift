@@ -71,7 +71,7 @@ struct VibeInvitationsView: View {
                         ProgressView()
                     } else if invites.isEmpty {
                         Text("No invitations yet.")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(C.textMuted)
                     } else {
                         ForEach(invites) { invite in
                             inviteRow(invite)
@@ -220,7 +220,7 @@ struct VibeInviteAcceptView: View {
                  ? "Join this Vibe using your Westreem account."
                  : "You are now a member of this Vibe.")
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(C.textMuted)
             if let acceptedSlug {
                 NavigationLink(value: AppRoute.vibe(acceptedSlug)) {
                     Text("Open Vibe")

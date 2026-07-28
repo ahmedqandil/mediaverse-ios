@@ -7,20 +7,28 @@ final class ShareViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = UIColor(red: 0.03, green: 0.03, blue: 0.06, alpha: 1)
-        loadSharedURL()
+        loadSharedContent()
     }
 
-    private func loadSharedURL() {
+    private func loadSharedContent() {
         let providers: [NSItemProvider] = (extensionContext?.inputItems ?? [])
             .compactMap { $0 as? NSExtensionItem }
             .flatMap { $0.attachments ?? [] }
+
+        let imageProviders = Array(providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+        }.prefix(10))
+        if !imageProviders.isEmpty {
+            loadImages(from: imageProviders)
+            return
+        }
 
         if let provider = providers.first(where: {
             $0.hasItemConformingToTypeIdentifier(UTType.url.identifier)
         }) {
             provider.loadItem(forTypeIdentifier: UTType.url.identifier, options: nil) {
                 [weak self] item, _ in
-                DispatchQueue.main.async { self?.showEcho(url: item as? URL) }
+                DispatchQueue.main.async { self?.showEcho(url: item as? URL, images: []) }
             }
             return
         }
@@ -31,22 +39,85 @@ final class ShareViewController: UIViewController {
             provider.loadItem(forTypeIdentifier: UTType.plainText.identifier, options: nil) {
                 [weak self] item, _ in
                 let url = (item as? String).flatMap(URL.init(string:))
-                DispatchQueue.main.async { self?.showEcho(url: url) }
+                DispatchQueue.main.async { self?.showEcho(url: url, images: []) }
             }
             return
         }
 
-        showEcho(url: nil)
+        showEcho(url: nil, images: [])
     }
 
-    private func showEcho(url: URL?) {
+    private func loadImages(from providers: [NSItemProvider]) {
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var loaded = [(Int, Data)]()
+        for (index, provider) in providers.enumerated() {
+            group.enter()
+            provider.loadItem(forTypeIdentifier: UTType.image.identifier, options: nil) { item, _ in
+                defer { group.leave() }
+                let image: UIImage?
+                if let value = item as? UIImage {
+                    image = value
+                } else if let url = item as? URL, let data = try? Data(contentsOf: url) {
+                    image = UIImage(data: data)
+                } else if let data = item as? Data {
+                    image = UIImage(data: data)
+                } else {
+                    image = nil
+                }
+                if let image, let data = Self.preparedImageData(image) {
+                    lock.lock()
+                    loaded.append((index, data))
+                    lock.unlock()
+                }
+            }
+        }
+        group.notify(queue: .main) { [weak self] in
+            self?.showEcho(url: nil, images: loaded.sorted { $0.0 < $1.0 }.map(\.1))
+        }
+    }
+
+    private static func preparedImageData(_ source: UIImage) -> Data? {
+        let maxBytes = 3_750_000
+        var maxPixel: CGFloat = 2048
+        var quality: CGFloat = 0.84
+        for _ in 0..<6 {
+            let largest = max(source.size.width, source.size.height)
+            let scale = largest > maxPixel ? maxPixel / largest : 1
+            let size = CGSize(
+                width: max(1, floor(source.size.width * scale)),
+                height: max(1, floor(source.size.height * scale))
+            )
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            format.opaque = true
+            let normalized = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+                UIColor.black.setFill()
+                UIRectFill(CGRect(origin: .zero, size: size))
+                source.draw(in: CGRect(origin: .zero, size: size))
+            }
+            if let data = normalized.jpegData(compressionQuality: quality), data.count <= maxBytes {
+                return data
+            }
+            quality = max(0.58, quality - 0.07)
+            maxPixel *= 0.82
+        }
+        return nil
+    }
+
+    private func showEcho(url: URL?, images: [Data]) {
         let root = ExtensionEchoView(
             sharedURL: url,
+            sharedImages: images,
             onClose: { [weak self] in
                 self?.extensionContext?.completeRequest(returningItems: nil)
             }
         )
-        let host = UIHostingController(rootView: root)
+        let host = UIHostingController(
+            rootView: root
+                .preferredColorScheme(.dark)
+                .tint(Color(red: 0, green: 0.90, blue: 0.46))
+        )
         addChild(host)
         host.view.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(host.view)
@@ -62,6 +133,7 @@ final class ShareViewController: UIViewController {
 
 private struct ExtensionEchoView: View {
     let sharedURL: URL?
+    let sharedImages: [Data]
     let onClose: () -> Void
 
     @State private var state = EchoState.loading
@@ -79,6 +151,7 @@ private struct ExtensionEchoView: View {
     private let background = Color(red: 0.03, green: 0.03, blue: 0.06)
     private let surface = Color(red: 0.06, green: 0.06, blue: 0.10)
     private let elevated = Color(red: 0.09, green: 0.10, blue: 0.14)
+    private var isPhotoRipple: Bool { !sharedImages.isEmpty }
 
     var body: some View {
         NavigationStack {
@@ -86,7 +159,7 @@ private struct ExtensionEchoView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     switch state {
                     case .loading:
-                        ProgressView("Preparing Echo…")
+                        ProgressView(isPhotoRipple ? "Preparing Ripple…" : "Preparing Echo…")
                             .tint(green)
                             .foregroundStyle(.white.opacity(0.68))
                             .frame(maxWidth: .infinity)
@@ -98,11 +171,19 @@ private struct ExtensionEchoView: View {
                             detail: "Sign in to WeStreem, then return and share this link again."
                         )
                     case .failed(let text):
-                        message(icon: "link.badge.plus", title: "Couldn’t prepare this Echo", detail: text)
+                        message(
+                            icon: isPhotoRipple ? "photo.on.rectangle.angled" : "link.badge.plus",
+                            title: isPhotoRipple ? "Couldn’t prepare this Ripple" : "Couldn’t prepare this Echo",
+                            detail: text
+                        )
                     case .ready:
                         previewCard
                         destinationPicker
-                        echoMode
+                        if isPhotoRipple {
+                            rippleTextEditor
+                        } else {
+                            echoMode
+                        }
                         publishButton
                     }
                 }
@@ -112,7 +193,7 @@ private struct ExtensionEchoView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .background(background)
-            .navigationTitle("Echo")
+            .navigationTitle(isPhotoRipple ? "Create Ripple" : "Echo")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -130,7 +211,7 @@ private struct ExtensionEchoView: View {
 
     private var previewCard: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("ECHO PREVIEW")
+            Text(isPhotoRipple ? "RIPPLE PREVIEW" : "ECHO PREVIEW")
                 .font(.system(size: 10, weight: .semibold))
                 .tracking(1.5)
                 .foregroundStyle(.white.opacity(0.46))
@@ -139,7 +220,56 @@ private struct ExtensionEchoView: View {
 
             Divider().overlay(.white.opacity(0.07))
 
-            HStack(spacing: 12) {
+            if !sharedImages.isEmpty {
+                photoPreview
+            } else {
+                linkPreview
+            }
+        }
+        .background(surface)
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.07)))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var photoPreview: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: 6),
+                GridItem(.flexible(), spacing: 6)
+            ], spacing: 6) {
+                ForEach(Array(sharedImages.prefix(4).enumerated()), id: \.offset) { index, data in
+                    if let image = UIImage(data: data) {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(height: sharedImages.count == 1 ? 190 : 108)
+                            .frame(maxWidth: .infinity)
+                            .clipped()
+                            .overlay {
+                                if index == 3, sharedImages.count > 4 {
+                                    Color.black.opacity(0.58)
+                                    Text("+\(sharedImages.count - 4)")
+                                        .font(.title2.bold())
+                                        .foregroundStyle(.white)
+                                }
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: 9))
+                            .gridCellColumns(sharedImages.count == 1 ? 2 : 1)
+                    }
+                }
+            }
+            Label(
+                "\(sharedImages.count) photo\(sharedImages.count == 1 ? "" : "s") ready to share",
+                systemImage: "photo.on.rectangle.angled"
+            )
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.white.opacity(0.66))
+        }
+        .padding(12)
+    }
+
+    private var linkPreview: some View {
+        HStack(spacing: 12) {
                 if let value = preview?.thumbnailUrl, let url = URL(string: value) {
                     AsyncImage(url: url) { image in
                         image.resizable().scaledToFill()
@@ -173,16 +303,15 @@ private struct ExtensionEchoView: View {
                 Spacer(minLength: 0)
             }
             .padding(12)
-        }
-        .background(surface)
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.07)))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private var destinationPicker: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let personal = destinations.first(where: \.isPersonal) {
-                destinationRow(personal, subtitle: "Echo directly to My Atmo")
+                destinationRow(
+                    personal,
+                    subtitle: isPhotoRipple ? "Post this Ripple to My Atmo" : "Echo directly to My Atmo"
+                )
             }
 
             Text("Find a Vibe")
@@ -311,6 +440,32 @@ private struct ExtensionEchoView: View {
         }
     }
 
+    private var rippleTextEditor: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Add to your Ripple")
+                .font(.caption.bold())
+                .foregroundStyle(.white.opacity(0.58))
+            TextField(
+                "",
+                text: $quote,
+                prompt: Text("Say something about these photos…").foregroundStyle(.white.opacity(0.42)),
+                axis: .vertical
+            )
+            .foregroundStyle(.white)
+            .tint(green)
+            .lineLimit(3...8)
+            .focused($focusedField, equals: .quote)
+            .padding(14)
+            .frame(minHeight: 112, alignment: .topLeading)
+            .background(elevated)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(focusedField == .quote ? green.opacity(0.7) : .white.opacity(0.10))
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
     private func echoModeButton(
         _ title: String,
         selected: Bool,
@@ -333,8 +488,8 @@ private struct ExtensionEchoView: View {
             Task { await publish() }
         } label: {
             Label(
-                publishing ? "Echoing…" : selected.count > 1 ? "Echo to \(selected.count)" : "Echo",
-                systemImage: "dot.radiowaves.left.and.right"
+                publishButtonTitle,
+                systemImage: isPhotoRipple ? "wave.3.right" : "dot.radiowaves.left.and.right"
             )
             .font(.subheadline.bold())
             .foregroundStyle(.black)
@@ -346,6 +501,16 @@ private struct ExtensionEchoView: View {
         .buttonStyle(.plain)
         .disabled(selected.isEmpty || publishing)
         .opacity(selected.isEmpty ? 0.5 : 1)
+    }
+
+    private var publishButtonTitle: String {
+        if publishing {
+            return isPhotoRipple ? "Publishing Ripple…" : "Echoing…"
+        }
+        if isPhotoRipple {
+            return selected.count > 1 ? "Publish to \(selected.count)" : "Publish Ripple"
+        }
+        return selected.count > 1 ? "Echo to \(selected.count)" : "Echo"
     }
 
     private var matchingVibes: [ShareVibe] {
@@ -371,8 +536,8 @@ private struct ExtensionEchoView: View {
 
     @MainActor
     private func prepare() async {
-        guard let sharedURL else {
-            state = .failed("No shareable link was found.")
+        guard sharedURL != nil || !sharedImages.isEmpty else {
+            state = .failed("No shareable link or photo was found.")
             return
         }
         guard ShareAPI.sessionToken != nil else {
@@ -380,22 +545,22 @@ private struct ExtensionEchoView: View {
             return
         }
         do {
-            async let vibeRequest = ShareAPI.get("/api/fan-clubs/postable")
-            async let resolveRequest = ShareAPI.post(
-                "/api/fan-clubs/resolve-attachment",
-                body: ["url": sharedURL.absoluteString]
-            )
-            let vibeData = try await vibeRequest
-            let resolvedData = try await resolveRequest
+            let vibeData = try await ShareAPI.get("/api/fan-clubs/postable")
             destinations = try JSONDecoder().decode(ShareVibesEnvelope.self, from: vibeData).vibes
-            let object = try JSONSerialization.jsonObject(with: resolvedData) as? [String: Any]
-            guard let rawAttachment = object?["attachment"] as? [String: Any] else {
-                throw ShareAPIError.invalidResponse
-            }
-            attachment = rawAttachment.mapValues(AnySendable.init)
-            if let rawPreview = object?["preview"] as? [String: Any],
-               let data = try? JSONSerialization.data(withJSONObject: rawPreview) {
-                preview = try? JSONDecoder().decode(SharePreview.self, from: data)
+            if let sharedURL {
+                let resolvedData = try await ShareAPI.post(
+                    "/api/fan-clubs/resolve-attachment",
+                    body: ["url": sharedURL.absoluteString]
+                )
+                let object = try JSONSerialization.jsonObject(with: resolvedData) as? [String: Any]
+                guard let rawAttachment = object?["attachment"] as? [String: Any] else {
+                    throw ShareAPIError.invalidResponse
+                }
+                attachment = rawAttachment.mapValues(AnySendable.init)
+                if let rawPreview = object?["preview"] as? [String: Any],
+                   let data = try? JSONSerialization.data(withJSONObject: rawPreview) {
+                    preview = try? JSONDecoder().decode(SharePreview.self, from: data)
+                }
             }
             if let personal = destinations.first(where: \.isPersonal) {
                 selected.insert(personal.slug)
@@ -408,17 +573,27 @@ private struct ExtensionEchoView: View {
 
     @MainActor
     private func publish() async {
-        guard let attachment, !selected.isEmpty, !publishing else { return }
+        guard !selected.isEmpty, !publishing else { return }
         publishing = true
         do {
+            var attachments = [[String: Any]]()
+            if !sharedImages.isEmpty, let uploadSlug = selected.sorted().first {
+                for photo in sharedImages {
+                    let imageURL = try await ShareAPI.uploadPhoto(photo, vibeSlug: uploadSlug)
+                    attachments.append(["type": "PHOTO", "imageUrl": imageURL])
+                }
+            } else if let attachment {
+                attachments.append(attachment.mapValues(\.value))
+            }
+            guard !attachments.isEmpty else { throw ShareAPIError.invalidResponse }
             let body = quote.trimmingCharacters(in: .whitespacesAndNewlines)
             for slug in selected.sorted() {
                 var payload: [String: Any] = [
-                    "attachments": [attachment.mapValues(\.value)],
+                    "attachments": attachments,
                     "isSpoiler": false,
                     "commentsDisabled": false
                 ]
-                if quoteMode, !body.isEmpty { payload["body"] = body }
+                if (isPhotoRipple || quoteMode), !body.isEmpty { payload["body"] = body }
                 _ = try await ShareAPI.post(
                     "/api/fan-clubs/\(slug.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? slug)/posts",
                     body: payload
@@ -471,7 +646,7 @@ private enum ShareAPI {
     static let account = "westreem.sessionJWT"
 
     static var sessionToken: String? {
-        var query: [String: Any] = [
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
@@ -493,9 +668,50 @@ private enum ShareAPI {
         try await request(path, method: "POST", body: try JSONSerialization.data(withJSONObject: body))
     }
 
+    static func uploadPhoto(_ data: Data, vibeSlug: String) async throws -> String {
+        let slug = vibeSlug.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? vibeSlug
+        let preparation = try await post(
+            "/api/fan-clubs/\(slug)/images/upload-url?purpose=post",
+            body: ["mimeType": "image/jpeg", "size": data.count]
+        )
+        guard let object = try JSONSerialization.jsonObject(with: preparation) as? [String: Any],
+              let uploadValue = object["uploadUrl"] as? String,
+              let uploadURL = URL(string: uploadValue) else {
+            throw ShareAPIError.invalidResponse
+        }
+        let uploaded = try await upload(data, to: uploadURL)
+        let uploadedObject = (try? JSONSerialization.jsonObject(with: uploaded)) as? [String: Any]
+        if let value = uploadedObject?["mediaUrl"] as? String, !value.isEmpty { return value }
+        if let value = object["mediaUrl"] as? String, !value.isEmpty { return value }
+        if let value = object["deliveryUrl"] as? String, !value.isEmpty { return value }
+        throw ShareAPIError.invalidResponse
+    }
+
+    private static func upload(_ data: Data, to url: URL) async throws -> Data {
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.httpBody = data
+        request.timeoutInterval = 120
+        request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        request.setValue(String(data.count), forHTTPHeaderField: "Content-Length")
+        if url.host == baseURL.host, let token = sessionToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue(
+                "next-auth.session-token=\(token); __Secure-next-auth.session-token=\(token); authjs.session-token=\(token); __Secure-authjs.session-token=\(token)",
+                forHTTPHeaderField: "Cookie"
+            )
+        }
+        let (responseData, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw ShareAPIError.invalidResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            throw ShareAPIError.server("The photo could not reach storage.")
+        }
+        return responseData
+    }
+
     private static func request(_ path: String, method: String, body: Data?) async throws -> Data {
         guard let token = sessionToken,
-              let url = URL(string: path, relativeTo: baseURL) else {
+              let url = endpointURL(path) else {
             throw ShareAPIError.signedOut
         }
         var request = URLRequest(url: url)
@@ -516,6 +732,15 @@ private enum ShareAPI {
             throw ShareAPIError.server(message ?? "WeStreem returned \(http.statusCode).")
         }
         return data
+    }
+
+    private static func endpointURL(_ value: String) -> URL? {
+        let parts = value.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        guard let rawPath = parts.first else { return nil }
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+        components?.percentEncodedPath = rawPath.hasPrefix("/") ? String(rawPath) : "/\(rawPath)"
+        components?.percentEncodedQuery = parts.count > 1 ? String(parts[1]) : nil
+        return components?.url
     }
 }
 

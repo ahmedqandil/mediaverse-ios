@@ -1335,7 +1335,8 @@ struct ShortsView: View {
             fillsWidth: true,
             horizontalPadding: 0,
             verticalPadding: 10,
-            background: .clear
+            background: .clear,
+            loadingID: isLoading ? feed.rawValue : nil
         ) { id in
             guard let tab = ShortsFeed(rawValue: id) else { return }
             Task { await switchFeed(tab) }

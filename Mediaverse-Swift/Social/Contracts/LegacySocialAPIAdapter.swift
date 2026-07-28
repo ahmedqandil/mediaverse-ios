@@ -10,11 +10,22 @@ public protocol LegacySocialTransport: Sendable {
     func socialUploadData(path: String, body: Data, contentType: String) async throws -> Data
 }
 
-public enum SocialDiscoverMode: String, Sendable {
+public enum SocialDiscoverMode: String, CaseIterable, Identifiable, Sendable {
     case forYou = "FOR_YOU"
     case trending = "TRENDING"
     case latest = "LATEST"
     case affiliated = "AFFILIATED"
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .forYou: "For You"
+        case .trending: "Trending"
+        case .latest: "Latest"
+        case .affiliated: "Affiliated"
+        }
+    }
 }
 
 public enum SocialProfileTab: String, Sendable {

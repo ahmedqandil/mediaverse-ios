@@ -28,12 +28,15 @@ final class AtmosphereViewModel: ObservableObject {
     @Published var selectedTab: Tab = .atmosphere
     @Published private(set) var atmosphereItems: [AtmosphereFeedItem] = []
     @Published private(set) var discoveredRipples: [Ripple] = []
+    @Published private(set) var discoverMode: SocialDiscoverMode = .forYou
+    @Published private(set) var emptyDiscoverModes = Set<SocialDiscoverMode>()
     @Published private(set) var myVibes: [VibeSummary] = []
     @Published private(set) var stateByTab: [Tab: LoadState] = [:]
     @Published private(set) var curationListings: [AssembledListing] = []
 
     private let api: LegacySocialAPIAdapter
     private var hasLoadedCuration = false
+    private var hasCheckedAffiliatedAvailability = false
 
     init(api: LegacySocialAPIAdapter = LegacySocialAPIAdapter(transport: APIClient.shared)) {
         self.api = api
@@ -53,6 +56,20 @@ final class AtmosphereViewModel: ObservableObject {
 
     func reload(_ tab: Tab? = nil) async {
         await load(tab ?? selectedTab)
+    }
+
+    func selectDiscoverMode(_ mode: SocialDiscoverMode) {
+        guard discoverMode != mode else { return }
+        discoverMode = mode
+        discoveredRipples = []
+        stateByTab[.discover] = .idle
+        Task { await load(.discover) }
+    }
+
+    var availableDiscoverModes: [SocialDiscoverMode] {
+        SocialDiscoverMode.allCases.filter { mode in
+            mode == .forYou || !emptyDiscoverModes.contains(mode)
+        }
     }
 
     func prepend(_ ripple: Ripple) {
@@ -118,7 +135,18 @@ final class AtmosphereViewModel: ObservableObject {
             case .atmosphere:
                 atmosphereItems = try await api.atmosphere().items
             case .discover:
-                discoveredRipples = try await api.discover(mode: .forYou).posts
+                let requestedMode = discoverMode
+                let response = try await api.discover(mode: requestedMode)
+                guard requestedMode == discoverMode else { return }
+                discoveredRipples = response.posts
+                if response.posts.isEmpty {
+                    emptyDiscoverModes.insert(requestedMode)
+                } else {
+                    emptyDiscoverModes.remove(requestedMode)
+                }
+                if requestedMode != .affiliated {
+                    Task { await checkAffiliatedAvailability() }
+                }
             case .myVibes:
                 myVibes = try await api.myVibes().clubs
             }
@@ -139,6 +167,22 @@ final class AtmosphereViewModel: ObservableObject {
             #if DEBUG
             print("[social-ui] \(tab.rawValue) failed=\(String(describing: error))")
             #endif
+        }
+    }
+
+    private func checkAffiliatedAvailability() async {
+        guard !hasCheckedAffiliatedAvailability else { return }
+        hasCheckedAffiliatedAvailability = true
+        do {
+            let response = try await api.discover(mode: .affiliated)
+            if response.posts.isEmpty {
+                emptyDiscoverModes.insert(.affiliated)
+            } else {
+                emptyDiscoverModes.remove(.affiliated)
+            }
+        } catch {
+            // Keep the filter available when the server cannot confirm its state.
+            hasCheckedAffiliatedAvailability = false
         }
     }
 

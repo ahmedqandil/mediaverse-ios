@@ -35,6 +35,9 @@ struct RippleComposer: View {
     @State private var notice: String?
     @State private var errorMessage: String?
     @State private var photoSelections: [PhotosPickerItem] = []
+    @State private var showsPhotoSourceChooser = false
+    @State private var showsPhotoLibrary = false
+    @State private var showsCamera = false
     @State private var photos: [UploadedRipplePhoto] = []
     @State private var photoSourceImages: [String: UIImage] = [:]
     @State private var positioningPhoto: RipplePhotoPositioning?
@@ -123,21 +126,18 @@ struct RippleComposer: View {
                     .foregroundStyle(C.textMuted)
 
                 HStack(spacing: 10) {
-                PhotosPicker(
-                    selection: $photoSelections,
-                    maxSelectionCount: max(0, 10 - photos.count),
-                    matching: .images
-                ) {
+                Button {
+                    isBodyFocused = false
+                    showsPhotoSourceChooser = true
+                } label: {
                     composerToolLabel(
                         "Photo",
                         systemImage: "photo.on.rectangle.angled",
                         selected: !photos.isEmpty
                     )
                 }
+                .buttonStyle(.plain)
                 .disabled(isUploadingPhotos || photos.count >= 10)
-                .onChange(of: photoSelections) { _, items in
-                    Task { await upload(items) }
-                }
                 Button {
                     pollOpen.toggle()
                     if !pollOpen {
@@ -204,6 +204,42 @@ struct RippleComposer: View {
         .background(C.surface)
         .overlay(RoundedRectangle(cornerRadius: C.cardRadius).stroke(C.borderSubtle))
         .clipShape(RoundedRectangle(cornerRadius: C.cardRadius))
+        .confirmationDialog(
+            "Add a photo",
+            isPresented: $showsPhotoSourceChooser,
+            titleVisibility: .visible
+        ) {
+            Button("Take Photo") {
+                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                    showsCamera = true
+                } else {
+                    errorMessage = "The camera is not available on this device."
+                }
+            }
+            Button("Choose from Library") {
+                showsPhotoLibrary = true
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .photosPicker(
+            isPresented: $showsPhotoLibrary,
+            selection: $photoSelections,
+            maxSelectionCount: max(0, 10 - photos.count),
+            matching: .images
+        )
+        .onChange(of: photoSelections) { _, items in
+            Task { await upload(items) }
+        }
+        .fullScreenCover(isPresented: $showsCamera) {
+            RipplePhotoCameraPicker(
+                onCapture: { image in
+                    showsCamera = false
+                    Task { await uploadCapturedPhoto(image) }
+                },
+                onCancel: { showsCamera = false }
+            )
+            .ignoresSafeArea()
+        }
     }
 
     @ViewBuilder
@@ -546,6 +582,39 @@ struct RippleComposer: View {
         }
     }
 
+    @MainActor
+    private func uploadCapturedPhoto(_ image: UIImage) async {
+        guard !isUploadingPhotos, photos.count < 10 else { return }
+        isUploadingPhotos = true
+        uploadProgress = 5
+        errorMessage = nil
+        defer {
+            isUploadingPhotos = false
+            uploadProgress = 0
+        }
+        do {
+            guard let originalData = image.jpegData(compressionQuality: 0.94),
+                  let data = preparedPhotoData(from: originalData) else {
+                throw LegacySocialAPIError.invalidPhoto
+            }
+            uploadProgress = 35
+            let photo = try await api.uploadRipplePhoto(
+                toVibe: try await uploadVibeSlug(),
+                data: data,
+                mimeType: "image/jpeg"
+            )
+            photos.append(photo)
+            photoSourceImages[photo.imageURL] = image
+            uploadProgress = 100
+        } catch {
+            if case APIError.http(413) = error {
+                errorMessage = "This photo is still too large to upload. Try again."
+            } else {
+                errorMessage = socialErrorMessage(error)
+            }
+        }
+    }
+
     private func uploadVibeSlug() async throws -> String {
         switch destination {
         case .personal:
@@ -633,6 +702,51 @@ struct RippleComposer: View {
         resolvedURL = nil
         photoSelections = []
         photos = []
+    }
+}
+
+private struct RipplePhotoCameraPicker: UIViewControllerRepresentable {
+    let onCapture: (UIImage) -> Void
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onCapture: onCapture, onCancel: onCancel)
+    }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.cameraCaptureMode = .photo
+        picker.allowsEditing = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        let onCapture: (UIImage) -> Void
+        let onCancel: () -> Void
+
+        init(onCapture: @escaping (UIImage) -> Void, onCancel: @escaping () -> Void) {
+            self.onCapture = onCapture
+            self.onCancel = onCancel
+        }
+
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            guard let image = info[.originalImage] as? UIImage else {
+                onCancel()
+                return
+            }
+            onCapture(image)
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            onCancel()
+        }
     }
 }
 

@@ -56,6 +56,8 @@ struct MediaverseApp: App {
             .environmentObject(globalUploads)
             .environmentObject(inAppBrowser)
             .environmentObject(incomingLinks)
+            .preferredColorScheme(.dark)
+            .tint(C.watch)
             .environment(\.openURL, OpenURLAction { url in
                 if InAppBrowserManager.canDisplayInApp(url) {
                     inAppBrowser.open(url)
@@ -336,12 +338,7 @@ private struct NativeOnboardingView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
 
                         if let errorMessage {
-                            Text(errorMessage)
-                                .font(.caption)
-                                .foregroundStyle(Color.red.opacity(0.9))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(12)
-                                .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+                            WestreemFeedbackBanner(message: errorMessage)
                         }
 
                         Button {

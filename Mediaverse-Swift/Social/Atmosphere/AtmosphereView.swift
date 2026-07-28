@@ -33,7 +33,8 @@ struct AtmosphereView: View {
                 },
                 selectedID: model.selectedTab.id,
                 fillsWidth: true,
-                horizontalPadding: 0
+                horizontalPadding: 0,
+                loadingID: isSelectedTabLoading ? model.selectedTab.id : nil
             ) { id in
                 guard let tab = AtmosphereViewModel.Tab(rawValue: id) else { return }
                 model.select(tab)
@@ -247,6 +248,9 @@ struct AtmosphereView: View {
 
     @ViewBuilder
     private var content: some View {
+        if model.selectedTab == .discover {
+            discoverFeed
+        } else {
         switch model.stateByTab[model.selectedTab] ?? .idle {
         case .idle, .loading:
             loading
@@ -255,6 +259,12 @@ struct AtmosphereView: View {
         case .loaded:
             loadedTab
         }
+        }
+    }
+
+    private var isSelectedTabLoading: Bool {
+        let state = model.stateByTab[model.selectedTab] ?? .idle
+        return state == .idle || state == .loading
     }
 
     private var loading: some View {
@@ -292,9 +302,49 @@ struct AtmosphereView: View {
         case .atmosphere:
             simpleFeed(model.atmosphereItems)
         case .discover:
-            simpleRipples(model.discoveredRipples)
+            EmptyView()
         case .myVibes:
             simpleVibes(model.myVibes)
+        }
+    }
+
+    private var discoverFeed: some View {
+        VStack(spacing: 0) {
+            WestreemHorizontalScrollView(showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(model.availableDiscoverModes) { mode in
+                        GenrePill(
+                            label: mode.title,
+                            selected: model.discoverMode == mode,
+                            isLoading: model.discoverMode == mode && isSelectedTabLoading
+                        ) {
+                            C.lightHaptic()
+                            model.selectDiscoverMode(mode)
+                        }
+                        .accessibilityAddTraits(model.discoverMode == mode ? .isSelected : [])
+                    }
+                }
+                .padding(.horizontal, C.pagePad)
+            }
+            .frame(height: C.tabPillHeight)
+            .padding(.vertical, 12)
+            .background(C.bg)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(C.borderSubtle).frame(height: 1)
+            }
+
+            switch model.stateByTab[.discover] ?? .idle {
+            case .idle, .loading:
+                loading
+            case .failed(let message):
+                unavailable(message)
+            case .loaded:
+                simpleRipples(model.discoveredRipples)
+            }
+        }
+        .onChange(of: model.availableDiscoverModes) { _, modes in
+            guard !modes.contains(model.discoverMode), let fallback = modes.first else { return }
+            model.selectDiscoverMode(fallback)
         }
     }
 

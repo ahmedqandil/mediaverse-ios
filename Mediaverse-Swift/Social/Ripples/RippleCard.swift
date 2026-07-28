@@ -299,6 +299,8 @@ struct RippleCard: View {
         .sheet(isPresented: $showsReport) {
             if let slug = ripple.club?.slug {
                 RippleReportSheet(postId: ripple.id, vibeSlug: slug)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
             }
         }
         .confirmationDialog(
@@ -650,45 +652,136 @@ private struct RippleReportSheet: View {
     let postId: String
     let vibeSlug: String
     @Environment(\.dismiss) private var dismiss
-    @State private var reason = ""
+    @State private var selectedReason: String?
     @State private var details = ""
     @State private var isSubmitting = false
     @State private var errorMessage: String?
+    @FocusState private var detailsFocused: Bool
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+    private let reasons = [
+        "Spam or scam",
+        "Harassment or bullying",
+        "Hate speech",
+        "Violence or dangerous content",
+        "Sexual content",
+        "Misinformation",
+        "Copyright or impersonation",
+        "Something else"
+    ]
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Reason") {
-                    TextField("Reason for reporting", text: $reason)
-                        .westreemField()
-                    TextField("Optional details", text: $details, axis: .vertical)
-                        .lineLimit(3...8)
-                        .westreemField(minHeight: 92)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Why are you reporting this Ripple?")
+                            .font(.title3.bold())
+                            .foregroundStyle(C.text)
+                        Text("Your report is private. The Vibe’s moderation team will review it.")
+                            .font(.subheadline)
+                            .foregroundStyle(C.textMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    VStack(spacing: 8) {
+                        ForEach(reasons, id: \.self) { reason in
+                            Button {
+                                C.lightHaptic()
+                                selectedReason = reason
+                                if reason == "Something else" {
+                                    detailsFocused = true
+                                }
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Text(reason)
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(C.text)
+                                        .multilineTextAlignment(.leading)
+                                    Spacer(minLength: 8)
+                                    Image(systemName: selectedReason == reason ? "checkmark.circle.fill" : "circle")
+                                        .font(.system(size: 20, weight: .semibold))
+                                        .foregroundStyle(selectedReason == reason ? C.watch : C.textTertiary)
+                                }
+                                .padding(.horizontal, 14)
+                                .frame(minHeight: 48)
+                                .background(selectedReason == reason ? C.watch.opacity(0.10) : C.elevated)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .stroke(
+                                            selectedReason == reason ? C.watch.opacity(0.65) : C.borderSubtle,
+                                            lineWidth: 1
+                                        )
+                                )
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack {
+                            Text(selectedReason == "Something else" ? "Tell us what happened" : "Additional details")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(C.textMuted)
+                            Spacer()
+                            Text("\(details.count)/2000")
+                                .font(.caption2)
+                                .foregroundStyle(details.count > 2_000 ? .red : C.textTertiary)
+                        }
+                        TextField(
+                            "",
+                            text: $details,
+                            prompt: Text("Optional context for the moderators").foregroundStyle(C.textTertiary),
+                            axis: .vertical
+                        )
+                        .focused($detailsFocused)
+                        .lineLimit(4...8)
+                        .textInputAutocapitalization(.sentences)
+                        .foregroundStyle(C.text)
+                        .tint(C.watch)
+                        .padding(12)
+                        .frame(minHeight: 108, alignment: .topLeading)
+                        .background(C.elevated)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(detailsFocused ? C.watch.opacity(0.65) : C.borderSubtle)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+
+                    Button {
+                        detailsFocused = false
+                        Task { await submit() }
+                    } label: {
+                        HStack(spacing: 8) {
+                            if isSubmitting {
+                                ProgressView().tint(.black)
+                            } else {
+                                Image(systemName: "flag.fill")
+                                Text("Submit report")
+                            }
+                        }
+                        .font(.headline)
+                        .foregroundStyle(.black)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(C.watch)
+                        .clipShape(RoundedRectangle(cornerRadius: 13))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSubmit)
+                    .opacity(canSubmit ? 1 : 0.45)
                 }
-                .westreemFormRow()
-                Section {
-                    Text("The Vibe’s moderation team will review this report.")
-                        .font(.caption)
-                        .foregroundStyle(C.textMuted)
-                }
-                .westreemFormRow()
+                .padding(C.pagePad)
+                .padding(.bottom, 24)
             }
-            .westreemFormStyle()
+            .scrollDismissesKeyboard(.interactively)
+            .background(C.bg.ignoresSafeArea())
             .navigationTitle("Report Ripple")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Submit") { Task { await submit() } }
-                        .disabled(
-                            isSubmitting
-                            || reason.trimmingCharacters(in: .whitespacesAndNewlines).count < 3
-                            || reason.count > 100
-                            || details.count > 2_000
-                        )
                 }
             }
             .alert(
@@ -705,15 +798,23 @@ private struct RippleReportSheet: View {
         }
     }
 
+    private var canSubmit: Bool {
+        guard !isSubmitting, selectedReason != nil, details.count <= 2_000 else { return false }
+        if selectedReason == "Something else" {
+            return details.trimmingCharacters(in: .whitespacesAndNewlines).count >= 3
+        }
+        return true
+    }
+
     @MainActor
     private func submit() async {
-        guard !isSubmitting else { return }
+        guard canSubmit, let selectedReason else { return }
         isSubmitting = true
         do {
             _ = try await api.reportRipple(
                 postId: postId,
                 vibeSlug: vibeSlug,
-                reason: reason,
+                reason: selectedReason,
                 details: details
             )
             dismiss()

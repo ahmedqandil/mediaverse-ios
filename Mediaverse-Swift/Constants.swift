@@ -110,6 +110,9 @@ enum C {
 
     // Semantic accent (defaults to watch)
     static let accent = Color(hex: "#00E676")
+    static let danger = Color(hex: "#FF5C6C")
+    static let warning = Color(hex: "#F2D36B")
+    static let success = Color(hex: "#6AE383")
 
     // ── Layout ───────────────────────────────────────────────────────────────
     static let cardRadius: CGFloat  = 12
@@ -243,9 +246,33 @@ private struct WestreemFieldChrome: ViewModifier {
     }
 }
 
+private struct WestreemEditorChrome: ViewModifier {
+    let minHeight: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .scrollContentBackground(.hidden)
+            .foregroundStyle(C.text)
+            .tint(C.watch)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(minHeight: minHeight, alignment: .topLeading)
+            .background(Color.white.opacity(0.05))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9)
+                    .stroke(C.border, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 9))
+    }
+}
+
 extension View {
     func westreemField(minHeight: CGFloat = 46) -> some View {
         modifier(WestreemFieldChrome(minHeight: minHeight))
+    }
+
+    func westreemEditor(minHeight: CGFloat = 96) -> some View {
+        modifier(WestreemEditorChrome(minHeight: minHeight))
     }
 
     func westreemFormStyle() -> some View {
@@ -260,6 +287,53 @@ extension View {
     func westreemFormRow() -> some View {
         listRowBackground(C.surface)
             .listRowSeparatorTint(C.borderSubtle)
+    }
+}
+
+struct WestreemFeedbackBanner: View {
+    enum Kind {
+        case error, warning, success, information
+
+        fileprivate var color: Color {
+            switch self {
+            case .error: C.danger
+            case .warning: C.warning
+            case .success: C.success
+            case .information: C.play
+            }
+        }
+
+        fileprivate var icon: String {
+            switch self {
+            case .error: "exclamationmark.triangle.fill"
+            case .warning: "exclamationmark.circle.fill"
+            case .success: "checkmark.circle.fill"
+            case .information: "info.circle.fill"
+            }
+        }
+    }
+
+    let message: String
+    var kind: Kind = .error
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: kind.icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(kind.color)
+                .padding(.top, 1)
+            Text(message)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(C.text)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(kind.color.opacity(0.10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(kind.color.opacity(0.24), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -279,6 +353,20 @@ struct WestreemPrimaryButtonStyle: ButtonStyle {
             .background(C.watch.opacity(configuration.isPressed ? 0.78 : 1))
             .clipShape(RoundedRectangle(cornerRadius: 11))
             .opacity(isBusy ? 0.72 : 1)
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+    }
+}
+
+struct WestreemSecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(C.text)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 46)
+            .background(C.elevated.opacity(configuration.isPressed ? 0.72 : 1))
+            .overlay(RoundedRectangle(cornerRadius: 11).stroke(C.border, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 11))
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
     }
 }

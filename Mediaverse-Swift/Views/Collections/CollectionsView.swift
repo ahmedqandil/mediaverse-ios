@@ -34,6 +34,15 @@ struct CollectionsView: View {
         }
     }
 
+    private var availableTabs: [CollectionTab] {
+        guard !isLoading else { return CollectionTab.allCases }
+        var tabs: [CollectionTab] = [.mine]
+        if !publicCollections.isEmpty {
+            tabs.append(.communities)
+        }
+        return tabs
+    }
+
     var body: some View {
         ZStack {
             C.bg.ignoresSafeArea()
@@ -46,7 +55,9 @@ struct CollectionsView: View {
                 ProgressView().tint(C.watch)
             } else {
                 VStack(spacing: 0) {
-                    tabBar
+                    if availableTabs.count > 1 {
+                        tabBar
+                    }
                     if activeTab == .mine {
                         if collections.isEmpty {
                             emptyState
@@ -122,11 +133,11 @@ struct CollectionsView: View {
 
     private var tabBar: some View {
         MediaverseUnderlineTabStrip(
-            items: CollectionTab.allCases.map { MediaverseTabItem(id: $0.id, label: $0.label) },
+            items: availableTabs.map { MediaverseTabItem(id: $0.id, label: $0.label) },
             selectedID: activeTab.id,
             fillsWidth: false
         ) { id in
-            guard let tab = CollectionTab.allCases.first(where: { $0.id == id }) else { return }
+            guard let tab = availableTabs.first(where: { $0.id == id }) else { return }
             activeTab = tab
         }
     }
@@ -224,6 +235,9 @@ struct CollectionsView: View {
         publicCollections = refreshedPublicCollections
         followingCollectionIds = Set(publicCollections.filter { $0.isFollowing }.map(\.id))
         isLoading = false
+        if !availableTabs.contains(activeTab), let first = availableTabs.first {
+            activeTab = first
+        }
     }
 
     private func toggleFollow(_ col: Collection) async {
@@ -473,13 +487,7 @@ private struct CreateCollectionSheet: View {
                         )
 
                         if let err = errorMsg {
-                            Text(err)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.red)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            WestreemFeedbackBanner(message: err)
                         }
                     }
                     .padding(.horizontal, C.pagePad)
