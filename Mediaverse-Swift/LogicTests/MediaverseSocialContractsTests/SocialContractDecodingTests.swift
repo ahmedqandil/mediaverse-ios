@@ -4,6 +4,21 @@ import XCTest
 final class SocialContractDecodingTests: XCTestCase {
     private let decoder = JSONDecoder()
 
+    func testWaveTypePreservesUnknownServerValues() throws {
+        let data = Data(
+            """
+            {"waves":[{"id":"w1","name":"Future","slug":"future","type":"FUTURE_WAVE",
+            "visibility":"PUBLIC","postingPolicy":"MEMBERS","position":1,"isSystem":false,
+            "isDefault":false,"commentsEnabled":true,"requiresPostApproval":false,
+            "allowPolls":true,"allowPhotos":true,"allowLinks":true,"allowEchoes":true,
+            "archivedAt":null,"capabilities":{"canView":true,"canPost":false,
+            "canCreateEvent":false,"canManage":false,"canArchive":false}}]}
+            """.utf8
+        )
+        let response = try decoder.decode(VibeWavesResponse.self, from: data)
+        XCTAssertEqual(response.waves.first?.type, .unknown("FUTURE_WAVE"))
+    }
+
     func testVibeDetailDefaultsMissingCapabilitiesToDenied() throws {
         let data = Data(
             """
