@@ -85,6 +85,8 @@
 		A4C0C00B301A000100000001 /* VibeAffiliationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C01B301A000100000001 /* VibeAffiliationsView.swift */; };
 		A4C0C00C301A000100000001 /* VibeInvitationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C01C301A000100000001 /* VibeInvitationsView.swift */; };
 		A4C0C00D301A000100000001 /* VibeManagementViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C01D301A000100000001 /* VibeManagementViews.swift */; };
+		E7100001301A000100000001 /* VibeEventModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7100011301A000100000001 /* VibeEventModels.swift */; };
+		E7100002301A000100000001 /* VibeEventsViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7100012301A000100000001 /* VibeEventsViews.swift */; };
 		846788EC2FFC2BD700DED05E /* StoriesAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846788EB2FFC2BD700DED05E /* StoriesAPIClient.swift */; };
 		846788EE2FFC2BF700DED05E /* StoriesModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846788ED2FFC2BF700DED05E /* StoriesModels.swift */; };
 		846788F02FFC2C0200DED05E /* StoriesRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846788EF2FFC2C0200DED05E /* StoriesRepository.swift */; };
@@ -215,6 +217,8 @@
 		A4C0C01B301A000100000001 /* VibeAffiliationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeAffiliationsView.swift; sourceTree = "<group>"; };
 		A4C0C01C301A000100000001 /* VibeInvitationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeInvitationsView.swift; sourceTree = "<group>"; };
 		A4C0C01D301A000100000001 /* VibeManagementViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeManagementViews.swift; sourceTree = "<group>"; };
+		E7100011301A000100000001 /* VibeEventModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeEventModels.swift; sourceTree = "<group>"; };
+		E7100012301A000100000001 /* VibeEventsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeEventsViews.swift; sourceTree = "<group>"; };
 		A4C0C019301A000100000001 /* EchoVibeSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoVibeSheet.swift; sourceTree = "<group>"; };
 		A4C0C01A301A000100000001 /* RippleComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleComposer.swift; sourceTree = "<group>"; };
 		846788EB2FFC2BD700DED05E /* StoriesAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoriesAPIClient.swift; sourceTree = "<group>"; };
@@ -526,6 +530,7 @@
 				A4C0C021301A000100000001 /* Social Atmosphere */,
 				A4C0C022301A000100000001 /* Social Ripples */,
 				A4C0C023301A000100000001 /* Social Vibes */,
+				E7100021301A000100000001 /* Social Events */,
 				71BEE56A7AB2A21372CEF785 /* Services */,
 				E31173AD82616B8E70C41238 /* Utilities */,
 				CD024875B3057A968077CEE8 /* Views */,
@@ -599,6 +604,16 @@
 			);
 			name = "Social Vibes";
 			path = Social/Vibes;
+			sourceTree = "<group>";
+		};
+		E7100021301A000100000001 /* Social Events */ = {
+			isa = PBXGroup;
+			children = (
+				E7100011301A000100000001 /* VibeEventModels.swift */,
+				E7100012301A000100000001 /* VibeEventsViews.swift */,
+			);
+			name = "Social Events";
+			path = Social/Events;
 			sourceTree = "<group>";
 		};
 		CD024875B3057A968077CEE8 /* Views */ = {
@@ -838,6 +853,8 @@
 				A4C0C00B301A000100000001 /* VibeAffiliationsView.swift in Sources */,
 				A4C0C00C301A000100000001 /* VibeInvitationsView.swift in Sources */,
 				A4C0C00D301A000100000001 /* VibeManagementViews.swift in Sources */,
+				E7100001301A000100000001 /* VibeEventModels.swift in Sources */,
+				E7100002301A000100000001 /* VibeEventsViews.swift in Sources */,
 				8467891E2FFD942100DED05E /* ViewerCountChip.swift in Sources */,
 				846788FD2FFC316000DED05E /* StoryProjectModel.swift in Sources */,
 				846788FF2FFC318000DED05E /* ProjectStore.swift in Sources */,

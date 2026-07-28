@@ -1982,6 +1982,117 @@ actor APIClient: LegacySocialTransport {
         let _: Resp = try await post("/api/channels/\(C.pathSegment(channelId))/follow", body: Body())
     }
 
+    // MARK: - Vibe Events
+
+    func fetchVibeEvents(scope: String = "upcoming", vibe: String? = nil) async throws -> [VibeEventCardModel] {
+        var path = "/api/vibe-events?scope=\(C.pathSegment(scope))"
+        if let vibe, !vibe.isEmpty { path += "&vibe=\(C.pathSegment(vibe))" }
+        let response: VibeEventListResponse = try await get(path)
+        return response.events
+    }
+
+    func fetchVibeEvent(slug: String) async throws -> VibeEventDetailResponse {
+        try await get("/api/vibe-events/\(C.pathSegment(slug))")
+    }
+
+    func fetchVibeEventTemplates() async throws -> [VibeEventTemplateModel] {
+        let response: VibeEventTemplatesResponse = try await get("/api/vibe-events/templates")
+        return response.templates
+    }
+
+    func fetchManagedCommunityVibes() async throws -> [VibeSummary] {
+        struct Response: Decodable { let clubs: [VibeSummary] }
+        let response: Response = try await get("/api/fan-clubs?mine=1&limit=50")
+        return response.clubs.filter { !$0.isPersonal }
+    }
+
+    func createVibeEvent(_ request: CreateVibeEventRequest) async throws -> CreatedVibeEvent {
+        let response: CreateVibeEventResponse = try await post("/api/vibe-events", body: request)
+        return response.event
+    }
+
+    func updateVibeEvent(slug: String, request: CreateVibeEventRequest) async throws -> CreatedVibeEvent {
+        let response: UpdateVibeEventResponse = try await patch(
+            "/api/vibe-events/\(C.pathSegment(slug))",
+            body: request
+        )
+        return response.event
+    }
+
+    func fetchVibeEventInvites(slug: String) async throws -> [VibeEventInviteModel] {
+        let response: VibeEventInvitesResponse = try await get("/api/vibe-events/\(C.pathSegment(slug))/invites")
+        return response.invites
+    }
+
+    func createVibeEventInvite(
+        slug: String,
+        email: String,
+        expiresAt: String?,
+        maxUses: Int
+    ) async throws -> VibeEventCreateInviteResponse {
+        struct Body: Encodable { let email: String; let expiresAt: String?; let maxUses: Int }
+        return try await post(
+            "/api/vibe-events/\(C.pathSegment(slug))/invites",
+            body: Body(email: email, expiresAt: expiresAt, maxUses: maxUses)
+        )
+    }
+
+    func revokeVibeEventInvite(slug: String, inviteID: String) async throws {
+        let _: VibeEventMutationResponse = try await delete(
+            "/api/vibe-events/\(C.pathSegment(slug))/invites/\(C.pathSegment(inviteID))"
+        )
+    }
+
+    func fetchVibeEventAttendees(slug: String, status: String? = nil) async throws -> [VibeEventAttendeeModel] {
+        var path = "/api/vibe-events/\(C.pathSegment(slug))/attendees"
+        if let status { path += "?status=\(C.pathSegment(status))" }
+        let response: VibeEventAttendeesResponse = try await get(path)
+        return response.attendees
+    }
+
+    func fetchVibeEventHosts(slug: String) async throws -> [VibeEventHostModel] {
+        let response: VibeEventHostsResponse = try await get("/api/vibe-events/\(C.pathSegment(slug))/hosts")
+        return response.hosts
+    }
+
+    func addVibeEventHost(slug: String, userID: String, role: String) async throws {
+        struct Body: Encodable { let userId: String; let role: String; let position: Int }
+        let _: VibeEventHostResponse = try await post(
+            "/api/vibe-events/\(C.pathSegment(slug))/hosts",
+            body: Body(userId: userID, role: role, position: 0)
+        )
+    }
+
+    func removeVibeEventHost(slug: String, userID: String) async throws {
+        struct Body: Encodable { let userId: String }
+        let _: VibeEventMutationResponse = try await delete(
+            "/api/vibe-events/\(C.pathSegment(slug))/hosts",
+            body: Body(userId: userID)
+        )
+    }
+
+    func updateVibeEventRSVP(slug: String, status: String) async throws -> VibeEventRSVP {
+        struct Body: Encodable { let status: String }
+        let response: VibeEventRSVPResponse = try await post(
+            "/api/vibe-events/\(C.pathSegment(slug))/rsvp",
+            body: Body(status: status)
+        )
+        return response.rsvp
+    }
+
+    func fetchVibeEventInvite(token: String) async throws -> VibeEventInvitePreview {
+        let response: VibeEventInvitePreviewResponse = try await get("/api/vibe-events/invite/\(C.pathSegment(token))")
+        return response.invite
+    }
+
+    func respondToVibeEventInvite(token: String, accept: Bool) async throws -> VibeEventInviteDecisionResponse {
+        struct Body: Encodable { let action: String }
+        return try await post(
+            "/api/vibe-events/invite/\(C.pathSegment(token))",
+            body: Body(action: accept ? "accept" : "decline")
+        )
+    }
+
     // MARK: - Private
 
     nonisolated private func validate(_ resp: URLResponse) throws {

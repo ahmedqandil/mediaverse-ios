@@ -2640,6 +2640,8 @@ struct EpisodeWatchView: View {
         case .vibe(let slug): VibeDetailView(slug: slug)
         case .vibeManagement(let slug, let tab): VibeDetailView(slug: slug, initialManagementTab: tab)
         case .vibeInvite(let token): VibeInviteAcceptView(token: token)
+        case .event(let slug): VibeEventDetailView(slug: slug)
+        case .eventInvite(let token): VibeEventInviteView(token: token)
         case .ripple(let postId): RippleDetailView(postId: postId)
         case .atmo(let handle): AtmoProfileView(handle: handle)
         case .search(let query): SearchView(initialQuery: query)

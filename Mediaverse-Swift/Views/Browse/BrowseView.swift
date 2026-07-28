@@ -38,6 +38,7 @@ struct BrowseView: View {
             ("channels", "Channels"),
             ("people", "People"),
             ("vibes", "Vibes"),
+            ("events", "Events"),
             ("collections", "Collections")
         ]
         return [PlatformBrowseItem(id: "discover", label: "Discover", enabled: true)]
@@ -231,6 +232,8 @@ struct BrowseView: View {
                 eyebrow: "Vibes to explore",
                 description: "Communities, conversations, and Ripples."
             )
+        case .events:
+            VibeEventsView()
         case .collections:
             CollectionsView(isBrowseActive: isRootActive)
         }
@@ -307,6 +310,7 @@ private enum BrowseSection: String, CaseIterable, Identifiable {
     case channels
     case people
     case vibes
+    case events
     case collections
 
     var id: String { rawValue }
@@ -321,6 +325,7 @@ private enum BrowseSection: String, CaseIterable, Identifiable {
         case .channels: return "Channels"
         case .people: return "People"
         case .vibes: return "Vibes"
+        case .events: return "Events"
         case .collections: return "Collections"
         }
     }
@@ -335,6 +340,7 @@ private enum BrowseSection: String, CaseIterable, Identifiable {
         case .channels: return "users"
         case .people: return "user"
         case .vibes: return "vibes"
+        case .events: return "calendar"
         case .collections: return "library"
         }
     }
@@ -349,6 +355,7 @@ private enum BrowseSection: String, CaseIterable, Identifiable {
         case .channels: return "rectangle.stack.person.crop"
         case .people: return "person.2"
         case .vibes: return "wave.3.right"
+        case .events: return "calendar"
         case .collections: return "square.stack"
         }
     }
@@ -475,6 +482,7 @@ private struct DiscoverHubView: View {
         case .channels: "Publishers, creators, and networks"
         case .people: "Creators and voices worth following"
         case .vibes: "Communities, conversations, and Ripples"
+        case .events: "Live conversations, watch parties, and premieres"
         case .collections: "Curated sets saved by the community"
         case .discover, .videos: ""
         }

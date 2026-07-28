@@ -50,6 +50,12 @@ struct VibeDetailView: View {
                         rippleComposerPrompt(for: detail)
                             .padding(.horizontal, C.pagePad)
                     }
+                    if !detail.club.isPersonal {
+                        VibeEventVibeSection(
+                            vibeSlug: detail.club.slug,
+                            canManage: detail.capabilities.canManageClub
+                        )
+                    }
                     ForEach(ripples) {
                         RippleCard(
                             ripple: $0,
@@ -557,6 +563,9 @@ struct AtmoProfileView: View {
     @State private var selectedTab: Tab = .atmosphere
     @State private var ripples: [Ripple] = []
     @State private var vibes: [VibeSummary] = []
+    @State private var availableContentTabs: Set<Tab> = [.atmosphere]
+    @State private var cachedRipples: [Tab: [Ripple]] = [:]
+    @State private var cachedCursors: [Tab: String] = [:]
     @State private var profile: FullProfile?
     @State private var isSelf = false
     @State private var nextCursor: String?
@@ -589,6 +598,8 @@ struct AtmoProfileView: View {
                         vibeRows
                     } else if selectedTab == .about {
                         aboutSection
+                    } else if ripples.isEmpty {
+                        atmosphereEmptyState
                     } else {
                         ForEach(ripples) {
                             RippleCard(
@@ -629,7 +640,7 @@ struct AtmoProfileView: View {
                 guard selectedTab.feedTab != nil else { return }
                 autoplay.update(frames: frames, ripples: ripples, blocked: isAutoplayBlocked)
             }
-            .refreshable { await load() }
+            .refreshable { await load(force: true) }
         }
         .simultaneousGesture(profileTabSwipeGesture)
         .background(C.bg.ignoresSafeArea())
@@ -649,7 +660,7 @@ struct AtmoProfileView: View {
         }
         .task(id: handle) {
             await loadIdentity()
-            await load()
+            await discoverProfileTabs()
         }
         .onDisappear { autoplay.stop() }
         .onChange(of: isAutoplayBlocked) { _, blocked in
@@ -716,13 +727,17 @@ struct AtmoProfileView: View {
     }
 
     private var tabItems: [MediaverseTabItem] {
-        var rows = [
-            MediaverseTabItem(id: Tab.atmosphere.rawValue, label: "Atmo"),
-            MediaverseTabItem(id: Tab.echoed.rawValue, label: "Echoed"),
-            MediaverseTabItem(id: Tab.mentions.rawValue, label: "Mentions")
-        ]
-        if isSelf {
+        var rows = [MediaverseTabItem(id: Tab.atmosphere.rawValue, label: "Atmo")]
+        if availableContentTabs.contains(.echoed) {
+            rows.append(MediaverseTabItem(id: Tab.echoed.rawValue, label: "Echoed"))
+        }
+        if availableContentTabs.contains(.mentions) {
+            rows.append(MediaverseTabItem(id: Tab.mentions.rawValue, label: "Mentions"))
+        }
+        if isSelf, availableContentTabs.contains(.vibes) {
             rows.append(MediaverseTabItem(id: Tab.vibes.rawValue, label: "Vibes"))
+        }
+        if isSelf, availableContentTabs.contains(.about) {
             rows.append(MediaverseTabItem(id: Tab.about.rawValue, label: "About"))
         }
         return rows
@@ -764,7 +779,64 @@ struct AtmoProfileView: View {
         .background(C.surface)
     }
 
-    private func load() async {
+    @MainActor
+    private func discoverProfileTabs() async {
+        isLoading = true
+        var available: Set<Tab> = [.atmosphere]
+
+        do {
+            let page = try await api.discover(
+                mode: .latest,
+                authorHandle: handle,
+                profileTab: .atmosphere
+            )
+            cachedRipples[.atmosphere] = page.posts
+            updateCachedCursor(page.nextCursor, for: .atmosphere)
+            ripples = page.posts
+            nextCursor = page.nextCursor
+            errorMessage = nil
+        } catch {
+            cachedRipples[.atmosphere] = []
+            ripples = []
+            nextCursor = nil
+            errorMessage = socialErrorMessage(error)
+        }
+
+        for tab in [Tab.echoed, Tab.mentions] {
+            guard let feedTab = tab.feedTab,
+                  let page = try? await api.discover(
+                    mode: .latest,
+                    authorHandle: handle,
+                    profileTab: feedTab
+                  ) else { continue }
+            cachedRipples[tab] = page.posts
+            updateCachedCursor(page.nextCursor, for: tab)
+            if !page.posts.isEmpty {
+                available.insert(tab)
+            }
+        }
+
+        if isSelf {
+            if let page = try? await api.myVibes() {
+                vibes = page.clubs
+                if !page.clubs.isEmpty {
+                    available.insert(.vibes)
+                }
+            }
+            if let bio = profile?.bio?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !bio.isEmpty {
+                available.insert(.about)
+            }
+        }
+
+        availableContentTabs = available
+        if !available.contains(selectedTab) {
+            selectedTab = .atmosphere
+        }
+        isLoading = false
+    }
+
+    private func load(force: Bool = false) async {
         isLoading = true
         do {
             if selectedTab == .vibes {
@@ -784,6 +856,13 @@ struct AtmoProfileView: View {
                 return
             }
             guard let feedTab = selectedTab.feedTab else { return }
+            if !force, let cached = cachedRipples[selectedTab] {
+                ripples = cached
+                nextCursor = cachedCursors[selectedTab]
+                errorMessage = nil
+                isLoading = false
+                return
+            }
             let page = try await api.discover(
                 mode: .latest,
                 authorHandle: handle,
@@ -791,6 +870,8 @@ struct AtmoProfileView: View {
             )
             ripples = page.posts
             nextCursor = page.nextCursor
+            cachedRipples[selectedTab] = page.posts
+            updateCachedCursor(page.nextCursor, for: selectedTab)
             errorMessage = nil
         } catch {
             ripples = []
@@ -812,6 +893,8 @@ struct AtmoProfileView: View {
             let existing = Set(ripples.map(\.id))
             ripples.append(contentsOf: page.posts.filter { !existing.contains($0.id) })
             nextCursor = page.nextCursor
+            cachedRipples[selectedTab] = ripples
+            updateCachedCursor(page.nextCursor, for: selectedTab)
         } catch {
             errorMessage = socialErrorMessage(error)
         }
@@ -838,12 +921,34 @@ struct AtmoProfileView: View {
                         postId: ripple.id,
                         pinned: ripple.pinnedAt == nil
                     )
-                    await load()
+                    await load(force: true)
                 } catch {
                     errorMessage = socialErrorMessage(error)
                 }
             }
         }
+    }
+
+    private func updateCachedCursor(_ cursor: String?, for tab: Tab) {
+        if let cursor {
+            cachedCursors[tab] = cursor
+        } else {
+            cachedCursors.removeValue(forKey: tab)
+        }
+    }
+
+    private var atmosphereEmptyState: some View {
+        ContentUnavailableView {
+            Label("This Atmosphere has no Ripples yet", systemImage: "wave.3.right")
+        } description: {
+            Text(isSelf
+                 ? "Create your first Ripple to start shaping your Atmosphere."
+                 : "When this person shares a Ripple, it will appear here.")
+        }
+        .foregroundStyle(C.text)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, C.pagePad)
+        .padding(.vertical, 56)
     }
 
     @ViewBuilder

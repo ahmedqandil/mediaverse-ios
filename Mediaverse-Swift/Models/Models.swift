@@ -1064,7 +1064,7 @@ struct ContextUser: Codable {
 // ── Upload ────────────────────────────────────────────────────────────────────
 
 struct UploadContext: Codable, Identifiable {
-    let type: String          // "channel" | "show"
+    let type: String          // "channel" | "show" | "user" (Flashes only)
     let id: String
     let name: String
     var avatarUrl: String? = nil
@@ -1077,6 +1077,7 @@ struct UploadContext: Codable, Identifiable {
 struct UploadContextsResponse: Codable {
     let channels: [UploadContext]
     let shows: [UploadContext]
+    let personal: UploadContext?
 }
 
 struct UploadPlaylistOption: Codable, Identifiable {

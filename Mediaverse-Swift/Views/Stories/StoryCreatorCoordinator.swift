@@ -89,6 +89,7 @@ struct StoryCreatorCoordinator: View {
     @Environment(\.dismiss) private var dismiss
     @State private var step: StoryCreatorStep = .media
     @State private var contexts: UploadContextsResponse?
+    @State private var fallbackPersonalPublisher: UploadContext?
     @State private var selectedPublisher: UploadContext?
     @State private var isLoadingPublishers = true
     @State private var errorText: String?
@@ -117,7 +118,9 @@ struct StoryCreatorCoordinator: View {
     private let exportService = StoryExportService()
 
     private var publishers: [UploadContext] {
-        (contexts?.channels ?? []) + (contexts?.shows ?? [])
+        ((contexts?.personal ?? fallbackPersonalPublisher).map { [$0] } ?? [])
+            + (contexts?.channels ?? [])
+            + (contexts?.shows ?? [])
     }
 
     private var resolvedPublisher: UploadContext? {
@@ -290,7 +293,7 @@ struct StoryCreatorCoordinator: View {
 
     private var headerSubtitle: String {
         switch step {
-        case .publisher: return "Flashes attach to a channel or show you manage."
+        case .publisher: return "Post to your Atmosphere, a channel, or a show you manage."
         case .media: return "Use a portrait photo or a portrait video up to 10 seconds."
         case .editor: return "Preview the saved draft with the same compositor used for export."
         case .metadata: return "Add the viewer-facing caption and optional action."
@@ -304,7 +307,7 @@ struct StoryCreatorCoordinator: View {
             if isLoadingPublishers {
                 loadingRow("Loading publishers...")
             } else if publishers.isEmpty {
-                Text("You need a channel or managed show before posting a flash.")
+                Text("Your personal Atmosphere could not be loaded. Refresh your account and try again.")
                     .font(.system(size: 13))
                     .foregroundStyle(C.textMuted)
                     .padding(16)
@@ -813,18 +816,18 @@ struct StoryCreatorCoordinator: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(C.text)
                     .lineLimit(1)
-                Text(publisher.networkName ?? (publisher.type == "show" ? "Show" : "Channel"))
+                Text(publisher.networkName ?? publisherTypeLabel(publisher))
                     .font(.system(size: 11))
                     .foregroundStyle(C.textTertiary)
                     .lineLimit(1)
             }
             Spacer()
-            Text(publisher.type == "show" ? "Show" : "Channel")
+            Text(publisherTypeLabel(publisher))
                 .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(publisher.type == "show" ? C.play : C.watch)
+                .foregroundStyle(publisherAccent(publisher))
                 .padding(.horizontal, 7)
                 .padding(.vertical, 4)
-                .background((publisher.type == "show" ? C.play : C.watch).opacity(0.12))
+                .background(publisherAccent(publisher).opacity(0.12))
                 .clipShape(RoundedRectangle(cornerRadius: 5))
             if selected {
                 Image(systemName: "checkmark")
@@ -846,7 +849,7 @@ struct StoryCreatorCoordinator: View {
                 Text(publisher.name)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(C.text)
-                Text(publisher.type == "show" ? "Show flash" : "Channel flash")
+                Text(publisherFlashLabel(publisher))
                     .font(.system(size: 11))
                     .foregroundStyle(C.textTertiary)
             }
@@ -869,7 +872,7 @@ struct StoryCreatorCoordinator: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(C.text)
                     .lineLimit(1)
-                Text(publisher.type == "show" ? "Show flash" : "Channel flash")
+                Text(publisherFlashLabel(publisher))
                     .font(.system(size: 11))
                     .foregroundStyle(C.textTertiary)
             }
@@ -930,7 +933,7 @@ struct StoryCreatorCoordinator: View {
             image.resizable().scaledToFill()
         } placeholder: {
             ZStack {
-                (publisher.type == "show" ? C.play : C.watch).opacity(0.15)
+                publisherAccent(publisher).opacity(0.15)
                 Text(String(publisher.name.prefix(1)).uppercased())
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(C.textMuted)
@@ -938,6 +941,26 @@ struct StoryCreatorCoordinator: View {
         }
         .frame(width: 38, height: 38)
         .clipShape(RoundedRectangle(cornerRadius: publisher.type == "show" ? 7 : 19))
+    }
+
+    private func publisherTypeLabel(_ publisher: UploadContext) -> String {
+        switch publisher.type.lowercased() {
+        case "user": "My Atmosphere"
+        case "show": "Show"
+        default: "Channel"
+        }
+    }
+
+    private func publisherFlashLabel(_ publisher: UploadContext) -> String {
+        switch publisher.type.lowercased() {
+        case "user": "Personal Flash"
+        case "show": "Show Flash"
+        default: "Channel Flash"
+        }
+    }
+
+    private func publisherAccent(_ publisher: UploadContext) -> Color {
+        publisher.type.lowercased() == "show" ? C.play : C.watch
     }
 
     private func mediaSourceButton(icon: String, title: String, subtitle: String, action: @escaping () -> Void) -> some View {
@@ -1080,10 +1103,23 @@ struct StoryCreatorCoordinator: View {
         do {
             let response = try await APIClient.shared.fetchUploadContexts()
             contexts = response
+            if response.personal == nil,
+               let profileResponse = try? await APIClient.shared.fetchProfile() {
+                let profile = profileResponse.profile
+                fallbackPersonalPublisher = UploadContext(
+                    type: "user",
+                    id: profile.id,
+                    name: profile.name ?? profile.handle.map { "@\($0)" } ?? "My Atmosphere",
+                    avatarUrl: profile.image
+                )
+            } else {
+                fallbackPersonalPublisher = nil
+            }
             if let preselectedPublisher {
                 selectedPublisher = preselectedPublisher
             }
-            let all = response.channels + response.shows
+            let personal = response.personal ?? fallbackPersonalPublisher
+            let all = (personal.map { [$0] } ?? []) + response.channels + response.shows
             if selectedPublisher == nil, all.count == 1, let only = all.first {
                 selectedPublisher = only
             }
