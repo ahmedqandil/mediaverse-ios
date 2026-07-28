@@ -186,7 +186,15 @@ struct VibeEventsView: View {
 
 struct VibeEventCardView: View {
     let event: VibeEventCardModel
+    @State private var rsvpStatus: String?
+    @State private var goingCount: Int
     private var start: Date? { event.startsAt.vibeEventDate }
+
+    init(event: VibeEventCardModel) {
+        self.event = event
+        _rsvpStatus = State(initialValue: event.viewerRsvpStatus)
+        _goingCount = State(initialValue: event.goingCount)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -234,8 +242,8 @@ struct VibeEventCardView: View {
                         .frame(width: 28, height: 28).clipShape(Circle())
                     Text(event.club.name).font(.caption.weight(.semibold)).foregroundStyle(C.textMuted).lineLimit(1)
                     Spacer()
-                    if event.goingCount > 0 {
-                        Label("\(event.goingCount) going", systemImage: "person.2.fill")
+                    if goingCount > 0 {
+                        Label("\(goingCount) going", systemImage: "person.2.fill")
                             .font(.caption)
                             .foregroundStyle(C.textMuted)
                     }
@@ -252,12 +260,66 @@ struct VibeEventCardView: View {
                         .foregroundStyle(C.textMuted)
                         .lineLimit(1)
                 }
+                EventRsvpButtons(slug: event.slug, eventStatus: event.status, selected: $rsvpStatus, goingCount: $goingCount)
             }
             .padding(15)
         }
         .background(C.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(C.borderSubtle, lineWidth: 1))
+    }
+}
+
+struct EventRsvpButtons: View {
+    let slug: String
+    let eventStatus: String
+    @Binding var selected: String?
+    @Binding var goingCount: Int
+    @State private var busy = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        if ["SCHEDULED", "LIVE"].contains(eventStatus) {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    rsvpButton("Going", status: "GOING", selectedStatus: ["GOING", "WAITLISTED"])
+                    rsvpButton("Interested", status: "INTERESTED", selectedStatus: ["INTERESTED"])
+                }
+                if let errorMessage {
+                    Text(errorMessage).font(.caption2).foregroundStyle(.red)
+                }
+            }
+        }
+    }
+
+    private func rsvpButton(_ title: String, status: String, selectedStatus: [String]) -> some View {
+        let active = selected.map(selectedStatus.contains) ?? false
+        return Button {
+            Task { await update(status: active ? "NOT_GOING" : status) }
+        } label: {
+            Text(active ? "\(selected == "WAITLISTED" ? "Waitlisted" : title) ✓" : title)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(active ? C.bg : C.watch)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(active ? C.watch : C.watch.opacity(0.12), in: Capsule())
+                .overlay(Capsule().stroke(C.watch.opacity(0.35)))
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+    }
+
+    @MainActor private func update(status: String) async {
+        guard !busy else { return }
+        busy = true
+        errorMessage = nil
+        do {
+            let mutation = try await APIClient.shared.updateVibeEventRSVP(slug: slug, status: status)
+            selected = ["NOT_GOING", "CANCELLED"].contains(mutation.rsvp.status) ? nil : mutation.rsvp.status
+            if let counts = mutation.counts { goingCount = counts.goingCount }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        busy = false
     }
 }
 
@@ -468,13 +530,9 @@ struct VibeEventDetailView: View {
                         .disabled(rsvpBusy)
                 }
             }
-            let now = Date()
-            let insideLiveWindow = event.status == "LIVE"
-                || ((event.startsAt.vibeEventDate ?? .distantFuture) <= now
-                    && (event.endsAt.vibeEventDate ?? .distantPast) >= now)
             let destination = event.status == "COMPLETED"
                 ? event.replayUrl
-                : insideLiveWindow ? event.onlineUrl : nil
+                : response?.capabilities.canJoin == true ? event.onlineUrl : nil
             if let destination, let url = URL(string: destination) {
                 Button {
                     Task {
@@ -483,6 +541,21 @@ struct VibeEventDetailView: View {
                     }
                 } label: { Label(event.status == "COMPLETED" ? "Watch replay" : "Join online", systemImage: "video.fill") }
                     .buttonStyle(EventSecondaryButtonStyle())
+            }
+            if response?.capabilities.canJoin == true,
+               event.status != "COMPLETED",
+               let instructions = event.accessInstructions,
+               !instructions.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Access instructions").font(.caption.bold()).foregroundStyle(C.watch)
+                    Text(instructions).font(.caption).foregroundStyle(C.textMuted)
+                }
+            } else if response?.capabilities.joinWindowState == "not_open",
+                      let value = response?.capabilities.joinOpensAt,
+                      let date = value.vibeEventDate {
+                Label("Online access opens \(date.formatted(date: .abbreviated, time: .shortened))", systemImage: "clock")
+            } else if response?.capabilities.joinWindowState == "closed" {
+                Label("The online access window has closed", systemImage: "lock.fill")
             }
         }
         .font(.subheadline)
@@ -646,6 +719,7 @@ struct VibeEventCreatorView: View {
         var id: String { rawValue }
     }
     let onCreated: (CreatedVibeEvent) -> Void
+    var onDeleted: () -> Void = {}
     var preselectedVibeSlug: String? = nil
     var editEvent: VibeEventDetailModel? = nil
     @Environment(\.dismiss) private var dismiss
@@ -665,6 +739,10 @@ struct VibeEventCreatorView: View {
     @State private var duration = 60
     @State private var onlineURL = ""
     @State private var accessInstructions = ""
+    @State private var hasJoinOpening = false
+    @State private var joinOpensAt = Date()
+    @State private var hasJoinClosing = false
+    @State private var joinClosesAt = Date().addingTimeInterval(2 * 60 * 60)
     @State private var inviteOnly = false
     @State private var capacity = ""
     @State private var hasRSVPDeadline = false
@@ -680,6 +758,7 @@ struct VibeEventCreatorView: View {
     @State private var creatorLoading = true
     @State private var creatorLoadError: String?
     @State private var errorMessage: String?
+    @State private var confirmsRemoval = false
     @State private var affiliationPicker: AffiliationPicker?
 
     var body: some View {
@@ -725,6 +804,12 @@ struct VibeEventCreatorView: View {
                 }
             }
         }
+        .confirmationDialog("Remove this Event?", isPresented: $confirmsRemoval, titleVisibility: .visible) {
+            Button("Remove Event", role: .destructive) { Task { await removeEvent() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("It will disappear from the Vibe, discovery, and public Event surfaces.")
+        }
         .task {
             creatorLoading = true
             creatorLoadError = nil
@@ -760,6 +845,14 @@ struct VibeEventCreatorView: View {
                     }
                     onlineURL = event.onlineUrl ?? ""
                     accessInstructions = event.accessInstructions ?? ""
+                    if let value = event.joinOpensAt?.vibeEventDate {
+                        hasJoinOpening = true
+                        joinOpensAt = value
+                    }
+                    if let value = event.joinClosesAt?.vibeEventDate {
+                        hasJoinClosing = true
+                        joinClosesAt = value
+                    }
                     inviteOnly = event.visibility == "INVITE_ONLY"
                     capacity = event.capacity.map(String.init) ?? ""
                     if let deadline = event.rsvpDeadline?.vibeEventDate {
@@ -844,6 +937,14 @@ struct VibeEventCreatorView: View {
             Section("Online experience") {
                 TextField("https://", text: $onlineURL).textInputAutocapitalization(.never).keyboardType(.URL)
                 TextField("Access instructions", text: $accessInstructions, axis: .vertical).lineLimit(2...5)
+                Toggle("Set join opening", isOn: $hasJoinOpening)
+                if hasJoinOpening {
+                    DatePicker("Join opens", selection: $joinOpensAt)
+                }
+                Toggle("Set join closing", isOn: $hasJoinClosing)
+                if hasJoinClosing {
+                    DatePicker("Join closes", selection: $joinClosesAt)
+                }
             }
             Section("Access and RSVP") {
                 Toggle("Invite only", isOn: $inviteOnly).disabled(template.allowedVisibility == ["INVITE_ONLY"])
@@ -937,6 +1038,10 @@ struct VibeEventCreatorView: View {
                     Button("Save draft") { Task { await save(status: "DRAFT") } }
                     .disabled(busy || vibes.isEmpty || title.trimmingCharacters(in: .whitespaces).isEmpty || summary.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
+                if editEvent != nil {
+                    Button("Remove Event", role: .destructive) { confirmsRemoval = true }
+                        .disabled(busy)
+                }
             }
         }
         .scrollContentBackground(.hidden)
@@ -955,6 +1060,8 @@ struct VibeEventCreatorView: View {
             startsAt: ISO8601DateFormatter.vibeEvent.string(from: startsAt), endsAt: ISO8601DateFormatter.vibeEvent.string(from: end),
             timeZone: TimeZone.current.identifier, onlineUrl: onlineURL.isEmpty ? nil : onlineURL,
             accessInstructions: accessInstructions.isEmpty ? nil : accessInstructions,
+            joinOpensAt: hasJoinOpening ? ISO8601DateFormatter.vibeEvent.string(from: joinOpensAt) : nil,
+            joinClosesAt: hasJoinClosing ? ISO8601DateFormatter.vibeEvent.string(from: joinClosesAt) : nil,
             visibility: inviteOnly ? "INVITE_ONLY" : "PUBLIC", capacity: Int(capacity),
             rsvpDeadline: hasRSVPDeadline ? ISO8601DateFormatter.vibeEvent.string(from: rsvpDeadline) : nil,
             topics: topicsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty },
@@ -974,6 +1081,20 @@ struct VibeEventCreatorView: View {
             }
         }
         catch { errorMessage = error.localizedDescription }
+        busy = false
+    }
+
+    @MainActor private func removeEvent() async {
+        guard let event = editEvent else { return }
+        busy = true
+        errorMessage = nil
+        do {
+            try await APIClient.shared.removeVibeEvent(slug: event.slug)
+            onDeleted()
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
         busy = false
     }
 
@@ -1008,12 +1129,12 @@ private struct EventAffiliationPicker: View {
     @State private var query = ""
 
     private var filteredShows: [ShowBrowseCard] {
-        guard !query.isEmpty else { return shows }
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         return shows.filter { $0.title.localizedCaseInsensitiveContains(query) }
     }
 
     private var filteredChannels: [ChannelBrowseCard] {
-        guard !query.isEmpty else { return channels }
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         return channels.filter {
             $0.name.localizedCaseInsensitiveContains(query)
                 || $0.handle.localizedCaseInsensitiveContains(query)
@@ -1022,22 +1143,42 @@ private struct EventAffiliationPicker: View {
 
     var body: some View {
         List {
-            Button {
-                onSelect("")
-            } label: {
-                HStack {
-                    Label("No affiliation", systemImage: "nosign")
-                    Spacer()
-                    if selectedID.isEmpty { Image(systemName: "checkmark").foregroundStyle(C.watch) }
-                }
-            }
-            if kind == .show {
-                ForEach(filteredShows) { show in
-                    selectionRow(id: show.id, title: show.title, subtitle: nil, image: show.coverUrl)
+            if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if selectedID.isEmpty {
+                    ContentUnavailableView(
+                        "Search for a \(kind.rawValue)",
+                        systemImage: "magnifyingglass",
+                        description: Text("Results appear after you start typing.")
+                    )
+                    .listRowBackground(Color.clear)
+                } else if kind == .show, let show = shows.first(where: { $0.id == selectedID }) {
+                    Section("Current affiliation") {
+                        selectionRow(id: show.id, title: show.title, subtitle: nil, image: show.coverUrl)
+                        clearSelection
+                    }
+                } else if kind == .channel, let channel = channels.first(where: { $0.id == selectedID }) {
+                    Section("Current affiliation") {
+                        selectionRow(id: channel.id, title: channel.name, subtitle: "@\(channel.handle)", image: channel.avatarUrl)
+                        clearSelection
+                    }
+                } else {
+                    clearSelection
                 }
             } else {
-                ForEach(filteredChannels) { channel in
-                    selectionRow(id: channel.id, title: channel.name, subtitle: "@\(channel.handle)", image: channel.avatarUrl)
+                Section("Results") {
+                    if kind == .show {
+                        ForEach(filteredShows) { show in
+                            selectionRow(id: show.id, title: show.title, subtitle: nil, image: show.coverUrl)
+                        }
+                    } else {
+                        ForEach(filteredChannels) { channel in
+                            selectionRow(id: channel.id, title: channel.name, subtitle: "@\(channel.handle)", image: channel.avatarUrl)
+                        }
+                    }
+                    if (kind == .show && filteredShows.isEmpty) || (kind == .channel && filteredChannels.isEmpty) {
+                        Text("No matching \(kind.rawValue.lowercased())s.")
+                            .foregroundStyle(C.textMuted)
+                    }
                 }
             }
         }
@@ -1050,6 +1191,14 @@ private struct EventAffiliationPicker: View {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Close") { dismiss() }.foregroundStyle(C.watch)
             }
+        }
+    }
+
+    private var clearSelection: some View {
+        Button(role: .destructive) {
+            onSelect("")
+        } label: {
+            Label("Remove affiliation", systemImage: "xmark.circle")
         }
     }
 
@@ -1171,6 +1320,7 @@ struct VibeEventManagerView: View {
                 case .edit:
                     VibeEventCreatorView(
                         onCreated: { _ in onSaved() },
+                        onDeleted: onSaved,
                         preselectedVibeSlug: event.club.slug,
                         editEvent: event
                     )

@@ -29,6 +29,7 @@ struct VibeEventCardModel: Codable, Identifiable, Hashable, Sendable {
     let goingCount: Int
     let interestedCount: Int
     let waitlistCount: Int
+    let viewerRsvpStatus: String?
     let capacity: Int?
     let replayUrl: String?
     let club: VibeEventIdentity
@@ -64,6 +65,8 @@ struct VibeEventDetailModel: Codable, Identifiable, Sendable {
     let status: String
     let onlineUrl: String?
     let accessInstructions: String?
+    let joinOpensAt: String?
+    let joinClosesAt: String?
     let replayUrl: String?
     let rsvpDeadline: String?
     let agenda: [VibeEventAgendaItem]
@@ -117,9 +120,17 @@ struct VibeEventCapabilities: Codable, Sendable {
     let canManage: Bool
     let canRsvp: Bool
     let canShare: Bool
+    let canJoin: Bool
+    let joinWindowOpen: Bool
+    let joinWindowState: String
+    let joinOpensAt: String?
+    let joinClosesAt: String?
 }
 
-struct VibeEventListResponse: Codable, Sendable { let events: [VibeEventCardModel] }
+struct VibeEventListResponse: Codable, Sendable {
+    let events: [VibeEventCardModel]
+    let nextCursor: String?
+}
 struct VibeEventDetailResponse: Codable, Sendable {
     let event: VibeEventDetailModel
     let capabilities: VibeEventCapabilities
@@ -165,6 +176,8 @@ struct CreateVibeEventRequest: Encodable, Sendable {
     let timeZone: String
     let onlineUrl: String?
     let accessInstructions: String?
+    let joinOpensAt: String?
+    let joinClosesAt: String?
     let visibility: String
     let capacity: Int?
     let rsvpDeadline: String?

@@ -27,6 +27,7 @@ struct VibeDetailView: View {
     @AppStorage("playerMuted") private var playerMuted = false
     @EnvironmentObject private var auth: AuthManager
     @EnvironmentObject private var miniPlayer: MiniPlayerManager
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
     private let features = SocialFeatureConfiguration.runtime()
 
@@ -80,6 +81,7 @@ struct VibeDetailView: View {
                             },
                             onVideoHandoff: handoffToWatch
                         )
+                        .padding(.horizontal, horizontalSizeClass == .compact ? 0 : C.pagePad)
                     }
                     if nextCursor != nil {
                         ProgressView()
@@ -97,6 +99,7 @@ struct VibeDetailView: View {
                     )
                 }
             }
+            .frame(maxWidth: .infinity)
             .padding(.bottom, C.bottomMenuClearance)
         }
         .coordinateSpace(name: "homeFeedScroll")

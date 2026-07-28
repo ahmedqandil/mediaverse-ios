@@ -900,19 +900,41 @@ private struct RippleAttachmentsView: View {
 
 private struct RippleEventAttachmentView: View {
     let event: RippleEventAttachment
+    @State private var rsvpStatus: String?
+    @State private var goingCount: Int
 
-    var body: some View {
-        Group {
-            if let slug = event.slug {
-                NavigationLink(value: AppRoute.event(slug)) { card }
-                    .buttonStyle(.plain)
-            } else {
-                card
-            }
-        }
+    init(event: RippleEventAttachment) {
+        self.event = event
+        _goingCount = State(initialValue: event.goingCount)
     }
 
-    private var card: some View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Group {
+                if let slug = event.slug {
+                    NavigationLink(value: AppRoute.event(slug)) { eventContent }
+                        .buttonStyle(.plain)
+                } else {
+                    eventContent
+                }
+            }
+            if let slug = event.slug {
+                EventRsvpButtons(
+                    slug: slug,
+                    eventStatus: event.status ?? "SCHEDULED",
+                    selected: $rsvpStatus,
+                    goingCount: $goingCount
+                )
+                .padding(.horizontal, 14)
+                .padding(.bottom, 14)
+            }
+        }
+        .background(C.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(C.borderSubtle))
+    }
+
+    private var eventContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             AsyncImage(url: C.mediaURL(event.coverURL)) { phase in
                 if case .success(let image) = phase {
@@ -956,8 +978,8 @@ private struct RippleEventAttachmentView: View {
                        let date = startsAt.vibeEventDate {
                         Label(date.formatted(.dateTime.month(.abbreviated).day().hour().minute()), systemImage: "clock")
                     }
-                    if event.goingCount > 0 {
-                        Label("\(event.goingCount) going", systemImage: "person.2")
+                    if goingCount > 0 {
+                        Label("\(goingCount) going", systemImage: "person.2")
                     }
                 }
                 .font(.caption)
@@ -965,9 +987,6 @@ private struct RippleEventAttachmentView: View {
             }
             .padding(14)
         }
-        .background(C.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(C.borderSubtle))
     }
 }
 

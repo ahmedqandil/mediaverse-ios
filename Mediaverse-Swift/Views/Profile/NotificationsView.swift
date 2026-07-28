@@ -6,6 +6,7 @@ struct NotificationPreferences: Decodable, Equatable {
     var notifyReplies: Bool
     var notifyNewContent: Bool
     var notifyMentions: Bool
+    var notifyVibeActivity: Bool
     var emailNewContent: Bool
     var emailComments: Bool
     var emailMarketing: Bool
@@ -30,7 +31,8 @@ private struct NotificationPreferencesView: View {
                                     (.notifyLikes, "Energy and comment likes", "When someone adds Energy or likes your comment"),
                                     (.notifyReplies, "Replies to my comments", "When someone replies to a comment you left"),
                                     (.notifyNewContent, "New content from follows", "Uploads and Ripples from people, Shows, Channels, and Vibes you follow"),
-                                    (.notifyMentions, "Mentions", "When someone mentions you in a Ripple or comment")
+                                    (.notifyMentions, "Mentions", "When someone mentions you in a Ripple or comment"),
+                                    (.notifyVibeActivity, "Vibe activity", "Invitations, moderation updates, and when a moderator pins your Ripple")
                                 ],
                                 preferences: preferences
                             )
@@ -143,6 +145,7 @@ private struct NotificationPreferencesView: View {
         case .notifyReplies: preferences.notifyReplies
         case .notifyNewContent: preferences.notifyNewContent
         case .notifyMentions: preferences.notifyMentions
+        case .notifyVibeActivity: preferences.notifyVibeActivity
         case .emailNewContent: preferences.emailNewContent
         case .emailComments: preferences.emailComments
         case .emailMarketing: preferences.emailMarketing
@@ -156,6 +159,7 @@ enum NotificationPreferenceField: String, CaseIterable {
     case notifyReplies
     case notifyNewContent
     case notifyMentions
+    case notifyVibeActivity
     case emailNewContent
     case emailComments
     case emailMarketing
@@ -611,6 +615,8 @@ private struct NotifRow: View {
             return "person.2.fill"
         case "vibe_moderation":
             return "shield.fill"
+        case "ripple_pinned", "ripple_unpinned":
+            return "pin.fill"
         case "vibe_affiliation_request", "vibe_affiliation_approved",
              "vibe_affiliation_rejected", "vibe_affiliation_revoked",
              "vibe_affiliation_cancelled":
@@ -652,6 +658,8 @@ private struct NotifRow: View {
         case "vibe_join_decision":                     return "Membership"
         case "vibe_invite":                            return "Vibe Invite"
         case "vibe_moderation":                        return "Vibe Moderation"
+        case "ripple_pinned":                          return "Pinned Ripple"
+        case "ripple_unpinned":                        return "Unpinned Ripple"
         case "vibe_new_ripple":                        return "New Ripple"
         case "vibe_affiliation_request":               return "Affiliation Request"
         case "vibe_affiliation_approved":              return "Affiliation Approved"

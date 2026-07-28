@@ -1985,10 +1985,17 @@ actor APIClient: LegacySocialTransport {
     // MARK: - Vibe Events
 
     func fetchVibeEvents(scope: String = "upcoming", vibe: String? = nil) async throws -> [VibeEventCardModel] {
-        var path = "/api/vibe-events?scope=\(C.pathSegment(scope))"
-        if let vibe, !vibe.isEmpty { path += "&vibe=\(C.pathSegment(vibe))" }
-        let response: VibeEventListResponse = try await get(path)
-        return response.events
+        var events = [VibeEventCardModel]()
+        var cursor: String?
+        repeat {
+            var path = "/api/vibe-events?scope=\(C.pathSegment(scope))&limit=50"
+            if let vibe, !vibe.isEmpty { path += "&vibe=\(C.pathSegment(vibe))" }
+            if let cursor { path += "&cursor=\(C.pathSegment(cursor))" }
+            let response: VibeEventListResponse = try await get(path)
+            events.append(contentsOf: response.events.filter { event in !events.contains(where: { $0.id == event.id }) })
+            cursor = response.nextCursor
+        } while cursor != nil
+        return events
     }
 
     func fetchVibeEvent(slug: String) async throws -> VibeEventDetailResponse {
@@ -2017,6 +2024,12 @@ actor APIClient: LegacySocialTransport {
             body: request
         )
         return response.event
+    }
+
+    func removeVibeEvent(slug: String) async throws {
+        let _: VibeEventMutationResponse = try await delete(
+            "/api/vibe-events/\(C.pathSegment(slug))"
+        )
     }
 
     func fetchVibeEventInvites(slug: String) async throws -> [VibeEventInviteModel] {
@@ -2075,12 +2088,14 @@ actor APIClient: LegacySocialTransport {
         struct Body: Encodable { let status: String }
         struct Response: Decodable {
             let rsvp: VibeEventRSVP
+            let counts: VibeEventRSVPCounts?
             let event: VibeEventRSVPCounts?
             let goingCount: Int?
             let interestedCount: Int?
             let waitlistCount: Int?
 
-            var counts: VibeEventRSVPCounts? {
+            var resolvedCounts: VibeEventRSVPCounts? {
+                if let counts { return counts }
                 if let event { return event }
                 guard let goingCount, let interestedCount, let waitlistCount else { return nil }
                 return .init(
@@ -2094,7 +2109,7 @@ actor APIClient: LegacySocialTransport {
             "/api/vibe-events/\(C.pathSegment(slug))/rsvp",
             body: Body(status: status)
         )
-        return .init(rsvp: response.rsvp, counts: response.counts)
+        return .init(rsvp: response.rsvp, counts: response.resolvedCounts)
     }
 
     func trackVibeEventAnalytics(

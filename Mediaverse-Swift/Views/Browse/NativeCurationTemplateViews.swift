@@ -41,9 +41,9 @@ struct NativeCurationListingView: View {
     @ViewBuilder
     private var templateRenderer: some View {
         switch templateType {
-            case "hero":
+            case "hero", "event_hero":
                 NativeCurationHero(listing: listing)
-            case "grid":
+            case "grid", "event_grid":
                 NativeCurationGrid(listing: listing)
             case "banner":
                 NativeCurationBanner(listing: listing)
@@ -53,7 +53,10 @@ struct NativeCurationListingView: View {
                 NativeCurationChannelList(listing: listing)
             case "social_rows":
                 NativeCurationSocialRows(listing: listing)
-            case "carousel":
+            case "carousel",
+                 "event_live_now", "event_upcoming", "event_starting_soon",
+                 "event_compact_schedule", "event_from_vibes", "event_from_shows",
+                 "event_from_channels", "event_replays":
                 NativeCurationCarousel(listing: listing)
             case "ripples":
                 NativeCurationRippleList(listing: listing)
@@ -939,44 +942,48 @@ private struct NativeCurationHero: View {
 
     var body: some View {
         if let item {
-            ZStack(alignment: .topTrailing) {
-                NavigationLink(value: item.appRoute) {
-                    heroCard(for: item)
-                }
-                .buttonStyle(.plain)
-
-                if trailerPlayer != nil, trailerVisible {
-                    Button { toggleTrailerMute() } label: {
-                        Image(systemName: trailerMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 38, height: 38)
-                            .background(Color.black.opacity(0.48), in: Circle())
-                            .overlay { Circle().stroke(Color.white.opacity(0.18), lineWidth: 1) }
+            VStack(alignment: .leading, spacing: 8) {
+                ZStack(alignment: .topTrailing) {
+                    NavigationLink(value: item.appRoute) {
+                        heroCard(for: item)
                     }
                     .buttonStyle(.plain)
-                    .padding(.top, 14)
-                    .padding(.trailing, 14)
-                        .accessibilityLabel(trailerMuted ? "Unmute trailer" : "Mute trailer")
-                }
 
-                if listing.items.count > 1 {
-                    HStack(spacing: 6) {
-                        ForEach(listing.items.indices, id: \.self) { index in
-                            Button {
-                                selectHero(index)
-                            } label: {
-                                Capsule()
-                                    .fill(.white.opacity(index == activeIndex ? 0.95 : 0.38))
-                                    .frame(width: index == activeIndex ? 20 : 6, height: 6)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Show feature \(index + 1)")
+                    if trailerPlayer != nil, trailerVisible {
+                        Button { toggleTrailerMute() } label: {
+                            Image(systemName: trailerMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 38, height: 38)
+                                .background(Color.black.opacity(0.48), in: Circle())
+                                .overlay { Circle().stroke(Color.white.opacity(0.18), lineWidth: 1) }
                         }
+                        .buttonStyle(.plain)
+                        .padding(.top, 14)
+                        .padding(.trailing, 14)
+                            .accessibilityLabel(trailerMuted ? "Unmute trailer" : "Mute trailer")
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .padding(.bottom, 8)
+
+                    if listing.items.count > 1 {
+                        HStack(spacing: 6) {
+                            ForEach(listing.items.indices, id: \.self) { index in
+                                Button {
+                                    selectHero(index)
+                                } label: {
+                                    Capsule()
+                                        .fill(.white.opacity(index == activeIndex ? 0.95 : 0.38))
+                                        .frame(width: index == activeIndex ? 20 : 6, height: 6)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Show feature \(index + 1)")
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .padding(.bottom, 8)
+                    }
                 }
+                NativeCuratedEventRsvp(item: item)
+                    .padding(.horizontal, C.pagePad)
             }
             .onAppear { startTrailerIfAvailable(for: item) }
             .onDisappear { stopTrailer() }
@@ -1170,8 +1177,9 @@ private struct NativeCurationBanner: View {
 
     var body: some View {
         if let item {
-            NavigationLink(value: listing.seeAllUrl.flatMap { AppRoute.route(link: $0) } ?? item.appRoute) {
-                ZStack {
+            VStack(alignment: .leading, spacing: 8) {
+                NavigationLink(value: listing.seeAllUrl.flatMap { AppRoute.route(link: $0) } ?? item.appRoute) {
+                    ZStack {
                     NativeCurationArtwork(item: item, aspectRatio: 16.0 / 6.0, cornerRadius: 12, preferCover: false)
                     LinearGradient(
                         colors: [.black.opacity(0.72), .black.opacity(0.20)],
@@ -1220,10 +1228,13 @@ private struct NativeCurationBanner: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                             .padding(8)
                         }
+                    }
+                    .padding(.horizontal, C.pagePad)
                 }
-                .padding(.horizontal, C.pagePad)
+                .buttonStyle(.plain)
+                NativeCuratedEventRsvp(item: item)
+                    .padding(.horizontal, C.pagePad)
             }
-            .buttonStyle(.plain)
         }
     }
 }
@@ -1272,14 +1283,16 @@ private struct NativeCurationSpotlight: View {
                         }
                     }
                     .buttonStyle(.plain)
+                    NativeCuratedEventRsvp(item: featured)
 
                     let supporting = Array(listing.items.dropFirst().prefix(3))
                     if !supporting.isEmpty {
                         WestreemHorizontalScrollView(showsIndicators: false) {
                             LazyHStack(alignment: .top, spacing: C.gridSpacing) {
                                 ForEach(Array(supporting.enumerated()), id: \.offset) { _, item in
-                                    NavigationLink(value: item.appRoute) {
-                                        HStack(alignment: .top, spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        NavigationLink(value: item.appRoute) {
+                                            HStack(alignment: .top, spacing: 10) {
                                             NativeCurationArtwork(
                                                 item: item,
                                                 aspectRatio: item.cardAspectRatio,
@@ -1302,9 +1315,11 @@ private struct NativeCurationSpotlight: View {
                                             .padding(.top, 2)
                                             Spacer(minLength: 0)
                                         }
-                                        .frame(width: 230, alignment: .leading)
+                                            .frame(width: 230, alignment: .leading)
+                                        }
+                                        .buttonStyle(.plain)
+                                        NativeCuratedEventRsvp(item: item)
                                     }
-                                    .buttonStyle(.plain)
                                 }
                             }
                         }
@@ -1327,6 +1342,11 @@ private struct NativeCurationEntityCard: View {
     let mode: Mode
     @Environment(\.curationListingId) private var curationListingId
 
+    init(item: ContentItem, mode: Mode) {
+        self.item = item
+        self.mode = mode
+    }
+
     static func width(for item: ContentItem, mode: Mode) -> CGFloat {
         switch item.normalizedEntityType {
         case "video", "episode": return 160
@@ -1345,8 +1365,9 @@ private struct NativeCurationEntityCard: View {
     }
 
     var body: some View {
-        NavigationLink(value: item.appRoute) {
-            VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
+            NavigationLink(value: item.appRoute) {
+                VStack(alignment: .leading, spacing: 8) {
                 ZStack(alignment: .bottomTrailing) {
                     NativeCurationArtwork(item: item, aspectRatio: aspectRatio, cornerRadius: C.cardRadius, preferCover: mode == .channelGrid)
                         .overlay(alignment: .topLeading) {
@@ -1402,9 +1423,11 @@ private struct NativeCurationEntityCard: View {
                         .foregroundStyle(C.textTertiary)
                         .lineLimit(1)
                 }
+                }
             }
+            .buttonStyle(.plain)
+            NativeCuratedEventRsvp(item: item)
         }
-        .buttonStyle(.plain)
         .simultaneousGesture(TapGesture().onEnded {
             guard let curationListingId else { return }
             Task {
@@ -1414,6 +1437,29 @@ private struct NativeCurationEntityCard: View {
                 )
             }
         })
+    }
+}
+
+private struct NativeCuratedEventRsvp: View {
+    let item: ContentItem
+    @State private var selected: String?
+    @State private var goingCount: Int
+
+    init(item: ContentItem) {
+        self.item = item
+        _selected = State(initialValue: item.metaString("viewerRsvpStatus"))
+        _goingCount = State(initialValue: item.metaInt("going") ?? 0)
+    }
+
+    @ViewBuilder var body: some View {
+        if item.normalizedEntityType == "event", let slug = item.metaString("slug") {
+            EventRsvpButtons(
+                slug: slug,
+                eventStatus: item.metaString("status") ?? "SCHEDULED",
+                selected: $selected,
+                goingCount: $goingCount
+            )
+        }
     }
 }
 
