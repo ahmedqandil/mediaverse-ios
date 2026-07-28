@@ -139,11 +139,21 @@ public actor LegacySocialAPIAdapter {
         try await uploadVibeImage(toVibe: slug, purpose: "profile", data: data, mimeType: mimeType)
     }
 
-    public func vibeRipples(slug: String, cursor: String? = nil, wave: String? = nil) async throws -> RipplePageResponse {
+    public func vibeRipples(
+        slug: String,
+        cursor: String? = nil,
+        wave: String? = nil,
+        resourceCategory: String? = nil,
+        bookmarkedOnly: Bool = false
+    ) async throws -> RipplePageResponse {
         let base = "/api/fan-clubs/\(try segment(slug))/posts"
         var query: [URLQueryItem] = []
         if let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
         if let wave { query.append(URLQueryItem(name: "wave", value: wave)) }
+        if let resourceCategory = nonempty(resourceCategory) {
+            query.append(URLQueryItem(name: "category", value: resourceCategory))
+        }
+        if bookmarkedOnly { query.append(URLQueryItem(name: "bookmarked", value: "1")) }
         return try await decode(RipplePageResponse.self, path: try path(base, query: query))
     }
 

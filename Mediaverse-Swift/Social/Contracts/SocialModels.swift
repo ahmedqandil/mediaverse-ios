@@ -831,6 +831,17 @@ public struct AcceptedAnswerResponse: Decodable, Equatable, Sendable {
     public let questionStatus: String
 }
 
+/// Pure presentation policy shared by the native Question and Resource views.
+public enum SpecializedWaveUIRules {
+    public static func canManageQuestionAnswer(isAuthor: Bool, canModerate: Bool) -> Bool {
+        isAuthor || canModerate
+    }
+
+    public static func canPublishResource(category: String, hasAttachment: Bool) -> Bool {
+        !category.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && hasAttachment
+    }
+}
+
 public struct RipplePinMutation: Decodable, Sendable {
     public struct Post: Decodable, Sendable {
         public let id: String
@@ -1101,9 +1112,10 @@ public struct RipplePageResponse: Decodable, Sendable {
     public let posts: [Ripple]
     public let nextCursor: String?
     public let restricted: Bool
+    public let resourceCategories: [String]
 
     enum CodingKeys: String, CodingKey {
-        case posts, nextCursor, restricted
+        case posts, nextCursor, restricted, resourceCategories
     }
 
     public init(from decoder: Decoder) throws {
@@ -1111,6 +1123,7 @@ public struct RipplePageResponse: Decodable, Sendable {
         posts = try values.decodeIfPresent([Ripple].self, forKey: .posts) ?? []
         nextCursor = try values.decodeIfPresent(String.self, forKey: .nextCursor)
         restricted = try values.decodeIfPresent(Bool.self, forKey: .restricted) ?? false
+        resourceCategories = try values.decodeIfPresent([String].self, forKey: .resourceCategories) ?? []
     }
 }
 

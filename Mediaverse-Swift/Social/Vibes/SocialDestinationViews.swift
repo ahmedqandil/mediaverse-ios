@@ -5,6 +5,7 @@ struct VibeDetailView: View {
     private struct CachedWaveFeed {
         var ripples: [Ripple]
         var nextCursor: String?
+        var resourceCategories: [String] = []
     }
 
     fileprivate enum VibeSheet: String, Identifiable {
@@ -28,6 +29,9 @@ struct VibeDetailView: View {
     @State private var nextCursor: String?
     @State private var waves: [VibeWave] = []
     @State private var selectedWaveSlug: String?
+    @State private var resourceCategories: [String] = []
+    @State private var selectedResourceCategory: String?
+    @State private var bookmarkedResourcesOnly = false
     @State private var waveFeeds: [String: CachedWaveFeed] = [:]
     @State private var feedRequestID = UUID()
     @State private var isSwitchingWave = false
@@ -63,6 +67,9 @@ struct VibeDetailView: View {
                     if !detail.club.isPersonal && !waves.isEmpty {
                         waveTabs
                     }
+                    if selectedWave?.type == .resources {
+                        resourceFilters
+                    }
                     if features.rippleComposerEnabled && canPost(in: detail) {
                         rippleComposerPrompt(for: detail)
                             .padding(.horizontal, C.pagePad)
@@ -88,7 +95,8 @@ struct VibeDetailView: View {
                                     ? vibePinAction(for: $0)
                                     : nil,
                                 isPinned: $0.pinnedAt != nil,
-                                pinTarget: "Vibe"
+                                pinTarget: "Vibe",
+                                canManageQuestionAnswers: detail.capabilities.canModerateContent
                             ),
                             allowsEngagement: features.rippleEngagementEnabled,
                             activePreviewVideoId: $autoplay.activeVideoID,
@@ -304,7 +312,12 @@ struct VibeDetailView: View {
                 : nil
             ripples = page.posts
             nextCursor = page.nextCursor
-            waveFeeds = [feedKey(nil): CachedWaveFeed(ripples: page.posts, nextCursor: page.nextCursor)]
+            resourceCategories = page.resourceCategories
+            waveFeeds = [feedKey(nil): CachedWaveFeed(
+                ripples: page.posts,
+                nextCursor: page.nextCursor,
+                resourceCategories: page.resourceCategories
+            )]
             if selectedWaveSlug != nil {
                 await switchWave(to: selectedWaveSlug)
             }
@@ -337,7 +350,13 @@ struct VibeDetailView: View {
         let requestID = feedRequestID
         let waveSlug = selectedWaveSlug
         do {
-            let page = try await api.vibeRipples(slug: slug, cursor: cursor, wave: waveSlug)
+            let page = try await api.vibeRipples(
+                slug: slug,
+                cursor: cursor,
+                wave: waveSlug,
+                resourceCategory: selectedResourceCategory,
+                bookmarkedOnly: bookmarkedResourcesOnly
+            )
             guard requestID == feedRequestID, waveSlug == selectedWaveSlug else { return }
             let existing = Set(ripples.map(\.id))
             ripples.append(contentsOf: page.posts.filter { !existing.contains($0.id) })
@@ -374,6 +393,82 @@ struct VibeDetailView: View {
         }
     }
 
+    private var resourceFilters: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                resourceFilterChip("All", selected: selectedResourceCategory == nil && !bookmarkedResourcesOnly) {
+                    await applyResourceFilter(category: nil, bookmarkedOnly: false)
+                }
+                if auth.isAuthenticated {
+                    resourceFilterChip("Saved", systemImage: "bookmark.fill", selected: bookmarkedResourcesOnly) {
+                        await applyResourceFilter(category: nil, bookmarkedOnly: !bookmarkedResourcesOnly)
+                    }
+                }
+                ForEach(resourceCategories, id: \.self) { category in
+                    resourceFilterChip(category, selected: selectedResourceCategory == category && !bookmarkedResourcesOnly) {
+                        await applyResourceFilter(category: category, bookmarkedOnly: false)
+                    }
+                }
+            }
+            .padding(.horizontal, C.pagePad)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Resource filters")
+    }
+
+    private func resourceFilterChip(
+        _ title: String,
+        systemImage: String? = nil,
+        selected: Bool,
+        action: @escaping () async -> Void
+    ) -> some View {
+        Button {
+            Task { await action() }
+        } label: {
+            Group {
+                if let systemImage {
+                    Label(title, systemImage: systemImage)
+                } else {
+                    Text(title)
+                }
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(selected ? C.bg : C.textMuted)
+            .padding(.horizontal, 12)
+            .frame(height: 32)
+            .background(selected ? C.watch : C.elevated)
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(isSwitchingWave)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    @MainActor
+    private func applyResourceFilter(category: String?, bookmarkedOnly: Bool) async {
+        guard selectedWave?.type == .resources else { return }
+        selectedResourceCategory = category
+        bookmarkedResourcesOnly = bookmarkedOnly
+        isSwitchingWave = true
+        do {
+            let page = try await api.vibeRipples(
+                slug: slug,
+                wave: selectedWaveSlug,
+                resourceCategory: category,
+                bookmarkedOnly: bookmarkedOnly
+            )
+            ripples = page.posts
+            nextCursor = page.nextCursor
+            if !page.resourceCategories.isEmpty {
+                resourceCategories = page.resourceCategories
+            }
+            cacheCurrentFeed()
+        } catch {
+            errorMessage = socialErrorMessage(error)
+        }
+        isSwitchingWave = false
+    }
+
     private func waveTab(title: String, slug: String?, systemImage: String) -> some View {
         let selected = selectedWaveSlug == slug
         return Button {
@@ -396,12 +491,16 @@ struct VibeDetailView: View {
     private func switchWave(to waveSlug: String?) async {
         guard selectedWaveSlug != waveSlug || waveFeeds[feedKey(waveSlug)] == nil else { return }
         cacheCurrentFeed()
+        selectedResourceCategory = nil
+        bookmarkedResourcesOnly = false
+        resourceCategories = []
         selectedWaveSlug = waveSlug
         feedRequestID = UUID()
         let requestID = feedRequestID
         if let cached = waveFeeds[feedKey(waveSlug)] {
             ripples = cached.ripples
             nextCursor = cached.nextCursor
+            resourceCategories = cached.resourceCategories
             isSwitchingWave = false
             return
         }
@@ -413,9 +512,11 @@ struct VibeDetailView: View {
             guard requestID == feedRequestID, selectedWaveSlug == waveSlug else { return }
             ripples = page.posts
             nextCursor = page.nextCursor
+            resourceCategories = page.resourceCategories
             waveFeeds[feedKey(waveSlug)] = CachedWaveFeed(
                 ripples: page.posts,
-                nextCursor: page.nextCursor
+                nextCursor: page.nextCursor,
+                resourceCategories: page.resourceCategories
             )
         } catch {
             guard requestID == feedRequestID else { return }
@@ -425,14 +526,23 @@ struct VibeDetailView: View {
     }
 
     private func cacheCurrentFeed() {
-        waveFeeds[feedKey(selectedWaveSlug)] = CachedWaveFeed(
+        waveFeeds[feedKey(
+            selectedWaveSlug,
+            category: selectedResourceCategory,
+            bookmarkedOnly: bookmarkedResourcesOnly
+        )] = CachedWaveFeed(
             ripples: ripples,
-            nextCursor: nextCursor
+            nextCursor: nextCursor,
+            resourceCategories: resourceCategories
         )
     }
 
-    private func feedKey(_ waveSlug: String?) -> String {
-        waveSlug ?? "__home__"
+    private func feedKey(
+        _ waveSlug: String?,
+        category: String? = nil,
+        bookmarkedOnly: Bool = false
+    ) -> String {
+        "\(waveSlug ?? "__home__")|\(category ?? "*")|\(bookmarkedOnly ? "saved" : "all")"
     }
 
     private var selectedWave: VibeWave? {

@@ -101,6 +101,17 @@ final class SocialContractDecodingTests: XCTestCase {
         XCTAssertEqual(response.posts[1].wave?.type, .resources)
         XCTAssertEqual(response.posts[1].resourceCategory, "Guides")
         XCTAssertTrue(response.posts[1].bookmarked)
+        XCTAssertEqual(response.resourceCategories, ["Guides"])
+    }
+
+    func testSpecializedWaveUIPolicyGatesSensitiveControls() {
+        XCTAssertTrue(SpecializedWaveUIRules.canManageQuestionAnswer(isAuthor: true, canModerate: false))
+        XCTAssertTrue(SpecializedWaveUIRules.canManageQuestionAnswer(isAuthor: false, canModerate: true))
+        XCTAssertFalse(SpecializedWaveUIRules.canManageQuestionAnswer(isAuthor: false, canModerate: false))
+
+        XCTAssertTrue(SpecializedWaveUIRules.canPublishResource(category: "Guides", hasAttachment: true))
+        XCTAssertFalse(SpecializedWaveUIRules.canPublishResource(category: " ", hasAttachment: true))
+        XCTAssertFalse(SpecializedWaveUIRules.canPublishResource(category: "Guides", hasAttachment: false))
     }
 
     func testWaveNotificationSettingsDefaultToInheritedDelivery() throws {

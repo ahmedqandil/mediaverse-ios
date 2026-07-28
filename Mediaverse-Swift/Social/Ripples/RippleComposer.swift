@@ -315,9 +315,10 @@ struct RippleComposer: View {
         let hasPoll = pollDraft != nil
         let hasContent = hasBody || attachment != nil || !photos.isEmpty || hasPoll
         if isResourceWave {
-            return hasContent
-                && !resourceCategory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                && attachment != nil
+            return hasContent && SpecializedWaveUIRules.canPublishResource(
+                category: resourceCategory,
+                hasAttachment: attachment != nil
+            )
         }
         return hasContent
     }

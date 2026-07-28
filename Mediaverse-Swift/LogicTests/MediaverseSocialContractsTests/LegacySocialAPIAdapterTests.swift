@@ -123,6 +123,31 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         XCTAssertEqual(payload["resourceCategory"] as? String, "Guides")
     }
 
+    func testResourceFiltersAndQuestionReopenUseCanonicalQueries() async throws {
+        let feedPath = "/api/fan-clubs/cinema/posts?wave=resources&category=Guides&bookmarked=1"
+        let reopenPath = "/api/fan-club-posts/question-1/accepted-answer"
+        let transport = SocialTransportStub(responses: [
+            feedPath: #"{"posts":[],"resourceCategories":["Guides","Tools"]}"#,
+            reopenPath: #"{"acceptedAnswerId":null,"questionStatus":"OPEN"}"#,
+        ])
+        let adapter = LegacySocialAPIAdapter(transport: transport)
+
+        let page = try await adapter.vibeRipples(
+            slug: "cinema",
+            wave: "resources",
+            resourceCategory: "Guides",
+            bookmarkedOnly: true
+        )
+        let reopened = try await adapter.reopenQuestion(postId: "question-1")
+
+        XCTAssertEqual(page.resourceCategories, ["Guides", "Tools"])
+        XCTAssertEqual(reopened.questionStatus, "OPEN")
+        let getPaths = await transport.paths
+        let deletePaths = await transport.deletePaths
+        XCTAssertEqual(getPaths, [feedPath])
+        XCTAssertEqual(deletePaths, [reopenPath])
+    }
+
     func testAtmosphereUsesFrozenBareArrayEndpointAndFiltersWebExcludedMedia() async throws {
         let transport = SocialTransportStub(responses: [
             "/api/subscriptions/feed": """

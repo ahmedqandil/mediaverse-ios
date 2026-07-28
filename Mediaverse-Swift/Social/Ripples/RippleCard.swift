@@ -100,6 +100,7 @@ struct RippleCardActions {
     var edit: (() -> Void)?
     var delete: (() -> Void)?
     var report: (() -> Void)?
+    var canManageQuestionAnswers = false
 
     static let readOnly = RippleCardActions()
 }
@@ -133,6 +134,9 @@ struct RippleCard: View {
     @State private var isResourceBookmarked: Bool
     @State private var isUpdatingResourceBookmark = false
     @State private var specializedError: String?
+    @State private var displayedQuestionStatus: String?
+    @State private var displayedAcceptedAnswerId: String?
+    @State private var isUpdatingAcceptedAnswer = false
 
     init(
         ripple: Ripple,
@@ -157,6 +161,8 @@ struct RippleCard: View {
         _engagement = StateObject(wrappedValue: RippleEngagementController(ripple: ripple))
         _displayedCommentCount = State(initialValue: ripple.commentCount)
         _isResourceBookmarked = State(initialValue: ripple.bookmarked)
+        _displayedQuestionStatus = State(initialValue: ripple.questionStatus)
+        _displayedAcceptedAnswerId = State(initialValue: ripple.acceptedAnswerId)
     }
 
     var body: some View {
@@ -243,7 +249,12 @@ struct RippleCard: View {
                     inputPosition: .top,
                     showsHeader: true,
                     autoFocusComposer: true,
-                    onCountChange: { displayedCommentCount = $0 }
+                    onCountChange: { displayedCommentCount = $0 },
+                    acceptedAnswerId: displayedAcceptedAnswerId,
+                    canManageAcceptedAnswer: canManageQuestionAnswer,
+                    onAcceptAnswer: { commentId in
+                        try await acceptQuestionAnswer(commentId: commentId)
+                    }
                 )
                 .padding(14)
                 .transition(.opacity.combined(with: .move(edge: .top)))
@@ -354,14 +365,22 @@ struct RippleCard: View {
     private var specializedWaveMetadata: some View {
         if ripple.wave?.type == .questions {
             HStack(spacing: 8) {
-                Image(systemName: ripple.questionStatus == "ANSWERED"
+                Image(systemName: displayedQuestionStatus == "ANSWERED"
                     ? "checkmark.seal.fill"
                     : "questionmark.bubble.fill")
-                Text(ripple.questionStatus == "ANSWERED" ? "Answered Question" : "Open Question")
+                Text(displayedQuestionStatus == "ANSWERED" ? "Answered Question" : "Open Question")
                     .font(.caption.weight(.semibold))
                 Spacer()
+                if displayedQuestionStatus == "ANSWERED", canManageQuestionAnswer {
+                    Button(isUpdatingAcceptedAnswer ? "Reopening…" : "Reopen") {
+                        Task { await reopenQuestion() }
+                    }
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.plain)
+                    .disabled(isUpdatingAcceptedAnswer)
+                }
             }
-            .foregroundStyle(ripple.questionStatus == "ANSWERED" ? Color.green : C.watch)
+            .foregroundStyle(displayedQuestionStatus == "ANSWERED" ? Color.green : C.watch)
             .padding(.horizontal, 11)
             .frame(height: 36)
             .background((ripple.questionStatus == "ANSWERED" ? Color.green : C.watch).opacity(0.11))
@@ -376,7 +395,7 @@ struct RippleCard: View {
                     .foregroundStyle(C.textMuted)
                     .lineLimit(1)
                 Spacer()
-                if allowsEngagement {
+                if allowsEngagement && auth.isAuthenticated {
                     Button {
                         Task { await toggleResourceBookmark() }
                     } label: {
@@ -396,6 +415,42 @@ struct RippleCard: View {
             .frame(height: 38)
             .background(C.elevated.opacity(0.72))
             .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    private var canManageQuestionAnswer: Bool {
+        guard ripple.wave?.type == .questions else { return false }
+        return SpecializedWaveUIRules.canManageQuestionAnswer(
+            isAuthor: auth.currentUser?.id == ripple.author.id,
+            canModerate: actions.canManageQuestionAnswers
+        )
+    }
+
+    @MainActor
+    private func acceptQuestionAnswer(commentId: String) async throws {
+        guard canManageQuestionAnswer, !isUpdatingAcceptedAnswer else { return }
+        isUpdatingAcceptedAnswer = true
+        defer { isUpdatingAcceptedAnswer = false }
+        let result = try await LegacySocialAPIAdapter(
+            transport: APIClient.shared
+        ).acceptQuestionAnswer(postId: ripple.id, commentId: commentId)
+        displayedAcceptedAnswerId = result.acceptedAnswerId
+        displayedQuestionStatus = result.questionStatus
+    }
+
+    @MainActor
+    private func reopenQuestion() async {
+        guard canManageQuestionAnswer, !isUpdatingAcceptedAnswer else { return }
+        isUpdatingAcceptedAnswer = true
+        defer { isUpdatingAcceptedAnswer = false }
+        do {
+            let result = try await LegacySocialAPIAdapter(
+                transport: APIClient.shared
+            ).reopenQuestion(postId: ripple.id)
+            displayedAcceptedAnswerId = result.acceptedAnswerId
+            displayedQuestionStatus = result.questionStatus
+        } catch {
+            specializedError = socialErrorMessage(error)
         }
     }
 

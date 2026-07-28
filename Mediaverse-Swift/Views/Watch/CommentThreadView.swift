@@ -116,6 +116,9 @@ struct CommentThreadView: View {
     var autoFocusComposer: Bool = false
     var onShowMore: ((Int) -> Void)? = nil
     var onCountChange: ((Int) -> Void)? = nil
+    var acceptedAnswerId: String? = nil
+    var canManageAcceptedAnswer: Bool = false
+    var onAcceptAnswer: ((String) async throws -> Void)? = nil
 
     @State private var comments: [Comment]
     @State private var isLoading: Bool
@@ -142,7 +145,10 @@ struct CommentThreadView: View {
         previewLimit: Int? = nil,
         autoFocusComposer: Bool = false,
         onShowMore: ((Int) -> Void)? = nil,
-        onCountChange: ((Int) -> Void)? = nil
+        onCountChange: ((Int) -> Void)? = nil,
+        acceptedAnswerId: String? = nil,
+        canManageAcceptedAnswer: Bool = false,
+        onAcceptAnswer: ((String) async throws -> Void)? = nil
     ) {
         self.target = target
         self.initialComments = initialComments
@@ -152,6 +158,9 @@ struct CommentThreadView: View {
         self.autoFocusComposer = autoFocusComposer
         self.onShowMore = onShowMore
         self.onCountChange = onCountChange
+        self.acceptedAnswerId = acceptedAnswerId
+        self.canManageAcceptedAnswer = canManageAcceptedAnswer
+        self.onAcceptAnswer = onAcceptAnswer
         _comments = State(initialValue: initialComments ?? [])
         _isLoading = State(initialValue: initialComments == nil)
     }
@@ -365,7 +374,10 @@ struct CommentThreadView: View {
                         onFlag: flagComment,
                         onReply: submitReply,
                         onEdit: editComment,
-                        onDelete: deleteComment
+                        onDelete: deleteComment,
+                        acceptedAnswerId: acceptedAnswerId,
+                        canAcceptAnswer: canManageAcceptedAnswer,
+                        onAcceptAnswer: onAcceptAnswer
                     )
                 }
                 if let previewLimit, commentCount > previewLimit {
@@ -668,6 +680,9 @@ private struct SharedCommentRow: View {
     let onReply: (String, String) async -> Void
     let onEdit: (String, String) async throws -> Void
     let onDelete: (String) async throws -> Void
+    let acceptedAnswerId: String?
+    let canAcceptAnswer: Bool
+    let onAcceptAnswer: ((String) async throws -> Void)?
 
     @State private var isReplyOpen = false
     @State private var replyText = ""
@@ -678,6 +693,8 @@ private struct SharedCommentRow: View {
     @State private var isSavingEdit = false
     @State private var isDeleting = false
     @State private var editError: String? = nil
+    @State private var isAcceptingAnswer = false
+    @State private var answerError: String? = nil
 
     @EnvironmentObject private var auth: AuthManager
 
@@ -710,6 +727,11 @@ private struct SharedCommentRow: View {
 
                 if !comment.isSoftDeletedForDisplay, !isEditing {
                     actionRow
+                    if let answerError {
+                        Text(answerError)
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.red.opacity(0.82))
+                    }
                 }
 
                 if isReplyOpen {
@@ -732,7 +754,10 @@ private struct SharedCommentRow: View {
                                 onFlag: onFlag,
                                 onReply: onReply,
                                 onEdit: onEdit,
-                                onDelete: onDelete
+                                onDelete: onDelete,
+                                acceptedAnswerId: acceptedAnswerId,
+                                canAcceptAnswer: canAcceptAnswer,
+                                onAcceptAnswer: onAcceptAnswer
                             )
                         }
                     }
@@ -782,6 +807,33 @@ private struct SharedCommentRow: View {
                         .foregroundStyle(C.textMuted.opacity(0.75))
                 }
                 .buttonStyle(.plain)
+            }
+
+            if acceptedAnswerId == comment.id {
+                Label("Accepted", systemImage: "checkmark.seal.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.green)
+                    .accessibilityLabel("Accepted answer")
+            } else if canAcceptAnswer, let onAcceptAnswer {
+                Button {
+                    guard !isAcceptingAnswer else { return }
+                    isAcceptingAnswer = true
+                    Task {
+                        defer { isAcceptingAnswer = false }
+                        do {
+                            answerError = nil
+                            try await onAcceptAnswer(comment.id)
+                        } catch {
+                            answerError = socialErrorMessage(error)
+                        }
+                    }
+                } label: {
+                    Text(isAcceptingAnswer ? "Accepting…" : "Accept answer")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(C.watch)
+                }
+                .buttonStyle(.plain)
+                .disabled(isAcceptingAnswer)
             }
 
             if allowsManagement, isOwnComment {
