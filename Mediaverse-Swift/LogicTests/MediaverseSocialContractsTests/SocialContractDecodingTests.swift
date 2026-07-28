@@ -19,6 +19,37 @@ final class SocialContractDecodingTests: XCTestCase {
         XCTAssertEqual(response.waves.first?.type, .unknown("FUTURE_WAVE"))
     }
 
+    func testWaveDefaultsOmittedAdditiveFieldsToSafeValues() throws {
+        let data = Data(
+            """
+            {"waves":[
+              {"id":"w1","name":"Legacy General","slug":"general"},
+              {"id":"w2","name":"Partial Events","slug":"events","type":"EVENTS",
+               "_count":{"posts":3},"capabilities":{"canView":true}}
+            ]}
+            """.utf8
+        )
+
+        let response = try decoder.decode(VibeWavesResponse.self, from: data)
+        let legacy = try XCTUnwrap(response.waves.first)
+        let partial = try XCTUnwrap(response.waves.last)
+
+        XCTAssertEqual(legacy.type, .custom)
+        XCTAssertEqual(legacy.visibility, "MEMBERS")
+        XCTAssertEqual(legacy.postingPolicy, "ADMINS")
+        XCTAssertTrue(legacy.requiresPostApproval)
+        XCTAssertFalse(legacy.commentsEnabled)
+        XCTAssertFalse(legacy.allowPolls)
+        XCTAssertFalse(legacy.capabilities.canView)
+        XCTAssertFalse(legacy.capabilities.canManage)
+
+        XCTAssertEqual(partial.type, .events)
+        XCTAssertTrue(partial.capabilities.canView)
+        XCTAssertFalse(partial.capabilities.canPost)
+        XCTAssertEqual(partial._count?.posts, 3)
+        XCTAssertEqual(partial._count?.events, 0)
+    }
+
     func testVibeDetailDefaultsMissingCapabilitiesToDenied() throws {
         let data = Data(
             """

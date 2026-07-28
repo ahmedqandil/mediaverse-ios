@@ -504,11 +504,54 @@ public struct VibeWaveCapabilities: Decodable, Equatable, Sendable {
     public let canCreateEvent: Bool
     public let canManage: Bool
     public let canArchive: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case canView, canPost, canCreateEvent, canManage, canArchive
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        canView = try values.decodeIfPresent(Bool.self, forKey: .canView) ?? false
+        canPost = try values.decodeIfPresent(Bool.self, forKey: .canPost) ?? false
+        canCreateEvent = try values.decodeIfPresent(Bool.self, forKey: .canCreateEvent) ?? false
+        canManage = try values.decodeIfPresent(Bool.self, forKey: .canManage) ?? false
+        canArchive = try values.decodeIfPresent(Bool.self, forKey: .canArchive) ?? false
+    }
+
+    private init(
+        canView: Bool,
+        canPost: Bool,
+        canCreateEvent: Bool,
+        canManage: Bool,
+        canArchive: Bool
+    ) {
+        self.canView = canView
+        self.canPost = canPost
+        self.canCreateEvent = canCreateEvent
+        self.canManage = canManage
+        self.canArchive = canArchive
+    }
+
+    fileprivate static let denied = VibeWaveCapabilities(
+        canView: false,
+        canPost: false,
+        canCreateEvent: false,
+        canManage: false,
+        canArchive: false
+    )
 }
 
 public struct VibeWaveCounts: Decodable, Equatable, Sendable {
     public let posts: Int
     public let events: Int
+
+    private enum CodingKeys: String, CodingKey { case posts, events }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        posts = try values.decodeIfPresent(Int.self, forKey: .posts) ?? 0
+        events = try values.decodeIfPresent(Int.self, forKey: .events) ?? 0
+    }
 }
 
 public struct VibeWave: Decodable, Identifiable, Equatable, Sendable {
@@ -532,6 +575,38 @@ public struct VibeWave: Decodable, Identifiable, Equatable, Sendable {
     public let capabilities: VibeWaveCapabilities
     public let _count: VibeWaveCounts?
     public let subscription: VibeWaveSubscription?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, slug, description, type, visibility, postingPolicy, position
+        case isSystem, isDefault, commentsEnabled, requiresPostApproval
+        case allowPolls, allowPhotos, allowLinks, allowEchoes, archivedAt
+        case capabilities, _count, subscription
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        slug = try values.decode(String.self, forKey: .slug)
+        description = try values.decodeIfPresent(String.self, forKey: .description)
+        type = try values.decodeIfPresent(VibeWaveType.self, forKey: .type) ?? .custom
+        visibility = try values.decodeIfPresent(String.self, forKey: .visibility) ?? "MEMBERS"
+        postingPolicy = try values.decodeIfPresent(String.self, forKey: .postingPolicy) ?? "ADMINS"
+        position = try values.decodeIfPresent(Int.self, forKey: .position) ?? 0
+        isSystem = try values.decodeIfPresent(Bool.self, forKey: .isSystem) ?? false
+        isDefault = try values.decodeIfPresent(Bool.self, forKey: .isDefault) ?? false
+        commentsEnabled = try values.decodeIfPresent(Bool.self, forKey: .commentsEnabled) ?? false
+        requiresPostApproval = try values.decodeIfPresent(Bool.self, forKey: .requiresPostApproval) ?? true
+        allowPolls = try values.decodeIfPresent(Bool.self, forKey: .allowPolls) ?? false
+        allowPhotos = try values.decodeIfPresent(Bool.self, forKey: .allowPhotos) ?? false
+        allowLinks = try values.decodeIfPresent(Bool.self, forKey: .allowLinks) ?? false
+        allowEchoes = try values.decodeIfPresent(Bool.self, forKey: .allowEchoes) ?? false
+        archivedAt = try values.decodeIfPresent(String.self, forKey: .archivedAt)
+        capabilities = try values.decodeIfPresent(VibeWaveCapabilities.self, forKey: .capabilities)
+            ?? VibeWaveCapabilities.denied
+        _count = try values.decodeIfPresent(VibeWaveCounts.self, forKey: ._count)
+        subscription = try values.decodeIfPresent(VibeWaveSubscription.self, forKey: .subscription)
+    }
 }
 
 public struct VibeWavesResponse: Decodable, Sendable {
