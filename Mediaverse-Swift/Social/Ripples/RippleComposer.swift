@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 enum RippleComposerDestination: Equatable {
     case personal
     case vibe(slug: String, name: String)
+    case wave(vibeSlug: String, vibeName: String, wave: VibeWave)
 }
 
 private struct RipplePhotoPositioning: Identifiable {
@@ -270,6 +271,8 @@ struct RippleComposer: View {
             "Posting to My Atmo"
         case .vibe(_, let name):
             "Posting to \(name)"
+        case .wave(_, let vibeName, let wave):
+            "Posting to \(vibeName) · \(wave.name)"
         }
     }
 
@@ -277,6 +280,7 @@ struct RippleComposer: View {
         switch destination {
         case .personal: "person.crop.circle"
         case .vibe: "person.3"
+        case .wave: "wave.3.right"
         }
     }
 
@@ -286,6 +290,8 @@ struct RippleComposer: View {
             "Create a Ripple on My Atmo…"
         case .vibe(_, let name):
             "Create a Ripple in \(name)…"
+        case .wave(_, _, let wave):
+            "Create a Ripple in \(wave.name)…"
         }
     }
 
@@ -621,6 +627,8 @@ struct RippleComposer: View {
             return try await api.ensurePersonalVibe().slug
         case .vibe(let slug, _):
             return slug
+        case .wave(let vibeSlug, _, _):
+            return vibeSlug
         }
     }
 
@@ -669,6 +677,14 @@ struct RippleComposer: View {
                 slug = try await api.ensurePersonalVibe().slug
             case .vibe(let destinationSlug, _):
                 slug = destinationSlug
+            case .wave(let vibeSlug, _, _):
+                slug = vibeSlug
+            }
+            let waveId: String?
+            if case .wave(_, _, let wave) = destination {
+                waveId = wave.id
+            } else {
+                waveId = nil
             }
             let created = try await api.createRipple(
                 inVibe: slug,
@@ -677,7 +693,8 @@ struct RippleComposer: View {
                     + (attachment.map { [$0] } ?? []),
                 poll: pollDraft,
                 isSpoiler: isSpoiler,
-                commentsDisabled: commentsDisabled
+                commentsDisabled: commentsDisabled,
+                waveId: waveId
             )
             reset()
             notice = created.status == "PENDING_REVIEW"

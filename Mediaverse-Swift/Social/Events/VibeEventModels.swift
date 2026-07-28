@@ -14,6 +14,13 @@ struct VibeEventAffiliation: Codable, Hashable, Sendable {
     let handle: String?
 }
 
+struct VibeEventWaveIdentity: Codable, Hashable, Sendable {
+    let id: String
+    let slug: String
+    let name: String
+    let type: String
+}
+
 struct VibeEventCardModel: Codable, Identifiable, Hashable, Sendable {
     let id: String
     let slug: String
@@ -33,6 +40,7 @@ struct VibeEventCardModel: Codable, Identifiable, Hashable, Sendable {
     let capacity: Int?
     let replayUrl: String?
     let club: VibeEventIdentity
+    let wave: VibeEventWaveIdentity?
     let affiliatedShow: VibeEventAffiliation?
     let affiliatedChannel: VibeEventAffiliation?
 }
@@ -76,6 +84,7 @@ struct VibeEventDetailModel: Codable, Identifiable, Sendable {
     let waitlistCount: Int
     let capacity: Int?
     let club: VibeEventIdentity
+    let wave: VibeEventWaveIdentity?
     let hosts: [VibeEventHostModel]
     let affiliatedShow: VibeEventAffiliation?
     let affiliatedChannel: VibeEventAffiliation?
@@ -166,6 +175,7 @@ struct VibeEventTemplatesResponse: Codable, Sendable { let templates: [VibeEvent
 struct CreateVibeEventRequest: Encodable, Sendable {
     let templateId: String?
     let clubId: String
+    let waveId: String?
     let title: String
     let summary: String
     let description: String?

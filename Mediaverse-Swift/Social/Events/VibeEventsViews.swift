@@ -817,6 +817,7 @@ struct VibeEventCreatorView: View {
     let onCreated: (CreatedVibeEvent) -> Void
     var onDeleted: () -> Void = {}
     var preselectedVibeSlug: String? = nil
+    var preselectedWaveID: String? = nil
     var editEvent: VibeEventDetailModel? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var templates = [VibeEventTemplateModel]()
@@ -1196,7 +1197,8 @@ struct VibeEventCreatorView: View {
         busy = true; errorMessage = nil
         let end = startsAt.addingTimeInterval(TimeInterval(duration * 60))
         let request = CreateVibeEventRequest(
-            templateId: template.id, clubId: selectedVibeID, title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+            templateId: template.id, clubId: selectedVibeID, waveId: preselectedWaveID ?? editEvent?.wave?.id,
+            title: title.trimmingCharacters(in: .whitespacesAndNewlines),
             summary: summary.trimmingCharacters(in: .whitespacesAndNewlines), description: details.isEmpty ? nil : details,
             coverUrl: coverURL.isEmpty ? nil : coverURL,
             coverFocus: "\(Int(coverFocusX))% \(Int(coverFocusY))% scale",
@@ -1367,6 +1369,7 @@ private struct EventAffiliationPicker: View {
 struct VibeEventVibeSection: View {
     let vibeSlug: String
     let canManage: Bool
+    var waveID: String? = nil
     @State private var showsCreator = false
 
     var body: some View {
@@ -1401,7 +1404,7 @@ struct VibeEventVibeSection: View {
             NavigationStack {
                 VibeEventCreatorView(onCreated: { _ in
                     showsCreator = false
-                }, preselectedVibeSlug: vibeSlug)
+                }, preselectedVibeSlug: vibeSlug, preselectedWaveID: waveID)
             }
         }
     }

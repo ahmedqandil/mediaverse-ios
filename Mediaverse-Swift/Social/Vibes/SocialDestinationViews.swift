@@ -2,6 +2,11 @@ import AVKit
 import SwiftUI
 
 struct VibeDetailView: View {
+    private struct CachedWaveFeed {
+        var ripples: [Ripple]
+        var nextCursor: String?
+    }
+
     fileprivate enum VibeSheet: String, Identifiable {
         case options
         case affiliations
@@ -19,6 +24,11 @@ struct VibeDetailView: View {
     @State private var detail: VibeDetailResponse?
     @State private var ripples: [Ripple] = []
     @State private var nextCursor: String?
+    @State private var waves: [VibeWave] = []
+    @State private var selectedWaveSlug: String?
+    @State private var waveFeeds: [String: CachedWaveFeed] = [:]
+    @State private var feedRequestID = UUID()
+    @State private var isSwitchingWave = false
     @State private var isLoading = true
     @State private var isMutatingRelationship = false
     @State private var relationshipNotice: String?
@@ -48,15 +58,25 @@ struct VibeDetailView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, C.pagePad)
                     }
-                    if features.rippleComposerEnabled && detail.capabilities.canPost {
+                    if !detail.club.isPersonal && !waves.isEmpty {
+                        waveTabs
+                    }
+                    if features.rippleComposerEnabled && canPost(in: detail) {
                         rippleComposerPrompt(for: detail)
                             .padding(.horizontal, C.pagePad)
                     }
-                    if !detail.club.isPersonal {
+                    if !detail.club.isPersonal && showsEventsSection {
                         VibeEventVibeSection(
                             vibeSlug: detail.club.slug,
-                            canManage: detail.capabilities.canManageClub
+                            canManage: selectedWave?.capabilities.canCreateEvent
+                                ?? detail.capabilities.canManageClub,
+                            waveID: selectedWave?.type == .events ? selectedWave?.id : nil
                         )
+                    }
+                    if isSwitchingWave {
+                        ProgressView()
+                            .tint(C.watch)
+                            .padding(.vertical, 28)
                     }
                     ForEach(ripples) {
                         RippleCard(
@@ -170,12 +190,10 @@ struct VibeDetailView: View {
                     NavigationStack {
                         ScrollView {
                             RippleComposer(
-                                destination: .vibe(
-                                    slug: detail.club.slug,
-                                    name: detail.club.name
-                                )
+                                destination: composerDestination(for: detail)
                             ) { ripple in
                                 ripples.insert(ripple, at: 0)
+                                cacheCurrentFeed()
                                 activeSheet = nil
                             }
                             .padding(C.pagePad)
@@ -241,7 +259,7 @@ struct VibeDetailView: View {
                     name: auth.currentUser?.name,
                     size: 38
                 )
-                Text("Create a Ripple in \(detail.club.name)…")
+                Text(composerPrompt(for: detail))
                     .font(.subheadline)
                     .foregroundStyle(C.textMuted)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -260,19 +278,28 @@ struct VibeDetailView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Create a Ripple in \(detail.club.name)")
+        .accessibilityLabel(composerPrompt(for: detail))
     }
 
     private func load() async {
         isLoading = true
         errorMessage = nil
         do {
-            async let loadedDetail = api.vibe(slug: slug)
+            let detail = try await api.vibe(slug: slug)
             async let loadedPage = api.vibeRipples(slug: slug)
-            let (detail, page) = try await (loadedDetail, loadedPage)
+            async let loadedWaves = detail.club.isPersonal ? [] : api.vibeWaves(slug: slug)
+            let (page, availableWaves) = try await (loadedPage, loadedWaves)
             self.detail = detail
+            waves = availableWaves.filter { $0.archivedAt == nil && $0.capabilities.canView }
+            selectedWaveSlug = waves.contains(where: { $0.slug == initialWaveSlug })
+                ? initialWaveSlug
+                : nil
             ripples = page.posts
             nextCursor = page.nextCursor
+            waveFeeds = [feedKey(nil): CachedWaveFeed(ripples: page.posts, nextCursor: page.nextCursor)]
+            if selectedWaveSlug != nil {
+                await switchWave(to: selectedWaveSlug)
+            }
             switch initialManagementTab?.lowercased() {
             case "affiliations":
                 if detail.capabilities.canManageAffiliations { activeSheet = .affiliations }
@@ -287,6 +314,9 @@ struct VibeDetailView: View {
             }
         } catch {
             detail = nil
+            waves = []
+            selectedWaveSlug = nil
+            waveFeeds = [:]
             ripples = []
             nextCursor = nil
             errorMessage = socialErrorMessage(error)
@@ -296,13 +326,132 @@ struct VibeDetailView: View {
 
     private func loadMore() async {
         guard let cursor = nextCursor else { return }
+        let requestID = feedRequestID
+        let waveSlug = selectedWaveSlug
         do {
-            let page = try await api.vibeRipples(slug: slug, cursor: cursor)
+            let page = try await api.vibeRipples(slug: slug, cursor: cursor, wave: waveSlug)
+            guard requestID == feedRequestID, waveSlug == selectedWaveSlug else { return }
             let existing = Set(ripples.map(\.id))
             ripples.append(contentsOf: page.posts.filter { !existing.contains($0.id) })
             nextCursor = page.nextCursor
+            cacheCurrentFeed()
         } catch {
             errorMessage = socialErrorMessage(error)
+        }
+    }
+
+    private var waveTabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                waveTab(title: "Home", slug: nil, systemImage: "house")
+                ForEach(waves) { wave in
+                    waveTab(title: wave.name, slug: wave.slug, systemImage: waveSystemImage(wave))
+                }
+            }
+            .padding(.horizontal, C.pagePad)
+        }
+    }
+
+    private func waveTab(title: String, slug: String?, systemImage: String) -> some View {
+        let selected = selectedWaveSlug == slug
+        return Button {
+            Task { await switchWave(to: slug) }
+        } label: {
+            Label(title, systemImage: systemImage)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(selected ? C.bg : C.text)
+                .padding(.horizontal, 14)
+                .frame(height: 38)
+                .background(selected ? C.watch : C.surface)
+                .clipShape(Capsule())
+                .overlay(Capsule().stroke(selected ? Color.clear : C.borderSubtle))
+        }
+        .buttonStyle(.plain)
+        .disabled(isSwitchingWave && selected)
+    }
+
+    @MainActor
+    private func switchWave(to waveSlug: String?) async {
+        guard selectedWaveSlug != waveSlug || waveFeeds[feedKey(waveSlug)] == nil else { return }
+        cacheCurrentFeed()
+        selectedWaveSlug = waveSlug
+        feedRequestID = UUID()
+        let requestID = feedRequestID
+        if let cached = waveFeeds[feedKey(waveSlug)] {
+            ripples = cached.ripples
+            nextCursor = cached.nextCursor
+            isSwitchingWave = false
+            return
+        }
+        ripples = []
+        nextCursor = nil
+        isSwitchingWave = true
+        do {
+            let page = try await api.vibeRipples(slug: slug, wave: waveSlug)
+            guard requestID == feedRequestID, selectedWaveSlug == waveSlug else { return }
+            ripples = page.posts
+            nextCursor = page.nextCursor
+            waveFeeds[feedKey(waveSlug)] = CachedWaveFeed(
+                ripples: page.posts,
+                nextCursor: page.nextCursor
+            )
+        } catch {
+            guard requestID == feedRequestID else { return }
+            errorMessage = socialErrorMessage(error)
+        }
+        if requestID == feedRequestID { isSwitchingWave = false }
+    }
+
+    private func cacheCurrentFeed() {
+        waveFeeds[feedKey(selectedWaveSlug)] = CachedWaveFeed(
+            ripples: ripples,
+            nextCursor: nextCursor
+        )
+    }
+
+    private func feedKey(_ waveSlug: String?) -> String {
+        waveSlug ?? "__home__"
+    }
+
+    private var selectedWave: VibeWave? {
+        waves.first { $0.slug == selectedWaveSlug }
+    }
+
+    private var showsEventsSection: Bool {
+        selectedWaveSlug == nil || selectedWave?.type == .events
+    }
+
+    private func canPost(in detail: VibeDetailResponse) -> Bool {
+        selectedWave?.capabilities.canPost ?? detail.capabilities.canPost
+    }
+
+    private func composerDestination(for detail: VibeDetailResponse) -> RippleComposerDestination {
+        if let selectedWave {
+            return .wave(
+                vibeSlug: detail.club.slug,
+                vibeName: detail.club.name,
+                wave: selectedWave
+            )
+        }
+        return .vibe(slug: detail.club.slug, name: detail.club.name)
+    }
+
+    private func composerPrompt(for detail: VibeDetailResponse) -> String {
+        if let selectedWave {
+            return "Create a Ripple in \(selectedWave.name)…"
+        }
+        return "Create a Ripple in \(detail.club.name)…"
+    }
+
+    private func waveSystemImage(_ wave: VibeWave) -> String {
+        switch wave.type {
+        case .announcements: "megaphone"
+        case .questions: "questionmark.bubble"
+        case .events: "calendar"
+        case .resources: "bookmark"
+        case .media: "play.rectangle"
+        case .staff: "person.2.badge.gearshape"
+        case .general, .custom, .unknown: "wave.3.right"
         }
     }
 
