@@ -47,26 +47,12 @@ struct SplashView: View {
     }
 
     private var logoMark: some View {
-        ZStack {
-            Circle()
-                .fill(C.watch.opacity(isAnimating ? 0.22 : 0.12))
-                .frame(width: 124, height: 124)
-                .scaleEffect(isAnimating ? 1.04 : 0.98)
-
-            Circle()
-                .stroke(C.watch.opacity(0.34), lineWidth: 1)
-                .frame(width: 124, height: 124)
-
-            Circle()
-                .stroke(C.play.opacity(0.20), lineWidth: 8)
-                .frame(width: 96, height: 96)
-
-            Image("westreem-mark")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 72, height: 72)
-                .shadow(color: C.watch.opacity(0.30), radius: 18, x: 0, y: 0)
-        }
+        Image("westreem-mark")
+            .resizable()
+            .scaledToFit()
+            .frame(width: 148, height: 148)
+            .scaleEffect(isAnimating ? 1.03 : 0.97)
+            .shadow(color: C.watch.opacity(0.30), radius: 18, x: 0, y: 0)
     }
 
     private var loadingBar: some View {
