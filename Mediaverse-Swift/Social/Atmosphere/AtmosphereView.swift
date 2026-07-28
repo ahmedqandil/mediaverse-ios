@@ -82,6 +82,10 @@ struct AtmosphereView: View {
             guard let ripple = notification.object as? Ripple else { return }
             model.prepend(ripple)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .userFollowChanged)) { _ in
+            guard auth.isAuthenticated else { return }
+            Task { await model.reload(.atmosphere) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .notificationCountsDidChange)) { notification in
             if let count = notification.object as? Int {
                 unreadNotificationCount = count
