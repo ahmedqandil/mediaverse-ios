@@ -2182,7 +2182,7 @@ struct SocialEnergyForm: View {
                     Text("Add a signal")
                         .font(.subheadline.bold())
                     Spacer()
-                    Text("CHOOSE ANY")
+                    Text(overall > 0 ? "CHOOSE ANY" : "SELECT INTENSITY FIRST")
                         .font(.system(size: 10, weight: .medium))
                         .tracking(1.4)
                         .foregroundStyle(C.textTertiary)
@@ -2214,7 +2214,14 @@ struct SocialEnergyForm: View {
                                 }
                         }
                         .buttonStyle(.plain)
+                        .disabled(overall < 1)
+                        .opacity(overall < 1 ? 0.35 : 1)
                         .accessibilityAddTraits(selected ? .isSelected : [])
+                        .accessibilityHint(
+                            overall < 1
+                                ? "Select an Energy intensity before choosing a signal."
+                                : "Adds or removes this Energy signal."
+                        )
                     }
                 }
 
