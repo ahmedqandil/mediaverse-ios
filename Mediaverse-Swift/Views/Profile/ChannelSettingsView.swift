@@ -15,6 +15,7 @@ struct ChannelSettingsView: View {
     @State private var selectedBannerItem: PhotosPickerItem?
     @State private var avatarPreviewImage: UIImage?
     @State private var bannerPreviewImage: UIImage?
+    @State private var positioningImage: ChannelImagePositioning?
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var isUploadingAvatar = false
@@ -61,6 +62,18 @@ struct ChannelSettingsView: View {
             guard let item else { return }
             Task { await uploadSelectedImage(item, type: .banner) }
         }
+        .fullScreenCover(item: $positioningImage) { pending in
+            WestreemImagePositionEditor(
+                image: pending.image,
+                aspectRatio: pending.aspectRatio,
+                title: pending.type == .avatar ? "Position Profile Image" : "Position Banner",
+                onCancel: { positioningImage = nil },
+                onApply: { positioned in
+                    positioningImage = nil
+                    Task { await uploadPositionedImage(positioned, type: pending.type) }
+                }
+            )
+        }
     }
 
     private var settingsForm: some View {
@@ -69,12 +82,7 @@ struct ChannelSettingsView: View {
 
             fieldGroup("Channel display name") {
                 TextField("Channel display name", text: $name)
-                    .textFieldStyle(.plain)
-                    .foregroundStyle(C.text)
-                    .padding(12)
-                    .background(Color.white.opacity(0.05))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .overlay { RoundedRectangle(cornerRadius: 10).stroke(C.border, lineWidth: 1) }
+                    .westreemField()
             }
 
             fieldGroup("Profile image") {
@@ -86,7 +94,11 @@ struct ChannelSettingsView: View {
                     existingURL: C.mediaURL(avatarUrl),
                     isUploading: isUploadingAvatar,
                     aspectRatio: 1,
-                    clearPreview: { avatarPreviewImage = nil }
+                    clearPreview: { avatarPreviewImage = nil },
+                    onAdjust: {
+                        guard let avatarPreviewImage else { return }
+                        positioningImage = ChannelImagePositioning(type: .avatar, image: avatarPreviewImage, aspectRatio: 1)
+                    }
                 )
             }
 
@@ -99,7 +111,11 @@ struct ChannelSettingsView: View {
                     existingURL: C.mediaURL(bannerUrl),
                     isUploading: isUploadingBanner,
                     aspectRatio: 16.0 / 6.0,
-                    clearPreview: { bannerPreviewImage = nil }
+                    clearPreview: { bannerPreviewImage = nil },
+                    onAdjust: {
+                        guard let bannerPreviewImage else { return }
+                        positioningImage = ChannelImagePositioning(type: .banner, image: bannerPreviewImage, aspectRatio: 16.0 / 6.0)
+                    }
                 )
             }
 
@@ -210,7 +226,8 @@ struct ChannelSettingsView: View {
         existingURL: URL?,
         isUploading: Bool,
         aspectRatio: CGFloat,
-        clearPreview: @escaping () -> Void
+        clearPreview: @escaping () -> Void,
+        onAdjust: @escaping () -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             if aspectRatio == 1 {
@@ -241,6 +258,18 @@ struct ChannelSettingsView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .disabled(isUploading || isSaving)
+
+                if previewImage != nil {
+                    Button(action: onAdjust) {
+                        Image(systemName: "crop")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(C.text)
+                            .frame(width: 42, height: 42)
+                            .background(C.elevated, in: RoundedRectangle(cornerRadius: 10))
+                    }
+                    .accessibilityLabel("Adjust image position")
+                    .disabled(isUploading || isSaving)
+                }
 
                 if !url.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button("Clear") {
@@ -349,10 +378,7 @@ struct ChannelSettingsView: View {
     }
 
     private func fieldGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(C.text)
+        WestreemFormPanel(title) {
             content()
         }
     }
@@ -360,6 +386,13 @@ struct ChannelSettingsView: View {
     private enum ChannelImageType: String {
         case avatar
         case banner
+    }
+
+    private struct ChannelImagePositioning: Identifiable {
+        let type: ChannelImageType
+        let image: UIImage
+        let aspectRatio: CGFloat
+        var id: String { type.rawValue }
     }
 
     private func loadChannel() async {
@@ -389,23 +422,48 @@ struct ChannelSettingsView: View {
             else {
                 throw APIError.invalidResponse("Could not read the selected image.")
             }
-            let uploadedURL = try await APIClient.shared.uploadBackstageImage(
-                channelId: channelId,
-                type: type.rawValue,
-                imageData: uploadData
-            )
-            switch type {
-            case .avatar:
-                avatarUrl = uploadedURL
-                avatarPreviewImage = sourceImage
-                selectedAvatarItem = nil
-            case .banner:
-                bannerUrl = uploadedURL
-                bannerPreviewImage = sourceImage
-                selectedBannerItem = nil
-            }
+            try await uploadPreparedImage(sourceImage, data: uploadData, type: type)
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func uploadPositionedImage(_ sourceImage: UIImage, type: ChannelImageType) async {
+        setUploading(true, for: type)
+        errorMessage = nil
+        defer { setUploading(false, for: type) }
+        do {
+            guard let uploadData = preparedJPEGData(
+                from: sourceImage,
+                maxPixel: type == .avatar ? 1200 : 1800
+            ) else {
+                throw APIError.invalidResponse("Could not prepare the positioned image.")
+            }
+            try await uploadPreparedImage(sourceImage, data: uploadData, type: type)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func uploadPreparedImage(
+        _ sourceImage: UIImage,
+        data: Data,
+        type: ChannelImageType
+    ) async throws {
+        let uploadedURL = try await APIClient.shared.uploadBackstageImage(
+            channelId: channelId,
+            type: type.rawValue,
+            imageData: data
+        )
+        switch type {
+        case .avatar:
+            avatarUrl = uploadedURL
+            avatarPreviewImage = sourceImage
+            selectedAvatarItem = nil
+        case .banner:
+            bannerUrl = uploadedURL
+            bannerPreviewImage = sourceImage
+            selectedBannerItem = nil
         }
     }
 

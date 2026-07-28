@@ -2,6 +2,15 @@ import SwiftUI
 import AuthenticationServices
 import LocalAuthentication
 
+enum StoredSessionValidation: Equatable {
+    case authenticated
+    case rejected
+
+    static func resolve(hasUser: Bool) -> Self {
+        hasUser ? .authenticated : .rejected
+    }
+}
+
 /// Manages authentication state for the entire app.
 /// Handles magic-link email flow and Google OAuth via ASWebAuthenticationSession.
 @MainActor
@@ -100,11 +109,24 @@ final class AuthManager: ObservableObject {
         }
     }
 
-    /// Background user-profile refresh. Never resets auth on failure.
+    /// Background user-profile refresh. Transient transport failures retain the
+    /// local session, but an explicit `{ user: null }` response means the stored
+    /// JWT is no longer a valid authenticated session.
     private func refreshUser(generation: UUID) async {
-        if let user = try? await APIClient.shared.fetchSession() {
+        do {
+            let user = try await APIClient.shared.fetchSession()
+            guard StoredSessionValidation.resolve(hasUser: user != nil) == .authenticated,
+                  let user else {
+                guard authGeneration == generation else { return }
+                await APIClient.shared.clearSessionToken()
+                await expireSessionLocally()
+                return
+            }
             guard authGeneration == generation else { return }
             currentUser = user
+        } catch {
+            // Stay signed in during a temporary connectivity failure. Authenticated
+            // endpoints still expire the session immediately if they return 401.
         }
         if authGeneration == generation {
             isLoading = false

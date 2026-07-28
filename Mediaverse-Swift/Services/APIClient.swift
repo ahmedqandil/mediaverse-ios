@@ -3,7 +3,7 @@ import Foundation
 /// Thin URLSession wrapper that authenticates with the stored mobile session JWT.
 /// The JWT is stored through SessionStorage and attached to every request as both
 /// a bearer token and compatibility cookies.
-actor APIClient {
+actor APIClient: LegacySocialTransport {
     static let shared = APIClient()
 
     private let session: URLSession = {
@@ -17,6 +17,21 @@ actor APIClient {
         )
         cfg.requestCachePolicy = .useProtocolCachePolicy
         cfg.httpCookieStorage = nil           // We manage cookies ourselves
+        cfg.httpShouldSetCookies = false
+        return URLSession(configuration: cfg)
+    }()
+
+    /// Direct-to-storage transfers need a longer budget than interactive API calls,
+    /// especially over cellular or when iOS has to resume an interrupted upload.
+    private let uploadSession: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 120
+        cfg.timeoutIntervalForResource = 300
+        cfg.waitsForConnectivity = true
+        cfg.allowsCellularAccess = true
+        cfg.allowsExpensiveNetworkAccess = true
+        cfg.allowsConstrainedNetworkAccess = true
+        cfg.httpCookieStorage = nil
         cfg.httpShouldSetCookies = false
         return URLSession(configuration: cfg)
     }()
@@ -190,6 +205,99 @@ actor APIClient {
     func get<T: Decodable>(_ path: String) async throws -> T {
         let data = try await getData(path)
         return try decoder.decode(T.self, from: data)
+    }
+
+    /// Frozen-backend bridge for the social adapter. Keeping this inside the
+    /// existing client preserves its JWT, compatibility cookies, trust checks,
+    /// caching, and error behavior for every social request.
+    func socialData(path: String) async throws -> Data {
+        do {
+            let data = try await getData(path)
+            #if DEBUG
+            print("[social-api] GET \(path) bytes=\(data.count) authenticated=\(SessionStorage.token != nil)")
+            #endif
+            return data
+        } catch {
+            #if DEBUG
+            print("[social-api] GET \(path) failed=\(String(describing: error)) authenticated=\(SessionStorage.token != nil)")
+            #endif
+            throw error
+        }
+    }
+
+    func socialPostData(path: String, body: Data) async throws -> Data {
+        guard let url = URL(string: C.baseURL + path) else {
+            throw APIError.badURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = body
+        attachAuth(&request)
+        let (data, response) = try await session.data(for: request)
+        do {
+            try validate(response)
+        } catch {
+            if let payload = try? JSONDecoder().decode(SocialAPIErrorPayload.self, from: data),
+               !payload.error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw APIError.invalidResponse(payload.error)
+            }
+            throw error
+        }
+        invalidateResponseCache()
+        return data
+    }
+
+    func socialPatchData(path: String, body: Data) async throws -> Data {
+        guard let url = URL(string: C.baseURL + path) else {
+            throw APIError.badURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = body
+        attachAuth(&request)
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        invalidateResponseCache()
+        return data
+    }
+
+    func socialDeleteData(path: String) async throws -> Data {
+        guard let url = URL(string: C.baseURL + path) else {
+            throw APIError.badURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        attachAuth(&request)
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        invalidateResponseCache()
+        return data
+    }
+
+    func socialUploadData(path: String, body: Data, contentType: String) async throws -> Data {
+        let url: URL?
+        if path.hasPrefix("http://") || path.hasPrefix("https://") {
+            url = URL(string: path)
+        } else {
+            url = URL(string: C.baseURL + path)
+        }
+        guard let url else { throw APIError.badURL(path) }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        request.setValue(String(body.count), forHTTPHeaderField: "Content-Length")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = body
+        attachAuth(&request)
+        let (data, response) = try await session.data(for: request)
+        try validate(response)
+        invalidateResponseCache()
+        return data
     }
 
     private func get<T: Decodable>(_ path: String, authenticated: Bool) async throws -> T {
@@ -556,6 +664,38 @@ actor APIClient {
         return response.data
     }
 
+    func trackCurationEvent(
+        listingId: String,
+        eventType: String,
+        contentId: String? = nil,
+        sessionId: String? = nil
+    ) async {
+        struct Body: Encodable {
+            let listingId: String
+            let eventType: String
+            let contentId: String?
+            let device: String
+            let sessionId: String?
+        }
+        guard let url = URL(string: C.baseURL + "/api/curation/event"),
+              let body = try? JSONEncoder().encode(
+                Body(
+                    listingId: listingId,
+                    eventType: eventType,
+                    contentId: contentId,
+                    device: "mobile",
+                    sessionId: sessionId
+                )
+              ) else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = body
+        attachAuth(&request)
+        _ = try? await session.data(for: request)
+    }
+
     // MARK: - Shorts
 
     func fetchShorts(
@@ -751,6 +891,41 @@ actor APIClient {
         )
     }
 
+    func completeOnboarding(name: String, handle: String, bio: String?, image: String?) async throws -> ProfileResponse {
+        struct Body: Encodable {
+            let name: String
+            let handle: String
+            let bio: String?
+            let image: String?
+        }
+        let body = Body(name: name, handle: handle, bio: bio, image: image)
+        do {
+            return try await post("/api/me/onboarding", body: body)
+        } catch APIError.notFound {
+            // Keep device builds compatible while the atomic onboarding endpoint
+            // rolls out: both of these profile endpoints already exist in production.
+            struct LegacyProfileBody: Encodable {
+                let name: String
+                let bio: String?
+                let image: String?
+            }
+            struct HandleBody: Encodable { let handle: String }
+            struct HandleResponse: Decodable { let handle: String }
+
+            let _: FullProfile = try await patch(
+                "/api/me/profile",
+                body: LegacyProfileBody(name: name, bio: bio, image: image)
+            )
+            let _: HandleResponse = try await patch(
+                "/api/me/handle",
+                body: HandleBody(handle: handle)
+            )
+            // The deployed POST is the existing idempotent personal-Atmo bootstrap.
+            try await postEmpty("/api/me/personal-vibe")
+            return try await fetchProfile()
+        }
+    }
+
     func fetchBackstageChannel(channelId: String) async throws -> BackstageChannelSettings {
         try await get("/api/backstage/channel/\(C.pathSegment(channelId))")
     }
@@ -858,16 +1033,18 @@ actor APIClient {
 
         var uploadRequest = URLRequest(url: uploadURL)
         uploadRequest.httpMethod = "PUT"
+        uploadRequest.timeoutInterval = 120
         uploadRequest.setValue("Bearer \(clientToken)", forHTTPHeaderField: "Authorization")
         uploadRequest.setValue("public", forHTTPHeaderField: "x-vercel-blob-access")
         uploadRequest.setValue("image/jpeg", forHTTPHeaderField: "x-content-type")
         uploadRequest.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        uploadRequest.setValue(String(imageData.count), forHTTPHeaderField: "x-content-length")
         uploadRequest.setValue(storeId, forHTTPHeaderField: "x-vercel-blob-store-id")
         uploadRequest.setValue("12", forHTTPHeaderField: "x-api-version")
         uploadRequest.setValue("\(storeId):\(Int(Date().timeIntervalSince1970 * 1000)):\(UUID().uuidString)", forHTTPHeaderField: "x-api-blob-request-id")
         uploadRequest.setValue("0", forHTTPHeaderField: "x-api-blob-request-attempt")
 
-        let (blobData, blobResp) = try await session.upload(for: uploadRequest, from: imageData)
+        let (blobData, blobResp) = try await uploadSession.upload(for: uploadRequest, from: imageData)
         try validateBlobUploadResponse(blobResp)
         let decoded = try decoder.decode(BlobResponse.self, from: blobData)
         return decoded.url
@@ -1127,12 +1304,30 @@ actor APIClient {
         try await postEmpty("/api/me/subscriptions/\(C.pathSegment(id))/cancel")
     }
 
-    func submitPartnerRequest(reason: String?) async throws {
+    func fetchPartnerRequestStatus() async throws -> PartnerApplicationStatus {
+        try await get("/api/me/partner-request")
+    }
+
+    func submitPartnerRequest(reason: String?) async throws -> PartnerApplicationStatus {
         struct Body: Encodable { let reason: String? }
-        struct Response: Decodable { let ok: Bool }
+        struct Response: Decodable {
+            let status: String
+            let submittedAt: String?
+        }
         let trimmedReason = reason?.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = Body(reason: trimmedReason?.isEmpty == true ? nil : trimmedReason)
-        let _: Response = try await post("/api/me/partner-request", body: body)
+        let response: Response = try await post("/api/me/partner-request", body: body)
+        return PartnerApplicationStatus(
+            status: response.status,
+            message: trimmedReason,
+            notes: nil,
+            submittedAt: response.submittedAt,
+            reviewedAt: nil
+        )
+    }
+
+    func withdrawPartnerRequest() async throws -> PartnerApplicationStatus {
+        try await delete("/api/me/partner-request")
     }
 
     func fetchVideoPlaylist(videoId: String, playlistId: String? = nil) async throws -> VideoPlaylistResponse {
@@ -1699,24 +1894,20 @@ actor APIClient {
         let _: Resp = try decoder.decode(Resp.self, from: data)
     }
 
-    func markNotificationRead(id: String) async throws {
-        let encodedId = C.pathSegment(id)
-        let path = "/api/notifications/\(encodedId)"
-        guard let url = URL(string: C.baseURL + path) else {
-            throw APIError.badURL(path)
-        }
-        struct Body: Encodable { let read: Bool }
-        struct Resp: Decodable { let ok: Bool? }
-        var req = URLRequest(url: url)
-        req.httpMethod = "PATCH"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.httpBody = try JSONEncoder().encode(Body(read: true))
-        attachAuth(&req)
-        let (data, resp) = try await session.data(for: req)
-        try validate(resp)
-        invalidateResponseCache()
-        let _: Resp = try decoder.decode(Resp.self, from: data)
+    func fetchNotificationPreferences() async throws -> NotificationPreferences {
+        let data = try await socialData(path: "/api/me/notification-preferences")
+        return try decoder.decode(NotificationPreferences.self, from: data)
+    }
+
+    func updateNotificationPreference(
+        _ field: NotificationPreferenceField,
+        enabled: Bool
+    ) async throws -> NotificationPreferences {
+        let data = try await socialPatchData(
+            path: "/api/me/notification-preferences",
+            body: try JSONEncoder().encode([field.rawValue: enabled])
+        )
+        return try decoder.decode(NotificationPreferences.self, from: data)
     }
 
     func fetchNotificationCounts() async throws -> [String: Int] {
@@ -1761,10 +1952,212 @@ actor APIClient {
         return try await post("/api/episodes/\(C.pathSegment(episodeId))/like", body: Body(type: type))
     }
 
+    func fetchContentEnergy(contentPath: String, id: String) async throws -> ContentEnergyResponse {
+        try await get("/api/\(contentPath)/\(C.pathSegment(id))/rating")
+    }
+
+    func submitContentEnergy(
+        contentPath: String,
+        id: String,
+        overall: Int,
+        tags: [String]
+    ) async throws -> ContentEnergySelection {
+        struct Body: Encodable {
+            let overall: Int
+            let tags: [String]
+        }
+        return try await post(
+            "/api/\(contentPath)/\(C.pathSegment(id))/rating",
+            body: Body(overall: min(max(overall, 1), 5), tags: Array(tags.prefix(10)))
+        )
+    }
+
+    func removeContentEnergy(contentPath: String, id: String) async throws {
+        try await deleteEmpty("/api/\(contentPath)/\(C.pathSegment(id))/rating")
+    }
+
     func toggleSubscribe(channelId: String) async throws {
         struct Body: Encodable {}
         struct Resp: Decodable { let ok: Bool? }
         let _: Resp = try await post("/api/channels/\(C.pathSegment(channelId))/follow", body: Body())
+    }
+
+    // MARK: - Vibe Events
+
+    func fetchVibeEvents(scope: String = "upcoming", vibe: String? = nil) async throws -> [VibeEventCardModel] {
+        var events = [VibeEventCardModel]()
+        var cursor: String?
+        repeat {
+            var path = "/api/vibe-events?scope=\(C.pathSegment(scope))&limit=50"
+            if let vibe, !vibe.isEmpty { path += "&vibe=\(C.pathSegment(vibe))" }
+            if let cursor { path += "&cursor=\(C.pathSegment(cursor))" }
+            let response: VibeEventListResponse = try await get(path)
+            events.append(contentsOf: response.events.filter { event in !events.contains(where: { $0.id == event.id }) })
+            cursor = response.nextCursor
+        } while cursor != nil
+        return events
+    }
+
+    func fetchVibeEvent(slug: String) async throws -> VibeEventDetailResponse {
+        try await get("/api/vibe-events/\(C.pathSegment(slug))")
+    }
+
+    func fetchVibeEventTemplates() async throws -> [VibeEventTemplateModel] {
+        let response: VibeEventTemplatesResponse = try await get("/api/vibe-events/templates")
+        return response.templates
+    }
+
+    func fetchManagedCommunityVibes() async throws -> [VibeSummary] {
+        struct Response: Decodable { let clubs: [VibeSummary] }
+        let response: Response = try await get("/api/fan-clubs?mine=1&limit=50")
+        return response.clubs.filter { !$0.isPersonal }
+    }
+
+    func createVibeEvent(_ request: CreateVibeEventRequest) async throws -> CreatedVibeEvent {
+        let response: CreateVibeEventResponse = try await post("/api/vibe-events", body: request)
+        return response.event
+    }
+
+    func updateVibeEvent(slug: String, request: CreateVibeEventRequest) async throws -> CreatedVibeEvent {
+        let response: UpdateVibeEventResponse = try await patch(
+            "/api/vibe-events/\(C.pathSegment(slug))",
+            body: request
+        )
+        return response.event
+    }
+
+    func removeVibeEvent(slug: String) async throws {
+        let _: VibeEventMutationResponse = try await delete(
+            "/api/vibe-events/\(C.pathSegment(slug))"
+        )
+    }
+
+    func fetchVibeEventInvites(slug: String) async throws -> [VibeEventInviteModel] {
+        let response: VibeEventInvitesResponse = try await get("/api/vibe-events/\(C.pathSegment(slug))/invites")
+        return response.invites
+    }
+
+    func createVibeEventInvite(
+        slug: String,
+        email: String,
+        expiresAt: String?,
+        maxUses: Int
+    ) async throws -> VibeEventCreateInviteResponse {
+        struct Body: Encodable { let email: String; let expiresAt: String?; let maxUses: Int }
+        return try await post(
+            "/api/vibe-events/\(C.pathSegment(slug))/invites",
+            body: Body(email: email, expiresAt: expiresAt, maxUses: maxUses)
+        )
+    }
+
+    func revokeVibeEventInvite(slug: String, inviteID: String) async throws {
+        let _: VibeEventMutationResponse = try await delete(
+            "/api/vibe-events/\(C.pathSegment(slug))/invites/\(C.pathSegment(inviteID))"
+        )
+    }
+
+    func fetchVibeEventAttendees(slug: String, status: String? = nil) async throws -> [VibeEventAttendeeModel] {
+        var path = "/api/vibe-events/\(C.pathSegment(slug))/attendees"
+        if let status { path += "?status=\(C.pathSegment(status))" }
+        let response: VibeEventAttendeesResponse = try await get(path)
+        return response.attendees
+    }
+
+    func fetchVibeEventHosts(slug: String) async throws -> [VibeEventHostModel] {
+        let response: VibeEventHostsResponse = try await get("/api/vibe-events/\(C.pathSegment(slug))/hosts")
+        return response.hosts
+    }
+
+    func addVibeEventHost(slug: String, userID: String, role: String) async throws {
+        struct Body: Encodable { let userId: String; let role: String; let position: Int }
+        let _: VibeEventHostResponse = try await post(
+            "/api/vibe-events/\(C.pathSegment(slug))/hosts",
+            body: Body(userId: userID, role: role, position: 0)
+        )
+    }
+
+    func removeVibeEventHost(slug: String, userID: String) async throws {
+        struct Body: Encodable { let userId: String }
+        let _: VibeEventMutationResponse = try await delete(
+            "/api/vibe-events/\(C.pathSegment(slug))/hosts",
+            body: Body(userId: userID)
+        )
+    }
+
+    func updateVibeEventRSVP(slug: String, status: String) async throws -> VibeEventRSVPMutation {
+        struct Body: Encodable { let status: String }
+        struct Response: Decodable {
+            let rsvp: VibeEventRSVP
+            let counts: VibeEventRSVPCounts?
+            let event: VibeEventRSVPCounts?
+            let goingCount: Int?
+            let interestedCount: Int?
+            let waitlistCount: Int?
+
+            var resolvedCounts: VibeEventRSVPCounts? {
+                if let counts { return counts }
+                if let event { return event }
+                guard let goingCount, let interestedCount, let waitlistCount else { return nil }
+                return .init(
+                    goingCount: goingCount,
+                    interestedCount: interestedCount,
+                    waitlistCount: waitlistCount
+                )
+            }
+        }
+        let response: Response = try await post(
+            "/api/vibe-events/\(C.pathSegment(slug))/rsvp",
+            body: Body(status: status)
+        )
+        return .init(rsvp: response.rsvp, counts: response.resolvedCounts)
+    }
+
+    func trackVibeEventAnalytics(
+        slug: String,
+        action: String,
+        source: String = "direct",
+        sessionID: String,
+        position: Int? = nil,
+        duration: Int? = nil
+    ) async throws {
+        struct Body: Encodable {
+            let action: String
+            let source: String
+            let sessionId: String
+            let position: Int?
+            let duration: Int?
+        }
+        struct Response: Decodable { let ok: Bool }
+        let _: Response = try await post(
+            "/api/vibe-events/\(C.pathSegment(slug))/analytics",
+            body: Body(
+                action: action,
+                source: source,
+                sessionId: sessionID,
+                position: position,
+                duration: duration
+            )
+        )
+    }
+
+    func fetchVibeEventAnalytics(slug: String) async throws -> VibeEventAnalyticsSummary {
+        let response: VibeEventAnalyticsResponse = try await get(
+            "/api/vibe-events/\(C.pathSegment(slug))/analytics"
+        )
+        return response.analytics
+    }
+
+    func fetchVibeEventInvite(token: String) async throws -> VibeEventInvitePreview {
+        let response: VibeEventInvitePreviewResponse = try await get("/api/vibe-events/invite/\(C.pathSegment(token))")
+        return response.invite
+    }
+
+    func respondToVibeEventInvite(token: String, accept: Bool) async throws -> VibeEventInviteDecisionResponse {
+        struct Body: Encodable { let action: String }
+        return try await post(
+            "/api/vibe-events/invite/\(C.pathSegment(token))",
+            body: Body(action: accept ? "accept" : "decline")
+        )
     }
 
     // MARK: - Private
@@ -1888,6 +2281,31 @@ actor APIClient {
     }
 }
 
+actor CurationEventTracker {
+    static let shared = CurationEventTracker()
+
+    private let sessionId = UUID().uuidString
+    private var impressions = Set<String>()
+
+    func impression(listingId: String) async {
+        guard impressions.insert(listingId).inserted else { return }
+        await APIClient.shared.trackCurationEvent(
+            listingId: listingId,
+            eventType: "impression",
+            sessionId: sessionId
+        )
+    }
+
+    func click(listingId: String, contentId: String) async {
+        await APIClient.shared.trackCurationEvent(
+            listingId: listingId,
+            eventType: "click",
+            contentId: contentId,
+            sessionId: sessionId
+        )
+    }
+}
+
 enum APIError: LocalizedError {
     case badURL(String)
     case unauthorized
@@ -1904,4 +2322,8 @@ enum APIError: LocalizedError {
         case .invalidResponse(let message): return message
         }
     }
+}
+
+private struct SocialAPIErrorPayload: Decodable {
+    let error: String
 }

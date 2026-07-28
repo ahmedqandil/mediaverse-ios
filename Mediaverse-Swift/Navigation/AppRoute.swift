@@ -11,6 +11,7 @@ public enum AppRoute: Hashable, Identifiable {
         case .episode(let s):          return "episode_\(s)"
         case .channel(let s):          return "channel_\(s)"
         case .show(let s):             return "show_\(s)"
+        case .showSeason(let showId, let seasonId): return "showSeason_\(showId)_\(seasonId)"
         case .showAccess(let showId, let productId, let intent, let handoffId):
             return "showAccess_\(showId)_\(productId ?? "any")_\(intent ?? "access")_\(handoffId ?? "direct")"
         case .handoff(let s):          return "handoff_\(s)"
@@ -19,6 +20,14 @@ public enum AppRoute: Hashable, Identifiable {
         case .microdramaWatchEp(let s, let ep): return "mdWatchEp_\(s)_\(ep)"
         case .playlist(let s):         return "playlist_\(s)"
         case .collection(let s):       return "collection_\(s)"
+        case .vibe(let s):             return "vibe_\(s)"
+        case .vibeManagement(let slug, let tab): return "vibeManagement_\(slug)_\(tab)"
+        case .vibeInvite(let s):       return "vibeInvite_\(s)"
+        case .event(let s):            return "event_\(s)"
+        case .eventInvite(let s):      return "eventInvite_\(s)"
+        case .ripple(let s):           return "ripple_\(s)"
+        case .atmo(let s):             return "atmo_\(s)"
+        case .search(let s):           return "search_\(s)"
         }
     }
     case video(String)              // video id
@@ -26,6 +35,7 @@ public enum AppRoute: Hashable, Identifiable {
     case episode(String)            // episode id
     case channel(String)            // handle or id
     case show(String)               // show id
+    case showSeason(showId: String, seasonId: String) // show id + selected season
     case showAccess(showId: String, productId: String?, intent: String?, handoffId: String?)
     case handoff(String)            // opaque public handoff id
     case microdramaShow(String)     // show id
@@ -33,6 +43,14 @@ public enum AppRoute: Hashable, Identifiable {
     case microdramaWatchEp(String, Int)  // show id + episode number
     case playlist(String)           // playlist id
     case collection(String)         // collection id
+    case vibe(String)               // Vibe slug
+    case vibeManagement(slug: String, tab: String) // Vibe management destination
+    case vibeInvite(String)         // opaque Vibe invitation token
+    case event(String)              // Vibe Event slug
+    case eventInvite(String)        // opaque Vibe Event invitation token
+    case ripple(String)             // Ripple id
+    case atmo(String)               // user handle
+    case search(String)             // prefilled native search query
 }
 
 extension AppRoute {
@@ -137,6 +155,21 @@ extension AppRoute {
         if parts.count >= 2, parts[0] == "playlists" { return .playlist(parts[1]) }
         if parts.count >= 2, parts[0] == "collections" { return .collection(parts[1]) }
         if parts.count >= 2, parts[0] == "collection" { return .collection(parts[1]) }
+        if parts.count >= 3, parts[0] == "vibes", parts[1] == "invite" { return .vibeInvite(parts[2]) }
+        if parts.count >= 3, parts[0] == "events", parts[1] == "invite" { return .eventInvite(parts[2]) }
+        if parts.count >= 2, parts[0] == "events" { return .event(parts[1]) }
+        if parts.count >= 4, parts[0] == "vibes", parts[2] == "posts" { return .ripple(parts[3]) }
+        if parts.count >= 3, parts[0] == "vibes", parts[2] == "manage" {
+            let tab = queryValue(["tab"], in: queryItems) ?? "settings"
+            return .vibeManagement(slug: parts[1], tab: tab)
+        }
+        if parts.count >= 2, parts[0] == "vibes" { return .vibe(parts[1]) }
+        if parts.count >= 2, parts[0] == "atmo" { return .atmo(parts[1]) }
+        if parts.count >= 2, parts[0] == "ripples" { return .ripple(parts[1]) }
+        if parts.first == "discover",
+           let topic = queryValue(["topic", "q", "query"], in: queryItems) {
+            return .search(topic)
+        }
         if parts.count >= 4, parts[0] == "microdramas", ["watch", "episode", "episodes"].contains(parts[2]), let episodeNumber = Int(parts[3]) {
             return .microdramaWatchEp(parts[1], episodeNumber)
         }

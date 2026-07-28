@@ -225,20 +225,9 @@ final class ShortNavigationCache {
     }
 }
 
-private struct InitialShortsPrewarm: Codable {
-    let seed: String
-    let response: ShortsResponse
-}
-
-enum InitialShortsFeedProvenance: Equatable {
-    case fresh
-    case cacheFallback
-}
-
 struct PreparedInitialShortsFeed {
     let seed: String
     let response: ShortsResponse
-    let provenance: InitialShortsFeedProvenance
 }
 
 enum ShortsAdSchedule {
@@ -368,9 +357,9 @@ private extension AssembledListing {
 
 private enum ShortsAdFrequencyStore {
     static func canShow(placement: String, userId: String?, cap: Int?) -> Bool {
-        guard let cap else { return true }
-        guard cap > 0 else { return false }
-        return UserDefaults.standard.integer(forKey: storageKey(for: placement, userId: userId)) < cap
+        // Frequency/session caps are enforced by the server. A second persistent
+        // client cap can become stale and suppress otherwise eligible inventory.
+        true
     }
 
     static func record(placement: String, userId: String?, cap: Int?) {
@@ -486,32 +475,15 @@ final class ShortsPlaybackManager: ObservableObject {
                     seed: seed,
                     forceRefresh: true
                 )
-                try? await DiskJSONCache.shared.store(
-                    InitialShortsPrewarm(seed: seed, response: response),
-                    forKey: cacheKey,
-                    ttl: 300
-                )
                 self?.storeInitialPrewarm(
                     seed: seed,
                     response: response,
                     isMuted: isMuted,
                     cacheKey: cacheKey,
-                    userId: userId,
-                    provenance: .fresh
+                    userId: userId
                 )
             } catch {
-                if let stale: InitialShortsPrewarm = try? await DiskJSONCache.shared.staleValue(forKey: cacheKey) {
-                    self?.storeInitialPrewarm(
-                        seed: stale.seed,
-                        response: stale.response,
-                        isMuted: isMuted,
-                        cacheKey: cacheKey,
-                        userId: userId,
-                        provenance: .cacheFallback
-                    )
-                } else {
-                    self?.clearInitialPrewarmTask(cacheKey: cacheKey)
-                }
+                self?.clearInitialPrewarmTask(cacheKey: cacheKey)
             }
         }
     }
@@ -551,7 +523,6 @@ final class ShortsPlaybackManager: ObservableObject {
         userId: String?,
         context: String?
     ) async -> PreparedInitialShortsFeed? {
-        let cacheKey = ShortsFeedCacheScope.initialFeedKey(userId: userId, context: context)
         prewarmInitialFeed(isMuted: isMuted, userId: userId, context: context)
         if let payload = takeReadyInitialFeed() {
             return payload
@@ -559,22 +530,7 @@ final class ShortsPlaybackManager: ObservableObject {
 
         if let initialPrewarmTask {
             await initialPrewarmTask.value
-            if let payload = takeReadyInitialFeed() {
-                return payload
-            }
         }
-
-        guard let cached: InitialShortsPrewarm = try? await DiskJSONCache.shared.staleValue(forKey: cacheKey) else {
-            return nil
-        }
-        storeInitialPrewarm(
-            seed: cached.seed,
-            response: cached.response,
-            isMuted: isMuted,
-            cacheKey: cacheKey,
-            userId: userId,
-            provenance: .cacheFallback
-        )
         return takeReadyInitialFeed()
     }
 
@@ -770,33 +726,17 @@ final class ShortsPlaybackManager: ObservableObject {
         rootFeedSnapshot = nil
     }
 
-    func cacheInitialFeedForNextSession(
-        seed: String,
-        response: ShortsResponse,
-        userId: String?,
-        context: String?
-    ) async {
-        let cacheKey = ShortsFeedCacheScope.initialFeedKey(userId: userId, context: context)
-        try? await DiskJSONCache.shared.store(
-            InitialShortsPrewarm(seed: seed, response: response),
-            forKey: cacheKey,
-            ttl: 300
-        )
-    }
-
     private func storeInitialPrewarm(
         seed: String,
         response: ShortsResponse,
         isMuted: Bool,
         cacheKey: String,
-        userId: String?,
-        provenance: InitialShortsFeedProvenance
+        userId: String?
     ) {
         guard initialPrewarmScope == cacheKey else { return }
         initialPrewarmPayload = PreparedInitialShortsFeed(
             seed: seed,
-            response: response,
-            provenance: provenance
+            response: response
         )
         initialPrewarmTask = nil
         let feedItems = response.shorts.enumerated().map { index, short in
@@ -998,7 +938,10 @@ final class ShortsPlaybackManager: ObservableObject {
                         progress: 0,
                         canSkip: false
                     )
-                    self.trackServerAdEvent("impression", id: id)
+                    // The SGAI Worker owns impression when AVPlayer fetches the
+                    // ASSET-LIST. The client begins with start to avoid double
+                    // counting the billable impression.
+                    self.trackServerAdEvent("start", id: id)
                 }
             } catch {
                 // AVFoundation can still finish the server-guided break when optional
@@ -1029,7 +972,7 @@ final class ShortsPlaybackManager: ObservableObject {
                 progress: 0,
                 canSkip: false
             )
-            trackServerAdEvent("impression", id: id)
+            trackServerAdEvent("start", id: id)
         }
         guard let refreshed = serverAdPresentations[id] else { return }
         let itemDuration = monitor?.interstitialPlayer.currentItem?.duration.seconds
@@ -1228,7 +1171,6 @@ struct ShortsView: View {
     @State private var pendingShortViewTask: Task<Void, Never>?
     @State private var imagePrefetchTask: Task<Void, Never>?
     @State private var activationRetryTask: Task<Void, Never>?
-    @State private var feedRevalidationTask: Task<Void, Never>?
     @State private var feedGeneration = UUID()
     @State private var skippedShortsAdItemIds = Set<String>()
     @State private var pendingShortsAdItemIds = Set<String>()
@@ -1307,6 +1249,7 @@ struct ShortsView: View {
             }
         }
         .simultaneousGesture(showsDismissControls ? edgeDismissGesture : nil)
+        .simultaneousGesture(feedSwipeGesture)
         .navigationBarHidden(true)
         .navigationBarBackButtonHidden(showsDismissControls)
         .disablesInteractiveSwipeBack()
@@ -1384,29 +1327,40 @@ struct ShortsView: View {
     }
 
     private var feedTabs: some View {
-        HStack(spacing: 8) {
-            ForEach(ShortsFeed.allCases, id: \.self) { tab in
-                Button {
-                    Task { await switchFeed(tab) }
-                } label: {
-                    Text(tab.label)
-                        .font(.system(size: 14, weight: feed == tab ? .bold : .semibold))
-                        .foregroundStyle(feed == tab ? .black : .white.opacity(0.78))
-                        .padding(.horizontal, 16)
-                        .frame(height: 34)
-                        .background(feed == tab ? C.watch : Color.black.opacity(0.42), in: Capsule())
-                        .overlay {
-                            Capsule()
-                                .stroke(feed == tab ? C.watch.opacity(0.4) : Color.white.opacity(0.16), lineWidth: 1)
-                        }
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(tab.label)
-            }
+        MediaverseUnderlineTabStrip(
+            items: ShortsFeed.allCases.map {
+                MediaverseTabItem(id: $0.rawValue, label: $0.label)
+            },
+            selectedID: feed.rawValue,
+            fillsWidth: true,
+            horizontalPadding: 0,
+            verticalPadding: 10,
+            background: .clear,
+            loadingID: isLoading ? feed.rawValue : nil
+        ) { id in
+            guard let tab = ShortsFeed(rawValue: id) else { return }
+            Task { await switchFeed(tab) }
         }
+        .frame(maxWidth: 300)
         .padding(.top, 14)
         .padding(.horizontal, 12)
         .zIndex(40)
+    }
+
+    private var feedSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 36)
+            .onEnded { value in
+                guard shouldShowFeedTabs, !showsDismissControls else { return }
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                guard abs(horizontal) > abs(vertical) * 1.5, abs(horizontal) > 72 else { return }
+                let feeds = ShortsFeed.allCases
+                guard let index = feeds.firstIndex(of: feed) else { return }
+                let nextIndex = horizontal < 0 ? index + 1 : index - 1
+                guard feeds.indices.contains(nextIndex) else { return }
+                C.lightHaptic()
+                Task { await switchFeed(feeds[nextIndex]) }
+            }
     }
 
     @ViewBuilder
@@ -1788,13 +1742,13 @@ struct ShortsView: View {
     }
 
     private func prefetchUpcomingShortsAds() {
-        guard platformConfig.isLoaded, shortsAdConfig.enabled else { return }
+        guard shortsAdConfig.enabled else { return }
         guard let currentShortIndex = currentShortIndexForAdPrefetch() else { return }
         let candidates = ShortsFeedAssembler.adCandidates(
             shorts: shorts,
             shortsAdConfig: shortsAdConfig,
             afterShortIndex: currentShortIndex,
-            lookahead: 3
+            lookahead: 6
         )
 
         for candidate in candidates {
@@ -1866,7 +1820,6 @@ struct ShortsView: View {
               request.feedSeed == feedSessionSeed,
               request.shortsIDs == shorts.map(\.id),
               requestUserId == auth.currentUser?.id,
-              platformConfig.isLoaded,
               shouldRequestShortsAd(
                   at: candidate.afterIndex,
                   placement: candidate.placement,
@@ -1879,7 +1832,11 @@ struct ShortsView: View {
             skippedShortsAdItemIds.insert(candidate.id)
             return
         }
-        guard let decision, decision.filled, !decision.ads.isEmpty else {
+        guard let decision else {
+            // Do not permanently consume this slot after a transient timeout.
+            return
+        }
+        guard decision.filled, !decision.ads.isEmpty else {
             skippedShortsAdItemIds.insert(candidate.id)
             return
         }
@@ -1962,8 +1919,7 @@ struct ShortsView: View {
 
     private func shouldRequestShortsAd(at index: Int, placement: String, adConfig: PlatformShortsAdsConfig) -> Bool {
         let config = adConfig
-        guard platformConfig.isLoaded,
-              ShortsAdSchedule.isEligible(afterShortAt: index, placement: placement, config: config)
+        guard ShortsAdSchedule.isEligible(afterShortAt: index, placement: placement, config: config)
         else { return false }
         let placementConfig = config.placementConfig(for: placement)
         guard ShortsAdFrequencyStore.canShow(
@@ -1989,25 +1945,7 @@ struct ShortsView: View {
     }
 
     private var shortsBackButton: some View {
-        Button {
-            dismiss()
-        } label: {
-            ZStack {
-                Circle()
-                    .fill(.black.opacity(0.46))
-                    .overlay {
-                        Circle().stroke(.white.opacity(0.16), lineWidth: 1)
-                    }
-
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(.white)
-            }
-            .frame(width: 44, height: 44)
-            .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Back")
+        PlatformBackButton { dismiss() }
         .padding(.leading, 14)
         .padding(.top, 12)
         .zIndex(30)
@@ -2051,8 +1989,6 @@ struct ShortsView: View {
     // MARK: - Data
 
     private func cancelSessionTasks() {
-        feedRevalidationTask?.cancel()
-        feedRevalidationTask = nil
         pendingShortViewTask?.cancel()
         pendingShortViewTask = nil
         imagePrefetchTask?.cancel()
@@ -2088,7 +2024,10 @@ struct ShortsView: View {
     }
 
     private func loadShortsAdConfig() {
-        shortsAdConfig = platformConfig.isLoaded ? platformConfig.config.ads.shorts : .disabled
+        // Start with safe platform defaults so config loading cannot block the
+        // first ad prefetch. Once loaded, the real config invalidates in-flight
+        // requests through shortsAdConfigGeneration and replaces these values.
+        shortsAdConfig = platformConfig.isLoaded ? platformConfig.config.ads.shorts : .default
         playbackManager.setShortsAdsEnabled(shortsAdConfig.enabled)
     }
 
@@ -2207,7 +2146,6 @@ struct ShortsView: View {
         if let prewarmedFeed {
             feedSessionSeed = prewarmedFeed.seed
         }
-        let initialFeedProvenance = prewarmedFeed?.provenance ?? .fresh
         feedSessionIDs = requestedShortIds
         let seededShort = resolvedSourceContext == nil && requestedShortIds == nil ? ShortNavigationCache.shared.take(id: initialShortId) : nil
         if let seededShort {
@@ -2256,14 +2194,6 @@ struct ShortsView: View {
                 uniqueShorts.contains(where: { $0.id == id }) ? id : nil
             } ?? uniqueShorts.first?.id
             saveRootFeedSessionIfNeeded()
-            if canUsePrewarmedFeed, initialFeedProvenance == .fresh {
-                await playbackManager.cacheInitialFeedForNextSession(
-                    seed: feedSessionSeed,
-                    response: resp,
-                    userId: auth.currentUser?.id,
-                    context: SessionStorage.activeContextCookieValue
-                )
-            }
             configurePlayback(ensureAutoplay: true)
             recordShortViewIfNeeded(itemID: currentID)
         } catch {
@@ -2290,61 +2220,6 @@ struct ShortsView: View {
         loadError = nil
         paginationError = nil
         await loadInitial(replacingExisting: true)
-    }
-
-    private func scheduleCachedFeedRevalidation() {
-        guard canPersistRootFeedSession, feedRevalidationTask == nil else { return }
-        let generation = feedGeneration
-        let requestedFeed = feed
-        let requestedSeed = feedSessionSeed
-        let requestedIDs = feedSessionIDs
-        let requestedUserId = auth.currentUser?.id
-        let requestedContext = SessionStorage.activeContextCookieValue
-        feedRevalidationTask = Task {
-            defer {
-                if feedGeneration == generation {
-                    feedRevalidationTask = nil
-                }
-            }
-            do {
-                let refreshed = try await APIClient.shared.fetchShorts(
-                    feed: requestedFeed.rawValue,
-                    limit: requestedIDs.map { min(30, max(10, $0.count + 10)) } ?? 10,
-                    seed: requestedSeed,
-                    ids: requestedIDs,
-                    forceRefresh: true
-                )
-                guard !Task.isCancelled,
-                      feedGeneration == generation,
-                      feed == requestedFeed,
-                      feedSessionSeed == requestedSeed else { return }
-                let refreshedShorts = uniqueByID(refreshed.shorts)
-                guard !refreshedShorts.isEmpty else { return }
-                let reconciliation = ShortsFeedReconciliation.reconcile(
-                    visible: shorts,
-                    fresh: refreshedShorts,
-                    currentCursor: nextCursor,
-                    freshCursor: refreshed.nextCursor
-                )
-                guard reconciliation.shouldApply else {
-                    await playbackManager.cacheInitialFeedForNextSession(
-                        seed: requestedSeed,
-                        response: refreshed,
-                        userId: requestedUserId,
-                        context: requestedContext
-                    )
-                    return
-                }
-                shorts = reconciliation.shorts
-                nextCursor = reconciliation.nextCursor
-                emptyReason = nil
-                paginationError = nil
-                saveRootFeedSessionIfNeeded()
-                configurePlayback(ensureAutoplay: true)
-            } catch {
-                // Cached playback remains valid when silent revalidation fails.
-            }
-        }
     }
 
     private func resolveInitialShorts(
@@ -2810,6 +2685,8 @@ private struct ShortCardView: View {
     @State private var isDisliked:      Bool     = false
     @State private var isBookmarked:    Bool     = false
     @State private var likeCount:       Int
+    @State private var showEnergy:      Bool     = false
+    @State private var energyAggregate: ContentEnergyAggregate?
     @State private var isPaused:        Bool     = false
     @State private var showPauseIcon:   Bool     = false
     @State private var heartBursts:     [HeartBurst] = []
@@ -2820,6 +2697,7 @@ private struct ShortCardView: View {
     @State private var lastTap:         Date     = .distantPast
     @State private var progressTimer:   Timer?
     @State private var showSaveSheet:   Bool     = false
+    @State private var showEchoSheet:   Bool     = false
     @State private var playlist: VideoPlaylist?
     @State private var isLoadingPlaylist = false
     @State private var showPlaylistPage = false
@@ -2870,10 +2748,15 @@ private struct ShortCardView: View {
     }
 
     private var tabBarClearance: CGFloat { C.bottomMenuClearance }
+    // The floating menu extends above its general content-clearance baseline.
+    // Reserve the menu's top lip as well so the complete scrubber stays visible.
+    private var progressBottomClearance: CGFloat { tabBarClearance + 24 }
     private var playerHorizontalInset: CGFloat { 24 }
     private var progressControlHeight: CGFloat { 16 }
     private var playerVerticalGap: CGFloat { 12 }
-    private var metadataBottomClearance: CGFloat { tabBarClearance + progressControlHeight + playerVerticalGap }
+    private var metadataBottomClearance: CGFloat {
+        progressBottomClearance + progressControlHeight + playerVerticalGap
+    }
     private var actionRailWidth: CGFloat { 58 }
     private var actionRailGap: CGFloat { 12 }
     private var metadataTrailingInset: CGFloat { actionRailWidth + actionRailGap }
@@ -2897,6 +2780,9 @@ private struct ShortCardView: View {
             guard isActive else { return }
             await loadFollowStatus()
             await loadPlaylistIfNeeded()
+            energyAggregate = try? await APIClient.shared
+                .fetchContentEnergy(contentPath: "videos", id: short.id)
+                .aggregate
         }
         .onDisappear {
             teardownPlayer()
@@ -2939,11 +2825,29 @@ private struct ShortCardView: View {
         .sheet(isPresented: $showSaveSheet) {
             SaveToCollectionSheet(videoId: short.id, targetKind: .short)
         }
+        .sheet(isPresented: $showEchoSheet) {
+            EchoVibeSheet(
+                content: .video(
+                    id: short.id,
+                    title: short.title,
+                    thumbnailURL: short.thumbnailUrl,
+                    isShort: true
+                )
+            )
+        }
         .sheet(isPresented: $showComments) {
             StandardCommentsSheet(target: .video(short.id), autoFocusComposer: true) {
                 showComments = false
             }
             .id(short.id)
+        }
+        .sheet(isPresented: $showEnergy) {
+            ContentEnergySheet(kind: .video, contentID: short.id) {
+                energyAggregate = $0
+            }
+            .presentationDetents([.height(610), .large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
         }
     }
 
@@ -3031,7 +2935,7 @@ private struct ShortCardView: View {
 
                 shortsProgressBar
                     .padding(.horizontal, progressBarHorizontalInset)
-                    .padding(.bottom, tabBarClearance)
+                    .padding(.bottom, progressBottomClearance)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             }
 
@@ -3041,6 +2945,8 @@ private struct ShortCardView: View {
                     vertical: true,
                     isPaused: playbackManager.serverAdIsPaused(for: short.id),
                     isMuted: isMuted,
+                    bottomContentInset: tabBarClearance,
+                    progressBottomInset: progressBottomClearance,
                     onTogglePause: { playbackManager.toggleServerAdPause(for: short.id) },
                     onToggleMute: {
                         isMuted.toggle()
@@ -3049,7 +2955,6 @@ private struct ShortCardView: View {
                     onSkip: { playbackManager.skipServerAd(for: short.id) },
                     onOpen: { playbackManager.openServerAd(for: short.id) }
                 )
-                .padding(.bottom, tabBarClearance)
                 .zIndex(35)
             }
 
@@ -3141,30 +3046,45 @@ private struct ShortCardView: View {
     // MARK: - Action column
 
     private var actionColumn: some View {
-        let likeRed = Color(red: 1, green: 0.28, blue: 0.34)
         return VStack(alignment: .center, spacing: 18) {
-            // Like
+            // Energy is the single universal content reaction.
             actionBtn(
-                assetIcon:  isLiked ? "heart-filled" : "heart",
-                fallbackIcon: isLiked ? "heart.fill" : "heart",
-                color:      isLiked ? likeRed : .white,
-                bgColor:    isLiked ? likeRed.opacity(0.35) : .black.opacity(0.35),
-                label:      likeCount > 0 ? fmtCount(likeCount) : nil,
-                labelColor: isLiked ? likeRed : .white.opacity(0.85)
-            ) { Task { await handleLike() } }
-
-            // Dislike — matches web IcThumbDown
-            actionBtn(
-                assetIcon: "thumbs-down",
-                fallbackIcon: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown",
-                color:   isDisliked ? Color(white: 0.67) : .white,
-                bgColor: .black.opacity(0.35),
-                label:   nil
-            ) { Task { await handleDislike() } }
+                assetIcon: "energy",
+                fallbackIcon: "bolt.fill",
+                color: C.watch,
+                bgColor: C.watch.opacity(0.28),
+                label: {
+                    if let count = energyAggregate?.count, count > 0 {
+                        return fmtCount(count)
+                    }
+                    return "Add Energy"
+                }(),
+                labelColor: .white.opacity(0.9)
+            ) {
+                if auth.isAuthenticated {
+                    showEnergy = true
+                } else {
+                    NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+                }
+            }
 
             // Comment
             actionBtn(assetIcon: "message-square", fallbackIcon: "bubble.left", color: .white, bgColor: .black.opacity(0.35), label: nil) {
                 showComments = true
+            }
+
+            actionBtn(
+                assetIcon: "echo",
+                fallbackIcon: "dot.radiowaves.left.and.right",
+                color: .white,
+                bgColor: .black.opacity(0.35),
+                label: "Echo"
+            ) {
+                if auth.isAuthenticated {
+                    showEchoSheet = true
+                } else {
+                    NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+                }
             }
 
             // Share
@@ -3282,6 +3202,25 @@ private struct ShortCardView: View {
                         }
                     }
                 }
+            }
+
+            if let aggregate = energyAggregate, aggregate.count > 0 {
+                Button {
+                    if auth.isAuthenticated {
+                        showEnergy = true
+                    } else {
+                        NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+                    }
+                } label: {
+                    SocialEnergyMeter(
+                        total: Int(((aggregate.avg ?? 0) * Double(aggregate.count)).rounded()),
+                        count: aggregate.count,
+                        tags: aggregate.topTags
+                    )
+                    .frame(maxWidth: 270, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("View Short Energy")
             }
 
             if let playlist {
@@ -3482,12 +3421,10 @@ private struct ShortCardView: View {
     }
 
     private func handleDoubleTap() {
-        Task { await handleLike(force: true) }
-        // Heart burst animation
-        let burst = HeartBurst()
-        heartBursts.append(burst)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
-            heartBursts.removeAll { $0.id == burst.id }
+        if auth.isAuthenticated {
+            showEnergy = true
+        } else {
+            NotificationCenter.default.post(name: .profileTabRequested, object: nil)
         }
     }
 
@@ -3853,6 +3790,7 @@ private struct ShortsAdCardView: View {
                         topContentInset: topInset,
                         bottomContentInset: bottomInset,
                         progressHorizontalInset: progressBarHorizontalInset,
+                        progressBottomInset: 0,
                         fillVerticalContainer: true,
                         adPolicy: policy,
                         adRemoval: policy.adRemoval,
@@ -4006,14 +3944,7 @@ private struct ShortsPlaylistPage: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                Button(action: onClose) {
-                    MediaverseIcon(name: "chevron-left", fallbackSystemName: "chevron.left")
-                        .frame(width: 18, height: 18)
-                        .foregroundStyle(.white)
-                        .frame(width: 38, height: 38)
-                        .background(.white.opacity(0.10), in: Circle())
-                }
-                .buttonStyle(.plain)
+                PlatformBackButton(action: onClose)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Playlist")

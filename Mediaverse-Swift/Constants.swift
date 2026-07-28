@@ -110,6 +110,9 @@ enum C {
 
     // Semantic accent (defaults to watch)
     static let accent = Color(hex: "#00E676")
+    static let danger = Color(hex: "#FF5C6C")
+    static let warning = Color(hex: "#F2D36B")
+    static let success = Color(hex: "#6AE383")
 
     // ── Layout ───────────────────────────────────────────────────────────────
     static let cardRadius: CGFloat  = 12
@@ -152,6 +155,522 @@ enum C {
     }
 }
 
+// MARK: - WeStreem form system
+
+/// Shared form chrome derived from the upload/video panel. It keeps sheets and
+/// full-screen editors visually consistent without changing their form state or
+/// submission behavior.
+struct WestreemFormPage<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, C.pagePad)
+            .padding(.vertical, 16)
+            .padding(.bottom, 28)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .background(C.bg.ignoresSafeArea())
+        .tint(C.watch)
+    }
+}
+
+struct WestreemFormPanel<Content: View>: View {
+    let title: String?
+    let helper: String?
+    let content: Content
+
+    init(
+        _ title: String? = nil,
+        helper: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.helper = helper
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let title, !title.isEmpty {
+                Text(title.uppercased())
+                    .font(.caption2.bold())
+                    .tracking(0.45)
+                    .foregroundStyle(C.textTertiary)
+            }
+
+            content
+
+            if let helper, !helper.isEmpty {
+                Text(helper)
+                    .font(.caption)
+                    .foregroundStyle(C.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(C.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(C.borderSubtle, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+private struct WestreemFieldChrome: ViewModifier {
+    let minHeight: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .textFieldStyle(.plain)
+            .foregroundStyle(C.text)
+            .tint(C.watch)
+            .padding(.horizontal, 12)
+            .frame(minHeight: minHeight)
+            .background(Color.white.opacity(0.05))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9)
+                    .stroke(C.border, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 9))
+    }
+}
+
+private struct WestreemEditorChrome: ViewModifier {
+    let minHeight: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .scrollContentBackground(.hidden)
+            .foregroundStyle(C.text)
+            .tint(C.watch)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(minHeight: minHeight, alignment: .topLeading)
+            .background(Color.white.opacity(0.05))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9)
+                    .stroke(C.border, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 9))
+    }
+}
+
+extension View {
+    func westreemField(minHeight: CGFloat = 46) -> some View {
+        modifier(WestreemFieldChrome(minHeight: minHeight))
+    }
+
+    func westreemEditor(minHeight: CGFloat = 96) -> some View {
+        modifier(WestreemEditorChrome(minHeight: minHeight))
+    }
+
+    func westreemFormStyle() -> some View {
+        scrollContentBackground(.hidden)
+            .background(C.bg)
+            .foregroundStyle(C.text)
+            .tint(C.watch)
+            .scrollDismissesKeyboard(.interactively)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    func westreemFormRow() -> some View {
+        listRowBackground(C.surface)
+            .listRowSeparatorTint(C.borderSubtle)
+    }
+}
+
+struct WestreemFeedbackBanner: View {
+    enum Kind {
+        case error, warning, success, information
+
+        fileprivate var color: Color {
+            switch self {
+            case .error: C.danger
+            case .warning: C.warning
+            case .success: C.success
+            case .information: C.play
+            }
+        }
+
+        fileprivate var icon: String {
+            switch self {
+            case .error: "exclamationmark.triangle.fill"
+            case .warning: "exclamationmark.circle.fill"
+            case .success: "checkmark.circle.fill"
+            case .information: "info.circle.fill"
+            }
+        }
+    }
+
+    let message: String
+    var kind: Kind = .error
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: kind.icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(kind.color)
+                .padding(.top, 1)
+            Text(message)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(C.text)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(kind.color.opacity(0.10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(kind.color.opacity(0.24), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct WestreemPrimaryButtonStyle: ButtonStyle {
+    let isBusy: Bool
+
+    init(isBusy: Bool = false) {
+        self.isBusy = isBusy
+    }
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(Color.black)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 48)
+            .background(C.watch.opacity(configuration.isPressed ? 0.78 : 1))
+            .clipShape(RoundedRectangle(cornerRadius: 11))
+            .opacity(isBusy ? 0.72 : 1)
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+    }
+}
+
+struct WestreemSecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(C.text)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 46)
+            .background(C.elevated.opacity(configuration.isPressed ? 0.72 : 1))
+            .overlay(RoundedRectangle(cornerRadius: 11).stroke(C.border, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 11))
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+    }
+}
+
+/// Horizontal rails announce gesture ownership so parent section pagers can
+/// yield while a carousel is being dragged.
+struct WestreemHorizontalScrollView<Content: View>: View {
+    let showsIndicators: Bool
+    let content: Content
+
+    init(
+        showsIndicators: Bool = false,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.showsIndicators = showsIndicators
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: showsIndicators) {
+            content
+        }
+        .simultaneousGesture(horizontalOwnershipGesture)
+    }
+
+    private var horizontalOwnershipGesture: some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .local)
+            .onChanged { value in
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                NotificationCenter.default.post(
+                    name: .horizontalCarouselInteractionChanged,
+                    object: true
+                )
+            }
+            .onEnded { _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    NotificationCenter.default.post(
+                        name: .horizontalCarouselInteractionChanged,
+                        object: false
+                    )
+                }
+            }
+    }
+}
+
+struct WestreemImagePositionEditor: View {
+    let image: UIImage
+    let aspectRatio: CGFloat
+    let title: String
+    let onCancel: () -> Void
+    let onApply: (UIImage) -> Void
+
+    @State private var zoom: CGFloat = 1
+    @State private var committedZoom: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var committedOffset: CGSize = .zero
+    @State private var actualViewportSize: CGSize = .zero
+    @State private var isDragging = false
+    @State private var isPinching = false
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                C.bg.ignoresSafeArea()
+                VStack(spacing: 18) {
+                    Label("Drag to position · Pinch to zoom", systemImage: "hand.draw")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(C.textMuted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    GeometryReader { proxy in
+                        let width = min(proxy.size.width, 420)
+                        let height = width / max(aspectRatio, 0.1)
+                        positionedPreview(width: width, height: height)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .frame(height: aspectRatio < 1 ? 460 : 280)
+
+                    HStack {
+                        Image(systemName: "minus.magnifyingglass")
+                        Slider(value: $zoom, in: 1...3) { editing in
+                            if !editing {
+                                committedZoom = zoom
+                                committedOffset = offset
+                            }
+                        }
+                            .tint(C.watch)
+                            .onChange(of: zoom) { _, _ in
+                                offset = constrainedOffset(offset, viewport: appliedViewportSize)
+                            }
+                        Image(systemName: "plus.magnifyingglass")
+                    }
+                    .foregroundStyle(C.textMuted)
+
+                    Button {
+                        C.lightHaptic()
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                            zoom = 1
+                            committedZoom = 1
+                            offset = .zero
+                            committedOffset = .zero
+                        }
+                    } label: {
+                        Label("Reset position", systemImage: "arrow.counterclockwise")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(C.textMuted)
+
+                    Spacer(minLength: 0)
+                }
+                .padding(C.pagePad)
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Apply") {
+                        onApply(croppedImage(viewport: appliedViewportSize))
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+        }
+    }
+
+    private var fallbackViewportSize: CGSize {
+        let width: CGFloat = 420
+        return CGSize(width: width, height: width / max(aspectRatio, 0.1))
+    }
+
+    private var appliedViewportSize: CGSize {
+        actualViewportSize.width > 0 && actualViewportSize.height > 0
+            ? actualViewportSize
+            : fallbackViewportSize
+    }
+
+    private func positionedPreview(width: CGFloat, height: CGFloat) -> some View {
+        ZStack {
+            Color.black
+            Image(uiImage: normalizedImage)
+                .resizable()
+                .scaledToFill()
+                .frame(width: width, height: height)
+                .scaleEffect(zoom)
+                .offset(offset)
+                .simultaneousGesture(
+                    DragGesture()
+                        .onChanged { value in
+                            if !isDragging {
+                                isDragging = true
+                                UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.45)
+                            }
+                            offset = constrainedOffset(
+                                CGSize(
+                                    width: committedOffset.width + value.translation.width,
+                                    height: committedOffset.height + value.translation.height
+                                ),
+                                viewport: CGSize(width: width, height: height)
+                            )
+                        }
+                        .onEnded { _ in
+                            isDragging = false
+                            committedOffset = offset
+                            UISelectionFeedbackGenerator().selectionChanged()
+                        }
+                )
+                .simultaneousGesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            if !isPinching {
+                                isPinching = true
+                                UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.45)
+                            }
+                            zoom = min(max(committedZoom * value, 1), 3)
+                            offset = constrainedOffset(offset, viewport: CGSize(width: width, height: height))
+                        }
+                        .onEnded { _ in
+                            isPinching = false
+                            committedZoom = zoom
+                            committedOffset = offset
+                            UISelectionFeedbackGenerator().selectionChanged()
+                        }
+                )
+        }
+        .frame(width: width, height: height)
+        .onAppear {
+            actualViewportSize = CGSize(width: width, height: height)
+        }
+        .onChange(of: CGSize(width: width, height: height)) { _, size in
+            actualViewportSize = size
+            offset = constrainedOffset(offset, viewport: size)
+            committedOffset = offset
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(C.watch, lineWidth: 2)
+        }
+        .clipped()
+    }
+
+    private var normalizedImage: UIImage {
+        guard image.imageOrientation != .up else { return image }
+        let renderer = UIGraphicsImageRenderer(size: image.size)
+        return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: image.size)) }
+    }
+
+    private func constrainedOffset(_ proposed: CGSize, viewport: CGSize) -> CGSize {
+        let imageSize = normalizedImage.size
+        let baseScale = max(viewport.width / imageSize.width, viewport.height / imageSize.height)
+        let displayed = CGSize(
+            width: imageSize.width * baseScale * zoom,
+            height: imageSize.height * baseScale * zoom
+        )
+        let maxX = max(0, (displayed.width - viewport.width) / 2)
+        let maxY = max(0, (displayed.height - viewport.height) / 2)
+        return CGSize(
+            width: min(max(proposed.width, -maxX), maxX),
+            height: min(max(proposed.height, -maxY), maxY)
+        )
+    }
+
+    private func croppedImage(viewport: CGSize) -> UIImage {
+        guard let cgImage = normalizedImage.cgImage else { return image }
+        let imageSize = CGSize(width: cgImage.width, height: cgImage.height)
+        let baseScale = max(viewport.width / imageSize.width, viewport.height / imageSize.height)
+        let effectiveScale = baseScale * zoom
+        let displayedSize = CGSize(
+            width: imageSize.width * effectiveScale,
+            height: imageSize.height * effectiveScale
+        )
+        let originX = (displayedSize.width - viewport.width) / 2 - offset.width
+        let originY = (displayedSize.height - viewport.height) / 2 - offset.height
+        let cropRect = CGRect(
+            x: originX / effectiveScale,
+            y: originY / effectiveScale,
+            width: viewport.width / effectiveScale,
+            height: viewport.height / effectiveScale
+        ).intersection(CGRect(origin: .zero, size: imageSize)).integral
+        guard cropRect.width > 0, cropRect.height > 0,
+              let cropped = cgImage.cropping(to: cropRect) else { return normalizedImage }
+        return UIImage(cgImage: cropped, scale: normalizedImage.scale, orientation: .up)
+    }
+}
+
+/// Canonical in-content back control used by players and immersive detail pages.
+/// Navigation behavior remains owned by the presenting screen.
+struct PlatformBackButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(.black.opacity(0.46))
+                    .overlay {
+                        Circle().stroke(.white.opacity(0.16), lineWidth: 1)
+                    }
+
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Back")
+    }
+}
+
+private struct HorizontalCarouselGestureOwnership: ViewModifier {
+    func body(content: Content) -> some View {
+        content.simultaneousGesture(
+            DragGesture(minimumDistance: 8, coordinateSpace: .local)
+                .onChanged { value in
+                    guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                    NotificationCenter.default.post(
+                        name: .horizontalCarouselInteractionChanged,
+                        object: true
+                    )
+                }
+                .onEnded { _ in
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                        NotificationCenter.default.post(
+                            name: .horizontalCarouselInteractionChanged,
+                            object: false
+                        )
+                    }
+                }
+        )
+    }
+}
+
+extension View {
+    func ownsHorizontalCarouselGesture() -> some View {
+        modifier(HorizontalCarouselGestureOwnership())
+    }
+}
+
 extension Color {
     init(hex: String) {
         let h = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
@@ -172,6 +691,7 @@ extension Notification.Name {
     static let userFollowChanged = Notification.Name("userFollowChanged")
     static let uploadRequested = Notification.Name("uploadRequested")
     static let uploadEligibilityChanged = Notification.Name("uploadEligibilityChanged")
+    static let rippleCreated = Notification.Name("rippleCreated")
     static let profileTabRequested = Notification.Name("profileTabRequested")
     static let exploreSectionRequested = Notification.Name("exploreSectionRequested")
     static let shortsTabRequested = Notification.Name("shortsTabRequested")
@@ -181,4 +701,5 @@ extension Notification.Name {
     static let mainTabScrollToTopRequested = Notification.Name("mainTabScrollToTopRequested")
     static let notificationCountsDidChange = Notification.Name("notificationCountsDidChange")
     static let sessionExpired = Notification.Name("sessionExpired")
+    static let horizontalCarouselInteractionChanged = Notification.Name("horizontalCarouselInteractionChanged")
 }

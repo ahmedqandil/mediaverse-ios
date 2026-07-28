@@ -4,11 +4,21 @@ struct MediaverseTabItem: Identifiable, Equatable {
     let id: String
     let label: String
     let count: Int?
+    let iconName: String?
+    let fallbackSystemName: String?
 
-    init(id: String, label: String, count: Int? = nil) {
+    init(
+        id: String,
+        label: String,
+        count: Int? = nil,
+        iconName: String? = nil,
+        fallbackSystemName: String? = nil
+    ) {
         self.id = id
         self.label = label
         self.count = count
+        self.iconName = iconName
+        self.fallbackSystemName = fallbackSystemName
     }
 }
 
@@ -19,6 +29,7 @@ struct MediaverseUnderlineTabStrip: View {
     var horizontalPadding: CGFloat = C.pagePad
     var verticalPadding: CGFloat = 12
     var background: Color = C.bg
+    var loadingID: String? = nil
     let onSelect: (String) -> Void
 
     var body: some View {
@@ -28,12 +39,25 @@ struct MediaverseUnderlineTabStrip: View {
                     onSelect(item.id)
                 } label: {
                     HStack(spacing: 4) {
+                        if let iconName = item.iconName {
+                            MediaverseIcon(
+                                name: iconName,
+                                fallbackSystemName: item.fallbackSystemName ?? "circle"
+                            )
+                            .frame(width: 16, height: 16)
+                        }
                         Text(item.label)
                             .font(.subheadline.weight(isSelected(item) ? .semibold : .regular))
                         if let count = item.count, count > 0 {
                             Text("(\(count))")
                                 .font(.caption2)
                                 .foregroundStyle(C.textMuted)
+                        }
+                        if loadingID == item.id {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .tint(C.watch)
+                                .accessibilityHidden(true)
                         }
                     }
                     .foregroundStyle(isSelected(item) ? C.text : C.textMuted)
@@ -52,6 +76,8 @@ struct MediaverseUnderlineTabStrip: View {
                 }
                 .frame(maxWidth: fillsWidth ? .infinity : nil)
                 .buttonStyle(.plain)
+                .disabled(loadingID == item.id)
+                .id(item.id)
             }
 
             if !fillsWidth {

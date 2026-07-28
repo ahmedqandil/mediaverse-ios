@@ -1064,7 +1064,7 @@ struct ContextUser: Codable {
 // ── Upload ────────────────────────────────────────────────────────────────────
 
 struct UploadContext: Codable, Identifiable {
-    let type: String          // "channel" | "show"
+    let type: String          // "channel" | "show" | "user" (Flashes only)
     let id: String
     let name: String
     var avatarUrl: String? = nil
@@ -1077,6 +1077,7 @@ struct UploadContext: Codable, Identifiable {
 struct UploadContextsResponse: Codable {
     let channels: [UploadContext]
     let shows: [UploadContext]
+    let personal: UploadContext?
 }
 
 struct UploadPlaylistOption: Codable, Identifiable {
@@ -1149,6 +1150,26 @@ struct FullProfile: Codable {
     let role: String?
     let handle: String?
     let channel: ProfileChannel?
+}
+
+struct PartnerApplicationStatus: Decodable, Equatable {
+    let status: String
+    let message: String?
+    let notes: String?
+    let submittedAt: String?
+    let reviewedAt: String?
+
+    var normalizedStatus: String {
+        status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    static let none = PartnerApplicationStatus(
+        status: "none",
+        message: nil,
+        notes: nil,
+        submittedAt: nil,
+        reviewedAt: nil
+    )
 }
 
 struct ProfileChannel: Codable, Identifiable {
@@ -1847,17 +1868,110 @@ struct SearchResultVideo: Codable, Identifiable {
     let channel: ChannelStub?
 }
 
+struct SearchResultPerson: Decodable, Identifiable {
+    let id: String
+    let name: String?
+    let handle: String?
+    let image: String?
+    let bio: String?
+}
+
+struct SearchResultVibe: Decodable, Identifiable {
+    let id: String
+    let slug: String
+    let name: String
+    let description: String?
+    let avatarUrl: String?
+    let followerCount: Int?
+    let postCount: Int?
+}
+
+struct SearchResultRippleAuthor: Decodable {
+    let name: String?
+    let handle: String?
+    let image: String?
+}
+
+struct SearchResultRippleClub: Decodable {
+    let name: String
+    let slug: String
+}
+
+struct SearchResultRipple: Decodable, Identifiable {
+    let id: String
+    let body: String?
+    let energyCount: Int?
+    let commentCount: Int?
+    let author: SearchResultRippleAuthor
+    let club: SearchResultRippleClub
+    let href: String?
+    let imageUrl: String?
+}
+
+struct SearchResultCollectionOwner: Decodable {
+    let name: String?
+    let handle: String?
+    let image: String?
+}
+
+struct SearchResultCollection: Decodable, Identifiable {
+    struct Count: Decodable {
+        let items: Int?
+        let followers: Int?
+    }
+
+    let id: String
+    let title: String
+    let description: String?
+    let type: String?
+    let user: SearchResultCollectionOwner?
+    let count: Count?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, description, type, user
+        case count = "_count"
+    }
+}
+
 struct SearchResults: Decodable {
     let channels: [SearchResultChannel]?
     let shows: [SearchResultShow]?
     let episodes: [SearchResultEpisode]?
     let videos: [SearchResultVideo]?
+    let people: [SearchResultPerson]?
+    let vibes: [SearchResultVibe]?
+    let ripples: [SearchResultRipple]?
+    let collections: [SearchResultCollection]?
+
+    init(
+        channels: [SearchResultChannel]? = nil,
+        shows: [SearchResultShow]? = nil,
+        episodes: [SearchResultEpisode]? = nil,
+        videos: [SearchResultVideo]? = nil,
+        people: [SearchResultPerson]? = nil,
+        vibes: [SearchResultVibe]? = nil,
+        ripples: [SearchResultRipple]? = nil,
+        collections: [SearchResultCollection]? = nil
+    ) {
+        self.channels = channels
+        self.shows = shows
+        self.episodes = episodes
+        self.videos = videos
+        self.people = people
+        self.vibes = vibes
+        self.ripples = ripples
+        self.collections = collections
+    }
 
     var isEmpty: Bool {
         (channels?.isEmpty ?? true)
             && (shows?.isEmpty ?? true)
             && (episodes?.isEmpty ?? true)
             && (videos?.isEmpty ?? true)
+            && (people?.isEmpty ?? true)
+            && (vibes?.isEmpty ?? true)
+            && (ripples?.isEmpty ?? true)
+            && (collections?.isEmpty ?? true)
     }
 
     var totalCount: Int {
@@ -1865,6 +1979,10 @@ struct SearchResults: Decodable {
             + (shows?.count ?? 0)
             + (episodes?.count ?? 0)
             + (videos?.count ?? 0)
+            + (people?.count ?? 0)
+            + (vibes?.count ?? 0)
+            + (ripples?.count ?? 0)
+            + (collections?.count ?? 0)
     }
 }
 
@@ -1874,6 +1992,49 @@ struct LikeVideoResponse: Codable {
     let likes: Int
     let dislikes: Int
     let userLike: String?   // "like" | "dislike" | null
+}
+
+struct ContentEnergySelection: Decodable {
+    let overall: Int
+    let tags: [String]
+    let review: String?
+}
+
+struct ContentEnergyAggregate: Decodable {
+    let avg: Double?
+    let count: Int
+    let distribution: [String: Int]?
+    let topTags: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case avg, count, distribution, topTags
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        avg = try values.decodeIfPresent(Double.self, forKey: .avg)
+        count = try values.decodeIfPresent(Int.self, forKey: .count) ?? 0
+        distribution = try values.decodeIfPresent([String: Int].self, forKey: .distribution)
+        if let strings = try? values.decode([String].self, forKey: .topTags) {
+            topTags = strings
+        } else if let keywords = try? values.decode([ContentEnergyKeyword].self, forKey: .topTags) {
+            topTags = keywords.map(\.tag)
+        } else if let counts = try? values.decode([String: Int].self, forKey: .topTags) {
+            topTags = counts.filter { $0.value > 0 }.sorted { $0.value > $1.value }.map(\.key)
+        } else {
+            topTags = []
+        }
+    }
+}
+
+private struct ContentEnergyKeyword: Decodable {
+    let tag: String
+    let count: Int?
+}
+
+struct ContentEnergyResponse: Decodable {
+    let userRating: ContentEnergySelection?
+    let aggregate: ContentEnergyAggregate
 }
 
 // ── Posts (clip reactions) ────────────────────────────────────────────────────
@@ -2172,6 +2333,11 @@ extension ContentItem {
     }
 
     var appRoute: AppRoute {
+        if let href = metaString("href"),
+           let route = AppRoute.route(link: href) {
+            return route
+        }
+
         let normalizedEntityType = entityType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let normalizedContentType = (metaString("showType") ?? metaString("type") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2190,12 +2356,22 @@ extension ContentItem {
         switch normalizedEntityType {
         case "show":
             return .show(entityId)
+        case "season":
+            return .showSeason(showId: metaString("showId") ?? entityId, seasonId: entityId)
         case "short":
             return .short(entityId, showId: metaString("showId"), channelId: metaString("channelId"))
         case "episode":
             return .episode(entityId)
         case "channel":
             return .channel(metaString("channelHandle") ?? metaString("handle") ?? entityId)
+        case "ripple":
+            return .ripple(entityId)
+        case "person":
+            return .atmo(metaString("handle") ?? entityId)
+        case "vibe":
+            return .vibe(metaString("slug") ?? entityId)
+        case "topic":
+            return .search(metaString("value") ?? title)
         default:
             return .media(id: entityId, type: metaString("type") ?? entityType, showId: metaString("showId"), channelId: metaString("channelId"))
         }

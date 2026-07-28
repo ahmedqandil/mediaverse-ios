@@ -526,6 +526,12 @@ private struct CardPressStyle: ButtonStyle {
 /// Mirrors the web homepage: hero → continue watching → feed with interleaved
 /// carousels (Shows every 3 videos, then Shorts, then Microdramas).
 struct HomeView: View {
+    enum HeaderStyle {
+        case home
+        case videos
+    }
+
+    var headerStyle: HeaderStyle = .home
 
     // MARK: State
 
@@ -630,15 +636,32 @@ struct HomeView: View {
         }
     }
 
-    private var activeChannelUploadContext: UploadContext? {
+    private var activeFlashPublisher: UploadContext? {
         guard auth.isAuthenticated else { return nil }
-        guard let activeContext, activeContext.type == "channel" else { return nil }
+        guard let activeContext else { return nil }
+        let type = activeContext.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard ["user", "channel", "show"].contains(type) else { return nil }
+        let publisherID: String
+        switch type {
+        case "channel":
+            publisherID = activeContext.channelId ?? activeContext.id
+        case "show":
+            publisherID = activeContext.showId ?? activeContext.id
+        default:
+            publisherID = activeContext.id
+        }
+        let publisherAvatar = activeContext.avatarUrl
+            ?? activeContext.image
+            ?? (type == "user" ? auth.currentUser?.image : nil)
         return UploadContext(
-            type: "channel",
-            id: activeContext.channelId ?? activeContext.id,
+            type: type,
+            id: publisherID,
             name: activeContext.name,
-            avatarUrl: activeContext.avatarUrl ?? activeContext.image,
-            networkName: nil
+            avatarUrl: publisherAvatar,
+            channelId: activeContext.channelId,
+            showId: activeContext.showId,
+            networkId: activeContext.networkId,
+            networkName: activeContext.networkName
         )
     }
 
@@ -693,7 +716,7 @@ struct HomeView: View {
     }
 
     private var homeContentTopInset: CGFloat {
-        52
+        headerStyle == .home ? 52 : 0
     }
 
     private func canReplaceMiniPlayer(with video: FeedVideo) -> Bool {
@@ -844,10 +867,23 @@ struct HomeView: View {
                     .id("home-feed")
             }
 
-            homeFloatingHeader
+            if headerStyle == .home {
+                homeFloatingHeader
+            }
         }
+        .navigationTitle(headerStyle == .videos ? "Videos" : "")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .navigationBar)
+        .toolbar(headerStyle == .home ? .hidden : .visible, for: .navigationBar)
+        .toolbar {
+            if headerStyle == .videos {
+                ToolbarItem(placement: .principal) {
+                    Text("Videos")
+                        .font(.system(size: 17, weight: .bold))
+                        .fontDesign(.rounded)
+                        .foregroundStyle(C.text)
+                }
+            }
+        }
         .sheet(isPresented: $searchPresented) { SearchView() }
         .sheet(isPresented: $notificationsPresented) {
             NotificationsView { unreadCount in
@@ -855,7 +891,7 @@ struct HomeView: View {
             }
         }
         .fullScreenCover(isPresented: $isCreatingStory) {
-            StoryCreatorCoordinator(preselectedPublisher: activeChannelUploadContext) {
+            StoryCreatorCoordinator(preselectedPublisher: activeFlashPublisher) {
                 isCreatingStory = false
                 Task { await storiesRepository.refresh(force: true) }
             }
@@ -1116,9 +1152,9 @@ struct HomeView: View {
                 await reloadForContextChange()
                 await loadNotificationCount()
             }
-            .tint(.clear)
+            .tint(headerStyle == .videos ? C.watch : .clear)
             .overlay(alignment: .top) {
-                if isRefreshingHome {
+                if isRefreshingHome && headerStyle == .home {
                     HomeRefreshIndicator()
                         .padding(.top, 12)
                         .transition(.move(edge: .top).combined(with: .opacity))
@@ -1139,7 +1175,7 @@ struct HomeView: View {
 
     @ViewBuilder
     private var feedBodyContent: some View {
-        if pageListings.isEmpty && feed.isEmpty && featuredShows.isEmpty && continueItems.isEmpty && storiesRepository.groups.isEmpty && activeChannelUploadContext == nil {
+        if pageListings.isEmpty && feed.isEmpty && featuredShows.isEmpty && continueItems.isEmpty && storiesRepository.groups.isEmpty && activeFlashPublisher == nil {
             emptyState
         } else if !pageListings.isEmpty {
             ForEach(pageListings) { listing in
@@ -1221,7 +1257,7 @@ struct HomeView: View {
         if platformConfig.storiesFeedEnabled && auth.isAuthenticated {
             StoryTrayView(
                 repository: storiesRepository,
-                activeChannel: activeChannelUploadContext,
+                activeChannel: activeFlashPublisher,
                 onAddStory: { isCreatingStory = true }
             ) { group in
                 presentStoryViewer(groupId: group.id)
@@ -1801,13 +1837,15 @@ struct HomeView: View {
         }
 
         do {
-            async let pageTask = CurationManager.shared.fetchPage(key: "home")
-            async let feedTask = APIClient.shared.fetchFeed()
+            async let pageTask: AssembledPage? = try? CurationManager.shared.fetchPage(key: "videos")
+            async let feedTask: FeedResponse? = try? APIClient.shared.fetchFeed()
 
-            let page = try await pageTask
-            let feedResponse = try? await feedTask
+            let (page, feedResponse) = await (pageTask, feedTask)
+            guard page != nil || feedResponse != nil else {
+                throw APIError.invalidResponse("home curation and feed unavailable")
+            }
             guard activeHomeLoadID == loadID, !Task.isCancelled else { return }
-            let activeListings = page.activeListings
+            let activeListings = page?.activeListings ?? []
             let feedListing = activeListings.first { $0.normalizedTemplateType == "video_feed" }
             let hero = activeListings.first { $0.normalizedTemplateType == "hero" }
             let curationVideos = (feedListing?.items ?? []).map(\.asFeedVideo)
@@ -2399,6 +2437,7 @@ struct HomeVideoCard: View {
     let onPreviewPaused: () -> Void
     let openMediaAction: () -> Void
     let replaceMediaAction: ((CGRect?) -> Void)?
+    var horizontalContentInset: CGFloat = 0
     @State private var thumbnailGlobalFrame: CGRect?
     @State private var previewScrubTime: Double?
     @State private var showPreviewVideo = false
@@ -2467,7 +2506,7 @@ struct HomeVideoCard: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, C.pagePad)
+            .padding(.horizontal, horizontalContentInset > 0 ? horizontalContentInset : C.pagePad)
         }
         .contentShape(Rectangle())
         .background {
@@ -2664,6 +2703,7 @@ struct HomeVideoCard: View {
         }
         .frame(height: video.homeFeedCardHeight(for: UIScreen.main.bounds.width))
         .frame(maxWidth: .infinity)
+        .padding(.horizontal, horizontalContentInset)
         .clipped()
         .onDisappear {
             let wasActive = activePreviewVideoId == video.id || previewManager.activeVideoId == video.id

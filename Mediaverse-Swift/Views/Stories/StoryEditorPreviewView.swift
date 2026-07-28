@@ -42,6 +42,12 @@ private enum StoryEditorTool: String, Identifiable, Equatable {
     var id: String { rawValue }
 }
 
+private enum StoryEditorSecondaryPresentation {
+    case musicImporter
+    case mediaPicker
+    case giphyPicker
+}
+
 private enum StoryStickerTool: String, CaseIterable, Identifiable {
     case link
     case location
@@ -158,11 +164,11 @@ private enum StoryStickerComposerKind: Identifiable, Equatable {
 
     var guideText: String {
         switch self {
-        case .link: return "Add a tappable link sticker to your story."
-        case .location: return "Add a place sticker that viewers can see on your story."
+        case .link: return "Add a tappable link sticker to your flash."
+        case .location: return "Add a place sticker that viewers can see on your flash."
         case .poll: return "Add a poll question with two to four choices."
         case .quiz: return "Add a quiz question, choices, and the correct answer."
-        case .question: return "Ask viewers to send a reply to your story."
+        case .question: return "Ask viewers to send a reply to your flash."
         case .countdown: return "Add a countdown sticker with a future end time."
         }
     }
@@ -360,6 +366,7 @@ struct StoryEditorPreviewView: View {
     @State private var isImportingMusic = false
     @State private var isImportingMediaOverlay = false
     @State private var isShowingGiphyPicker = false
+    @State private var pendingSecondaryPresentation: StoryEditorSecondaryPresentation?
     @State private var mediaOverlaySelection: PhotosPickerItem?
     @State private var isDrawingPresented = false
     @State private var drawing = PKDrawing()
@@ -393,6 +400,7 @@ struct StoryEditorPreviewView: View {
     @State private var canvasGestureVisualScale: CGFloat = 1
     @State private var canvasGestureVisualRotation: Angle = .zero
     @State private var canvasGestureVisualOffset: CGSize = .zero
+    @State private var canvasGestureResetAfterRender = false
     @State private var filterBaselineClip: VideoClip?
     @State private var lookSection: StoryLookSection = .filters
     @State private var selectedBeautyControl: StoryBeautyControl = .smooth
@@ -525,18 +533,6 @@ struct StoryEditorPreviewView: View {
                         accessibilityReduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.86),
                         value: activeTool?.id
                     )
-                    .overlay {
-                        if activeTool != nil,
-                           !isDrawingPresented,
-                           !isTextComposerPresented,
-                           editor.selectedOverlayID == nil {
-                            CanvasMediaTransformGestureLayer(
-                                onBegin: beginCanvasMediaTransform,
-                                onChange: updateCanvasMediaTransform,
-                                onEnd: finishCanvasMediaTransform
-                            )
-                        }
-                    }
             }
 
             if isDrawingPresented {
@@ -662,6 +658,7 @@ struct StoryEditorPreviewView: View {
                 clearLiveToolBaselines()
                 toolSheetDismissShouldCancel = true
             }
+            presentPendingSecondaryPresentation()
         }) { tool in
             toolSheet(tool)
                 .presentationDetents([.height(toolSheetHeight(for: tool)), .medium])
@@ -822,11 +819,6 @@ struct StoryEditorPreviewView: View {
                             Label("Draw", systemImage: "pencil.tip")
                         }
                         Button {
-                            openTool(.transform)
-                        } label: {
-                            Label("Move and resize", systemImage: "arrow.up.left.and.arrow.down.right")
-                        }
-                        Button {
                             openTool(.clip)
                         } label: {
                             Label("Edit clips", systemImage: "film.stack")
@@ -840,8 +832,7 @@ struct StoryEditorPreviewView: View {
                         }
                         Button {
                             stopPlayback()
-                            activeTool = nil
-                            isImportingMediaOverlay = true
+                            requestSecondaryPresentation(.mediaPicker)
                         } label: {
                             Label("Add photo or video", systemImage: "photo.on.rectangle.angled")
                         }
@@ -849,7 +840,7 @@ struct StoryEditorPreviewView: View {
                             stopPlayback()
                             onBack()
                         } label: {
-                            Label("Retake story", systemImage: "camera.rotate")
+                            Label("Retake flash", systemImage: "camera.rotate")
                         }
                     } label: {
                         creationToolbarLabel("More", systemImage: "ellipsis")
@@ -922,7 +913,7 @@ struct StoryEditorPreviewView: View {
 
     private func shareStory() {
         guard canShareStory else {
-            renderError = "Stories can be up to 10 seconds. Delete or adjust a clip before sharing."
+            renderError = "Flashes can be up to 10 seconds. Delete or adjust a clip before sharing."
             return
         }
         stopPlayback()
@@ -1779,6 +1770,7 @@ struct StoryEditorPreviewView: View {
         canvasGestureVisualScale = 1
         canvasGestureVisualRotation = .zero
         canvasGestureVisualOffset = .zero
+        canvasGestureResetAfterRender = false
     }
 
     private func updateCanvasMediaTransform(
@@ -1814,12 +1806,21 @@ struct StoryEditorPreviewView: View {
         }
         editor.previewSelectedClipTransform(transform)
         canvasTransformBaselineClip = nil
-        canvasGestureVisualScale = 1
-        canvasGestureVisualRotation = .zero
-        canvasGestureVisualOffset = .zero
+        if hasVideoPreviewClip {
+            resetCanvasGestureVisualTransform()
+        } else {
+            canvasGestureResetAfterRender = true
+        }
         Task {
             await editor.commitSelectedClipTransform(transform, baselineClip: baseline)
         }
+    }
+
+    private func resetCanvasGestureVisualTransform() {
+        canvasGestureVisualScale = 1
+        canvasGestureVisualRotation = .zero
+        canvasGestureVisualOffset = .zero
+        canvasGestureResetAfterRender = false
     }
 
     @ViewBuilder
@@ -1924,7 +1925,7 @@ struct StoryEditorPreviewView: View {
     private func toolDrawerTitle(_ tool: StoryEditorTool) -> String {
         switch tool {
         case .clip: return "Clip"
-        case .transform: return "Move & Resize"
+        case .transform: return "Position"
         case .look: return "Look"
         case .beauty: return "Beauty"
         case .audio: return "Audio"
@@ -1936,9 +1937,14 @@ struct StoryEditorPreviewView: View {
 
     private var mediaTransformControls: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label("Drag to move", systemImage: "hand.draw")
-            Label("Pinch to zoom", systemImage: "arrow.up.left.and.arrow.down.right")
-            Label("Twist two fingers to rotate", systemImage: "rotate.right")
+            Text("Position the selected photo or video directly on the canvas.")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white.opacity(0.68))
+            HStack(spacing: 18) {
+                Label("Drag", systemImage: "hand.draw")
+                Label("Pinch", systemImage: "arrow.up.left.and.arrow.down.right")
+                Label("Rotate", systemImage: "rotate.right")
+            }
         }
         .font(.system(size: 13, weight: .semibold))
         .foregroundStyle(.white.opacity(0.82))
@@ -1993,7 +1999,7 @@ struct StoryEditorPreviewView: View {
 
     private var overlayTimingControls: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Choose when this item appears in the story.")
+            Text("Choose when this item appears in the flash.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(C.textMuted)
 
@@ -2054,7 +2060,7 @@ struct StoryEditorPreviewView: View {
                 .tint(C.watch)
             }
 
-            Button("Show for full story") {
+            Button("Show for full flash") {
                 overlayTimingStart = 0
                 overlayTimingDuration = duration
             }
@@ -2525,7 +2531,7 @@ struct StoryEditorPreviewView: View {
         let stack = clip.resolvedEffectStack
         let selected = stack.creativeEffects.first ?? .none
         return VStack(alignment: .leading, spacing: 12) {
-            Text("Creative effects are rendered identically in this preview and the published story.")
+            Text("Creative effects are rendered identically in this preview and the published flash.")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(C.textTertiary)
 
@@ -2580,6 +2586,7 @@ struct StoryEditorPreviewView: View {
             guard let clip = editor.selectedClip else { return }
             beginLookPreview(from: clip)
             editor.previewSelectedClipBeauty(settings)
+            schedulePreviewRender(after: 0)
         } label: {
             Text(title)
                 .font(.system(size: 11, weight: .semibold))
@@ -2601,6 +2608,7 @@ struct StoryEditorPreviewView: View {
         update(&beauty)
         beauty.activateForConfiguredControls()
         editor.previewSelectedClipBeauty(beauty)
+        schedulePreviewRender(after: 0)
     }
 
     private func adjustmentSlider(
@@ -2867,7 +2875,7 @@ struct StoryEditorPreviewView: View {
                 }
                 Spacer()
                 Button {
-                    isImportingMusic = true
+                    requestSecondaryPresentation(.musicImporter)
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 13, weight: .bold))
@@ -2953,7 +2961,7 @@ struct StoryEditorPreviewView: View {
             }
 
             if !editor.project.tracks.overlays.isEmpty {
-                Text("On this story")
+                Text("On this flash")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(C.textMuted)
                 overlayStrip
@@ -2967,8 +2975,7 @@ struct StoryEditorPreviewView: View {
         case .link:
             beginStickerComposer(.link)
         case .gif:
-            activeTool = nil
-            isShowingGiphyPicker = true
+            requestSecondaryPresentation(.giphyPicker)
         case .mention:
             activeTool = nil
             beginMentionComposer()
@@ -2982,6 +2989,38 @@ struct StoryEditorPreviewView: View {
             beginStickerComposer(.question)
         case .countdown:
             beginStickerComposer(.countdown)
+        }
+    }
+
+    private func requestSecondaryPresentation(_ presentation: StoryEditorSecondaryPresentation) {
+        stopPlayback()
+        guard activeTool != nil else {
+            presentSecondaryPresentation(presentation)
+            return
+        }
+
+        pendingSecondaryPresentation = presentation
+        toolSheetDismissShouldCancel = false
+        Task {
+            await commitLiveToolPreview()
+            activeTool = nil
+        }
+    }
+
+    private func presentPendingSecondaryPresentation() {
+        guard let presentation = pendingSecondaryPresentation else { return }
+        pendingSecondaryPresentation = nil
+        presentSecondaryPresentation(presentation)
+    }
+
+    private func presentSecondaryPresentation(_ presentation: StoryEditorSecondaryPresentation) {
+        switch presentation {
+        case .musicImporter:
+            isImportingMusic = true
+        case .mediaPicker:
+            isImportingMediaOverlay = true
+        case .giphyPicker:
+            isShowingGiphyPicker = true
         }
     }
 
@@ -3518,6 +3557,7 @@ struct StoryEditorPreviewView: View {
                     targets: targets,
                     selectedOverlayID: editor.selectedOverlayID,
                     previewScale: previewScale,
+                    allowsMediaTransform: activeTool == nil || activeTool == .transform,
                     onTap: { overlay in
                         if let overlay {
                             handleOverlayTap(overlay)
@@ -3554,7 +3594,10 @@ struct StoryEditorPreviewView: View {
                         isOverlayInteracting = false
                         overlayAlignmentGuide = OverlayAlignmentGuide()
                         Task { await editor.persistInteractiveOverlayEdits() }
-                    }
+                    },
+                    onMediaBegin: beginCanvasMediaTransform,
+                    onMediaChange: updateCanvasMediaTransform,
+                    onMediaEnd: finishCanvasMediaTransform
                 )
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .zIndex(20_000)
@@ -3627,7 +3670,7 @@ struct StoryEditorPreviewView: View {
                     .scaleEffect(state.transform.scale * interactiveStickerScale)
                     .rotationEffect(.radians(state.transform.rotation))
                     .allowsHitTesting(false)
-                    .accessibilityLabel("Story overlay")
+                    .accessibilityLabel("Flash overlay")
             )
         }
 
@@ -3641,7 +3684,7 @@ struct StoryEditorPreviewView: View {
                 .rotationEffect(.radians(state.transform.rotation))
                 .offset(x: CGFloat(state.transform.tx) * previewScale, y: -CGFloat(state.transform.ty) * previewScale)
                 .allowsHitTesting(false)
-                .accessibilityLabel("Story overlay")
+                .accessibilityLabel("Flash overlay")
         )
     }
 
@@ -4411,12 +4454,17 @@ struct StoryEditorPreviewView: View {
                         .resizable()
                         .scaledToFill()
                 } else if let previewPlayer {
-                    StoryEditorPlayerView(player: previewPlayer)
-                        .onAppear {
-                            previewPlayer.play()
-                            isPlaying = true
-                        }
-                        .storyPreviewColorGrade(videoPreviewColorGrade)
+                    GeometryReader { proxy in
+                        StoryEditorPlayerView(player: previewPlayer)
+                            .scaleEffect(selectedClipPreviewScale)
+                            .rotationEffect(selectedClipPreviewRotation)
+                            .offset(selectedClipPreviewOffset(in: proxy.size))
+                            .onAppear {
+                                previewPlayer.play()
+                                isPlaying = true
+                            }
+                            .storyPreviewColorGrade(videoPreviewColorGrade)
+                    }
                 } else if let renderedImage {
                     Image(uiImage: renderedImage)
                         .resizable()
@@ -4506,7 +4554,27 @@ struct StoryEditorPreviewView: View {
                     .allowsHitTesting(false)
             }
         }
-        .accessibilityLabel("Story editor preview")
+        .accessibilityLabel("Flash editor preview")
+    }
+
+    private var selectedClipPreviewScale: CGFloat {
+        CGFloat(editor.selectedClip?.transform.scale ?? 1)
+    }
+
+    private var selectedClipPreviewRotation: Angle {
+        Angle(radians: editor.selectedClip?.transform.rotation ?? 0)
+    }
+
+    private func selectedClipPreviewOffset(in viewportSize: CGSize) -> CGSize {
+        guard let transform = editor.selectedClip?.transform,
+              project.canvas.width > 0,
+              project.canvas.height > 0 else {
+            return .zero
+        }
+        return CGSize(
+            width: CGFloat(transform.tx / Double(project.canvas.width)) * viewportSize.width,
+            height: -CGFloat(transform.ty / Double(project.canvas.height)) * viewportSize.height
+        )
     }
 
     private func previewRenderProject(from project: Project) -> Project {
@@ -4622,9 +4690,15 @@ struct StoryEditorPreviewView: View {
             let image = try makeUIImage(from: buffer)
             guard !Task.isCancelled else { return }
             renderedImage = image
+            if canvasGestureResetAfterRender {
+                resetCanvasGestureVisualTransform()
+            }
             renderError = nil
         } catch {
             guard !Task.isCancelled else { return }
+            if canvasGestureResetAfterRender {
+                resetCanvasGestureVisualTransform()
+            }
             renderError = error.localizedDescription
         }
     }
@@ -5312,6 +5386,7 @@ private struct CanvasMediaTransformGestureLayer: UIViewRepresentable {
                 lastScale = 1
                 lastRotation = 0
                 lastTranslation = .zero
+                UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.55)
                 onBegin()
             }
 
@@ -5338,6 +5413,7 @@ private struct CanvasMediaTransformGestureLayer: UIViewRepresentable {
                 lastRotation = 0
                 lastTranslation = .zero
                 onEnd(finalScale, finalRotation, finalTranslation, viewportSize)
+                UISelectionFeedbackGenerator().selectionChanged()
             }
         }
 
@@ -5367,13 +5443,25 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
     let targets: [OverlayGestureTarget]
     let selectedOverlayID: UUID?
     let previewScale: CGFloat
+    let allowsMediaTransform: Bool
     let onTap: (Overlay?) -> Void
     let onBegin: (Overlay) -> Void
     let onChange: (UUID, Transform2D) -> Void
     let onEnd: () -> Void
+    let onMediaBegin: () -> Void
+    let onMediaChange: (Double, Double, CGSize, CGSize) -> Void
+    let onMediaEnd: (Double, Double, CGSize, CGSize) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onTap: onTap, onBegin: onBegin, onChange: onChange, onEnd: onEnd)
+        Coordinator(
+            onTap: onTap,
+            onBegin: onBegin,
+            onChange: onChange,
+            onEnd: onEnd,
+            onMediaBegin: onMediaBegin,
+            onMediaChange: onMediaChange,
+            onMediaEnd: onMediaEnd
+        )
     }
 
     func makeUIView(context: Context) -> UIView {
@@ -5404,6 +5492,7 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
         context.coordinator.targets = targets
         context.coordinator.selectedOverlayID = selectedOverlayID
         context.coordinator.previewScale = previewScale
+        context.coordinator.allowsMediaTransform = allowsMediaTransform
 
         return view
     }
@@ -5416,6 +5505,10 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
         context.coordinator.onChange = onChange
         context.coordinator.onEnd = onEnd
         context.coordinator.previewScale = previewScale
+        context.coordinator.allowsMediaTransform = allowsMediaTransform
+        context.coordinator.onMediaBegin = onMediaBegin
+        context.coordinator.onMediaChange = onMediaChange
+        context.coordinator.onMediaEnd = onMediaEnd
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
@@ -5426,8 +5519,18 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
         var onChange: (UUID, Transform2D) -> Void
         var onEnd: () -> Void
         var previewScale: CGFloat = 1
+        var allowsMediaTransform = true
+        var onMediaBegin: () -> Void
+        var onMediaChange: (Double, Double, CGSize, CGSize) -> Void
+        var onMediaEnd: (Double, Double, CGSize, CGSize) -> Void
         var startTransform: Transform2D?
         var activeTarget: OverlayGestureTarget?
+        var isTransformingMedia = false
+        var mediaScale = 1.0
+        var mediaRotation = 0.0
+        var mediaTranslation = CGSize.zero
+        var mediaLastPanLocation: CGPoint?
+        var mediaPanTouchCount = 0
         var lastMagnification: Double = 1
         var lastRotation: Double = 0
         weak var pan: UIPanGestureRecognizer?
@@ -5438,12 +5541,18 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
             onTap: @escaping (Overlay?) -> Void,
             onBegin: @escaping (Overlay) -> Void,
             onChange: @escaping (UUID, Transform2D) -> Void,
-            onEnd: @escaping () -> Void
+            onEnd: @escaping () -> Void,
+            onMediaBegin: @escaping () -> Void,
+            onMediaChange: @escaping (Double, Double, CGSize, CGSize) -> Void,
+            onMediaEnd: @escaping (Double, Double, CGSize, CGSize) -> Void
         ) {
             self.onTap = onTap
             self.onBegin = onBegin
             self.onChange = onChange
             self.onEnd = onEnd
+            self.onMediaBegin = onMediaBegin
+            self.onMediaChange = onMediaChange
+            self.onMediaEnd = onMediaEnd
         }
 
         @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
@@ -5452,14 +5561,55 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
         }
 
         @objc func handleTransform(_ recognizer: UIGestureRecognizer) {
-            if recognizer.state == .began, startTransform == nil {
+            if recognizer.state == .began, startTransform == nil, !isTransformingMedia {
                 let location = recognizer.location(in: recognizer.view)
-                guard let target = targetForInteraction(at: location) else { return }
-                activeTarget = target
-                startTransform = target.transform
-                lastMagnification = 1
-                lastRotation = 0
-                onBegin(target.overlay)
+                if let target = targetForInteraction(at: location) {
+                    activeTarget = target
+                    startTransform = target.transform
+                    lastMagnification = 1
+                    lastRotation = 0
+                    onBegin(target.overlay)
+                } else if allowsMediaTransform {
+                    isTransformingMedia = true
+                    mediaScale = 1
+                    mediaRotation = 0
+                    mediaTranslation = .zero
+                    mediaLastPanLocation = nil
+                    mediaPanTouchCount = 0
+                    UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.55)
+                    onMediaBegin()
+                } else {
+                    return
+                }
+            }
+
+            if isTransformingMedia {
+                if let pinch, pinch.state == .began || pinch.state == .changed {
+                    mediaScale = Double(pinch.scale)
+                }
+                if let rotation, rotation.state == .began || rotation.state == .changed {
+                    mediaRotation = Double(rotation.rotation)
+                }
+                if let pan, pan.state == .began || pan.state == .changed {
+                    let touchCount = pan.numberOfTouches
+                    let location = pan.location(in: recognizer.view)
+                    if mediaPanTouchCount == touchCount, let previous = mediaLastPanLocation {
+                        mediaTranslation.width += location.x - previous.x
+                        mediaTranslation.height += location.y - previous.y
+                    }
+                    mediaLastPanLocation = location
+                    mediaPanTouchCount = touchCount
+                }
+                let viewportSize = recognizer.view?.bounds.size ?? .zero
+                onMediaChange(mediaScale, mediaRotation, mediaTranslation, viewportSize)
+                if interactionsEnded {
+                    isTransformingMedia = false
+                    mediaLastPanLocation = nil
+                    mediaPanTouchCount = 0
+                    onMediaEnd(mediaScale, mediaRotation, mediaTranslation, viewportSize)
+                    UISelectionFeedbackGenerator().selectionChanged()
+                }
+                return
             }
 
             guard let activeTarget, let startTransform else { return }
@@ -5492,6 +5642,7 @@ private struct OverlayCanvasGestureLayer: UIViewRepresentable {
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             guard !(gestureRecognizer is UITapGestureRecognizer) else { return true }
             return targetForInteraction(at: gestureRecognizer.location(in: gestureRecognizer.view)) != nil
+                || allowsMediaTransform
         }
 
         private func targetForInteraction(at point: CGPoint) -> OverlayGestureTarget? {
@@ -6072,7 +6223,7 @@ private enum StoryEditorPreviewError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .imageConversionFailed:
-            return "Could not display the rendered story frame."
+            return "Could not display the rendered flash frame."
         case .mediaOverlayImportFailed:
             return "Could not add that photo or video overlay. Choose another item."
         }

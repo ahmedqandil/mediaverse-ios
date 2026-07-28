@@ -91,7 +91,7 @@ struct ChannelsBrowseView: View {
     }
 
     private var sectionTabs: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        WestreemHorizontalScrollView(showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(curationSections) { section in
                     GenrePill(label: section.name, selected: selectedSectionID == section.id) {
@@ -189,17 +189,15 @@ struct ChannelsBrowseView: View {
     private func load() async {
         loadGeneration &+= 1
         let generation = loadGeneration
-        if let cachedPage = CurationManager.shared.cachedPage(key: "channels", section: selectedSectionID, allowExpired: true), cachedPage.hasCurationSurface {
-            applyCurationPage(cachedPage)
-            isLoading = false
-        } else {
-            isLoading = channels.isEmpty
-        }
+        isLoading = channels.isEmpty
 
         do {
-            let page = try await CurationManager.shared.fetchPage(key: "channels", section: selectedSectionID)
+            let fetchedChannels = try await APIClient.shared.fetchChannels()
             guard generation == loadGeneration else { return }
-            applyCurationPage(page)
+            channels = fetchedChannels.uniqueByID()
+            curationSections = []
+            curationListings = []
+            selectedSectionID = nil
         } catch {
             guard generation == loadGeneration else { return }
             if channels.isEmpty {
@@ -210,28 +208,6 @@ struct ChannelsBrowseView: View {
             }
         }
         isLoading = false
-    }
-
-    @MainActor
-    private func applyCurationPage(_ page: AssembledPage) {
-        let sections = page.sortedSections
-        curationSections = sections
-        if let selectedSectionID,
-           !sections.contains(where: { $0.id == selectedSectionID }) {
-            self.selectedSectionID = sections.first?.id
-        } else if selectedSectionID == nil {
-            selectedSectionID = sections.first?.id
-        }
-        let activeListings = page.listings(forSectionID: selectedSectionID)
-        curationListings = activeListings
-        let channelListings = activeListings.filter { $0.normalizedTemplateType != "hero" }
-        let sourceItems = channelListings.isEmpty
-            ? (activeListings.isEmpty ? page.curationItems : activeListings.flatMap(\.items))
-            : channelListings.flatMap(\.items)
-        channels = sourceItems
-            .filter { $0.entityType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "channel" }
-            .map(\.asChannelBrowseCard)
-            .uniqueByID()
     }
 }
 

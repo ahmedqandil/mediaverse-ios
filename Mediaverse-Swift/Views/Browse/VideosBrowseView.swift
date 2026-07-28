@@ -137,7 +137,7 @@ struct VideosBrowseView: View {
     }
 
     private var sectionTabs: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        WestreemHorizontalScrollView(showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(curationSections) { section in
                     GenrePill(label: section.name, selected: selectedSectionID == section.id) {
@@ -479,7 +479,7 @@ struct VideosBrowseView: View {
 
     @MainActor
     private func cachedCuratedInitialVideos() -> [FeedVideo]? {
-        guard let page = CurationManager.shared.cachedPage(key: "home", allowExpired: true) else { return nil }
+        guard let page = CurationManager.shared.cachedPage(key: "videos", allowExpired: true) else { return nil }
         let feedListing = page.activeListings.first { $0.normalizedTemplateType == "video_feed" }
             ?? page.listings.first { $0.normalizedTemplateType == "video_feed" }
         guard let feedListing else { return nil }
@@ -490,7 +490,7 @@ struct VideosBrowseView: View {
     }
 
     private func fetchCuratedInitialVideos() async throws -> [FeedVideo] {
-        let page = try await CurationManager.shared.fetchPage(key: "home")
+        let page = try await CurationManager.shared.fetchPage(key: "videos")
         guard let feedListing = page.activeListings.first(where: { $0.normalizedTemplateType == "video_feed" })
             ?? page.listings.first(where: { $0.normalizedTemplateType == "video_feed" }) else { return [] }
         return feedListing.items

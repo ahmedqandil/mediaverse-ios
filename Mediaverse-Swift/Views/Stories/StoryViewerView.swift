@@ -32,7 +32,7 @@ struct StoryViewerView: View {
     @State private var tickTask: Task<Void, Never>?
     @State private var viewedTask: Task<Void, Never>?
     @State private var videoRetryTask: Task<Void, Never>?
-    @State private var preloadTask: Task<Void, Never>?
+    @State private var preloadTasks = [String: Task<Void, Never>]()
     @State private var backendRefreshTask: Task<Void, Never>?
     @State private var activeStoryId: String?
     @State private var preloadedStoryIds = Set<String>()
@@ -55,9 +55,12 @@ struct StoryViewerView: View {
     @State private var viewerPreviewResponses = [String: StoryViewersResponse]()
     @State private var viewerPreviewAvatars = [String: [ViewerUser]]()
     @State private var viewerAccessDeniedStoryIds = Set<String>()
-    @State private var likingStoryIds = Set<String>()
+    @State private var energySheetStory: StoryItem?
 
-    private let videoPrewarmLimit = 3
+    private let videoPrewarmLimit = 4
+    private var isFlashEnergyEnabled: Bool {
+        SocialFeatureConfiguration.runtime().flashesEnergyEnabled
+    }
 
     private var groups: [StoryGroup] { repository.groups.filter { !$0.stories.isEmpty } }
     private var currentGroup: StoryGroup? { groups.indices.contains(groupIndex) ? groups[groupIndex] : nil }
@@ -106,7 +109,7 @@ struct StoryViewerView: View {
         .onChange(of: inAppBrowser.item) { _, item in
             setPaused(item != nil)
         }
-        .alert("Delete story?", isPresented: Binding(
+        .alert("Delete flash?", isPresented: Binding(
             get: { storyPendingDelete != nil },
             set: {
                 if !$0 {
@@ -124,13 +127,24 @@ struct StoryViewerView: View {
                 setPaused(false)
             }
         } message: {
-            Text("This removes the story immediately for every viewer.")
+            Text("This removes the flash immediately for every viewer.")
         }
         .sheet(item: $viewersSheetStory, onDismiss: {
             viewersSheetStory = nil
             setPaused(false)
         }) { story in
             viewersSheet(for: story)
+        }
+        .sheet(item: $energySheetStory, onDismiss: {
+            energySheetStory = nil
+            setPaused(false)
+        }) { story in
+            StoryEnergySheet(story: story) { aggregate in
+                repository.applyEnergy(storyId: story.id, aggregate: aggregate)
+            }
+            .presentationDetents([.height(610), .large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
         }
         .accessibilityElement(children: .contain)
     }
@@ -293,7 +307,7 @@ struct StoryViewerView: View {
                         )
                 }
                 .frame(height: 24)
-                .accessibilityLabel("Story \(index + 1) progress")
+                .accessibilityLabel("Flash \(index + 1) progress")
                 .accessibilityValue("\(Int(progress(for: index, story: story) * 100)) percent")
                 .accessibilityAdjustableAction { direction in
                     switch direction {
@@ -339,7 +353,7 @@ struct StoryViewerView: View {
                     storyPendingDelete = story
                     setPaused(true)
                 } label: {
-                    Label("Delete story", systemImage: "trash")
+                    Label("Delete flash", systemImage: "trash")
                 }
             } label: {
                 Image(systemName: "ellipsis")
@@ -348,7 +362,7 @@ struct StoryViewerView: View {
             }
             .foregroundStyle(.white)
             .disabled(isDeletingStory)
-            .accessibilityLabel("Story options")
+            .accessibilityLabel("Flash options")
 
             Button {
                 dismiss()
@@ -358,7 +372,7 @@ struct StoryViewerView: View {
                     .frame(width: compact ? 34 : 36, height: compact ? 34 : 36)
             }
             .foregroundStyle(.white)
-            .accessibilityLabel("Close stories")
+            .accessibilityLabel("Close flashes")
         }
     }
 
@@ -406,7 +420,9 @@ struct StoryViewerView: View {
             }
 
             HStack(spacing: 10) {
-                storyLikeButton(story)
+                if isFlashEnergyEnabled {
+                    storyEnergyButton(story)
+                }
 
                 if canShowViewersChip(for: story, group: group) {
                     ViewerCountChip(
@@ -415,6 +431,19 @@ struct StoryViewerView: View {
                         onTap: { presentViewersSheet(for: story) }
                     )
                 }
+            }
+
+            if isFlashEnergyEnabled, story.energyCount > 0 {
+                SocialEnergyMeter(
+                    total: story.energyTotal,
+                    count: story.energyCount,
+                    tags: story.energyTags
+                        .sorted { lhs, rhs in
+                            lhs.value == rhs.value ? lhs.key < rhs.key : lhs.value > rhs.value
+                        }
+                        .map(\.key)
+                )
+                .padding(.top, 2)
             }
 
             if let label = story.ctaLabel, !label.isEmpty {
@@ -438,17 +467,21 @@ struct StoryViewerView: View {
         }
     }
 
-    private func storyLikeButton(_ story: StoryItem) -> some View {
+    private func storyEnergyButton(_ story: StoryItem) -> some View {
         Button {
-            Task { await toggleLike(story) }
+            setPaused(true)
+            energySheetStory = story
         } label: {
             HStack(spacing: 7) {
-                Image(systemName: story.userLiked ? "heart.fill" : "heart")
+                Image(systemName: "bolt.fill")
                     .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(story.userLiked ? .red : .white)
-                    .scaleEffect(story.userLiked ? 1.08 : 1)
-                Text(story.likeCount > 0 ? compactCount(story.likeCount) : "Like")
+                    .foregroundStyle(C.watch)
+                Text("Add Energy")
                     .font(.system(size: 12, weight: .bold))
+                if story.energyCount > 0 {
+                    Text(compactCount(story.energyCount))
+                        .font(.system(size: 12, weight: .bold))
+                }
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 11)
@@ -458,11 +491,8 @@ struct StoryViewerView: View {
             .overlay { Capsule().stroke(.white.opacity(0.16), lineWidth: 1) }
         }
         .buttonStyle(.plain)
-        .disabled(likingStoryIds.contains(story.id))
-        .opacity(likingStoryIds.contains(story.id) ? 0.7 : 1)
-        .animation(.spring(response: 0.22, dampingFraction: 0.72), value: story.userLiked)
-        .accessibilityLabel(story.userLiked ? "Unlike story" : "Like story")
-        .accessibilityValue(story.likeCount > 0 ? "\(story.likeCount) likes" : "No likes")
+        .accessibilityLabel("Add Energy")
+        .accessibilityValue(story.energyCount > 0 ? "\(story.energyCount) Energy" : "No Energy yet")
     }
 
     // MARK: - Overlay sticker layer
@@ -504,11 +534,11 @@ struct StoryViewerView: View {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture { previousStory() }
-                    .accessibilityLabel("Previous story")
+                    .accessibilityLabel("Previous flash")
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture { nextStory() }
-                    .accessibilityLabel("Next story")
+                    .accessibilityLabel("Next flash")
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
@@ -628,17 +658,15 @@ struct StoryViewerView: View {
     }
 
     private func scheduleStoryPreload() {
-        preloadTask?.cancel()
         let candidates = preloadCandidates()
-        let pending = candidates.filter { !preloadedStoryIds.contains($0.id) }
         trimStoryPreloadState(keeping: candidates)
-        guard !pending.isEmpty else { return }
-
-        preloadTask = Task {
-            for story in pending {
-                guard !Task.isCancelled else { return }
-                guard preloadedStoryIds.insert(story.id).inserted else { continue }
+        for story in candidates {
+            guard preloadedStoryIds.insert(story.id).inserted else { continue }
+            let storyID = story.id
+            preloadTasks[storyID] = Task {
                 await preloadStory(story, priority: preloadPriority(for: story))
+                guard !Task.isCancelled else { return }
+                preloadTasks[storyID] = nil
             }
         }
     }
@@ -648,7 +676,14 @@ struct StoryViewerView: View {
         guard groups.indices.contains(groupIndex) else { return candidates }
 
         let group = groups[groupIndex]
-        for index in [storyIndex, storyIndex + 1, storyIndex + 2, storyIndex + 3, storyIndex - 1] where group.stories.indices.contains(index) {
+        for index in [
+            storyIndex,
+            storyIndex + 1,
+            storyIndex + 2,
+            storyIndex + 3,
+            storyIndex + 4,
+            storyIndex - 1
+        ] where group.stories.indices.contains(index) {
             candidates.append(group.stories[index])
         }
 
@@ -778,6 +813,7 @@ struct StoryViewerView: View {
         warmPlayer.automaticallyWaitsToMinimizeStalling = false
         warmPlayer.isMuted = true
         warmPlayer.volume = 0
+        warmPlayer.preroll(atRate: 1) { _ in }
         prewarmedVideoPlayers[story.id] = warmPlayer
         prewarmedVideoOrder.removeAll { $0 == story.id }
         prewarmedVideoOrder.append(story.id)
@@ -812,6 +848,10 @@ struct StoryViewerView: View {
             prewarmedVideoPlayers[storyId] = nil
         }
         prewarmedVideoOrder.removeAll { !ids.contains($0) }
+        for storyID in preloadTasks.keys where !ids.contains(storyID) {
+            preloadTasks[storyID]?.cancel()
+            preloadTasks[storyID] = nil
+        }
     }
 
     private func clearPrewarmedVideoPlayers() {
@@ -1035,12 +1075,12 @@ struct StoryViewerView: View {
         tickTask?.cancel()
         viewedTask?.cancel()
         videoRetryTask?.cancel()
-        preloadTask?.cancel()
+        preloadTasks.values.forEach { $0.cancel() }
         backendRefreshTask?.cancel()
         tickTask = nil
         viewedTask = nil
         videoRetryTask = nil
-        preloadTask = nil
+        preloadTasks.removeAll()
         backendRefreshTask = nil
         activeStoryId = nil
         clearVideoObservers()
@@ -1133,13 +1173,6 @@ struct StoryViewerView: View {
         return "\(hours / 24)d"
     }
 
-    private func toggleLike(_ story: StoryItem) async {
-        guard !likingStoryIds.contains(story.id) else { return }
-        likingStoryIds.insert(story.id)
-        defer { likingStoryIds.remove(story.id) }
-        await repository.toggleLike(storyId: story.id)
-    }
-
     private func compactCount(_ value: Int) -> String {
         guard value >= 1_000 else { return "\(value)" }
         let divisor = value >= 1_000_000 ? 1_000_000.0 : 1_000.0
@@ -1152,6 +1185,126 @@ struct StoryViewerView: View {
     private func openCTA(_ value: String?) {
         guard let value, let url = URL(string: value) else { return }
         inAppBrowser.open(url)
+    }
+}
+
+private struct StoryEnergySheet: View {
+    let story: StoryItem
+    let onSaved: (StoryEnergyAggregate) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var overall = 0
+    @State private var selectedTags = Set<String>()
+    @State private var isLoading = false
+    @State private var isSaving = false
+    @State private var errorMessage: String?
+    @State private var hasExistingEnergy = false
+    @State private var confirmationMessage: String?
+
+    var body: some View {
+        SocialEnergyForm(
+            contentLabel: "Flash",
+            isUpdate: hasExistingEnergy,
+            overall: $overall,
+            selectedTags: $selectedTags,
+            isSaving: isSaving || isLoading,
+            errorMessage: errorMessage,
+            confirmationMessage: confirmationMessage,
+            onClose: { dismiss() },
+            onSubmit: { Task { await save() } },
+            onRemove: hasExistingEnergy ? { Task { await remove() } } : nil
+        )
+        .task { await load() }
+    }
+
+    @MainActor
+    private func load() async {
+        guard !isLoading else { return }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            let response = try await StoriesAPIClient.shared.fetchEnergy(storyId: story.id)
+            if let current = response.userRating {
+                overall = current.overall
+                selectedTags = Set(current.tags.map(flashEnergyLabel))
+                hasExistingEnergy = true
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func save() async {
+        guard !isSaving else { return }
+        isSaving = true
+        do {
+            _ = try await StoriesAPIClient.shared.submitEnergy(
+                storyId: story.id,
+                overall: overall,
+                tags: Array(selectedTags)
+            )
+            let refreshed = try await StoriesAPIClient.shared.fetchEnergy(storyId: story.id)
+            onSaved(refreshed.aggregate)
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) {
+                confirmationMessage = storyEnergyFeeling(tags: selectedTags, overall: overall)
+            }
+            try? await Task.sleep(for: .milliseconds(1_200))
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isSaving = false
+    }
+
+    @MainActor
+    private func remove() async {
+        guard !isSaving, hasExistingEnergy else { return }
+        isSaving = true
+        errorMessage = nil
+        defer { isSaving = false }
+        do {
+            try await StoriesAPIClient.shared.removeEnergy(storyId: story.id)
+            let refreshed = try await StoriesAPIClient.shared.fetchEnergy(storyId: story.id)
+            onSaved(refreshed.aggregate)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+}
+
+private func storyEnergyFeeling(tags: Set<String>, overall: Int) -> String {
+    let feelings = tags.sorted().map(flashEnergyLabel)
+    if feelings.isEmpty {
+        return ["", "Low key", "Warm", "Charged", "High energy", "Electric"][min(max(overall, 0), 5)]
+    }
+    return feelings.joined(separator: " · ")
+}
+
+private func flashEnergyLabel(_ value: String) -> String {
+    switch value.uppercased() {
+    case "HITS": "Hits"
+    case "INSPIRED": "Inspired"
+    case "REAL": "Real"
+    case "DEEP": "Deep"
+    case "CHILL": "Chill"
+    case "CLUTCH": "Clutch"
+    default: value.capitalized
+    }
+}
+
+private func flashEnergySymbol(_ value: String) -> String {
+    switch value.uppercased() {
+    case "HITS": "waveform.path"
+    case "INSPIRED": "star.fill"
+    case "REAL": "lightbulb.fill"
+    case "DEEP": "brain.head.profile"
+    case "CHILL": "face.smiling"
+    case "CLUTCH": "bolt.fill"
+    default: "sparkles"
     }
 }
 

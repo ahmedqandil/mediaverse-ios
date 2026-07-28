@@ -262,13 +262,13 @@ struct MentionText: View {
         case "show":
             NotificationCenter.default.post(name: .mentionNavigationRequested, object: AppRoute.show(result.id))
         default:
-            NotificationCenter.default.post(name: .mentionNavigationRequested, object: AppRoute.channel(result.handle))
+            NotificationCenter.default.post(name: .mentionNavigationRequested, object: AppRoute.atmo(result.handle))
         }
     }
 
     @MainActor
     private func openMentionFallback(handle: String) {
-        NotificationCenter.default.post(name: .mentionNavigationRequested, object: AppRoute.channel(handle))
+        NotificationCenter.default.post(name: .mentionNavigationRequested, object: AppRoute.atmo(handle))
     }
 }
 

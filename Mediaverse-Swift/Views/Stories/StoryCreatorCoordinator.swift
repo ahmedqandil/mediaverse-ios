@@ -20,7 +20,7 @@ private enum StoryPublishPhase: String {
     case uploading = "Uploading..."
     case publishing = "Publishing..."
     case processing = "Processing video..."
-    case complete = "Story posted!"
+    case complete = "Flash posted!"
 }
 
 private enum StoryDraftMedia {
@@ -78,9 +78,18 @@ struct StoryCreatorCoordinator: View {
     let preselectedPublisher: UploadContext?
     let onComplete: () -> Void
 
+    init(preselectedPublisher: UploadContext?, onComplete: @escaping () -> Void) {
+        self.preselectedPublisher = preselectedPublisher
+        self.onComplete = onComplete
+        _selectedPublisher = State(initialValue: preselectedPublisher)
+        _isCameraPresented = State(initialValue: preselectedPublisher != nil)
+        _shouldDismissOnCameraCancel = State(initialValue: preselectedPublisher != nil)
+    }
+
     @Environment(\.dismiss) private var dismiss
     @State private var step: StoryCreatorStep = .media
     @State private var contexts: UploadContextsResponse?
+    @State private var fallbackPersonalPublisher: UploadContext?
     @State private var selectedPublisher: UploadContext?
     @State private var isLoadingPublishers = true
     @State private var errorText: String?
@@ -109,7 +118,9 @@ struct StoryCreatorCoordinator: View {
     private let exportService = StoryExportService()
 
     private var publishers: [UploadContext] {
-        (contexts?.channels ?? []) + (contexts?.shows ?? [])
+        ((contexts?.personal ?? fallbackPersonalPublisher).map { [$0] } ?? [])
+            + (contexts?.channels ?? [])
+            + (contexts?.shows ?? [])
     }
 
     private var resolvedPublisher: UploadContext? {
@@ -140,12 +151,16 @@ struct StoryCreatorCoordinator: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                C.bg.ignoresSafeArea()
-                content
+                if isCameraPresented {
+                    camera
+                } else {
+                    C.bg.ignoresSafeArea()
+                    content
+                }
             }
-            .navigationTitle("Story")
+            .navigationTitle("Flash")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar(step == .editor || step == .media ? .hidden : .visible, for: .navigationBar)
+            .toolbar(isCameraPresented || step == .editor || step == .media ? .hidden : .visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Close") {
@@ -159,35 +174,18 @@ struct StoryCreatorCoordinator: View {
                 }
             }
         }
-        .fullScreenCover(isPresented: $isCameraPresented) {
-            StoryCameraView(maxDuration: storyMaxDurationSeconds) {
-                handleCameraCancel()
-            } onPhoto: { photo in
-                shouldDismissOnCameraCancel = false
-                isCameraPresented = false
-                Task { await importCameraPhoto(photo) }
-            } onLibraryVideo: { url in
-                shouldDismissOnCameraCancel = false
-                isCameraPresented = false
-                Task { await importLibraryVideo(url) }
-            } onComplete: { segments in
-                shouldDismissOnCameraCancel = false
-                isCameraPresented = false
-                Task { await importCameraSegments(segments) }
-            }
-        }
         .sheet(isPresented: $isShowingPostDrawer) {
             postDrawerSheet
         }
         .confirmationDialog(
-            "Leave this story?",
+            "Leave this flash?",
             isPresented: $isShowingEditorExitConfirmation,
             titleVisibility: .visible
         ) {
             Button("Save Draft") {
                 dismiss()
             }
-            Button("Discard Story", role: .destructive) {
+            Button("Discard Flash", role: .destructive) {
                 discardCurrentDraft()
             }
             Button("Continue Editing", role: .cancel) {}
@@ -204,12 +202,31 @@ struct StoryCreatorCoordinator: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This permanently removes every saved story draft and its local media.")
+            Text("This permanently removes every saved flash draft and its local media.")
         }
         .task {
             await loadPublishers()
             await loadSavedDrafts()
         }
+    }
+
+    private var camera: some View {
+        StoryCameraView(maxDuration: storyMaxDurationSeconds) {
+            handleCameraCancel()
+        } onPhoto: { photo in
+            shouldDismissOnCameraCancel = false
+            isCameraPresented = false
+            Task { await importCameraPhoto(photo) }
+        } onLibraryVideo: { url in
+            shouldDismissOnCameraCancel = false
+            isCameraPresented = false
+            Task { await importLibraryVideo(url) }
+        } onComplete: { segments in
+            shouldDismissOnCameraCancel = false
+            isCameraPresented = false
+            Task { await importCameraSegments(segments) }
+        }
+        .ignoresSafeArea()
     }
 
     @ViewBuilder
@@ -266,17 +283,17 @@ struct StoryCreatorCoordinator: View {
     private var headerTitle: String {
         switch step {
         case .publisher: return "Choose publisher"
-        case .media: return "Story camera"
-        case .editor: return "Edit story"
-        case .metadata: return "Story details"
-        case .publish: return "Posting story"
-        case .success: return "Story posted"
+        case .media: return "Flash camera"
+        case .editor: return "Edit flash"
+        case .metadata: return "Flash details"
+        case .publish: return "Posting flash"
+        case .success: return "Flash posted"
         }
     }
 
     private var headerSubtitle: String {
         switch step {
-        case .publisher: return "Stories attach to a channel or show you manage."
+        case .publisher: return "Post to your Atmosphere, a channel, or a show you manage."
         case .media: return "Use a portrait photo or a portrait video up to 10 seconds."
         case .editor: return "Preview the saved draft with the same compositor used for export."
         case .metadata: return "Add the viewer-facing caption and optional action."
@@ -290,7 +307,7 @@ struct StoryCreatorCoordinator: View {
             if isLoadingPublishers {
                 loadingRow("Loading publishers...")
             } else if publishers.isEmpty {
-                Text("You need a channel or managed show before posting a story.")
+                Text("Your personal Atmosphere could not be loaded. Refresh your account and try again.")
                     .font(.system(size: 13))
                     .foregroundStyle(C.textMuted)
                     .padding(16)
@@ -325,10 +342,10 @@ struct StoryCreatorCoordinator: View {
                 savedDraftSection
             }
 
-            mediaSourceButton(icon: "camera", title: "Open Camera", subtitle: "Capture a story or choose existing media from the camera controls") {
+            mediaSourceButton(icon: "camera", title: "Open Camera", subtitle: "Capture a flash or choose existing media from the camera controls") {
                 openCamera()
             }
-            .accessibilityLabel("Open story camera")
+            .accessibilityLabel("Open flash camera")
 
             if draftMedia != nil {
                 primaryButton(title: "Open Editor", icon: "slider.horizontal.3") {
@@ -356,7 +373,7 @@ struct StoryCreatorCoordinator: View {
                     .font(.system(size: 11, weight: .semibold))
                     .buttonStyle(.plain)
                     .foregroundStyle(.red)
-                    .accessibilityLabel("Clear all story drafts")
+                    .accessibilityLabel("Clear all flash drafts")
                 }
 
                 ForEach(savedDrafts) { draft in
@@ -368,7 +385,7 @@ struct StoryCreatorCoordinator: View {
                                 draftThumbnail(for: draft)
 
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text("Story draft")
+                                    Text("Flash draft")
                                         .font(.system(size: 13, weight: .semibold))
                                         .foregroundStyle(C.text)
                                     Text("\(Int(ceil(draft.totalDurationSeconds)))s · Edited \(draft.updatedAt, style: .relative)")
@@ -394,7 +411,7 @@ struct StoryCreatorCoordinator: View {
                                 .frame(width: 36, height: 36)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Delete story draft")
+                        .accessibilityLabel("Delete flash draft")
                     }
                     .padding(10)
                     .background(C.surface)
@@ -416,7 +433,7 @@ struct StoryCreatorCoordinator: View {
         } catch {
             savedDrafts = []
             savedDraftThumbnails = [:]
-            errorText = "Could not load saved story drafts."
+            errorText = "Could not load saved flash drafts."
         }
     }
 
@@ -522,7 +539,7 @@ struct StoryCreatorCoordinator: View {
             savedDrafts.removeAll { $0.id == draft.id }
             savedDraftThumbnails[draft.id] = nil
         } catch {
-            errorText = "Could not delete this story draft."
+            errorText = "Could not delete this flash draft."
         }
     }
 
@@ -541,8 +558,8 @@ struct StoryCreatorCoordinator: View {
         }
         if failedCount > 0 {
             errorText = failedCount == 1
-                ? "One story draft could not be deleted."
-                : "\(failedCount) story drafts could not be deleted."
+                ? "One flash draft could not be deleted."
+                : "\(failedCount) flash drafts could not be deleted."
         }
     }
 
@@ -552,7 +569,7 @@ struct StoryCreatorCoordinator: View {
             VStack(spacing: 12) {
                 ProgressView()
                     .tint(C.watch)
-                Text("Preparing story...")
+                Text("Preparing flash...")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.75))
             }
@@ -618,7 +635,7 @@ struct StoryCreatorCoordinator: View {
     private var postDrawerSheet: some View {
         NavigationStack {
             postDrawerContent
-                .navigationTitle("Share Story")
+                .navigationTitle("Share Flash")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
@@ -661,7 +678,7 @@ struct StoryCreatorCoordinator: View {
                 } else if let publisher = resolvedPublisher {
                     selectedDestinationSummary(publisher)
                 } else {
-                    loadingRow(isLoadingPublishers ? "Loading destinations..." : "No available story destinations.")
+                    loadingRow(isLoadingPublishers ? "Loading destinations..." : "No available flash destinations.")
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -716,7 +733,7 @@ struct StoryCreatorCoordinator: View {
                 .storyTextFieldStyle()
 
             if destinationSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(resolvedPublisher == nil ? "Search for a channel or show to post this story." : "Only the selected destination is shown until you search.")
+                Text(resolvedPublisher == nil ? "Search for a channel or show to post this flash." : "Only the selected destination is shown until you search.")
                     .font(.system(size: 11))
                     .foregroundStyle(C.textTertiary)
             } else if filteredPublishers.isEmpty {
@@ -745,7 +762,7 @@ struct StoryCreatorCoordinator: View {
             Text(publishPhase.rawValue)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(C.text)
-            Text("You can leave this screen. We'll notify you when the story is posted.")
+            Text("You can leave this screen. We'll notify you when the flash is posted.")
                 .font(.system(size: 12))
                 .foregroundStyle(C.textTertiary)
 
@@ -769,7 +786,7 @@ struct StoryCreatorCoordinator: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 54, weight: .bold))
                 .foregroundStyle(C.watch)
-            Text("Story posted! Expires in 24 h.")
+            Text("Flash posted! Expires in 24 h.")
                 .font(.system(size: 17, weight: .bold))
                 .foregroundStyle(C.text)
             Button {
@@ -799,18 +816,18 @@ struct StoryCreatorCoordinator: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(C.text)
                     .lineLimit(1)
-                Text(publisher.networkName ?? (publisher.type == "show" ? "Show" : "Channel"))
+                Text(publisher.networkName ?? publisherTypeLabel(publisher))
                     .font(.system(size: 11))
                     .foregroundStyle(C.textTertiary)
                     .lineLimit(1)
             }
             Spacer()
-            Text(publisher.type == "show" ? "Show" : "Channel")
+            Text(publisherTypeLabel(publisher))
                 .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(publisher.type == "show" ? C.play : C.watch)
+                .foregroundStyle(publisherAccent(publisher))
                 .padding(.horizontal, 7)
                 .padding(.vertical, 4)
-                .background((publisher.type == "show" ? C.play : C.watch).opacity(0.12))
+                .background(publisherAccent(publisher).opacity(0.12))
                 .clipShape(RoundedRectangle(cornerRadius: 5))
             if selected {
                 Image(systemName: "checkmark")
@@ -832,7 +849,7 @@ struct StoryCreatorCoordinator: View {
                 Text(publisher.name)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(C.text)
-                Text(publisher.type == "show" ? "Show story" : "Channel story")
+                Text(publisherFlashLabel(publisher))
                     .font(.system(size: 11))
                     .foregroundStyle(C.textTertiary)
             }
@@ -855,7 +872,7 @@ struct StoryCreatorCoordinator: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(C.text)
                     .lineLimit(1)
-                Text(publisher.type == "show" ? "Show story" : "Channel story")
+                Text(publisherFlashLabel(publisher))
                     .font(.system(size: 11))
                     .foregroundStyle(C.textTertiary)
             }
@@ -884,7 +901,7 @@ struct StoryCreatorCoordinator: View {
                 .allowsHitTesting(false)
 
             VStack(alignment: .leading, spacing: 5) {
-                Text(media.mediaType == "image" ? "Image story" : "Video story")
+                Text(media.mediaType == "image" ? "Image flash" : "Video flash")
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(C.text)
                 Text("\(media.duration) seconds")
@@ -916,7 +933,7 @@ struct StoryCreatorCoordinator: View {
             image.resizable().scaledToFill()
         } placeholder: {
             ZStack {
-                (publisher.type == "show" ? C.play : C.watch).opacity(0.15)
+                publisherAccent(publisher).opacity(0.15)
                 Text(String(publisher.name.prefix(1)).uppercased())
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(C.textMuted)
@@ -924,6 +941,26 @@ struct StoryCreatorCoordinator: View {
         }
         .frame(width: 38, height: 38)
         .clipShape(RoundedRectangle(cornerRadius: publisher.type == "show" ? 7 : 19))
+    }
+
+    private func publisherTypeLabel(_ publisher: UploadContext) -> String {
+        switch publisher.type.lowercased() {
+        case "user": "My Atmosphere"
+        case "show": "Show"
+        default: "Channel"
+        }
+    }
+
+    private func publisherFlashLabel(_ publisher: UploadContext) -> String {
+        switch publisher.type.lowercased() {
+        case "user": "Personal Flash"
+        case "show": "Show Flash"
+        default: "Channel Flash"
+        }
+    }
+
+    private func publisherAccent(_ publisher: UploadContext) -> Color {
+        publisher.type.lowercased() == "show" ? C.play : C.watch
     }
 
     private func mediaSourceButton(icon: String, title: String, subtitle: String, action: @escaping () -> Void) -> some View {
@@ -1066,10 +1103,23 @@ struct StoryCreatorCoordinator: View {
         do {
             let response = try await APIClient.shared.fetchUploadContexts()
             contexts = response
+            if response.personal == nil,
+               let profileResponse = try? await APIClient.shared.fetchProfile() {
+                let profile = profileResponse.profile
+                fallbackPersonalPublisher = UploadContext(
+                    type: "user",
+                    id: profile.id,
+                    name: profile.name ?? profile.handle.map { "@\($0)" } ?? "My Atmosphere",
+                    avatarUrl: profile.image
+                )
+            } else {
+                fallbackPersonalPublisher = nil
+            }
             if let preselectedPublisher {
                 selectedPublisher = preselectedPublisher
             }
-            let all = response.channels + response.shows
+            let personal = response.personal ?? fallbackPersonalPublisher
+            let all = (personal.map { [$0] } ?? []) + response.channels + response.shows
             if selectedPublisher == nil, all.count == 1, let only = all.first {
                 selectedPublisher = only
             }
@@ -1130,7 +1180,7 @@ struct StoryCreatorCoordinator: View {
                 throw StoryCreatorError.message("Could not read the selected video duration.")
             }
             guard durationSeconds <= storyMaxDurationSeconds + 0.05 else {
-                throw StoryCreatorError.message("Stories can be up to 10 seconds. Choose or trim a shorter video.")
+                throw StoryCreatorError.message("Flashes can be up to 10 seconds. Choose or trim a shorter video.")
             }
             let persisted = try await createVideoDraft(sourceURL: url, asset: asset, durationSeconds: durationSeconds)
             let thumbnail = await makeVideoThumbnail(url: persisted.mediaURL)
@@ -1155,7 +1205,7 @@ struct StoryCreatorCoordinator: View {
         do {
             let totalDuration = segments.reduce(0) { $0 + ($1.duration / max($1.speed, 0.5)) }
             guard totalDuration <= storyMaxDurationSeconds + 0.25 else {
-                throw StoryCreatorError.message("Stories can be up to 10 seconds. Delete a segment and try again.")
+                throw StoryCreatorError.message("Flashes can be up to 10 seconds. Delete a segment and try again.")
             }
             let assets = segments.map { AVAsset(url: $0.url) }
             let persisted = try await createVideoDraft(segments: Array(zip(segments, assets)))
@@ -1183,7 +1233,7 @@ struct StoryCreatorCoordinator: View {
         effectStack: StoryEffectStack? = nil
     ) async throws -> Project {
         var project = Project.storyDraft(
-            title: "Story Draft",
+            title: "Flash Draft",
             destination: nil
         )
         _ = try await ProjectStore.shared.create(project)
@@ -1266,7 +1316,7 @@ struct StoryCreatorCoordinator: View {
 
             try await ProjectStore.shared.save(project)
             guard let previewPath = firstRelativePath else {
-                throw StoryCreatorError.message("Could not prepare the recorded story preview.")
+                throw StoryCreatorError.message("Could not prepare the recorded flash preview.")
             }
             return (project, store.absoluteURL(for: previewPath))
         } catch {
@@ -1332,7 +1382,7 @@ struct StoryCreatorCoordinator: View {
             let uploadContext = try await ensureStoryUploadContext(for: selectedPublisher)
             try Task.checkCancellation()
             guard let project = currentProject else {
-                throw StoryCreatorError.message("Story draft is missing. Choose media again.")
+                throw StoryCreatorError.message("Flash draft is missing. Choose media again.")
             }
 
             let request = StoryBackgroundPublishRequest(
@@ -1347,7 +1397,7 @@ struct StoryCreatorCoordinator: View {
             StoryBackgroundPublisher.shared.enqueue(request)
             dismiss()
         } catch is CancellationError {
-            errorText = "Publishing canceled. No story was created."
+            errorText = "Publishing canceled. No flash was created."
             reopenPostDrawerAfterPublishFailure()
             publishPhase = .idle
             publishProgress = 0
@@ -1388,7 +1438,7 @@ struct StoryCreatorCoordinator: View {
         publishTask?.cancel()
         publishPhase = .idle
         publishProgress = 0
-        errorText = "Publishing canceled. No story was created."
+        errorText = "Publishing canceled. No flash was created."
         step = .editor
     }
 
@@ -1408,7 +1458,7 @@ struct StoryCreatorCoordinator: View {
             try await updateDraftDestination(selectedPublisher)
             _ = try await ensureStoryUploadContext(for: selectedPublisher)
             guard let project = currentProject else {
-                throw StoryCreatorError.message("Story draft is missing. Choose media again.")
+                throw StoryCreatorError.message("Flash draft is missing. Choose media again.")
             }
 
             let export = try await exportService.export(project: project) { progress in
@@ -1470,14 +1520,14 @@ struct StoryCreatorCoordinator: View {
             NotificationCenter.default.post(name: .storiesDidChange, object: nil)
             step = .success
         } catch is CancellationError {
-            errorText = "Publishing canceled. No story was created."
+            errorText = "Publishing canceled. No flash was created."
             reopenPostDrawerAfterPublishFailure()
             publishPhase = .idle
             publishProgress = 0
         } catch StoriesError.notSignedIn {
             errorText = SessionStorage.token == nil
                 ? "Your session is missing. Sign in again before posting."
-                : "Your story publishing session was rejected by the server. Try again, or refresh your sign-in if it repeats."
+                : "Your flash publishing session was rejected by the server. Try again, or refresh your sign-in if it repeats."
             reopenPostDrawerAfterPublishFailure()
             publishPhase = .idle
             publishProgress = 0
@@ -1488,7 +1538,7 @@ struct StoryCreatorCoordinator: View {
             publishProgress = 0
         } catch let StoriesError.serverUnavailable(statusCode) {
             let suffix = statusCode.map { " HTTP \($0)." } ?? ""
-            errorText = "\(publishFailureContext): Stories are temporarily unavailable.\(suffix)"
+            errorText = "\(publishFailureContext): Flashes are temporarily unavailable.\(suffix)"
             reopenPostDrawerAfterPublishFailure()
             publishPhase = .idle
             publishProgress = 0
@@ -1503,19 +1553,19 @@ struct StoryCreatorCoordinator: View {
     private var publishFailureContext: String {
         switch publishPhase {
         case .idle:
-            return "Story publish"
+            return "Flash publish"
         case .rendering:
-            return "Rendering story"
+            return "Rendering flash"
         case .preparingUpload:
             return "Preparing upload"
         case .uploading:
             return "Uploading media"
         case .publishing:
-            return "Creating story"
+            return "Creating flash"
         case .processing:
-            return "Processing story video"
+            return "Processing flash video"
         case .complete:
-            return "Story publish"
+            return "Flash publish"
         }
     }
 
@@ -1601,7 +1651,7 @@ private struct StoryFinalSharePreview: View {
         .task(id: project.updatedAt) {
             await renderPreview()
         }
-        .accessibilityLabel("Final story viewer preview")
+        .accessibilityLabel("Final flash viewer preview")
     }
 
     private func renderPreview() async {
@@ -1801,8 +1851,8 @@ private final class StoryBackgroundPublisher: @unchecked Sendable {
 
     private static func publish(_ request: StoryBackgroundPublishRequest) async {
         let progressID = await GlobalUploadProgressManager.shared.begin(
-            title: "Posting story",
-            detail: "Rendering story...",
+            title: "Posting flash",
+            detail: "Rendering flash...",
             progress: 0.05
         )
 
@@ -1814,7 +1864,7 @@ private final class StoryBackgroundPublisher: @unchecked Sendable {
                 Task { @MainActor in
                     GlobalUploadProgressManager.shared.update(
                         id: progressID,
-                        detail: "Rendering story... \(Int(progress * 100))%",
+                        detail: "Rendering flash... \(Int(progress * 100))%",
                         progress: 0.05 + (progress * 0.30)
                     )
                 }
@@ -1849,7 +1899,7 @@ private final class StoryBackgroundPublisher: @unchecked Sendable {
 
             await GlobalUploadProgressManager.shared.update(
                 id: progressID,
-                detail: "Creating story...",
+                detail: "Creating flash...",
                 progress: 0.92
             )
             let placedLink = firstStoryLink(in: request.project)
@@ -1892,12 +1942,12 @@ private final class StoryBackgroundPublisher: @unchecked Sendable {
             }
             await GlobalUploadProgressManager.shared.complete(
                 id: progressID,
-                title: "Story ready",
-                detail: "Your story is live."
+                title: "Flash ready",
+                detail: "Your flash is live."
             )
             await notify(
-                title: "Story ready",
-                body: "Your story is live.",
+                title: "Flash ready",
+                body: "Your flash is live.",
                 userInfo: [
                     "kind": "storyPublish",
                     "storyId": createdStory.id,
@@ -1907,11 +1957,11 @@ private final class StoryBackgroundPublisher: @unchecked Sendable {
         } catch {
             await GlobalUploadProgressManager.shared.fail(
                 id: progressID,
-                title: "Story failed",
+                title: "Flash failed",
                 detail: error.localizedDescription
             )
             await notify(
-                title: "Story failed to post",
+                title: "Flash failed to post",
                 body: error.localizedDescription,
                 userInfo: ["kind": "storyPublishFailed"]
             )
@@ -1990,8 +2040,7 @@ private enum StoryUploadPipeline {
         let uploadMimeType = export.mimeType
 
         let upload = try await StoriesAPIClient.shared.getUploadUrl(mimeType: uploadMimeType)
-        guard let uploadURL = URL(string: upload.uploadUrl),
-              StoriesRequestPolicy.isAllowedUploadURL(uploadURL) else {
+        guard let uploadURL = await StoriesAPIClient.shared.resolvedAllowedUploadURL(from: upload.uploadUrl) else {
             throw StoriesError.badURL
         }
         try await StoriesAPIClient.shared.uploadMedia(
@@ -2043,8 +2092,7 @@ private enum StoryUploadPipeline {
 
     private static func uploadThumbnail(data: Data) async throws -> String {
         let upload = try await StoriesAPIClient.shared.getUploadUrl(mimeType: thumbnailMimeType)
-        guard let uploadURL = URL(string: upload.uploadUrl),
-              StoriesRequestPolicy.isAllowedUploadURL(uploadURL) else {
+        guard let uploadURL = await StoriesAPIClient.shared.resolvedAllowedUploadURL(from: upload.uploadUrl) else {
             throw StoriesError.badURL
         }
         try await StoriesAPIClient.shared.uploadMedia(
@@ -2083,7 +2131,7 @@ private enum StoryMediaReadiness {
             return
         }
         guard let url = C.mediaURL(mediaUrl) else {
-            throw StoryCreatorError.message("Story video URL is invalid.")
+            throw StoryCreatorError.message("Flash video URL is invalid.")
         }
 
         let deadline = Date().addingTimeInterval(30 * 60)
@@ -2107,9 +2155,9 @@ private enum StoryMediaReadiness {
         }
 
         if let lastError {
-            throw StoryCreatorError.message("Story video is still processing: \(lastError.localizedDescription)")
+            throw StoryCreatorError.message("Flash video is still processing: \(lastError.localizedDescription)")
         }
-        throw StoryCreatorError.message("Story video is still processing. Try again shortly.")
+        throw StoryCreatorError.message("Flash video is still processing. Try again shortly.")
     }
 
     private static func isPlayableVideo(url: URL) async throws -> Bool {

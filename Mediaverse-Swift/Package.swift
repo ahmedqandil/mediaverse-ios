@@ -6,7 +6,8 @@ let package = Package(
     name: "MediaverseLogicContracts",
     platforms: [.macOS(.v13)],
     products: [
-        .library(name: "MediaverseRouting", targets: ["MediaverseRouting"])
+        .library(name: "MediaverseRouting", targets: ["MediaverseRouting"]),
+        .library(name: "MediaverseSocialContracts", targets: ["MediaverseSocialContracts"])
     ],
     targets: [
         .target(
@@ -14,10 +15,19 @@ let package = Package(
             path: "Navigation",
             sources: ["AppRoute.swift"]
         ),
+        .target(
+            name: "MediaverseSocialContracts",
+            path: "Social/Contracts"
+        ),
         .testTarget(
             name: "MediaverseRoutingTests",
             dependencies: ["MediaverseRouting"],
             path: "LogicTests/MediaverseRoutingTests"
+        ),
+        .testTarget(
+            name: "MediaverseSocialContractsTests",
+            dependencies: ["MediaverseSocialContracts"],
+            path: "LogicTests/MediaverseSocialContractsTests"
         )
     ]
 )

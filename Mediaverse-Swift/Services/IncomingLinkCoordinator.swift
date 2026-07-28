@@ -1,5 +1,11 @@
 import Foundation
 
+struct IncomingShare: Identifiable, Equatable {
+    let id = UUID()
+    let url: URL
+    let text: String?
+}
+
 @MainActor
 final class IncomingLinkCoordinator: ObservableObject {
     static let shared = IncomingLinkCoordinator()
@@ -10,6 +16,7 @@ final class IncomingLinkCoordinator: ObservableObject {
     private var pendingDeviceActivationCode: String?
     private var pendingHandoffID: String?
     private var postedPendingHandoffID: String?
+    @Published var incomingShare: IncomingShare?
 
     private init() {}
 
@@ -19,6 +26,10 @@ final class IncomingLinkCoordinator: ObservableObject {
     }
 
     func handle(_ url: URL) {
+        if let share = Self.incomingShare(from: url) {
+            incomingShare = share
+            return
+        }
         if let code = AuthManager.deviceActivationCode(from: url) {
             pendingDeviceActivationCode = code
             auth?.requestDeviceActivation(code: code)
@@ -44,6 +55,25 @@ final class IncomingLinkCoordinator: ObservableObject {
         if C.isTrustedBrowserURL(url) {
             inAppBrowser?.open(url)
         }
+    }
+
+    func dismissIncomingShare() {
+        incomingShare = nil
+    }
+
+    private static func incomingShare(from url: URL) -> IncomingShare? {
+        guard url.scheme?.lowercased() == "westreem",
+              url.host?.lowercased() == "share",
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let value = components.queryItems?.first(where: { $0.name == "url" })?.value,
+              let sharedURL = URL(string: value),
+              ["http", "https"].contains(sharedURL.scheme?.lowercased() ?? "")
+        else { return nil }
+        let text = components.queryItems?
+            .first(where: { $0.name == "text" })?
+            .value?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return IncomingShare(url: sharedURL, text: text?.isEmpty == false ? text : nil)
     }
 
     func handleNotificationTap(userInfo: [AnyHashable: Any]) {

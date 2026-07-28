@@ -151,7 +151,7 @@ private struct FullscreenAdPlayer: View {
                     externalPlayer: player,
                     initialAdIndex: presentation.currentAdIndex,
                     isPresentationOnly: true,
-                    brandCardPlacement: .playerOverlay,
+                    brandCardPlacement: .belowPlayer,
                     initialImpressionTracked: presentation.hasTrackedImpression,
                     initialStartTracked: presentation.hasTrackedStart,
                     adPolicy: presentation.adPolicy,
@@ -161,7 +161,9 @@ private struct FullscreenAdPlayer: View {
                     onSkip: {
                         didSkipCurrentAd = true
                     },
-                    onFinish: nil
+                    onFinish: nil,
+                    suppressTracking: presentation.suppressTracking,
+                    observeExternalCompletion: presentation.observeExternalCompletion
                 ) {
                     if didSkipCurrentAd {
                         presentation.onSkip?()
@@ -210,6 +212,30 @@ private struct FullscreenAdPlayer: View {
         guard !didRequestDismiss else { return }
         didRequestDismiss = true
         onDismiss()
+    }
+}
+
+private struct FullscreenServerGuidedAdPlayer: View {
+    @ObservedObject var coordinator: ServerAdPlaybackCoordinator
+    let onDismiss: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            ServerGuidedAdPlayerView(
+                coordinator: coordinator,
+                brandCardPlacement: .belowPlayer,
+                onFullscreen: onDismiss
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(Color.black)
+        .ignoresSafeArea()
+        .onChange(of: coordinator.presentation) { _, presentation in
+            if presentation == nil {
+                onDismiss()
+            }
+        }
     }
 }
 
@@ -285,6 +311,46 @@ func openFullscreenAdPlayer(
 
     MediaverseAppDelegate.orientationLock = .landscape
     ActiveAdFullscreenHandoff.protect(player)
+    presenter.present(vc, animated: true) {
+        requestFullscreenLandscapeGeometry()
+        player.play()
+    }
+}
+
+/// Presents the active AVFoundation interstitial using the same ad chrome as CSAI.
+@MainActor
+func openFullscreenServerAdPlayer(
+    _ coordinator: ServerAdPlaybackCoordinator,
+    onDismiss: (() -> Void)? = nil
+) {
+    guard let player = coordinator.interstitialPlayer,
+          let presenter = UIApplication.shared.firstKeyWindow?
+            .rootViewController?
+            .topMostPresented,
+          !(presenter is FullScreenPlayerHostVC<FullscreenServerGuidedAdPlayer>) else {
+        coordinator.interstitialPlayer?.play()
+        return
+    }
+
+    var vc: FullScreenPlayerHostVC<FullscreenServerGuidedAdPlayer>!
+    let dismissFullscreen = {
+        vc.dismiss(animated: true)
+    }
+    vc = FullScreenPlayerHostVC(
+        rootView: FullscreenServerGuidedAdPlayer(
+            coordinator: coordinator,
+            onDismiss: dismissFullscreen
+        )
+    )
+    vc.modalPresentationStyle = .fullScreen
+    vc.modalTransitionStyle = .crossDissolve
+    vc.view.backgroundColor = .black
+    vc.onDismiss = {
+        FullscreenOrientationCoordinator.schedulePortraitReset()
+        onDismiss?()
+    }
+
+    MediaverseAppDelegate.orientationLock = .landscape
     presenter.present(vc, animated: true) {
         requestFullscreenLandscapeGeometry()
         player.play()

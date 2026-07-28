@@ -23,13 +23,15 @@ private extension StoryGroup {
 struct StoryTrayView: View {
     @ObservedObject var repository: StoriesRepository
     let activeChannel: UploadContext?
+    var title = "FLASHES"
     let onAddStory: () -> Void
     let onSelect: (StoryGroup) -> Void
 
     private var activeGroup: StoryGroup? {
         guard let activeChannel else { return nil }
         return repository.groups.first { group in
-            group.publisherType == "channel" && group.publisherId == activeChannel.id
+            group.publisherType.caseInsensitiveCompare(activeChannel.type) == .orderedSame
+                && group.publisherId == activeChannel.id
         }
     }
 
@@ -48,13 +50,16 @@ struct StoryTrayView: View {
         Group {
             if hasVisibleContent {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("STORIES")
-                        .font(.system(size: 10, weight: .semibold))
-                        .tracking(3)
-                        .foregroundStyle(C.textMuted)
-                        .padding(.horizontal, 12)
+                    let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !normalizedTitle.isEmpty {
+                        Text(normalizedTitle)
+                            .font(.system(size: 10, weight: .semibold))
+                            .tracking(3)
+                            .foregroundStyle(C.textMuted)
+                            .padding(.horizontal, 12)
+                    }
 
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    WestreemHorizontalScrollView(showsIndicators: false) {
                         LazyHStack(spacing: 16) {
                             if let activeChannel {
                                 activeChannelTile(activeChannel)
@@ -67,14 +72,13 @@ struct StoryTrayView: View {
                                         onSelect(group)
                                     }
                                     .accessibilityAddTraits(.isButton)
-                                    .accessibilityLabel("Story from \(group.publisherName)")
-                                    .accessibilityHint(group.hasUnseen ? "Unseen stories" : "Seen stories")
+                                    .accessibilityLabel("Flash from \(group.publisherName)")
+                                    .accessibilityHint(group.hasUnseen ? "Unseen flashes" : "Seen flashes")
                             }
                         }
                         .padding(.horizontal, 12)
                     }
                 }
-                .padding(.top, 18)
                 .padding(.bottom, 8)
             }
         }
@@ -100,20 +104,22 @@ struct StoryTrayView: View {
                     onSelect(displayGroup)
                 }
                 .accessibilityAddTraits(.isButton)
-                .accessibilityLabel("Your channel story")
-                .accessibilityHint(activeGroup.hasUnseen ? "Unseen stories" : "Seen stories")
+                .accessibilityLabel("Your \(channel.type) flash")
+                .accessibilityHint(activeGroup.hasUnseen ? "Unseen flashes" : "Seen flashes")
         } else {
             StoryAddAvatarView(channel: channel)
                 .contentShape(Rectangle())
                 .onTapGesture(perform: onAddStory)
                 .accessibilityAddTraits(.isButton)
-                .accessibilityLabel("Add story for \(channel.name)")
+                .accessibilityLabel("Add flash for \(channel.name)")
         }
     }
 }
 
 struct StoryAvatarView: View {
     let group: StoryGroup
+    private let avatarSize: CGFloat = 78
+    private let tileWidth: CGFloat = 90
 
     private var initial: String {
         group.publisherName.trimmingCharacters(in: .whitespacesAndNewlines).first.map(String.init) ?? "?"
@@ -122,7 +128,7 @@ struct StoryAvatarView: View {
     var body: some View {
         VStack(spacing: 7) {
             avatar
-                .frame(width: 68, height: 68)
+                .frame(width: avatarSize, height: avatarSize)
                 .padding(2)
                 .background(C.bg)
                 .clipShape(Circle())
@@ -138,9 +144,9 @@ struct StoryAvatarView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .opacity(group.hasUnseen ? 1 : 0.6)
-                .frame(width: 80)
+                .frame(width: tileWidth)
         }
-        .frame(width: 80)
+        .frame(width: tileWidth)
         .contentShape(Rectangle())
     }
 
@@ -149,7 +155,7 @@ struct StoryAvatarView: View {
         if let url = C.mediaURL(group.publisherImageUrl) {
             CachedRemoteImage(
                 url: url,
-                targetSize: CGSize(width: 68, height: 68)
+                targetSize: CGSize(width: avatarSize, height: avatarSize)
             ) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
@@ -174,6 +180,8 @@ struct StoryAvatarView: View {
 
 private struct StoryAddAvatarView: View {
     let channel: UploadContext
+    private let avatarSize: CGFloat = 78
+    private let tileWidth: CGFloat = 90
 
     private var initial: String {
         channel.name.trimmingCharacters(in: .whitespacesAndNewlines).first.map(String.init) ?? "+"
@@ -183,7 +191,7 @@ private struct StoryAddAvatarView: View {
         VStack(spacing: 7) {
             ZStack(alignment: .bottomTrailing) {
                 avatar
-                    .frame(width: 68, height: 68)
+                    .frame(width: avatarSize, height: avatarSize)
                     .padding(2)
                     .background(C.bg)
                     .clipShape(Circle())
@@ -203,13 +211,13 @@ private struct StoryAddAvatarView: View {
                     }
             }
 
-            Text("Add story")
+            Text("Add flash")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(C.text)
                 .lineLimit(1)
-                .frame(width: 80)
+                .frame(width: tileWidth)
         }
-        .frame(width: 80)
+        .frame(width: tileWidth)
         .contentShape(Rectangle())
     }
 
@@ -218,7 +226,7 @@ private struct StoryAddAvatarView: View {
         if let url = C.mediaURL(channel.avatarUrl) {
             CachedRemoteImage(
                 url: url,
-                targetSize: CGSize(width: 68, height: 68)
+                targetSize: CGSize(width: avatarSize, height: avatarSize)
             ) { image in
                 image.resizable().scaledToFill()
             } placeholder: {

@@ -234,17 +234,25 @@ private struct ContextAvatar: View {
     }
 
     private var fallbackIcon: some View {
-        let (iconName, color): (String, Color) = {
+        let color: Color = {
             switch ctx.type {
-            case "admin": return ("shield.fill", Color(hex: "#EF4444"))
-            case "network": return ("building.2.fill", Color(hex: "#F59E0B"))
-            case "channel": return ("play.rectangle.fill", C.watch)
-            default: return ("person.fill", Color(hex: "#10B981"))
+            case "admin": return Color(hex: "#EF4444")
+            case "network": return Color(hex: "#F59E0B")
+            case "show": return Color(hex: "#A780D7")
+            default: return C.watch
             }
         }()
 
-        return Image(systemName: iconName)
-            .font(.system(size: max(14, size * 0.42), weight: .semibold))
+        let initials = ctx.name
+            .split(separator: " ")
+            .prefix(2)
+            .compactMap(\.first)
+            .map(String.init)
+            .joined()
+            .uppercased()
+
+        return Text(initials.isEmpty ? "?" : initials)
+            .font(.system(size: max(11, size * 0.34), weight: .bold, design: .rounded))
             .foregroundStyle(color)
             .frame(width: size, height: size)
             .background(color.opacity(0.12))

@@ -6,7 +6,35 @@
 	objectVersion = 56;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		E50000000000000000000061 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DD7512F5E0289CDDCE66B0F8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E50000000000000000000041;
+			remoteInfo = WestreemShareExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		E50000000000000000000034 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				E50000000000000000000003 /* WestreemShareExtension.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXBuildFile section */
+		E50000000000000000000001 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50000000000000000000011 /* ShareViewController.swift */; };
+		E50000000000000000000002 /* MainInterface.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = E50000000000000000000013 /* MainInterface.storyboard */; };
+		E50000000000000000000003 /* WestreemShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = E50000000000000000000014 /* WestreemShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		E50000000000000000000004 /* IncomingShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50000000000000000000015 /* IncomingShareSheet.swift */; };
 		0330DE777F7802F12B216F12 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1079593180F3AC1E7E78616 /* LoginView.swift */; };
 		0465594F090062B86606BD71 /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 244896868E339180BDFCBB1F /* ProfileView.swift */; };
 		074934FE7811BA935B449923 /* EpisodeWatchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A90D9B1C22E7B0B62BDCD3C6 /* EpisodeWatchView.swift */; };
@@ -44,6 +72,21 @@
 		843AC7103011F215004FB5C3 /* MediaverseTabStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 843AC70F3011F215004FB5C3 /* MediaverseTabStrip.swift */; };
 		843AC712301211BE004FB5C3 /* IncomingLinkCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 843AC711301211BE004FB5C3 /* IncomingLinkCoordinator.swift */; };
 		843AC7153012120A004FB5C3 /* HandoffResolverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 843AC7143012120A004FB5C3 /* HandoffResolverView.swift */; };
+		A4C0C001301A000100000001 /* SocialModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C011301A000100000001 /* SocialModels.swift */; };
+		A4C0C002301A000100000001 /* SocialFeatureConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C012301A000100000001 /* SocialFeatureConfiguration.swift */; };
+		A4C0C003301A000100000001 /* LegacySocialAPIAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C013301A000100000001 /* LegacySocialAPIAdapter.swift */; };
+		A4C0C004301A000100000001 /* AtmosphereViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C014301A000100000001 /* AtmosphereViewModel.swift */; };
+		A4C0C005301A000100000001 /* AtmosphereView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C015301A000100000001 /* AtmosphereView.swift */; };
+		A4C0C006301A000100000001 /* RippleCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C016301A000100000001 /* RippleCard.swift */; };
+		A4C0C007301A000100000001 /* RippleEngagementController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C017301A000100000001 /* RippleEngagementController.swift */; };
+		A4C0C008301A000100000001 /* SocialDestinationViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C018301A000100000001 /* SocialDestinationViews.swift */; };
+		A4C0C009301A000100000001 /* EchoVibeSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C019301A000100000001 /* EchoVibeSheet.swift */; };
+		A4C0C00A301A000100000001 /* RippleComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C01A301A000100000001 /* RippleComposer.swift */; };
+		A4C0C00B301A000100000001 /* VibeAffiliationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C01B301A000100000001 /* VibeAffiliationsView.swift */; };
+		A4C0C00C301A000100000001 /* VibeInvitationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C01C301A000100000001 /* VibeInvitationsView.swift */; };
+		A4C0C00D301A000100000001 /* VibeManagementViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C01D301A000100000001 /* VibeManagementViews.swift */; };
+		E7100001301A000100000001 /* VibeEventModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7100011301A000100000001 /* VibeEventModels.swift */; };
+		E7100002301A000100000001 /* VibeEventsViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7100012301A000100000001 /* VibeEventsViews.swift */; };
 		846788EC2FFC2BD700DED05E /* StoriesAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846788EB2FFC2BD700DED05E /* StoriesAPIClient.swift */; };
 		846788EE2FFC2BF700DED05E /* StoriesModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846788ED2FFC2BF700DED05E /* StoriesModels.swift */; };
 		846788F02FFC2C0200DED05E /* StoriesRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846788EF2FFC2C0200DED05E /* StoriesRepository.swift */; };
@@ -116,6 +159,12 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		E50000000000000000000011 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		E50000000000000000000012 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		E50000000000000000000013 /* MainInterface.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = MainInterface.storyboard; sourceTree = "<group>"; };
+		E50000000000000000000016 /* WestreemShareExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WestreemShareExtension.entitlements; sourceTree = "<group>"; };
+		E50000000000000000000014 /* WestreemShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WestreemShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		E50000000000000000000015 /* IncomingShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomingShareSheet.swift; sourceTree = "<group>"; };
 		00284911F531EED24A1B0F42 /* AppRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRoute.swift; sourceTree = "<group>"; };
 		048C927F22ABD7E30850299B /* MicrodramasBrowseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MicrodramasBrowseView.swift; sourceTree = "<group>"; };
 		04C90508DEF2416C969716EC /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
@@ -157,6 +206,21 @@
 		843AC70F3011F215004FB5C3 /* MediaverseTabStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaverseTabStrip.swift; sourceTree = "<group>"; };
 		843AC711301211BE004FB5C3 /* IncomingLinkCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomingLinkCoordinator.swift; sourceTree = "<group>"; };
 		843AC7143012120A004FB5C3 /* HandoffResolverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandoffResolverView.swift; sourceTree = "<group>"; };
+		A4C0C011301A000100000001 /* SocialModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocialModels.swift; sourceTree = "<group>"; };
+		A4C0C012301A000100000001 /* SocialFeatureConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocialFeatureConfiguration.swift; sourceTree = "<group>"; };
+		A4C0C013301A000100000001 /* LegacySocialAPIAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacySocialAPIAdapter.swift; sourceTree = "<group>"; };
+		A4C0C014301A000100000001 /* AtmosphereViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtmosphereViewModel.swift; sourceTree = "<group>"; };
+		A4C0C015301A000100000001 /* AtmosphereView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtmosphereView.swift; sourceTree = "<group>"; };
+		A4C0C016301A000100000001 /* RippleCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleCard.swift; sourceTree = "<group>"; };
+		A4C0C017301A000100000001 /* RippleEngagementController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleEngagementController.swift; sourceTree = "<group>"; };
+		A4C0C018301A000100000001 /* SocialDestinationViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocialDestinationViews.swift; sourceTree = "<group>"; };
+		A4C0C01B301A000100000001 /* VibeAffiliationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeAffiliationsView.swift; sourceTree = "<group>"; };
+		A4C0C01C301A000100000001 /* VibeInvitationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeInvitationsView.swift; sourceTree = "<group>"; };
+		A4C0C01D301A000100000001 /* VibeManagementViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeManagementViews.swift; sourceTree = "<group>"; };
+		E7100011301A000100000001 /* VibeEventModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeEventModels.swift; sourceTree = "<group>"; };
+		E7100012301A000100000001 /* VibeEventsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeEventsViews.swift; sourceTree = "<group>"; };
+		A4C0C019301A000100000001 /* EchoVibeSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoVibeSheet.swift; sourceTree = "<group>"; };
+		A4C0C01A301A000100000001 /* RippleComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleComposer.swift; sourceTree = "<group>"; };
 		846788EB2FFC2BD700DED05E /* StoriesAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoriesAPIClient.swift; sourceTree = "<group>"; };
 		846788ED2FFC2BF700DED05E /* StoriesModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoriesModels.swift; sourceTree = "<group>"; };
 		846788EF2FFC2C0200DED05E /* StoriesRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoriesRepository.swift; sourceTree = "<group>"; };
@@ -217,6 +281,13 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		E50000000000000000000031 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		02B0BA9E035DF6D35360D7B1 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -241,6 +312,7 @@
 			children = (
 				8279F99B5DC950C1401F5EFD /* Mediaverse.app */,
 				25BF1A786BBBB58C59AFF35C /* MediaverseTests.xctest */,
+				E50000000000000000000014 /* WestreemShareExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -454,6 +526,11 @@
 				84366B0430061680009977FA /* Mediaverse.entitlements */,
 				791DB8710C9B711EEDC3A50F /* Models */,
 				33A49384FA011542146DC570 /* Navigation */,
+				A4C0C020301A000100000001 /* Social Contracts */,
+				A4C0C021301A000100000001 /* Social Atmosphere */,
+				A4C0C022301A000100000001 /* Social Ripples */,
+				A4C0C023301A000100000001 /* Social Vibes */,
+				E7100021301A000100000001 /* Social Events */,
 				71BEE56A7AB2A21372CEF785 /* Services */,
 				E31173AD82616B8E70C41238 /* Utilities */,
 				CD024875B3057A968077CEE8 /* Views */,
@@ -468,7 +545,75 @@
 				8467891B2FFD93FD00DED05E /* ViewModels */,
 				877E5A2E84907C5FB29F1CC6 /* Frameworks */,
 				873010BA2AE5CCAC0AAAE368 /* MediaverseTests */,
+				E50000000000000000000021 /* ShareExtension */,
 			);
+			sourceTree = "<group>";
+		};
+		A4C0C020301A000100000001 /* Social Contracts */ = {
+			isa = PBXGroup;
+			children = (
+				A4C0C011301A000100000001 /* SocialModels.swift */,
+				A4C0C012301A000100000001 /* SocialFeatureConfiguration.swift */,
+				A4C0C013301A000100000001 /* LegacySocialAPIAdapter.swift */,
+			);
+			name = "Social Contracts";
+			path = Social/Contracts;
+			sourceTree = "<group>";
+		};
+		A4C0C021301A000100000001 /* Social Atmosphere */ = {
+			isa = PBXGroup;
+			children = (
+				A4C0C014301A000100000001 /* AtmosphereViewModel.swift */,
+				A4C0C015301A000100000001 /* AtmosphereView.swift */,
+			);
+			name = "Social Atmosphere";
+			path = Social/Atmosphere;
+			sourceTree = "<group>";
+		};
+		A4C0C022301A000100000001 /* Social Ripples */ = {
+			isa = PBXGroup;
+			children = (
+				A4C0C016301A000100000001 /* RippleCard.swift */,
+				A4C0C017301A000100000001 /* RippleEngagementController.swift */,
+				A4C0C019301A000100000001 /* EchoVibeSheet.swift */,
+				A4C0C01A301A000100000001 /* RippleComposer.swift */,
+				E50000000000000000000015 /* IncomingShareSheet.swift */,
+			);
+			name = "Social Ripples";
+			path = Social/Ripples;
+			sourceTree = "<group>";
+		};
+		E50000000000000000000021 /* ShareExtension */ = {
+			isa = PBXGroup;
+			children = (
+				E50000000000000000000011 /* ShareViewController.swift */,
+				E50000000000000000000012 /* Info.plist */,
+				E50000000000000000000013 /* MainInterface.storyboard */,
+				E50000000000000000000016 /* WestreemShareExtension.entitlements */,
+			);
+			path = ShareExtension;
+			sourceTree = "<group>";
+		};
+		A4C0C023301A000100000001 /* Social Vibes */ = {
+			isa = PBXGroup;
+			children = (
+				A4C0C018301A000100000001 /* SocialDestinationViews.swift */,
+				A4C0C01B301A000100000001 /* VibeAffiliationsView.swift */,
+				A4C0C01C301A000100000001 /* VibeInvitationsView.swift */,
+				A4C0C01D301A000100000001 /* VibeManagementViews.swift */,
+			);
+			name = "Social Vibes";
+			path = Social/Vibes;
+			sourceTree = "<group>";
+		};
+		E7100021301A000100000001 /* Social Events */ = {
+			isa = PBXGroup;
+			children = (
+				E7100011301A000100000001 /* VibeEventModels.swift */,
+				E7100012301A000100000001 /* VibeEventsViews.swift */,
+			);
+			name = "Social Events";
+			path = Social/Events;
 			sourceTree = "<group>";
 		};
 		CD024875B3057A968077CEE8 /* Views */ = {
@@ -577,15 +722,34 @@
 				E2ACE6D20D33089F5A902453 /* Sources */,
 				8275042644AAC1068F42F1DF /* Frameworks */,
 				553F0AC685CB7977524595B8 /* Resources */,
+				E50000000000000000000034 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				E50000000000000000000062 /* PBXTargetDependency */,
 			);
 			name = Mediaverse;
 			productName = Mediaverse;
 			productReference = 8279F99B5DC950C1401F5EFD /* Mediaverse.app */;
 			productType = "com.apple.product-type.application";
+		};
+		E50000000000000000000041 /* WestreemShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E50000000000000000000053 /* Build configuration list for PBXNativeTarget "WestreemShareExtension" */;
+			buildPhases = (
+				E50000000000000000000033 /* Sources */,
+				E50000000000000000000031 /* Frameworks */,
+				E50000000000000000000032 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = WestreemShareExtension;
+			productName = WestreemShareExtension;
+			productReference = E50000000000000000000014 /* WestreemShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -620,11 +784,20 @@
 			targets = (
 				FA640C03D22EB3B57265CB31 /* Mediaverse */,
 				109571F60D591CBC5E08B3A8 /* MediaverseTests */,
+				E50000000000000000000041 /* WestreemShareExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		E50000000000000000000032 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E50000000000000000000002 /* MainInterface.storyboard in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		553F0AC685CB7977524595B8 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -645,6 +818,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		E50000000000000000000033 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E50000000000000000000001 /* ShareViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		733ED63B7B2D338EEBB05468 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -658,6 +839,22 @@
 			buildActionMask = 2147483647;
 			files = (
 				84366B0A3006CC08009977FA /* PushNotificationManager.swift in Sources */,
+				A4C0C001301A000100000001 /* SocialModels.swift in Sources */,
+				A4C0C002301A000100000001 /* SocialFeatureConfiguration.swift in Sources */,
+				A4C0C003301A000100000001 /* LegacySocialAPIAdapter.swift in Sources */,
+				A4C0C004301A000100000001 /* AtmosphereViewModel.swift in Sources */,
+				A4C0C005301A000100000001 /* AtmosphereView.swift in Sources */,
+				A4C0C006301A000100000001 /* RippleCard.swift in Sources */,
+				A4C0C007301A000100000001 /* RippleEngagementController.swift in Sources */,
+				A4C0C008301A000100000001 /* SocialDestinationViews.swift in Sources */,
+				A4C0C009301A000100000001 /* EchoVibeSheet.swift in Sources */,
+				A4C0C00A301A000100000001 /* RippleComposer.swift in Sources */,
+				E50000000000000000000004 /* IncomingShareSheet.swift in Sources */,
+				A4C0C00B301A000100000001 /* VibeAffiliationsView.swift in Sources */,
+				A4C0C00C301A000100000001 /* VibeInvitationsView.swift in Sources */,
+				A4C0C00D301A000100000001 /* VibeManagementViews.swift in Sources */,
+				E7100001301A000100000001 /* VibeEventModels.swift in Sources */,
+				E7100002301A000100000001 /* VibeEventsViews.swift in Sources */,
 				8467891E2FFD942100DED05E /* ViewerCountChip.swift in Sources */,
 				846788FD2FFC316000DED05E /* StoryProjectModel.swift in Sources */,
 				846788FF2FFC318000DED05E /* ProjectStore.swift in Sources */,
@@ -753,6 +950,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		E50000000000000000000062 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E50000000000000000000041 /* WestreemShareExtension */;
+			targetProxy = E50000000000000000000061 /* PBXContainerItemProxy */;
+		};
 		7CEBFB03BB0B1FFB93BDA24F /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			name = Mediaverse;
@@ -762,6 +964,50 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		E50000000000000000000051 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ShareExtension/WestreemShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = LPXBZ2LJZ8;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.13;
+				PRODUCT_BUNDLE_IDENTIFIER = com.westreem.app.share;
+				PRODUCT_MODULE_NAME = WestreemShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		E50000000000000000000052 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ShareExtension/WestreemShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = LPXBZ2LJZ8;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.13;
+				PRODUCT_BUNDLE_IDENTIFIER = com.westreem.app.share;
+				PRODUCT_MODULE_NAME = WestreemShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		0CCE54F3C7EDE59FA89285C1 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -872,7 +1118,6 @@
 			buildSettings = {
 				ASETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				ASSETCATALOG_COMPILER_APPICON_NAME = "appicon-gradient";
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_ENTITLEMENTS = Mediaverse.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -916,7 +1161,6 @@
 			buildSettings = {
 				ASETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				ASSETCATALOG_COMPILER_APPICON_NAME = "appicon-gradient";
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_ENTITLEMENTS = Mediaverse.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -959,6 +1203,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		E50000000000000000000053 /* Build configuration list for PBXNativeTarget "WestreemShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E50000000000000000000051 /* Debug */,
+				E50000000000000000000052 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		3A34381A4E58A598D2869596 /* Build configuration list for PBXProject "Mediaverse" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

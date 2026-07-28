@@ -1,5 +1,170 @@
 import SwiftUI
 
+struct NotificationPreferences: Decodable, Equatable {
+    var notifyComments: Bool
+    var notifyLikes: Bool
+    var notifyReplies: Bool
+    var notifyNewContent: Bool
+    var notifyMentions: Bool
+    var notifyVibeActivity: Bool
+    var emailNewContent: Bool
+    var emailComments: Bool
+    var emailMarketing: Bool
+}
+
+private struct NotificationPreferencesView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var preferences: NotificationPreferences?
+    @State private var saving = Set<NotificationPreferenceField>()
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let preferences {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 22) {
+                            preferenceSection(
+                                "IN-APP NOTIFICATIONS",
+                                fields: [
+                                    (.notifyComments, "Comments on my content", "When someone comments on your videos or Ripples"),
+                                    (.notifyLikes, "Energy and comment likes", "When someone adds Energy or likes your comment"),
+                                    (.notifyReplies, "Replies to my comments", "When someone replies to a comment you left"),
+                                    (.notifyNewContent, "New content from follows", "Uploads and Ripples from people, Shows, Channels, and Vibes you follow"),
+                                    (.notifyMentions, "Mentions", "When someone mentions you in a Ripple or comment"),
+                                    (.notifyVibeActivity, "Vibe activity", "Invitations, moderation updates, and when a moderator pins your Ripple")
+                                ],
+                                preferences: preferences
+                            )
+                            preferenceSection(
+                                "EMAIL NOTIFICATIONS",
+                                fields: [
+                                    (.emailNewContent, "New content digest", "A summary of new content from your follows"),
+                                    (.emailComments, "Comments and replies", "Email when someone engages with your content"),
+                                    (.emailMarketing, "Westreem updates", "Product news and announcements")
+                                ],
+                                preferences: preferences
+                            )
+                            if let errorMessage {
+                                Text(errorMessage)
+                                    .font(.footnote)
+                                    .foregroundStyle(.red)
+                            }
+                        }
+                        .padding(C.pagePad)
+                    }
+                } else {
+                    ProgressView("Loading preferences…")
+                        .tint(C.watch)
+                }
+            }
+            .background(C.bg.ignoresSafeArea())
+            .navigationTitle("Notification Preferences")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(C.watch)
+                }
+            }
+            .task { await load() }
+        }
+    }
+
+    private func preferenceSection(
+        _ title: String,
+        fields: [(NotificationPreferenceField, String, String)],
+        preferences: NotificationPreferences
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(C.textMuted)
+            VStack(spacing: 0) {
+                ForEach(Array(fields.enumerated()), id: \.element.0) { index, field in
+                    Toggle(
+                        isOn: Binding(
+                            get: { value(of: field.0, in: preferences) },
+                            set: { enabled in
+                                Task { await update(field.0, enabled: enabled) }
+                            }
+                        )
+                    ) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(field.1)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(C.text)
+                            Text(field.2)
+                                .font(.caption)
+                                .foregroundStyle(C.textMuted)
+                        }
+                    }
+                    .tint(C.watch)
+                    .disabled(saving.contains(field.0))
+                    .padding(.vertical, 12)
+                    if index < fields.count - 1 {
+                        Divider().overlay(C.borderSubtle)
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .background(C.surface, in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(C.borderSubtle))
+        }
+    }
+
+    @MainActor
+    private func load() async {
+        do {
+            preferences = try await APIClient.shared.fetchNotificationPreferences()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func update(_ field: NotificationPreferenceField, enabled: Bool) async {
+        guard !saving.contains(field) else { return }
+        saving.insert(field)
+        errorMessage = nil
+        do {
+            preferences = try await APIClient.shared.updateNotificationPreference(field, enabled: enabled)
+        } catch {
+            errorMessage = "Could not save notification preferences."
+        }
+        saving.remove(field)
+    }
+
+    private func value(
+        of field: NotificationPreferenceField,
+        in preferences: NotificationPreferences
+    ) -> Bool {
+        switch field {
+        case .notifyComments: preferences.notifyComments
+        case .notifyLikes: preferences.notifyLikes
+        case .notifyReplies: preferences.notifyReplies
+        case .notifyNewContent: preferences.notifyNewContent
+        case .notifyMentions: preferences.notifyMentions
+        case .notifyVibeActivity: preferences.notifyVibeActivity
+        case .emailNewContent: preferences.emailNewContent
+        case .emailComments: preferences.emailComments
+        case .emailMarketing: preferences.emailMarketing
+        }
+    }
+}
+
+enum NotificationPreferenceField: String, CaseIterable {
+    case notifyComments
+    case notifyLikes
+    case notifyReplies
+    case notifyNewContent
+    case notifyMentions
+    case notifyVibeActivity
+    case emailNewContent
+    case emailComments
+    case emailMarketing
+}
+
 /// Notifications inbox scoped to the active context.
 struct NotificationsView: View {
 
@@ -13,6 +178,7 @@ struct NotificationsView: View {
     @State private var isLoading = true
     @State private var isMarkingRead = false
     @State private var route: AppRoute?
+    @State private var showsPreferences = false
     @State private var notificationMutationGeneration = 0
 
     init(onUnreadCountChange: ((Int) -> Void)? = nil) {
@@ -48,7 +214,15 @@ struct NotificationsView: View {
                         .foregroundStyle(C.watch)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    if hasUnreadNotifications {
+                    HStack(spacing: 14) {
+                        Button {
+                            showsPreferences = true
+                        } label: {
+                            Image(systemName: "slider.horizontal.3")
+                        }
+                        .accessibilityLabel("Notification preferences")
+
+                        if hasUnreadNotifications {
                         Button {
                             Task { await markAllAsRead() }
                         } label: {
@@ -62,6 +236,7 @@ struct NotificationsView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(C.watch)
                         .disabled(isMarkingRead)
+                        }
                     }
                 }
             }
@@ -69,6 +244,9 @@ struct NotificationsView: View {
                 routeDestination(route)
             }
             .task { await load() }
+            .sheet(isPresented: $showsPreferences) {
+                NotificationPreferencesView()
+            }
         }
     }
 
@@ -238,13 +416,11 @@ struct NotificationsView: View {
     private func markAsReadIfNeeded(_ notif: AppNotification) async {
         guard !notif.read else { return }
         notificationMutationGeneration &+= 1
-        setNotification(notif.id, read: true)
-        publishUnreadCount(unreadCount)
-
         do {
-            try await APIClient.shared.markNotificationRead(id: notif.id)
+            try await APIClient.shared.markNotificationsRead()
+            notifs = notifs.map { notification($0, read: true) }
+            publishUnreadCount(0)
         } catch {
-            setNotification(notif.id, read: false)
             publishUnreadCount(unreadCount)
         }
     }
@@ -299,6 +475,7 @@ struct NotificationsView: View {
         case .episode(let id): EpisodeWatchView(episodeId: id)
         case .channel(let id): ChannelView(handle: id)
         case .show(let id): ShowView(showId: id)
+        case .showSeason(let showId, let seasonId): ShowView(showId: showId, initialSeasonId: seasonId)
         case .showAccess(let showId, let productId, let intent, let handoffId):
             ShowView(showId: showId, handoffProductId: productId, handoffIntent: intent, handoffPublicId: handoffId)
         case .handoff(let id): HandoffResolverView(publicId: id)
@@ -307,6 +484,14 @@ struct NotificationsView: View {
         case .microdramaShow(let id): MicrodramaShowView(showId: id)
         case .microdramaWatch(let id): MicrodramaWatchView(showId: id)
         case .microdramaWatchEp(let id, let episodeNumber): MicrodramaWatchView(showId: id, startEpisodeNumber: episodeNumber)
+        case .vibe(let slug): VibeDetailView(slug: slug)
+        case .vibeManagement(let slug, let tab): VibeDetailView(slug: slug, initialManagementTab: tab)
+        case .vibeInvite(let token): VibeInviteAcceptView(token: token)
+        case .event(let slug): VibeEventDetailView(slug: slug)
+        case .eventInvite(let token): VibeEventInviteView(token: token)
+        case .ripple(let postId): RippleDetailView(postId: postId)
+        case .atmo(let handle): AtmoProfileView(handle: handle)
+        case .search(let query): SearchView(initialQuery: query)
         }
     }
 }
@@ -411,16 +596,31 @@ private struct NotifRow: View {
         // aliases like "comment"/"like" that never matched, so everything showed a bell.)
         switch type.lowercased() {
         case "new_comment", "comment_reply", "comment_removed",
-             "post_comment", "post_comment_reply", "comment":
+             "post_comment", "post_comment_reply", "comment",
+             "ripple_comment", "ripple_reply":
             return "bubble.left.fill"
         case "comment_like", "post_comment_liked", "post_liked", "story_like", "like":
             return "heart.fill"
-        case "mention", "story_mention":
+        case "ripple_energy", "ripple_photo_energy", "flash_energy":
+            return "bolt.fill"
+        case "ripple_echo":
+            return "wave.3.right"
+        case "mention", "story_mention", "ripple_mention":
             return "at"
-        case "new_follower", "following", "follow":
+        case "new_follower", "following", "follow", "vibe_follow":
             return "person.badge.plus"
-        case "new_episode", "new_video":
+        case "new_episode", "new_video", "vibe_new_ripple":
             return "play.rectangle.fill"
+        case "vibe_join_request", "vibe_join_decision", "vibe_invite":
+            return "person.2.fill"
+        case "vibe_moderation":
+            return "shield.fill"
+        case "ripple_pinned", "ripple_unpinned":
+            return "pin.fill"
+        case "vibe_affiliation_request", "vibe_affiliation_approved",
+             "vibe_affiliation_rejected", "vibe_affiliation_revoked",
+             "vibe_affiliation_cancelled":
+            return "link"
         case "upload_complete", "upload":
             return "arrow.up.circle.fill"
         case "partner_approved":
@@ -442,14 +642,30 @@ private struct NotifRow: View {
 
     private func typeLabel(_ type: String) -> String {
         switch type.lowercased() {
-        case "new_comment", "post_comment":            return "Comment"
-        case "comment_reply", "post_comment_reply":    return "Reply"
+        case "new_comment", "post_comment", "ripple_comment": return "Comment"
+        case "comment_reply", "post_comment_reply", "ripple_reply": return "Reply"
         case "comment_like", "post_comment_liked":     return "Like"
         case "post_liked":                             return "Post Like"
-        case "story_like":                             return "Story Like"
-        case "mention", "story_mention":               return "Mention"
+        case "story_like":                             return "Flash Like"
+        case "ripple_energy":                          return "Ripple Energy"
+        case "ripple_photo_energy":                    return "Photo Energy"
+        case "flash_energy":                           return "Flash Energy"
+        case "ripple_echo":                            return "Echo"
+        case "mention", "story_mention", "ripple_mention": return "Mention"
         case "comment_removed":                        return "Moderation"
-        case "new_follower", "following":              return "Follower"
+        case "new_follower", "following", "vibe_follow": return "Follower"
+        case "vibe_join_request":                      return "Join Request"
+        case "vibe_join_decision":                     return "Membership"
+        case "vibe_invite":                            return "Vibe Invite"
+        case "vibe_moderation":                        return "Vibe Moderation"
+        case "ripple_pinned":                          return "Pinned Ripple"
+        case "ripple_unpinned":                        return "Unpinned Ripple"
+        case "vibe_new_ripple":                        return "New Ripple"
+        case "vibe_affiliation_request":               return "Affiliation Request"
+        case "vibe_affiliation_approved":              return "Affiliation Approved"
+        case "vibe_affiliation_rejected":              return "Affiliation Rejected"
+        case "vibe_affiliation_revoked":               return "Affiliation Revoked"
+        case "vibe_affiliation_cancelled":             return "Affiliation Cancelled"
         case "new_episode":                            return "New Episode"
         case "new_video":                              return "New Video"
         case "upload_complete":                        return "Upload Ready"

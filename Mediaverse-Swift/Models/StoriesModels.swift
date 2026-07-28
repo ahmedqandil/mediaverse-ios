@@ -246,6 +246,9 @@ struct StoryItem: Codable, Identifiable, Equatable {
     let viewCount:   Int
     var likeCount:   Int
     var userLiked:   Bool
+    var energyCount: Int
+    var energyTotal: Int
+    var energyTags:  [String: Int]
     var seen:        Bool
 
     /// Convenience: all mention overlays
@@ -259,20 +262,23 @@ struct StoryItem: Codable, Identifiable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id, mediaUrl, mediaType, duration, caption, captionHtml
         case overlays, mentions, storyMentions   // accept all forms
-        case ctaLabel, ctaUrl, expiresAt, createdAt, viewCount, likeCount, userLiked, liked, myLike, seen
+        case ctaLabel, ctaUrl, expiresAt, createdAt, viewCount, likeCount, userLiked, liked, myLike
+        case energyCount, energyTotal, energyTags, seen
     }
 
     init(
         id: String, mediaUrl: String, mediaType: String, duration: Int,
         caption: String?, captionHtml: String? = nil, overlays: [StoryOverlay] = [],
         ctaLabel: String?, ctaUrl: String?,
-        expiresAt: Date, createdAt: Date, viewCount: Int, likeCount: Int = 0, userLiked: Bool = false, seen: Bool
+        expiresAt: Date, createdAt: Date, viewCount: Int, likeCount: Int = 0, userLiked: Bool = false,
+        energyCount: Int = 0, energyTotal: Int = 0, energyTags: [String: Int] = [:], seen: Bool
     ) {
         self.id = id; self.mediaUrl = mediaUrl; self.mediaType = mediaType
         self.duration = duration; self.caption = caption; self.captionHtml = captionHtml
         self.overlays = overlays; self.ctaLabel = ctaLabel; self.ctaUrl = ctaUrl
         self.expiresAt = expiresAt; self.createdAt = createdAt
         self.viewCount = viewCount; self.likeCount = likeCount; self.userLiked = userLiked; self.seen = seen
+        self.energyCount = energyCount; self.energyTotal = energyTotal; self.energyTags = energyTags
     }
 
     init(from decoder: Decoder) throws {
@@ -293,6 +299,9 @@ struct StoryItem: Codable, Identifiable, Equatable {
             ?? c.decodeIfPresent(Bool.self, forKey: .liked)
             ?? c.decodeIfPresent(Bool.self, forKey: .myLike)
             ?? false
+        energyCount = try c.decodeIfPresent(Int.self, forKey: .energyCount) ?? 0
+        energyTotal = try c.decodeIfPresent(Int.self, forKey: .energyTotal) ?? 0
+        energyTags = try c.decodeIfPresent([String: Int].self, forKey: .energyTags) ?? [:]
         seen        = try c.decodeIfPresent(Bool.self,   forKey: .seen)        ?? false
 
         // Decode overlays from the new `overlays` field, fall back to legacy `mentions`
@@ -323,6 +332,9 @@ struct StoryItem: Codable, Identifiable, Equatable {
         try c.encode(viewCount, forKey: .viewCount)
         try c.encode(likeCount, forKey: .likeCount)
         try c.encode(userLiked, forKey: .userLiked)
+        try c.encode(energyCount, forKey: .energyCount)
+        try c.encode(energyTotal, forKey: .energyTotal)
+        try c.encode(energyTags, forKey: .energyTags)
         try c.encode(seen,      forKey: .seen)
     }
 }

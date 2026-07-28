@@ -34,6 +34,15 @@ struct CollectionsView: View {
         }
     }
 
+    private var availableTabs: [CollectionTab] {
+        guard !isLoading else { return CollectionTab.allCases }
+        var tabs: [CollectionTab] = [.mine]
+        if !publicCollections.isEmpty {
+            tabs.append(.communities)
+        }
+        return tabs
+    }
+
     var body: some View {
         ZStack {
             C.bg.ignoresSafeArea()
@@ -46,7 +55,9 @@ struct CollectionsView: View {
                 ProgressView().tint(C.watch)
             } else {
                 VStack(spacing: 0) {
-                    tabBar
+                    if availableTabs.count > 1 {
+                        tabBar
+                    }
                     if activeTab == .mine {
                         if collections.isEmpty {
                             emptyState
@@ -122,11 +133,11 @@ struct CollectionsView: View {
 
     private var tabBar: some View {
         MediaverseUnderlineTabStrip(
-            items: CollectionTab.allCases.map { MediaverseTabItem(id: $0.id, label: $0.label) },
+            items: availableTabs.map { MediaverseTabItem(id: $0.id, label: $0.label) },
             selectedID: activeTab.id,
             fillsWidth: false
         ) { id in
-            guard let tab = CollectionTab.allCases.first(where: { $0.id == id }) else { return }
+            guard let tab = availableTabs.first(where: { $0.id == id }) else { return }
             activeTab = tab
         }
     }
@@ -224,6 +235,9 @@ struct CollectionsView: View {
         publicCollections = refreshedPublicCollections
         followingCollectionIds = Set(publicCollections.filter { $0.isFollowing }.map(\.id))
         isLoading = false
+        if !availableTabs.contains(activeTab), let first = availableTabs.first {
+            activeTab = first
+        }
     }
 
     private func toggleFollow(_ col: Collection) async {
@@ -473,13 +487,7 @@ private struct CreateCollectionSheet: View {
                         )
 
                         if let err = errorMsg {
-                            Text(err)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.red)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            WestreemFeedbackBanner(message: err)
                         }
                     }
                     .padding(.horizontal, C.pagePad)
@@ -536,31 +544,15 @@ private struct CreateCollectionSheet: View {
     }
 
     private func collectionTextField(title label: String, placeholder: String, text: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(label)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(C.textMuted)
-
+        WestreemFormPanel(label) {
             TextField(placeholder, text: text)
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(C.text)
-                .tint(C.watch)
-                .padding(.horizontal, 16)
-                .frame(height: 54)
-                .background(C.elevated.opacity(0.88), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(C.borderSubtle, lineWidth: 1)
-                }
+                .westreemField(minHeight: 52)
         }
     }
 
     private func segmentedSection(title label: String, options: [(String, String)], selection: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(label)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(C.textMuted)
-
+        WestreemFormPanel(label) {
             HStack(spacing: 6) {
                 ForEach(options, id: \.0) { value, title in
                     Button {

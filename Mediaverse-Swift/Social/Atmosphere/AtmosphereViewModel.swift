@@ -1,0 +1,195 @@
+import Foundation
+
+@MainActor
+final class AtmosphereViewModel: ObservableObject {
+    enum Tab: String, CaseIterable, Identifiable {
+        case atmosphere
+        case discover
+        case myVibes
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .atmosphere: "The Atmosphere"
+            case .discover: "Discover"
+            case .myVibes: "My Vibes"
+            }
+        }
+    }
+
+    enum LoadState: Equatable {
+        case idle
+        case loading
+        case loaded
+        case failed(String)
+    }
+
+    @Published var selectedTab: Tab = .atmosphere
+    @Published private(set) var atmosphereItems: [AtmosphereFeedItem] = []
+    @Published private(set) var discoveredRipples: [Ripple] = []
+    @Published private(set) var discoverMode: SocialDiscoverMode = .forYou
+    @Published private(set) var emptyDiscoverModes = Set<SocialDiscoverMode>()
+    @Published private(set) var myVibes: [VibeSummary] = []
+    @Published private(set) var stateByTab: [Tab: LoadState] = [:]
+    @Published private(set) var curationListings: [AssembledListing] = []
+
+    private let api: LegacySocialAPIAdapter
+    private var hasLoadedCuration = false
+    private var hasCheckedAffiliatedAvailability = false
+
+    init(api: LegacySocialAPIAdapter = LegacySocialAPIAdapter(transport: APIClient.shared)) {
+        self.api = api
+    }
+
+    func select(_ tab: Tab) {
+        selectedTab = tab
+        Task { await loadIfNeeded(tab) }
+    }
+
+    func loadIfNeeded(_ tab: Tab? = nil) async {
+        let tab = tab ?? selectedTab
+        await loadCurationIfNeeded()
+        guard stateByTab[tab] == nil || stateByTab[tab] == .idle else { return }
+        await load(tab)
+    }
+
+    func reload(_ tab: Tab? = nil) async {
+        await load(tab ?? selectedTab)
+    }
+
+    func selectDiscoverMode(_ mode: SocialDiscoverMode) {
+        guard discoverMode != mode else { return }
+        discoverMode = mode
+        discoveredRipples = []
+        stateByTab[.discover] = .idle
+        Task { await load(.discover) }
+    }
+
+    var availableDiscoverModes: [SocialDiscoverMode] {
+        SocialDiscoverMode.allCases.filter { mode in
+            mode == .forYou || !emptyDiscoverModes.contains(mode)
+        }
+    }
+
+    func prepend(_ ripple: Ripple) {
+        atmosphereItems.insert(.ripple(ripple), at: 0)
+    }
+
+    var atmosphereFeedListing: AssembledListing? {
+        curationListings.first { $0.normalizedTemplateType == "atmosphere_feed" }
+    }
+
+    var beforeFeedListings: [AssembledListing] {
+        let injected = Set(atmosphereFeedListing?.feedSlots?.map(\.listingId) ?? [])
+        guard let index = curationListings.firstIndex(where: { $0.normalizedTemplateType == "atmosphere_feed" }) else {
+            return curationListings.filter {
+                $0.normalizedTemplateType != "atmosphere_feed"
+                    && !injected.contains($0.listingId)
+            }
+        }
+        return curationListings[..<index].filter { !injected.contains($0.listingId) }
+    }
+
+    var afterFeedListings: [AssembledListing] {
+        guard let index = curationListings.firstIndex(where: { $0.normalizedTemplateType == "atmosphere_feed" }) else {
+            return []
+        }
+        let injected = Set(atmosphereFeedListing?.feedSlots?.map(\.listingId) ?? [])
+        return curationListings.suffix(from: curationListings.index(after: index))
+            .filter { !injected.contains($0.listingId) }
+    }
+
+    var inlineListings: [AssembledListing] {
+        guard let feed = atmosphereFeedListing else { return [] }
+        return Array((feed.feedSlots ?? []).prefix(max(0, feed.feedConfig?.mobileCount ?? 2)))
+    }
+
+    var inlineEvery: Int {
+        guard atmosphereFeedListing != nil else { return 0 }
+        return max(1, atmosphereFeedListing?.feedConfig?.mobileEvery ?? 5)
+    }
+
+    private func loadCurationIfNeeded() async {
+        guard !hasLoadedCuration else { return }
+        hasLoadedCuration = true
+        do {
+            let page = try await CurationManager.shared.fetchPage(key: "atmosphere")
+            curationListings = page.activeListings
+            #if DEBUG
+            print("[social-ui] atmosphere curation listings=\(curationListings.count)")
+            #endif
+        } catch {
+            // Curation is presentation-only. Organic social feeds remain available.
+            curationListings = []
+            #if DEBUG
+            print("[social-ui] atmosphere curation failed=\(String(describing: error))")
+            #endif
+        }
+    }
+
+    private func load(_ tab: Tab) async {
+        stateByTab[tab] = .loading
+        do {
+            switch tab {
+            case .atmosphere:
+                atmosphereItems = try await api.atmosphere().items
+            case .discover:
+                let requestedMode = discoverMode
+                let response = try await api.discover(mode: requestedMode)
+                guard requestedMode == discoverMode else { return }
+                discoveredRipples = response.posts
+                if response.posts.isEmpty {
+                    emptyDiscoverModes.insert(requestedMode)
+                } else {
+                    emptyDiscoverModes.remove(requestedMode)
+                }
+                if requestedMode != .affiliated {
+                    Task { await checkAffiliatedAvailability() }
+                }
+            case .myVibes:
+                myVibes = try await api.myVibes().clubs
+            }
+            stateByTab[tab] = .loaded
+            #if DEBUG
+            let count: Int
+            switch tab {
+            case .atmosphere: count = atmosphereItems.count
+            case .discover: count = discoveredRipples.count
+            case .myVibes: count = myVibes.count
+            }
+            print("[social-ui] \(tab.rawValue) decoded=\(count)")
+            #endif
+        } catch is CancellationError {
+            stateByTab[tab] = .idle
+        } catch {
+            stateByTab[tab] = .failed(Self.message(for: error))
+            #if DEBUG
+            print("[social-ui] \(tab.rawValue) failed=\(String(describing: error))")
+            #endif
+        }
+    }
+
+    private func checkAffiliatedAvailability() async {
+        guard !hasCheckedAffiliatedAvailability else { return }
+        hasCheckedAffiliatedAvailability = true
+        do {
+            let response = try await api.discover(mode: .affiliated)
+            if response.posts.isEmpty {
+                emptyDiscoverModes.insert(.affiliated)
+            } else {
+                emptyDiscoverModes.remove(.affiliated)
+            }
+        } catch {
+            // Keep the filter available when the server cannot confirm its state.
+            hasCheckedAffiliatedAvailability = false
+        }
+    }
+
+    private static func message(for error: Error) -> String {
+        if let apiError = error as? APIError {
+            return apiError.localizedDescription
+        }
+        return "This part of The Atmosphere could not be loaded."
+    }
+}

@@ -206,7 +206,7 @@ struct ShowsBrowseView: View {
     }
 
     private var genreSubtabs: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        WestreemHorizontalScrollView(showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(showGenres, id: \.self) { genre in
                     GenrePill(label: genre, selected: selectedGenre == genre) {
@@ -503,7 +503,7 @@ private struct ShowsCarousel: View {
                 }
                 .padding(.horizontal, C.pagePad)
 
-                ScrollView(.horizontal, showsIndicators: false) {
+                WestreemHorizontalScrollView(showsIndicators: false) {
                     HStack(spacing: CarouselCardMetrics.spacing) {
                         ForEach(uniqueShows) { show in
                             NavigationLink(value: AppRoute.show(show.id)) {
@@ -604,15 +604,24 @@ struct ShowPosterCard: View {
 struct GenrePill: View {
     let label: String
     let selected: Bool
+    var isLoading = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Text(label)
+            HStack(spacing: 6) {
+                Text(label)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(selected ? .black : C.watch)
+                        .accessibilityHidden(true)
+                }
+            }
                 .font(.caption.weight(selected ? .semibold : .medium))
                 .foregroundStyle(selected ? Color.black : C.text)
-                .lineLimit(1)
-                .minimumScaleFactor(0.82)
                 .padding(.horizontal, 14)
                 .frame(minWidth: C.tabPillMinWidth)
                 .frame(height: C.tabPillHeight)
@@ -620,7 +629,9 @@ struct GenrePill: View {
                 .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+        .disabled(isLoading)
         .animation(.easeInOut(duration: 0.18), value: selected)
+        .animation(.easeInOut(duration: 0.18), value: isLoading)
     }
 }
 

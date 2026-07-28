@@ -7,10 +7,14 @@ enum CommentThreadTarget: Equatable {
     case episode(String)
     case collection(String)
     case post(String)
+    case ripple(String)
+    case ripplePhoto(String)
 
     var id: String {
         switch self {
-        case .video(let id), .episode(let id), .collection(let id), .post(let id): return id
+        case .video(let id), .episode(let id), .collection(let id), .post(let id),
+             .ripple(let id), .ripplePhoto(let id):
+            return id
         }
     }
 }
@@ -120,6 +124,7 @@ struct CommentThreadView: View {
     @State private var likedCommentIds = Set<String>()
     @State private var flaggedCommentIds = Set<String>()
     @State private var loadError: String? = nil
+    @State private var submitError: String? = nil
     @State private var replyTarget: Comment? = nil
     @FocusState private var isComposerFocused: Bool
 
@@ -204,6 +209,8 @@ struct CommentThreadView: View {
 
     private var supportsCommentFlags: Bool {
         if case .post = target { return false }
+        if case .ripple = target { return false }
+        if case .ripplePhoto = target { return false }
         return true
     }
 
@@ -290,6 +297,13 @@ struct CommentThreadView: View {
 
                 MentionAutocompletePanel(text: $commentText)
                     .zIndex(1)
+
+                if let submitError {
+                    Text(submitError)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.red.opacity(0.9))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
     }
@@ -432,9 +446,9 @@ struct CommentThreadView: View {
 
     @MainActor
     private func focusComposerAfterSheetPresentation() async {
-        guard inputPosition == .bottom, auth.isAuthenticated else { return }
-        try? await Task.sleep(nanoseconds: 120_000_000)
-        guard inputPosition == .bottom, auth.isAuthenticated else { return }
+        guard auth.isAuthenticated else { return }
+        try? await Task.sleep(nanoseconds: inputPosition == .bottom ? 120_000_000 : 220_000_000)
+        guard auth.isAuthenticated else { return }
         isComposerFocused = true
     }
 
@@ -470,6 +484,16 @@ struct CommentThreadView: View {
         case .post(let id):
             let postComments = try await APIClient.shared.fetchPostComments(postId: id)
             return postComments.map { $0.asSharedComment }
+        case .ripple(let id):
+            let comments = try await LegacySocialAPIAdapter(
+                transport: APIClient.shared
+            ).rippleComments(postId: id)
+            return comments.map(\.asSharedComment)
+        case .ripplePhoto(let id):
+            let comments = try await LegacySocialAPIAdapter(
+                transport: APIClient.shared
+            ).ripplePhotoComments(attachmentId: id)
+            return comments.map(\.asSharedComment)
         }
     }
 
@@ -477,6 +501,7 @@ struct CommentThreadView: View {
         let text = commentText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard auth.isAuthenticated, !text.isEmpty, !isSubmitting else { return }
         isSubmitting = true
+        submitError = nil
         do {
             if let replyTarget {
                 let reply = try await postTargetComment(content: text, parentId: replyTarget.id)
@@ -493,7 +518,10 @@ struct CommentThreadView: View {
             commentText = ""
             isComposerFocused = false
             onCountChange?(commentCount)
-        } catch {}
+        } catch {
+            submitError = error.localizedDescription
+            isComposerFocused = true
+        }
         isSubmitting = false
     }
 
@@ -510,13 +538,30 @@ struct CommentThreadView: View {
 
     private func editComment(commentId: String, text: String) async throws {
         guard auth.isAuthenticated else { return }
-        let updated = try await APIClient.shared.editComment(commentId: commentId, content: text)
+        let updatedContent: String?
+        let updatedHTML: String?
+        switch target {
+        case .ripple:
+            let updated = try await LegacySocialAPIAdapter(transport: APIClient.shared)
+                .editRippleComment(commentId: commentId, content: text)
+            updatedContent = updated.content
+            updatedHTML = updated.contentHTML
+        case .ripplePhoto:
+            let updated = try await LegacySocialAPIAdapter(transport: APIClient.shared)
+                .editRipplePhotoComment(commentId: commentId, content: text)
+            updatedContent = updated.content
+            updatedHTML = updated.contentHTML
+        default:
+            let updated = try await APIClient.shared.editComment(commentId: commentId, content: text)
+            updatedContent = updated.content
+            updatedHTML = updated.contentHtml
+        }
         withAnimation(contentAnimation) {
             comments = comments.map {
                 $0.updatingContent(
                     commentId: commentId,
-                    content: updated.content ?? text,
-                    contentHtml: updated.contentHtml
+                    content: updatedContent ?? text,
+                    contentHtml: updatedHTML
                 )
             }
         }
@@ -524,7 +569,16 @@ struct CommentThreadView: View {
 
     private func deleteComment(commentId: String) async throws {
         guard auth.isAuthenticated else { return }
-        try await APIClient.shared.deleteComment(commentId: commentId)
+        switch target {
+        case .ripple:
+            try await LegacySocialAPIAdapter(transport: APIClient.shared)
+                .deleteRippleComment(commentId: commentId)
+        case .ripplePhoto:
+            try await LegacySocialAPIAdapter(transport: APIClient.shared)
+                .deleteRipplePhotoComment(commentId: commentId)
+        default:
+            try await APIClient.shared.deleteComment(commentId: commentId)
+        }
         withAnimation(contentAnimation) {
             comments = comments.compactMap { $0.removing(commentId: commentId) }
             if replyTarget?.id == commentId {
@@ -546,6 +600,16 @@ struct CommentThreadView: View {
         case .post(let id):
             let comment = try await APIClient.shared.createPostComment(postId: id, content: content, parentId: parentId)
             return comment.asSharedComment
+        case .ripple(let id):
+            let comment = try await LegacySocialAPIAdapter(
+                transport: APIClient.shared
+            ).createRippleComment(postId: id, content: content, parentId: parentId)
+            return comment.asSharedComment
+        case .ripplePhoto(let id):
+            let comment = try await LegacySocialAPIAdapter(
+                transport: APIClient.shared
+            ).createRipplePhotoComment(attachmentId: id, content: content, parentId: parentId)
+            return comment.asSharedComment
         }
     }
 
@@ -559,6 +623,14 @@ struct CommentThreadView: View {
         Task {
             if case .post(let postId) = target {
                 _ = try? await APIClient.shared.likePostComment(postId: postId, commentId: commentId, liked: !wasLiked)
+            } else if case .ripple = target {
+                _ = try? await LegacySocialAPIAdapter(
+                    transport: APIClient.shared
+                ).toggleRippleCommentLike(commentId: commentId)
+            } else if case .ripplePhoto = target {
+                _ = try? await LegacySocialAPIAdapter(
+                    transport: APIClient.shared
+                ).toggleRipplePhotoCommentLike(commentId: commentId)
             } else {
                 _ = try? await APIClient.shared.likeComment(commentId: commentId, liked: !wasLiked)
             }
@@ -1093,6 +1165,25 @@ private extension PostComment {
             actorShow: nil,
             replies: replies?.map(\.asSharedComment),
             replyCount: replies?.count
+        )
+    }
+}
+
+private extension RippleComment {
+    var asSharedComment: Comment {
+        Comment(
+            id: id,
+            content: content,
+            contentHtml: contentHTML,
+            isRemoved: false,
+            likes: likeCount,
+            createdAt: createdAt,
+            parentId: parentId,
+            user: CommentUser(id: user.id, name: user.name ?? user.handle, image: user.image),
+            actorChannel: nil,
+            actorShow: nil,
+            replies: replies.map(\.asSharedComment),
+            replyCount: replies.count
         )
     }
 }

@@ -66,9 +66,25 @@ actor StoriesAPIClient {
         return URLSession(configuration: configuration)
     }
 
-    func fetchGroups(myChannelId: String? = nil) async throws -> [StoryGroup] {
+    func fetchGroups(
+        myChannelId: String? = nil,
+        myPublisherType: String? = nil,
+        myPublisherId: String? = nil
+    ) async throws -> [StoryGroup] {
         var path = "/api/stories"
-        if let myChannelId,
+        if let myPublisherType,
+           let myPublisherId,
+           !myPublisherType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !myPublisherId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            var components = URLComponents()
+            components.queryItems = [
+                URLQueryItem(name: "myPublisherType", value: myPublisherType),
+                URLQueryItem(name: "myPublisherId", value: myPublisherId)
+            ]
+            if let query = components.percentEncodedQuery {
+                path += "?\(query)"
+            }
+        } else if let myChannelId,
            !myChannelId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            let encoded = myChannelId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
             path += "?myChannelId=\(encoded)"
@@ -83,6 +99,39 @@ actor StoriesAPIClient {
 
     func toggleLike(storyId: String) async throws -> StoryLikeResponse {
         try await send("/api/stories/\(C.pathSegment(storyId))/like", method: "POST", body: Data(), authenticated: true)
+    }
+
+    func fetchEnergy(storyId: String) async throws -> StoryEnergyResponse {
+        try await send(
+            "/api/stories/\(C.pathSegment(storyId))/rating",
+            method: "GET",
+            body: Optional<Data>.none,
+            authenticated: true
+        )
+    }
+
+    func submitEnergy(storyId: String, overall: Int, tags: [String]) async throws -> StoryEnergyUserRating {
+        struct Body: Encodable {
+            let overall: Int
+            let tags: [String]
+        }
+        let data = try encoder.encode(Body(overall: min(max(overall, 1), 5), tags: Array(tags.prefix(6))))
+        return try await send(
+            "/api/stories/\(C.pathSegment(storyId))/rating",
+            method: "POST",
+            body: data,
+            authenticated: true
+        )
+    }
+
+    func removeEnergy(storyId: String) async throws {
+        struct Response: Decodable { let ok: Bool }
+        let _: Response = try await send(
+            "/api/stories/\(C.pathSegment(storyId))/rating",
+            method: "DELETE",
+            body: Optional<Data>.none,
+            authenticated: true
+        )
     }
 
     func getUploadUrl(mimeType: String) async throws -> UploadUrlResponse {
@@ -108,6 +157,9 @@ actor StoriesAPIClient {
         var request = URLRequest(url: resolvedURL)
         request.httpMethod = "PUT"
         request.setValue(mimeType, forHTTPHeaderField: "Content-Type")
+        // Same-site proxy uploads require the mobile session. Presigned R2
+        // destinations are external and intentionally receive no credentials.
+        attachAuth(&request)
 
         await MainActor.run { onProgress(0) }
         let progressDelegate = StoriesUploadProgressDelegate(onProgress: onProgress)
@@ -218,6 +270,12 @@ actor StoriesAPIClient {
         return URL(string: url.absoluteString, relativeTo: baseURL)?.absoluteURL ?? url
     }
 
+    func resolvedAllowedUploadURL(from rawValue: String) -> URL? {
+        guard let rawURL = URL(string: rawValue) else { return nil }
+        let resolved = resolvedUploadURL(from: rawURL)
+        return StoriesRequestPolicy.isAllowedUploadURL(resolved) ? resolved : nil
+    }
+
     private func attachAuth(_ request: inout URLRequest) {
         guard let url = request.url, C.isTrustedBackendURL(url) else {
             return
@@ -311,6 +369,49 @@ struct StoryLikeResponse: Decodable {
     }
 }
 
+struct StoryEnergyUserRating: Decodable {
+    let overall: Int
+    let tags: [String]
+    let review: String?
+}
+
+struct StoryEnergyAggregate: Decodable {
+    let avg: Double?
+    let count: Int
+    let distribution: [String: Int]
+    let topTags: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case avg, count, distribution, topTags
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        avg = try values.decodeIfPresent(Double.self, forKey: .avg)
+        count = try values.decodeIfPresent(Int.self, forKey: .count) ?? 0
+        distribution = try values.decodeIfPresent([String: Int].self, forKey: .distribution) ?? [:]
+        if let strings = try? values.decode([String].self, forKey: .topTags) {
+            topTags = strings
+        } else if let keywords = try? values.decode([StoryEnergyKeyword].self, forKey: .topTags) {
+            topTags = keywords.map(\.tag)
+        } else if let counts = try? values.decode([String: Int].self, forKey: .topTags) {
+            topTags = counts.filter { $0.value > 0 }.sorted { $0.value > $1.value }.map(\.key)
+        } else {
+            topTags = []
+        }
+    }
+}
+
+private struct StoryEnergyKeyword: Decodable {
+    let tag: String
+    let count: Int?
+}
+
+struct StoryEnergyResponse: Decodable {
+    let userRating: StoryEnergyUserRating?
+    let aggregate: StoryEnergyAggregate
+}
+
 struct PollVoteResponse: Decodable {
     let overlayIndex: Int
     let votes: [Int]
@@ -369,26 +470,26 @@ enum StoriesError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .badURL:
-            return "The story endpoint is not configured correctly."
+            return "The flash endpoint is not configured correctly."
         case .notSignedIn:
-            return "Sign in to use stories."
+            return "Sign in to use flashes."
         case .notAllowed:
-            return "You do not have permission to manage this story."
+            return "You do not have permission to manage this flash."
         case .notFound:
-            return "This story is no longer available."
+            return "This flash is no longer available."
         case .serverUnavailable(let statusCode):
             if let statusCode {
-                return "Stories are temporarily unavailable. Server returned HTTP \(statusCode)."
+                return "Flashes are temporarily unavailable. Server returned HTTP \(statusCode)."
             }
-            return "Stories are temporarily unavailable."
+            return "Flashes are temporarily unavailable."
         case .decodingFailed:
-            return "Stories returned an unexpected response."
+            return "Flashes returned an unexpected response."
         case .missingMediaUrl:
             return "Upload succeeded but no media URL was returned."
         case .videoTooLong:
-            return "Video is too long or too large. Stories can be up to 10 seconds."
+            return "Video is too long or too large. Flashes can be up to 10 seconds."
         case .http(let code):
-            return "Stories request failed with HTTP \(code)."
+            return "Flashes request failed with HTTP \(code)."
         case .serverMessage(let message):
             return message
         }

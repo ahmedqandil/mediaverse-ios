@@ -45,6 +45,29 @@ final class AppRouteContractTests: XCTestCase {
         )
     }
 
+    func testSocialWebLinksResolveToNativeDestinations() {
+        XCTAssertEqual(AppRoute.route(link: "/vibes/cinema"), .vibe("cinema"))
+        XCTAssertEqual(
+            AppRoute.route(link: "https://www.westreem.com/vibes/invite/opaque%20token"),
+            .vibeInvite("opaque token")
+        )
+        XCTAssertEqual(
+            AppRoute.route(link: "https://www.westreem.com/vibes/cinema/posts/ripple-7"),
+            .ripple("ripple-7")
+        )
+        XCTAssertEqual(AppRoute.route(link: "/atmo/ahmed"), .atmo("ahmed"))
+        XCTAssertEqual(AppRoute.route(link: "/ripples/ripple-8"), .ripple("ripple-8"))
+        XCTAssertEqual(AppRoute.route(link: "/discover?topic=cinema"), .search("cinema"))
+        XCTAssertEqual(
+            AppRoute.route(link: "/vibes/cinema/manage?tab=affiliations"),
+            .vibeManagement(slug: "cinema", tab: "affiliations")
+        )
+        XCTAssertEqual(
+            AppRoute.route(link: "/vibes/cinema/manage?tab=requests"),
+            .vibeManagement(slug: "cinema", tab: "requests")
+        )
+    }
+
     func testNotificationPayloadPrecedence() {
         let payload: [AnyHashable: Any] = [
             "type": "short",
@@ -73,6 +96,13 @@ final class AppRouteContractTests: XCTestCase {
         XCTAssertNotEqual(
             AppRoute.short("same", showId: "show-a", channelId: nil).id,
             AppRoute.short("same", showId: "show-b", channelId: nil).id
+        )
+    }
+
+    func testSeasonRoutesPreserveShowAndSeasonIdentity() {
+        XCTAssertNotEqual(
+            AppRoute.showSeason(showId: "show-1", seasonId: "season-1").id,
+            AppRoute.showSeason(showId: "show-1", seasonId: "season-2").id
         )
     }
 

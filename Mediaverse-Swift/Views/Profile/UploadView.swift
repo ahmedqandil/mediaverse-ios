@@ -53,6 +53,7 @@ struct UploadView: View {
 
     private let presentationStyle: PresentationStyle
     private let onOptionSelected: () -> Void
+    private let socialFeatures = SocialFeatureConfiguration.runtime()
 
     @State private var contexts: UploadContextsResponse?
     @State private var selectedDestination: UploadContext?
@@ -88,6 +89,7 @@ struct UploadView: View {
     @State private var isPickingThumbnail = false
     @State private var isRecordingVideo = false
     @State private var isCreatingStory = false
+    @State private var isCreatingRipple = false
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var selectedThumbnailPhotoItem: PhotosPickerItem?
     @State private var isUploading = false
@@ -179,6 +181,29 @@ struct UploadView: View {
                 isCreatingStory = false
             }
         }
+        .fullScreenCover(isPresented: $isCreatingRipple) {
+            NavigationStack {
+                ScrollView {
+                    RippleComposer(destination: .personal) { ripple in
+                        NotificationCenter.default.post(name: .rippleCreated, object: ripple)
+                        isCreatingRipple = false
+                        onOptionSelected()
+                    }
+                    .padding(C.pagePad)
+                }
+                .background(C.bg.ignoresSafeArea())
+                .navigationTitle("Create Ripple")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            isCreatingRipple = false
+                        }
+                        .foregroundStyle(C.text)
+                    }
+                }
+            }
+        }
         .sheet(isPresented: $showDestinationLookup) {
             UploadDestinationLookupSheet(
                 destinations: allDestinations,
@@ -229,9 +254,10 @@ struct UploadView: View {
         }
         .sheet(isPresented: $showThumbnailCropper) {
             if let pendingThumbnailImage {
-                ThumbnailCropperSheet(
+                WestreemImagePositionEditor(
                     image: pendingThumbnailImage,
                     aspectRatio: C.mediaAspectRatio(forContentType: contentType),
+                    title: "Position Thumbnail",
                     onCancel: {
                         clearPendingThumbnailCrop()
                     },
@@ -338,7 +364,7 @@ struct UploadView: View {
                             Text("Create")
                                 .font(.system(size: 22, weight: .bold))
                                 .foregroundStyle(C.text)
-                            Text("Open the camera for a story, record a new video, or upload from your library.")
+                            Text("Open the camera for a flash, record a new video, or upload from your library.")
                                 .font(.system(size: 13))
                                 .foregroundStyle(C.textMuted)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -366,11 +392,23 @@ struct UploadView: View {
                         drawerMessage(text: "Importing selected video...", icon: "arrow.down.circle")
                     }
 
+                    if socialFeatures.rippleComposerEnabled {
+                        uploadSourceButton(
+                            icon: "wave.3.right",
+                            title: "Create Ripple",
+                            subtitle: "Share text, photos, links, media, or a poll"
+                        ) {
+                            C.lightHaptic()
+                            isCreatingRipple = true
+                            onOptionSelected()
+                        }
+                    }
+
                     if platformConfig.storiesFeedEnabled {
                         uploadSourceButton(
                             icon: "circle.dashed.inset.filled",
-                        title: "Add story",
-                        subtitle: "Open the story camera for photo or portrait video"
+                        title: "Add flash",
+                        subtitle: "Open the flash camera for photo or portrait video"
                     ) {
                         C.lightHaptic()
                         isCreatingStory = true
@@ -855,7 +893,7 @@ struct UploadView: View {
             Text("Choose what to create")
                 .font(.system(size: 18, weight: .bold))
                 .foregroundStyle(C.text)
-            Text("Use the drawer below to start a story, record a video, or choose an existing video.")
+            Text("Use the drawer below to start a flash, record a video, or choose an existing video.")
                 .font(.system(size: 13))
                 .foregroundStyle(C.textMuted)
                 .multilineTextAlignment(.center)
@@ -888,10 +926,21 @@ struct UploadView: View {
                     drawerMessage(text: "Importing selected video...", icon: "arrow.down.circle")
                 }
 
+                if socialFeatures.rippleComposerEnabled {
+                    uploadSourceButton(
+                        icon: "wave.3.right",
+                        title: "Create Ripple",
+                        subtitle: "Share text, photos, links, media, or a poll"
+                    ) {
+                        C.lightHaptic()
+                        isCreatingRipple = true
+                    }
+                }
+
                 if platformConfig.storiesFeedEnabled {
                     uploadSourceButton(
                         icon: "circle.dashed.inset.filled",
-                        title: "Story",
+                        title: "Flash",
                         subtitle: "Capture a 24-hour photo or portrait video"
                     ) {
                         C.lightHaptic()
@@ -1102,16 +1151,9 @@ struct UploadView: View {
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title.uppercased())
-                .font(.caption2.bold())
-                .foregroundStyle(C.textTertiary)
+        WestreemFormPanel(title) {
             content()
         }
-        .padding(14)
-        .background(C.surface)
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.borderSubtle, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private func reloadForContextChange() async {

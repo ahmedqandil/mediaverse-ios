@@ -17,6 +17,10 @@ private struct SearchHistoryItem: Codable, Identifiable, Hashable {
         case "episode": return "film"
         case "short": return "play.rectangle.on.rectangle"
         case "video": return "play.rectangle"
+        case "person": return "person.crop.circle"
+        case "vibe": return "person.3.fill"
+        case "ripple": return "wave.3.right"
+        case "collection": return "rectangle.stack.fill"
         default: return "magnifyingglass"
         }
     }
@@ -28,6 +32,10 @@ private struct SearchHistoryItem: Codable, Identifiable, Hashable {
         case "episode": return .episode(targetId)
         case "short": return .short(targetId, showId: showId, channelId: channelId)
         case "video": return .video(targetId)
+        case "person": return .atmo(targetId)
+        case "vibe": return .vibe(targetId)
+        case "ripple": return .ripple(targetId)
+        case "collection": return .collection(targetId)
         default: return nil
         }
     }
@@ -45,6 +53,10 @@ private enum SearchFilter: String, CaseIterable, Identifiable {
     case videos
     case channels
     case episodes
+    case people
+    case vibes
+    case ripples
+    case collections
 
     var id: String { rawValue }
     var title: String {
@@ -54,13 +66,17 @@ private enum SearchFilter: String, CaseIterable, Identifiable {
         case .videos: return "Videos"
         case .channels: return "Channels"
         case .episodes: return "Episodes"
+        case .people: return "People"
+        case .vibes: return "Vibes"
+        case .ripples: return "Ripples"
+        case .collections: return "Collections"
         }
     }
 }
 
 struct SearchView: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var query = ""
+    @State private var query: String
     @State private var committedQuery = ""
     @State private var suggests = [SuggestItem]()
     @State private var trending = [SuggestItem]()
@@ -80,6 +96,10 @@ struct SearchView: View {
     @State private var searchGeneration = 0
     @AppStorage("searchHistory") private var searchHistoryData = "[]"
     @FocusState private var focused: Bool
+
+    init(initialQuery: String = "") {
+        _query = State(initialValue: initialQuery)
+    }
 
     private var trimmedQuery: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -135,6 +155,9 @@ struct SearchView: View {
             Task {
                 await loadRemoteSearchHistoryIfNeeded()
                 await loadTrendingIfNeeded()
+                if trimmedQuery.count >= 2, !showResults {
+                    await runFullSearch()
+                }
             }
         }
         .onDisappear {
@@ -154,7 +177,7 @@ struct SearchView: View {
                     .font(.system(size: 15, weight: .semibold))
                     .frame(width: 18)
 
-                TextField("Search shows, channels, videos…", text: $query)
+                TextField("Search Westreem…", text: $query)
                     .focused($focused)
                     .submitLabel(.search)
                     .textInputAutocapitalization(.never)
@@ -513,6 +536,10 @@ struct SearchView: View {
                     if let shows = results.shows, !shows.isEmpty { showsResults(shows) }
                     if let episodes = results.episodes, !episodes.isEmpty { episodesResults(episodes) }
                     if let videos = results.videos, !videos.isEmpty { videosResults(videos) }
+                    if let people = results.people, !people.isEmpty { peopleResults(people) }
+                    if let vibes = results.vibes, !vibes.isEmpty { vibesResults(vibes) }
+                    if let ripples = results.ripples, !ripples.isEmpty { ripplesResults(ripples) }
+                    if let collections = results.collections, !collections.isEmpty { collectionsResults(collections) }
                 }
             }
             .padding(.top, 14)
@@ -632,6 +659,115 @@ struct SearchView: View {
                     }
                     .buttonStyle(.plain)
                     Divider().background(C.border).padding(.leading, C.pagePad + 112)
+                }
+            }
+        }
+    }
+
+    private func peopleResults(_ people: [SearchResultPerson]) -> some View {
+        resultSection("People & Atmospheres") {
+            LazyVStack(spacing: 0) {
+                ForEach(people) { person in
+                    Button {
+                        guard let handle = person.handle else { return }
+                        openSearchItem(
+                            title: person.name ?? "@\(handle)",
+                            subtitle: "@\(handle)",
+                            type: "person",
+                            route: .atmo(handle)
+                        )
+                    } label: {
+                        SocialSearchRow(
+                            imageUrl: person.image,
+                            title: person.name ?? person.handle.map { "@\($0)" } ?? "Atmosphere",
+                            subtitle: person.handle.map { "@\($0)" },
+                            detail: person.bio,
+                            symbol: "person.crop.circle"
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func vibesResults(_ vibes: [SearchResultVibe]) -> some View {
+        resultSection("Community Vibes") {
+            LazyVStack(spacing: 0) {
+                ForEach(vibes) { vibe in
+                    Button {
+                        openSearchItem(
+                            title: vibe.name,
+                            subtitle: vibe.followerCount.map { "\($0) followers" },
+                            type: "vibe",
+                            route: .vibe(vibe.slug)
+                        )
+                    } label: {
+                        SocialSearchRow(
+                            imageUrl: vibe.avatarUrl,
+                            title: vibe.name,
+                            subtitle: vibe.followerCount.map { "\($0) followers" },
+                            detail: vibe.description,
+                            symbol: "person.3.fill"
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func ripplesResults(_ ripples: [SearchResultRipple]) -> some View {
+        resultSection("Public Ripples") {
+            LazyVStack(spacing: 0) {
+                ForEach(ripples) { ripple in
+                    Button {
+                        openSearchItem(
+                            title: ripple.body?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                                ? ripple.body!
+                                : "Ripple",
+                            subtitle: ripple.club.name,
+                            type: "ripple",
+                            route: .ripple(ripple.id)
+                        )
+                    } label: {
+                        SocialSearchRow(
+                            imageUrl: ripple.imageUrl ?? ripple.author.image,
+                            title: ripple.body?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                                ? ripple.body!
+                                : "\(ripple.author.name ?? ripple.author.handle ?? "A user") shared a Ripple",
+                            subtitle: ripple.club.name,
+                            detail: searchEngagementLine(energy: ripple.energyCount, comments: ripple.commentCount),
+                            symbol: "wave.3.right"
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func collectionsResults(_ collections: [SearchResultCollection]) -> some View {
+        resultSection("Community Collections") {
+            LazyVStack(spacing: 0) {
+                ForEach(collections) { collection in
+                    Button {
+                        openSearchItem(
+                            title: collection.title,
+                            subtitle: collection.user?.name,
+                            type: "collection",
+                            route: .collection(collection.id)
+                        )
+                    } label: {
+                        SocialSearchRow(
+                            imageUrl: collection.user?.image,
+                            title: collection.title,
+                            subtitle: collection.user?.name,
+                            detail: collection.count?.items.map { "\($0) items" },
+                            symbol: "rectangle.stack.fill"
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -918,6 +1054,16 @@ struct SearchView: View {
             normalizedType = "channel"; targetId = id; showId = nil; channelId = nil
         case .show(let id):
             normalizedType = "show"; targetId = id; showId = nil; channelId = nil
+        case .showSeason(let routeShowId, _):
+            normalizedType = "show"; targetId = routeShowId; showId = nil; channelId = nil
+        case .atmo(let handle):
+            normalizedType = "person"; targetId = handle; showId = nil; channelId = nil
+        case .vibe(let slug):
+            normalizedType = "vibe"; targetId = slug; showId = nil; channelId = nil
+        case .ripple(let id):
+            normalizedType = "ripple"; targetId = id; showId = nil; channelId = nil
+        case .collection(let id):
+            normalizedType = "collection"; targetId = id; showId = nil; channelId = nil
         default:
             normalizedType = type; targetId = route.id; showId = nil; channelId = nil
         }
@@ -941,6 +1087,10 @@ struct SearchView: View {
         let ordered: [(String, String, (SuggestItem) -> Bool)] = [
             ("channels", "Channels", { $0.type.lowercased() == "channel" }),
             ("shows", "Shows", { $0.type.lowercased() == "show" }),
+            ("people", "People & Atmospheres", { $0.type.lowercased() == "person" }),
+            ("vibes", "Community Vibes", { $0.type.lowercased() == "vibe" }),
+            ("ripples", "Public Ripples", { $0.type.lowercased() == "ripple" }),
+            ("collections", "Community Collections", { $0.type.lowercased() == "collection" }),
             ("videos", "Videos & Shorts", { ["video", "short"].contains($0.type.lowercased()) }),
             ("episodes", "Episodes", { $0.type.lowercased() == "episode" })
         ]
@@ -964,6 +1114,10 @@ struct SearchView: View {
         if parts.count >= 2, parts[0] == "shows" { return .show(parts[1]) }
         if parts.count >= 2, parts[0] == "channel" { return .channel(parts[1]) }
         if parts.count >= 2, parts[0] == "channels" { return .channel(parts[1]) }
+        if parts.count >= 2, parts[0] == "atmo" { return .atmo(parts[1]) }
+        if parts.count >= 4, parts[0] == "vibes", parts[2] == "posts" { return .ripple(parts[3]) }
+        if parts.count >= 2, parts[0] == "vibes" { return .vibe(parts[1]) }
+        if parts.count >= 2, parts[0] == "collections" { return .collection(parts[1]) }
         return nil
     }
 
@@ -975,6 +1129,7 @@ struct SearchView: View {
         case .episode(let id): EpisodeWatchView(episodeId: id)
         case .channel(let id): ChannelView(handle: id)
         case .show(let id): ShowView(showId: id)
+        case .showSeason(let showId, let seasonId): ShowView(showId: showId, initialSeasonId: seasonId)
         case .showAccess(let showId, let productId, let intent, let handoffId):
             ShowView(showId: showId, handoffProductId: productId, handoffIntent: intent, handoffPublicId: handoffId)
         case .handoff(let id): HandoffResolverView(publicId: id)
@@ -983,6 +1138,14 @@ struct SearchView: View {
         case .microdramaShow(let id): MicrodramaShowView(showId: id)
         case .microdramaWatch(let id): MicrodramaWatchView(showId: id)
         case .microdramaWatchEp(let id, let episodeNumber): MicrodramaWatchView(showId: id, startEpisodeNumber: episodeNumber)
+        case .vibe(let slug): VibeDetailView(slug: slug)
+        case .vibeManagement(let slug, let tab): VibeDetailView(slug: slug, initialManagementTab: tab)
+        case .vibeInvite(let token): VibeInviteAcceptView(token: token)
+        case .event(let slug): VibeEventDetailView(slug: slug)
+        case .eventInvite(let token): VibeEventInviteView(token: token)
+        case .ripple(let postId): RippleDetailView(postId: postId)
+        case .atmo(let handle): AtmoProfileView(handle: handle)
+        case .search(let query): SearchView(initialQuery: query)
         }
     }
 
@@ -993,6 +1156,10 @@ struct SearchView: View {
         case "show": return "Show"
         case "episode": return "Episode"
         case "channel": return "Channel"
+        case "person": return "Atmosphere"
+        case "vibe": return "Vibe"
+        case "ripple": return "Ripple"
+        case "collection": return "Collection"
         default: return "Result"
         }
     }
@@ -1004,9 +1171,73 @@ struct SearchView: View {
         case "show": return Color(hex: "#A78BFA")
         case "episode": return Color(hex: "#34D399")
         case "channel": return Color(hex: "#FBBF24")
+        case "person": return Color(hex: "#22D3EE")
+        case "vibe": return Color(hex: "#C084FC")
+        case "ripple": return Color(hex: "#6AE383")
+        case "collection": return Color(hex: "#FB923C")
         default: return C.watch
         }
     }
+}
+
+private struct SocialSearchRow: View {
+    let imageUrl: String?
+    let title: String
+    let subtitle: String?
+    let detail: String?
+    let symbol: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            CachedRemoteImage(
+                url: C.mediaURL(imageUrl),
+                targetSize: CGSize(width: 52, height: 52)
+            ) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                Image(systemName: symbol)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(C.textMuted)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.white.opacity(0.06))
+            }
+            .frame(width: 52, height: 52)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(C.text)
+                    .lineLimit(2)
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(C.textMuted)
+                        .lineLimit(1)
+                }
+                if let detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(C.textTertiary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(.caption.bold())
+                .foregroundStyle(C.textTertiary)
+        }
+        .padding(.horizontal, C.pagePad)
+        .padding(.vertical, 9)
+        .contentShape(Rectangle())
+    }
+}
+
+private func searchEngagementLine(energy: Int?, comments: Int?) -> String? {
+    var parts = [String]()
+    if let energy, energy > 0 { parts.append("\(energy) Energy") }
+    if let comments, comments > 0 { parts.append("\(comments) Comments") }
+    return parts.isEmpty ? nil : parts.joined(separator: " · ")
 }
 
 private struct SearchChannelCard: View {

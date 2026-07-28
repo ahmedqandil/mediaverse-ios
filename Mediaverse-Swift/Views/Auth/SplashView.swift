@@ -61,9 +61,10 @@ struct SplashView: View {
                 .stroke(C.play.opacity(0.20), lineWidth: 8)
                 .frame(width: 96, height: 96)
 
-            MediaverseIcon(name: "play", fallbackSystemName: "play.fill")
-                .frame(width: 44, height: 44)
-                .foregroundStyle(C.watch)
+            Image("westreem-mark")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 72, height: 72)
                 .shadow(color: C.watch.opacity(0.30), radius: 18, x: 0, y: 0)
         }
     }

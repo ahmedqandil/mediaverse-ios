@@ -11,6 +11,7 @@ struct MicrodramaShowView: View {
         case shorts = "Shorts"
         case allVideos = "All Videos"
         case playlists = "Playlists"
+        case related = "Related"
         case about = "About"
 
         var id: String { rawValue }
@@ -19,13 +20,17 @@ struct MicrodramaShowView: View {
     let showId: String
 
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var auth: AuthManager
 
     @State private var show: MicrodramaShowDetail?
     @State private var episodes = [MicrodramaEpisode]()
     @State private var clips = [ShowClip]()
     @State private var shorts = [Short]()
     @State private var playlists = [ChannelPlaylist]()
+    @State private var relatedShows = [MicrodramaListShow]()
     @State private var config: MicrodramaConfig?
+    @State private var followStatus: FollowStatus?
+    @State private var isUpdatingFollow = false
     @State private var selectedTab: DetailTab = .episodes
     @State private var isLoading = true
     @State private var errorMsg: String?
@@ -49,6 +54,7 @@ struct MicrodramaShowView: View {
         if !shorts.isEmpty || !shortClips.isEmpty { tabs.append(.shorts) }
         if allVideoCount > 0 { tabs.append(.allVideos) }
         if !playlists.isEmpty { tabs.append(.playlists) }
+        if !relatedShows.isEmpty { tabs.append(.related) }
         tabs.append(.about)
         return tabs
     }
@@ -99,6 +105,8 @@ struct MicrodramaShowView: View {
                                 allVideosSection
                             case .playlists:
                                 playlistsSection
+                            case .related:
+                                relatedSection
                             case .about:
                                 aboutSection(show)
                             }
@@ -108,12 +116,16 @@ struct MicrodramaShowView: View {
                     }
                     .frame(width: pageWidth, alignment: .topLeading)
                 }
+                .frame(width: pageWidth)
+                .clipped()
                 .ignoresSafeArea(edges: .top)
 
                 heroBackButton
                     .padding(.leading, 16)
                     .padding(.top, max(12, topInset - 6))
             }
+            .frame(width: pageWidth, alignment: .topLeading)
+            .clipped()
         }
     }
 
@@ -128,7 +140,7 @@ struct MicrodramaShowView: View {
                                 reader.scrollTo(tab.id, anchor: .center)
                             }
                         } label: {
-                            Text(tab.rawValue)
+                            Text(tabTitle(tab))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(selectedTab == tab ? C.text : C.textMuted)
                                 .lineLimit(1)
@@ -157,6 +169,18 @@ struct MicrodramaShowView: View {
         .background(C.bg)
         .overlay(alignment: .bottom) {
             Divider().background(C.border)
+        }
+    }
+
+    private func tabTitle(_ tab: DetailTab) -> String {
+        switch tab {
+        case .episodes: return episodes.isEmpty ? "Episodes" : "Episodes (\(episodes.count))"
+        case .videos: return "Videos (\(videoClips.count))"
+        case .shorts: return "Shorts (\(shortClips.count + shorts.count))"
+        case .allVideos: return "All Videos"
+        case .playlists: return "Playlists (\(playlists.count))"
+        case .related: return "Related"
+        case .about: return "About"
         }
     }
 
@@ -286,6 +310,32 @@ struct MicrodramaShowView: View {
         .padding(.horizontal, C.pagePad)
     }
 
+    private var relatedSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader("Related", count: relatedShows.count)
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 16) {
+                ForEach(relatedShows) { related in
+                    NavigationLink(value: AppRoute.microdramaShow(related.id)) {
+                        VStack(alignment: .leading, spacing: 7) {
+                            mediaThumb(url: related.coverUrl ?? related.bannerUrl, aspectRatio: 2.0 / 3.0)
+                            Text(related.title)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(C.text)
+                                .lineLimit(2)
+                            if let genre = related.genre {
+                                Text(genre)
+                                    .font(.caption2)
+                                    .foregroundStyle(C.textMuted)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(.horizontal, C.pagePad)
+    }
+
     private func sectionHeader(_ title: String, count: Int) -> some View {
         HStack {
             Text(title)
@@ -336,49 +386,39 @@ struct MicrodramaShowView: View {
     }
 
     private func aboutSection(_ show: MicrodramaShowDetail) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 20) {
             if let description = show.description, !description.isEmpty {
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("Story")
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(C.text)
-                    Text(description)
-                        .font(.subheadline)
-                        .foregroundStyle(C.textMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Text(description)
+                    .font(.subheadline)
+                    .foregroundStyle(C.text.opacity(0.80))
+                    .lineSpacing(4)
             }
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Details")
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(C.text)
+            let rows: [(String, String)] = [
+                show.genre.map { ("Genre", $0.capitalized) },
+                !show.showType.isEmpty ? ("Type", show.showType.capitalized) : nil,
+                show.language.map { ("Language", $0.capitalized) },
+                show.country.map { ("Country", $0) },
+                show.studio.map { ("Studio", $0) },
+                show.contentRating.map { ("Rating", $0) },
+                ("Episodes", "\(episodes.count)"),
+                !show.tags.isEmpty ? ("Tags", show.tags.joined(separator: ", ")) : nil
+            ].compactMap { $0 }
 
-                detailGrid(show)
-            }
-
-            if !show.tags.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Tags")
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(C.text)
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 86), spacing: 8)], alignment: .leading, spacing: 8) {
-                        ForEach(show.tags, id: \.self) { tag in
-                            Text(tag)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(C.text)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.75)
-                                .padding(.horizontal, 10)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 28)
-                                .background(Color.white.opacity(0.08), in: Capsule())
-                        }
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
+                ForEach(rows, id: \.0) { row in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(row.0.uppercased())
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(C.textMuted)
+                            .tracking(1.2)
+                        Text(row.1)
+                            .font(.subheadline)
+                            .foregroundStyle(C.text.opacity(0.85))
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-
-            accessLines
         }
         .padding(.horizontal, C.pagePad)
     }
@@ -419,19 +459,7 @@ struct MicrodramaShowView: View {
     // MARK: - Hero
 
     private var heroBackButton: some View {
-        Button {
-            dismiss()
-        } label: {
-            MediaverseIcon(name: "chevron-left", fallbackSystemName: "chevron.left")
-                .frame(width: 22, height: 22)
-                .foregroundStyle(.white)
-                .frame(width: 52, height: 52)
-                .background(.black.opacity(0.30))
-                .clipShape(Circle())
-                .overlay { Circle().stroke(.white.opacity(0.16), lineWidth: 1) }
-                .shadow(color: .black.opacity(0.35), radius: 12, y: 5)
-        }
-        .buttonStyle(.plain)
+        PlatformBackButton { dismiss() }
     }
 
     private func hero(_ show: MicrodramaShowDetail, width: CGFloat) -> some View {
@@ -480,19 +508,44 @@ struct MicrodramaShowView: View {
                     .minimumScaleFactor(0.75)
                     .shadow(color: .black.opacity(0.6), radius: 4)
 
-                NavigationLink(value: AppRoute.microdramaWatch(showId)) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "play.fill")
-                        Text("Watch Now")
+                HStack(spacing: 10) {
+                    NavigationLink(value: firstEpisodeRoute) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "play.fill")
+                            Text(episodes.first.map { "Watch Ep \($0.episodeNumber)" } ?? (show.status == "upcoming" ? "Coming Soon" : "Watch Now"))
+                        }
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 20)
+                        .frame(height: 40)
+                        .background(C.watch)
+                        .clipShape(Capsule())
                     }
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .background(C.watch)
-                    .clipShape(Capsule())
+                    .buttonStyle(.plain)
+                    .disabled(episodes.isEmpty)
+
+                    Button { Task { await toggleFollow() } } label: {
+                        Text(followStatus?.subscribed == true ? "✓ Following" : "Follow")
+                            .font(.subheadline.bold())
+                            .foregroundStyle(followStatus?.subscribed == true ? .white : .black)
+                            .padding(.horizontal, 20)
+                            .frame(height: 40)
+                            .background(followStatus?.subscribed == true ? .white.opacity(0.15) : .white)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isUpdatingFollow)
+
+                    Button { shareShow() } label: {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 14))
+                            .foregroundStyle(C.text)
+                            .frame(width: 40, height: 40)
+                            .background(.white.opacity(0.12), in: Circle())
+                            .overlay { Circle().stroke(.white.opacity(0.15), lineWidth: 1) }
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
             .padding(.horizontal, C.pagePad)
             .padding(.bottom, 24)
@@ -504,6 +557,11 @@ struct MicrodramaShowView: View {
     }
 
     private enum MicrodramaBadgeStyle { case accent, muted }
+
+    private var firstEpisodeRoute: AppRoute {
+        if let first = episodes.first { return .microdramaWatchEp(showId, first.episodeNumber) }
+        return .microdramaWatch(showId)
+    }
 
     private func metaBadge(_ text: String, style: MicrodramaBadgeStyle) -> some View {
         Text(text)
@@ -544,6 +602,18 @@ struct MicrodramaShowView: View {
                     .font(.caption.weight(.medium))
                     .foregroundStyle(Color(hex: "#10B981"))
                 }
+                if cfg.adUnlockEnabled,
+                   episodes.contains(where: { $0.accessState == "ad_unlock" }) {
+                    Label("Watch a short ad to unlock episodes from Ep \(cfg.adUnlockStartEpisode)", systemImage: "play.rectangle.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Color(hex: "#FACC15"))
+                }
+                let paidCount = episodes.filter { $0.accessState == "svod" || $0.accessState == "ppv" || $0.accessState == "locked" }.count
+                if paidCount > 0 {
+                    Label("\(paidCount) episode\(paidCount == 1 ? "" : "s") require access", systemImage: "lock.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(C.textMuted)
+                }
             }
         }
     }
@@ -558,6 +628,8 @@ struct MicrodramaShowView: View {
             async let clipResponse = APIClient.shared.fetchShowClips(id: showId)
             async let playlistResponse = APIClient.shared.fetchShowPlaylists(id: showId)
             async let shortsResponse = APIClient.shared.fetchShorts(feed: "recommended", limit: 24, source: "show", sourceId: showId)
+            async let relatedResponse = APIClient.shared.fetchMicrodramas(section: "trending", limit: 7)
+            async let followResponse: FollowStatus? = auth.isAuthenticated ? (try? await APIClient.shared.fetchShowFollowStatus(id: showId)) : nil
 
             let resp = try await episodeResponse
             show = resp.show
@@ -567,10 +639,25 @@ struct MicrodramaShowView: View {
             playlists = (try? await playlistResponse) ?? []
             let fetchedShorts = try? await shortsResponse
             shorts = fetchedShorts?.shorts ?? []
+            relatedShows = ((try? await relatedResponse) ?? []).filter { $0.id != showId }.prefix(6).map { $0 }
+            followStatus = await followResponse
         } catch {
             errorMsg = error.localizedDescription
         }
         isLoading = false
+    }
+
+    @MainActor
+    private func toggleFollow() async {
+        guard auth.isAuthenticated, !isUpdatingFollow else { return }
+        isUpdatingFollow = true
+        defer { isUpdatingFollow = false }
+        followStatus = try? await APIClient.shared.toggleShowFollow(id: showId)
+    }
+
+    private func shareShow() {
+        guard let url = URL(string: "\(C.baseURL)/microdramas/\(showId)") else { return }
+        UIActivityViewController(activityItems: [url], applicationActivities: nil).presentFromRoot()
     }
 
     private func errorState(_ msg: String) -> some View {

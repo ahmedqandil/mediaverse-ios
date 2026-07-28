@@ -2,8 +2,25 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
-/// User profile — avatar, name, stats, settings rows, context switcher, sign out.
+/// Account — identity settings, library shortcuts, context switcher, and sign out.
 struct ProfileView: View {
+    private enum ProfileDestination: Hashable, Identifiable {
+        case history
+        case collections
+        case channel(String)
+        case pairedDevices
+        case affiliationReviews
+
+        var id: String {
+            switch self {
+            case .history: "history"
+            case .collections: "collections"
+            case .channel(let id): "channel-\(id)"
+            case .pairedDevices: "paired-devices"
+            case .affiliationReviews: "affiliation-reviews"
+            }
+        }
+    }
 
     let isRootActive: Bool
 
@@ -15,16 +32,14 @@ struct ProfileView: View {
     @State private var contextUser: ContextUser?
     @State private var isLoading      = true
     @State private var showCtxSwitcher = false
-    @State private var showHistory    = false
-    @State private var showCollections = false
+    @State private var profileDestination: ProfileDestination?
     @State private var showEditProfile = false
-    @State private var showChannelSettings = false
-    @State private var showPairedDevices = false
     @State private var showPartnerRequest = false
     @State private var subscriptions = [UserSubscription]()
     @State private var rentals = [UserRental]()
     @State private var cancellingSubscriptionId: String?
     @State private var notificationCounts = [String: Int]()
+    @State private var partnerApplication: PartnerApplicationStatus = .none
     @State private var hasLoadedProfile = false
     @State private var profileLoadGeneration = 0
     @State private var billingLoadGeneration = 0
@@ -68,7 +83,7 @@ struct ProfileView: View {
                 }
             }
         }
-        .navigationTitle("Profile")
+        .navigationTitle("Account")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showCtxSwitcher) {
             ContextSwitcherView(
@@ -84,25 +99,28 @@ struct ProfileView: View {
             }
         }
         .sheet(isPresented: $showPartnerRequest) {
-            PartnerRequestSheet {
-                Task { await loadAll() }
-            }
-        }
-        .navigationDestination(isPresented: $showHistory) {
-            WatchHistoryView()
-        }
-        .navigationDestination(isPresented: $showCollections) {
-            CollectionsView()
-        }
-        .navigationDestination(isPresented: $showChannelSettings) {
-            if let channelId = activeChannelId {
-                ChannelSettingsView(channelId: channelId) {
+            PartnerRequestSheet(initialStatus: partnerApplication) { status in
+                partnerApplication = status
+                if status.normalizedStatus != "none" {
                     Task { await loadAll() }
                 }
             }
         }
-        .navigationDestination(isPresented: $showPairedDevices) {
-            PairedDevicesView()
+        .navigationDestination(item: $profileDestination) { destination in
+            switch destination {
+            case .history:
+                WatchHistoryView()
+            case .collections:
+                CollectionsView()
+            case .channel(let channelId):
+                ChannelSettingsView(channelId: channelId) {
+                    Task { await loadAll() }
+                }
+            case .pairedDevices:
+                PairedDevicesView()
+            case .affiliationReviews:
+                AffiliationReviewView()
+            }
         }
         .task {
             guard isRootActive else { return }
@@ -166,6 +184,15 @@ struct ProfileView: View {
 
     private var canRequestPartner: Bool {
         profile?.role?.lowercased() == "viewer"
+    }
+
+    private var partnerRequestSubtitle: String {
+        switch partnerApplication.normalizedStatus {
+        case "pending": return "Application pending review"
+        case "rejected": return "Not approved · Review and reapply"
+        case "approved": return "Approved"
+        default: return "Apply for creator access"
+        }
     }
 
     private var profileHero: some View {
@@ -317,14 +344,14 @@ struct ProfileView: View {
             sectionTitle("Me")
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                 quickActionTile(iconName: "history", fallbackSystemName: "clock", title: "History", subtitle: "Resume watching") {
-                    showHistory = true
+                    profileDestination = .history
                 }
                 quickActionTile(iconName: "collection", fallbackSystemName: "square.grid.2x2", title: "Collections", subtitle: "Saved clips and shows") {
-                    showCollections = true
+                    profileDestination = .collections
                 }
-                if activeChannelId != nil {
+                if let activeChannelId {
                     quickActionTile(iconName: "play", fallbackSystemName: "play.rectangle", title: "Channel", subtitle: activeChannelSubtitle) {
-                        showChannelSettings = true
+                        profileDestination = .channel(activeChannelId)
                     }
                 }
             }
@@ -346,11 +373,20 @@ struct ProfileView: View {
                 }
                 rowDivider
                 accountRow(iconName: "devices", fallbackSystemName: "tv.and.mediabox", title: "Paired Devices", subtitle: "TVs and living-room apps") {
-                    showPairedDevices = true
+                    profileDestination = .pairedDevices
+                }
+                rowDivider
+                accountRow(iconName: "network", fallbackSystemName: "link.badge.plus", title: "Affiliation Requests", subtitle: "Review Vibe connections you manage") {
+                    profileDestination = .affiliationReviews
                 }
                 rowDivider
                 if canRequestPartner {
-                    accountRow(iconName: "network", fallbackSystemName: "person.badge.plus", title: "Become a Partner", subtitle: "Apply for creator access") {
+                    accountRow(
+                        iconName: "network",
+                        fallbackSystemName: partnerApplication.normalizedStatus == "pending" ? "clock.badge" : "person.badge.plus",
+                        title: partnerApplication.normalizedStatus == "pending" ? "Partner Application" : "Become a Partner",
+                        subtitle: partnerRequestSubtitle
+                    ) {
                         openPartnerRequest()
                     }
                     rowDivider
@@ -870,13 +906,15 @@ struct ProfileView: View {
         async let subscriptionsTask = APIClient.shared.fetchUserSubscriptions()
         async let rentalsTask = APIClient.shared.fetchUserRentals()
         async let notificationCountsTask = APIClient.shared.fetchNotificationCounts()
+        async let partnerApplicationTask = APIClient.shared.fetchPartnerRequestStatus()
 
-        let (profResult, ctxResult, subscriptionsResult, rentalsResult, notificationCountsResult) = (
+        let (profResult, ctxResult, subscriptionsResult, rentalsResult, notificationCountsResult, partnerApplicationResult) = (
             try? await profTask,
             try? await ctxTask,
             try? await subscriptionsTask,
             try? await rentalsTask,
-            try? await notificationCountsTask
+            try? await notificationCountsTask,
+            try? await partnerApplicationTask
         )
 
         guard profileGeneration == profileLoadGeneration, auth.isAuthenticated else { return }
@@ -893,6 +931,7 @@ struct ProfileView: View {
         if notificationGeneration == notificationLoadGeneration {
             notificationCounts = notificationCountsResult ?? [:]
         }
+        partnerApplication = partnerApplicationResult ?? .none
         hasLoadedProfile = true
         isLoading = false
     }
@@ -949,13 +988,25 @@ struct ProfileView: View {
 }
 
 private struct PartnerRequestSheet: View {
-    let onSubmitted: () -> Void
+    let onSubmitted: (PartnerApplicationStatus) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var application: PartnerApplicationStatus
     @State private var reason = ""
     @State private var isSubmitting = false
     @State private var didSubmit = false
     @State private var errorMessage: String?
+    @State private var showsApplicationForm = false
+    @State private var showsWithdrawalConfirmation = false
+
+    init(
+        initialStatus: PartnerApplicationStatus,
+        onSubmitted: @escaping (PartnerApplicationStatus) -> Void
+    ) {
+        _application = State(initialValue: initialStatus)
+        _reason = State(initialValue: initialStatus.message ?? "")
+        self.onSubmitted = onSubmitted
+    }
 
     var body: some View {
         NavigationStack {
@@ -973,7 +1024,44 @@ private struct PartnerRequestSheet: View {
                                 .lineSpacing(2)
                         }
 
-                        fieldGroup("Reason") {
+                        if application.normalizedStatus == "pending" {
+                            statusBanner(
+                                iconName: "clock.fill",
+                                title: "Application under review",
+                                message: "Your partner request is pending. We’ll notify you when the review is complete.",
+                                color: .orange
+                            )
+                            if let submittedAt = formattedSubmittedAt {
+                                Text("Submitted \(submittedAt)")
+                                    .font(.caption)
+                                    .foregroundStyle(C.textMuted)
+                            }
+                            Button(role: .destructive) {
+                                showsWithdrawalConfirmation = true
+                            } label: {
+                                Label(isSubmitting ? "Withdrawing..." : "Withdraw application", systemImage: "xmark.circle")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.red)
+                            .disabled(isSubmitting)
+                        } else if application.normalizedStatus == "approved" {
+                            statusBanner(
+                                iconName: "checkmark.seal.fill",
+                                title: "Partner access approved",
+                                message: "Your application was approved and creator access is active.",
+                                color: .green
+                            )
+                        } else if showsApplicationForm || application.normalizedStatus == "rejected" {
+                            if application.normalizedStatus == "rejected" {
+                                statusBanner(
+                                    iconName: "info.circle.fill",
+                                    title: "Application not approved",
+                                    message: application.notes ?? "You can update your request and apply again.",
+                                    color: .orange
+                                )
+                            }
+                            fieldGroup("Reason") {
                             ZStack(alignment: .topLeading) {
                                 if reason.isEmpty {
                                     Text("Share your channel idea, audience, or content plans...")
@@ -982,16 +1070,12 @@ private struct PartnerRequestSheet: View {
                                         .padding(.top, 14)
                                 }
                                 TextEditor(text: $reason)
-                                    .frame(minHeight: 160)
-                                    .foregroundStyle(C.text)
-                                    .scrollContentBackground(.hidden)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 6)
+                                    .westreemEditor(minHeight: 160)
                                     .disabled(isSubmitting || didSubmit)
                             }
-                            .background(Color.white.opacity(0.05))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .overlay { RoundedRectangle(cornerRadius: 10).stroke(C.border, lineWidth: 1) }
+                            }
+                        } else {
+                            partnerOverview
                         }
 
                         if didSubmit {
@@ -1021,13 +1105,27 @@ private struct PartnerRequestSheet: View {
                         .foregroundStyle(C.textMuted)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(submitTitle) {
-                        Task { await submit() }
+                    if showsApplicationForm || application.normalizedStatus == "rejected" {
+                        Button(submitTitle) {
+                            Task { await submit() }
+                        }
+                        .disabled(isSubmitting || didSubmit)
+                        .foregroundStyle(C.watch)
                     }
-                    .disabled(isSubmitting || didSubmit)
-                    .foregroundStyle(C.watch)
                 }
             }
+        }
+        .confirmationDialog(
+            "Withdraw partner application?",
+            isPresented: $showsWithdrawalConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Withdraw application", role: .destructive) {
+                Task { await withdraw() }
+            }
+            Button("Keep application", role: .cancel) {}
+        } message: {
+            Text("Your pending request will be removed. You can apply again later.")
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -1037,11 +1135,68 @@ private struct PartnerRequestSheet: View {
         isSubmitting ? "Sending..." : "Submit"
     }
 
+    private var formattedSubmittedAt: String? {
+        guard let value = application.submittedAt else { return nil }
+        let formatter = ISO8601DateFormatter()
+        guard let date = formatter.date(from: value) else { return nil }
+        return date.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    private var partnerOverview: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Image(systemName: "chart.line.uptrend.xyaxis")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(C.watch)
+                Text("Build your audience on WeStreem")
+                    .font(.title2.bold())
+                    .foregroundStyle(C.text)
+                Text("Partner access gives creators the professional tools to publish, grow, and understand their audience.")
+                    .font(.subheadline)
+                    .foregroundStyle(C.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(spacing: 10) {
+                partnerBenefit("play.rectangle.fill", "Your own channel", "Create a branded home for your audience.")
+                partnerBenefit("arrow.up.circle.fill", "Publish across formats", "Manage videos and shorts from Backstage.")
+                partnerBenefit("chart.bar.fill", "Creator analytics", "Understand reach, watch time, and engagement.")
+                partnerBenefit("dollarsign.circle.fill", "Build a business", "Access monetization tools when eligible.")
+            }
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showsApplicationForm = true
+                }
+            } label: {
+                Text("Proceed to application")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(C.watch)
+        }
+    }
+
+    private func partnerBenefit(_ icon: String, _ title: String, _ message: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .frame(width: 22)
+                .foregroundStyle(C.watch)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(C.text)
+                Text(message).font(.caption).foregroundStyle(C.textMuted)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
     private func fieldGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(C.text)
+        WestreemFormPanel(title) {
             content()
         }
     }
@@ -1074,9 +1229,28 @@ private struct PartnerRequestSheet: View {
         errorMessage = nil
         defer { isSubmitting = false }
         do {
-            try await APIClient.shared.submitPartnerRequest(reason: reason)
+            let updated = try await APIClient.shared.submitPartnerRequest(reason: reason)
+            application = updated
             didSubmit = true
-            onSubmitted()
+            onSubmitted(updated)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func withdraw() async {
+        guard !isSubmitting else { return }
+        isSubmitting = true
+        errorMessage = nil
+        defer { isSubmitting = false }
+        do {
+            let updated = try await APIClient.shared.withdrawPartnerRequest()
+            application = updated
+            reason = ""
+            didSubmit = false
+            showsApplicationForm = false
+            onSubmitted(updated)
+            dismiss()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1096,6 +1270,7 @@ private struct EditProfileSheet: View {
     @State private var selectedBannerItem: PhotosPickerItem?
     @State private var profilePreviewImage: UIImage?
     @State private var bannerPreviewImage: UIImage?
+    @State private var positioningImage: ProfileImagePositioning?
     @State private var uploadingProfileImage = false
     @State private var uploadingBannerImage = false
     @State private var saving = false
@@ -1119,12 +1294,7 @@ private struct EditProfileSheet: View {
                     VStack(alignment: .leading, spacing: 18) {
                         fieldGroup("Display name") {
                             TextField("Your name", text: $name)
-                                .textFieldStyle(.plain)
-                                .foregroundStyle(C.text)
-                                .padding(12)
-                                .background(Color.white.opacity(0.05))
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                .overlay { RoundedRectangle(cornerRadius: 10).stroke(C.border, lineWidth: 1) }
+                                .westreemField()
                         }
 
                         fieldGroup("Bio") {
@@ -1136,15 +1306,8 @@ private struct EditProfileSheet: View {
                                         .padding(.top, 14)
                                 }
                                 TextEditor(text: $bio)
-                                    .frame(minHeight: 120)
-                                    .foregroundStyle(C.text)
-                                    .scrollContentBackground(.hidden)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 6)
+                                    .westreemEditor(minHeight: 120)
                             }
-                            .background(Color.white.opacity(0.05))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .overlay { RoundedRectangle(cornerRadius: 10).stroke(C.border, lineWidth: 1) }
                         }
 
                         fieldGroup("Profile image") {
@@ -1155,7 +1318,15 @@ private struct EditProfileSheet: View {
                                 previewImage: profilePreviewImage,
                                 existingURL: C.mediaURL(image),
                                 isUploading: uploadingProfileImage,
-                                aspectRatio: 1
+                                aspectRatio: 1,
+                                onAdjust: {
+                                    guard let profilePreviewImage else { return }
+                                    positioningImage = ProfileImagePositioning(
+                                        kind: .profile,
+                                        image: profilePreviewImage,
+                                        aspectRatio: 1
+                                    )
+                                }
                             )
                         }
 
@@ -1167,14 +1338,20 @@ private struct EditProfileSheet: View {
                                 previewImage: bannerPreviewImage,
                                 existingURL: C.mediaURL(bannerUrl),
                                 isUploading: uploadingBannerImage,
-                                aspectRatio: 16.0 / 6.0
+                                aspectRatio: 16.0 / 6.0,
+                                onAdjust: {
+                                    guard let bannerPreviewImage else { return }
+                                    positioningImage = ProfileImagePositioning(
+                                        kind: .banner,
+                                        image: bannerPreviewImage,
+                                        aspectRatio: 16.0 / 6.0
+                                    )
+                                }
                             )
                         }
 
                         if let errorMessage {
-                            Text(errorMessage)
-                                .font(.caption)
-                                .foregroundStyle(.red)
+                            WestreemFeedbackBanner(message: errorMessage)
                         }
                     }
                     .padding(C.pagePad)
@@ -1198,6 +1375,18 @@ private struct EditProfileSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+        .fullScreenCover(item: $positioningImage) { pending in
+            WestreemImagePositionEditor(
+                image: pending.image,
+                aspectRatio: pending.aspectRatio,
+                title: pending.kind == .profile ? "Position Profile Image" : "Position Banner",
+                onCancel: { positioningImage = nil },
+                onApply: { positioned in
+                    positioningImage = nil
+                    Task { await uploadPositionedImage(positioned, kind: pending.kind) }
+                }
+            )
+        }
         .onChange(of: selectedProfileItem) { _, item in
             guard let item else { return }
             Task { await uploadSelectedImage(item, kind: .profile) }
@@ -1230,7 +1419,8 @@ private struct EditProfileSheet: View {
         previewImage: UIImage?,
         existingURL: URL?,
         isUploading: Bool,
-        aspectRatio: CGFloat
+        aspectRatio: CGFloat,
+        onAdjust: @escaping () -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             mediaPreview(previewImage: previewImage, existingURL: existingURL, aspectRatio: aspectRatio)
@@ -1256,6 +1446,18 @@ private struct EditProfileSheet: View {
                 }
                 .disabled(isUploading || saving)
 
+                if previewImage != nil {
+                    Button(action: onAdjust) {
+                        Image(systemName: "crop")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(C.text)
+                            .frame(width: 42, height: 42)
+                            .background(C.elevated, in: RoundedRectangle(cornerRadius: 10))
+                    }
+                    .accessibilityLabel("Adjust image position")
+                    .disabled(isUploading || saving)
+                }
+
                 if !url.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button("Clear") {
                         url.wrappedValue = ""
@@ -1271,15 +1473,10 @@ private struct EditProfileSheet: View {
             }
 
             TextField("Image URL", text: url)
-                .textFieldStyle(.plain)
                 .keyboardType(.URL)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .foregroundStyle(C.text)
-                .padding(12)
-                .background(Color.white.opacity(0.05))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay { RoundedRectangle(cornerRadius: 10).stroke(C.border, lineWidth: 1) }
+                .westreemField()
         }
     }
 
@@ -1321,10 +1518,7 @@ private struct EditProfileSheet: View {
     }
 
     private func fieldGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(C.text)
+        WestreemFormPanel(title) {
             content()
         }
     }
@@ -1332,6 +1526,13 @@ private struct EditProfileSheet: View {
     private enum ProfileImageKind: String {
         case profile = "avatar"
         case banner
+    }
+
+    private struct ProfileImagePositioning: Identifiable {
+        let kind: ProfileImageKind
+        let image: UIImage
+        let aspectRatio: CGFloat
+        var id: String { kind.rawValue }
     }
 
     private func uploadSelectedImage(_ item: PhotosPickerItem, kind: ProfileImageKind) async {
@@ -1347,22 +1548,47 @@ private struct EditProfileSheet: View {
                 throw APIError.invalidResponse("Could not read the selected image.")
             }
 
-            let uploadedURL = try await APIClient.shared.uploadProfileBlobImage(
-                kind: kind.rawValue,
-                imageData: uploadData
-            )
-            switch kind {
-            case .profile:
-                image = uploadedURL
-                profilePreviewImage = sourceImage
-                selectedProfileItem = nil
-            case .banner:
-                bannerUrl = uploadedURL
-                bannerPreviewImage = sourceImage
-                selectedBannerItem = nil
-            }
+            try await uploadPreparedProfileImage(sourceImage, data: uploadData, kind: kind)
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func uploadPositionedImage(_ sourceImage: UIImage, kind: ProfileImageKind) async {
+        setUploading(true, for: kind)
+        errorMessage = nil
+        defer { setUploading(false, for: kind) }
+        do {
+            guard let uploadData = preparedJPEGData(
+                from: sourceImage,
+                maxPixel: kind == .profile ? 1200 : 1800
+            ) else {
+                throw APIError.invalidResponse("Could not prepare the positioned image.")
+            }
+            try await uploadPreparedProfileImage(sourceImage, data: uploadData, kind: kind)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func uploadPreparedProfileImage(
+        _ sourceImage: UIImage,
+        data: Data,
+        kind: ProfileImageKind
+    ) async throws {
+        let uploadedURL = try await APIClient.shared.uploadProfileBlobImage(
+            kind: kind.rawValue,
+            imageData: data
+        )
+        switch kind {
+        case .profile:
+            image = uploadedURL
+            profilePreviewImage = sourceImage
+            selectedProfileItem = nil
+        case .banner:
+            bannerUrl = uploadedURL
+            bannerPreviewImage = sourceImage
+            selectedBannerItem = nil
         }
     }
 

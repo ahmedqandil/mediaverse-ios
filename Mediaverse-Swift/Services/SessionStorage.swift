@@ -9,6 +9,7 @@ enum SessionStorage {
     private static let activeContextCookieJSONKey = "westreem.activeContextCookieJSON"
     private static let biometricUnlockEnabledKey = "westreem.biometricUnlockEnabled"
     private static let tokenService = "com.westreem.mediaverse.session"
+    private static let sharedAccessGroup = "LPXBZ2LJZ8.com.westreem.shared"
 
     /// The current session JWT, or nil if signed out.
     static var token: String? {
@@ -103,7 +104,27 @@ enum SessionStorage {
 
     private static var keychainToken: String? {
         get {
-            var query = tokenQuery
+            if let token = readToken(query: sharedTokenQuery) {
+                return token
+            }
+            // One-time migration keeps existing installations signed in while
+            // making the session available to the WeStreem Share Extension.
+            if let legacy = readToken(query: legacyTokenQuery) {
+                writeToken(legacy, query: sharedTokenQuery)
+                return legacy
+            }
+            return nil
+        }
+        set {
+            SecItemDelete(sharedTokenQuery as CFDictionary)
+            SecItemDelete(legacyTokenQuery as CFDictionary)
+            guard let newValue else { return }
+            writeToken(newValue, query: sharedTokenQuery)
+        }
+    }
+
+    private static func readToken(query base: [String: Any]) -> String? {
+            var query = base
             query[kSecReturnData as String] = true
             query[kSecMatchLimit as String] = kSecMatchLimitOne
 
@@ -115,26 +136,27 @@ enum SessionStorage {
                 return nil
             }
             return token
-        }
-        set {
-            SecItemDelete(tokenQuery as CFDictionary)
-            guard let newValue,
-                  let data = newValue.data(using: .utf8) else {
-                return
-            }
-
-            var query = tokenQuery
-            query[kSecValueData as String] = data
-            query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-            SecItemAdd(query as CFDictionary, nil)
-        }
     }
 
-    private static var tokenQuery: [String: Any] {
+    private static func writeToken(_ token: String, query base: [String: Any]) {
+        guard let data = token.data(using: .utf8) else { return }
+        var query = base
+        query[kSecValueData as String] = data
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        SecItemAdd(query as CFDictionary, nil)
+    }
+
+    private static var legacyTokenQuery: [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: tokenService,
             kSecAttrAccount as String: tokenKey
         ]
+    }
+
+    private static var sharedTokenQuery: [String: Any] {
+        var query = legacyTokenQuery
+        query[kSecAttrAccessGroup as String] = sharedAccessGroup
+        return query
     }
 }

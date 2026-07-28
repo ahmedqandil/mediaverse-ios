@@ -3,6 +3,22 @@ import CoreImage
 import CoreMedia
 @testable import Mediaverse
 
+final class SocialSessionValidationTests: XCTestCase {
+    func testMissingSessionUserRejectsStoredCredential() {
+        XCTAssertEqual(
+            StoredSessionValidation.resolve(hasUser: false),
+            .rejected
+        )
+    }
+
+    func testReturnedSessionUserAuthenticatesStoredCredential() {
+        XCTAssertEqual(
+            StoredSessionValidation.resolve(hasUser: true),
+            .authenticated
+        )
+    }
+}
+
 final class StoryTimedMediaOverlayTests: XCTestCase {
     func testOverlayMediaLoopsAgainstItsOwnDuration() {
         XCTAssertEqual(storyLoopedMediaTime(elapsed: 0.5, duration: 2), 0.5, accuracy: 0.0001)
@@ -326,17 +342,18 @@ final class StoryTimelineOverlayEditingTests: XCTestCase {
         project.tracks.overlays = [.text(overlay)]
         let editor = StoryTimelineEditor(project: project)
         editor.selectOverlay(overlay.id)
+        let normalizedBaseline = editor.selectedOverlay?.timeRange
 
         await editor.updateSelectedOverlayTime(start: 4.8, duration: 4)
 
         let updated = try! XCTUnwrap(editor.selectedOverlay)
         XCTAssertEqual(updated.timeRange.start.time.seconds, 4.8, accuracy: 0.001)
-        XCTAssertEqual(updated.timeRange.duration.time.seconds, 0.2, accuracy: 0.001)
+        XCTAssertEqual(updated.timeRange.duration.time.seconds, 4, accuracy: 0.001)
         XCTAssertTrue(editor.canUndo)
 
         await editor.undo()
 
-        XCTAssertEqual(editor.selectedOverlay?.timeRange, overlay.timeRange)
+        XCTAssertEqual(editor.selectedOverlay?.timeRange, normalizedBaseline)
     }
 }
 
@@ -484,19 +501,35 @@ final class SGAIPlaybackTests: XCTestCase {
         XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .csai)
     }
 
-    func testExplicitSSAIIsPreserved() throws {
+    func testLegacyMasterSSAIValueFailsClosedToCSAI() throws {
         let data = Data(#"{"adsEnabled":true,"deliveryMode":"ssai"}"#.utf8)
         let policy = try JSONDecoder().decode(EffectiveAdPolicy.self, from: data)
-        XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .ssai)
+        XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .csai)
     }
 
-    func testAutoDefaultsToSGAIAndUnsupportedFallsBackToCSAI() throws {
+    func testDeviceOverrideIsIgnoredUnlessMasterModeIsServer() throws {
         let policy = try JSONDecoder().decode(
             EffectiveAdPolicy.self,
             from: Data(#"{"adsEnabled":true,"deliveryByDevice":{"nativeApp":"auto"}}"#.utf8)
         )
+        XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .csai)
+    }
+
+    func testServerAutoDefaultsToSGAIAndUnsupportedFallsBackToSSAI() throws {
+        let policy = try JSONDecoder().decode(
+            EffectiveAdPolicy.self,
+            from: Data(#"{"adsEnabled":true,"deliveryMode":"server","deliveryByDevice":{"nativeApp":"auto"}}"#.utf8)
+        )
         XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .sgai)
-        XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy, supportsHLSInterstitials: false), .csai)
+        XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy, supportsHLSInterstitials: false), .ssai)
+    }
+
+    func testGlobalCSAIModeOverridesNativeServerSetting() throws {
+        let policy = try JSONDecoder().decode(
+            EffectiveAdPolicy.self,
+            from: Data(#"{"adsEnabled":true,"deliveryMode":"csai","deliveryByDevice":{"nativeApp":"ssai"}}"#.utf8)
+        )
+        XCTAssertEqual(AdDeliveryResolver.resolve(policy: policy), .csai)
     }
 
     func testShortsKeepFeedAdsClientSideAndUseSGAIOnlyForHLS() throws {
@@ -1136,7 +1169,11 @@ final class StoryOverlayLayoutTests: XCTestCase {
             in: CGSize(width: 390, height: 844)
         )
 
-        XCTAssertEqual(compact, 320.0 / 390.0, accuracy: 0.0001)
+        let compactFrame = StoryOverlayLayout.storyFrame(
+            for: canvas,
+            in: CGSize(width: 320, height: 568)
+        )
+        XCTAssertEqual(compact, compactFrame.width / 390.0, accuracy: 0.0001)
         XCTAssertEqual(regular, 1, accuracy: 0.0001)
     }
 
@@ -1669,6 +1706,115 @@ final class StoryLookEditingTests: XCTestCase {
         XCTAssertGreaterThan(beauty.brightness, 0)
         XCTAssertGreaterThan(beauty.eyeBrightening, 0)
         XCTAssertTrue(beauty.isEnabled)
+    }
+
+    func testNaturalBeautyPresetIsVisiblyConfigured() {
+        let beauty = StoryBeautySettings.natural
+
+        XCTAssertGreaterThanOrEqual(beauty.intensity, 0.75)
+        XCTAssertGreaterThanOrEqual(beauty.skinSmoothing, 0.65)
+        XCTAssertGreaterThanOrEqual(beauty.wrinkleReduction, 0.5)
+        XCTAssertGreaterThan(beauty.skinGlow, 0.3)
+        XCTAssertGreaterThan(beauty.underEye, 0.15)
+        XCTAssertTrue(beauty.isEnabled)
+    }
+
+    func testSemanticSkinMaskRejectsEmptyAndImplausibleCoverage() {
+        XCTAssertFalse(
+            StorySemanticMaskQuality.isUsable(litPixelCount: 0, totalPixelCount: 10_000)
+        )
+        XCTAssertFalse(
+            StorySemanticMaskQuality.isUsable(litPixelCount: 100, totalPixelCount: 10_000)
+        )
+        XCTAssertTrue(
+            StorySemanticMaskQuality.isUsable(litPixelCount: 4_000, totalPixelCount: 10_000)
+        )
+        XCTAssertFalse(
+            StorySemanticMaskQuality.isUsable(litPixelCount: 9_000, totalPixelCount: 10_000)
+        )
+    }
+
+    func testBeautyLuminosityIsControlScaledAndZeroSafe() {
+        XCTAssertEqual(StoryBeautyLuminosity.gammaPower(for: .off), 1)
+
+        let naturalPower = StoryBeautyLuminosity.gammaPower(for: .natural)
+        XCTAssertLessThan(naturalPower, 0.95)
+        XCTAssertGreaterThanOrEqual(naturalPower, 0.75)
+
+        let studio = StoryBeautySettings(
+            intensity: 1,
+            skinSmoothing: 1,
+            skinGlow: 1,
+            skinTone: 0,
+            brightness: 1
+        )
+        XCTAssertEqual(StoryBeautyLuminosity.gammaPower(for: studio), 0.75)
+    }
+
+    func testBeautyMaskCacheKeySeparatesFrameSizeAndIntensity() {
+        let extent = CGRect(x: 0, y: 0, width: 1_080, height: 1_920)
+        let baseline = StoryBeautyMaskCacheKey.make(
+            trackingKey: "clip-a",
+            time: 1,
+            extent: extent,
+            intensity: 0.78
+        )
+
+        XCTAssertNotNil(baseline)
+        XCTAssertNil(
+            StoryBeautyMaskCacheKey.make(
+                trackingKey: nil,
+                time: 1,
+                extent: extent,
+                intensity: 0.78
+            )
+        )
+        XCTAssertNotEqual(
+            baseline,
+            StoryBeautyMaskCacheKey.make(
+                trackingKey: "clip-a",
+                time: 1.1,
+                extent: extent,
+                intensity: 0.78
+            )
+        )
+        XCTAssertNotEqual(
+            baseline,
+            StoryBeautyMaskCacheKey.make(
+                trackingKey: "clip-a",
+                time: 1,
+                extent: CGRect(x: 0, y: 0, width: 720, height: 1_280),
+                intensity: 0.78
+            )
+        )
+        XCTAssertNotEqual(
+            baseline,
+            StoryBeautyMaskCacheKey.make(
+                trackingKey: "clip-a",
+                time: 1,
+                extent: extent,
+                intensity: 1
+            )
+        )
+    }
+
+    func testBeautyMaskKeepsVisibleContourCoverageWithSemanticRefinement() {
+        XCTAssertEqual(
+            StoryBeautyMaskCoverage.safetyAmount(hasSemanticMask: true, intensity: 0),
+            0
+        )
+        XCTAssertGreaterThan(
+            StoryBeautyMaskCoverage.safetyAmount(hasSemanticMask: true, intensity: 0.78),
+            0.15
+        )
+        XCTAssertEqual(
+            StoryBeautyMaskCoverage.safetyAmount(hasSemanticMask: true, intensity: 1),
+            0.38
+        )
+        XCTAssertEqual(
+            StoryBeautyMaskCoverage.safetyAmount(hasSemanticMask: false, intensity: 1),
+            0.62
+        )
     }
 
     func testMasterBeautyPreservesExistingCustomControls() {

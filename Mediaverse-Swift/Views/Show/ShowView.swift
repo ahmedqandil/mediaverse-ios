@@ -9,6 +9,7 @@ private let NON_SERIES_TYPES: Set<String> = ["movie", "film", "special", "event"
 struct ShowView: View {
 
     let showId: String
+    var initialSeasonId: String? = nil
     var handoffProductId: String? = nil
     var handoffIntent: String? = nil
     var handoffPublicId: String? = nil
@@ -190,6 +191,14 @@ struct ShowView: View {
                         C.lightHaptic()
                         await load(showSpinner: false)
                     }
+                    .task(id: "\(sh.id):\(initialSeasonId ?? "")") {
+                        guard let initialSeasonId,
+                              sh.seasons.contains(where: { $0.id == initialSeasonId })
+                        else { return }
+                        activeTab = .episodes
+                        await Task.yield()
+                        pageScrollProxy.scrollTo(seasonAnchorId(initialSeasonId), anchor: .top)
+                    }
                 }
 
                 heroBackButton()
@@ -202,19 +211,7 @@ struct ShowView: View {
     // MARK: - Hero
 
     private func heroBackButton() -> some View {
-        Button {
-            dismiss()
-        } label: {
-            MediaverseIcon(name: "chevron-left", fallbackSystemName: "chevron.left")
-                .frame(width: 22, height: 22)
-                .foregroundStyle(.white)
-                .frame(width: 52, height: 52)
-                .background(.black.opacity(0.30))
-                .clipShape(Circle())
-                .overlay { Circle().stroke(.white.opacity(0.16), lineWidth: 1) }
-                .shadow(color: .black.opacity(0.35), radius: 12, y: 5)
-        }
-        .buttonStyle(.plain)
+        PlatformBackButton { dismiss() }
     }
 
     private func heroSection(_ sh: ShowData, width: CGFloat) -> some View {

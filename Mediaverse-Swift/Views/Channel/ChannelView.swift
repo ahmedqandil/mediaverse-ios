@@ -153,19 +153,7 @@ struct ChannelView: View {
     }
 
     private func heroBackButton() -> some View {
-        Button {
-            dismiss()
-        } label: {
-            MediaverseIcon(name: "chevron-left", fallbackSystemName: "chevron.left")
-                .frame(width: 22, height: 22)
-                .foregroundStyle(.white)
-                .frame(width: 52, height: 52)
-                .background(.black.opacity(0.30))
-                .clipShape(Circle())
-                .overlay { Circle().stroke(.white.opacity(0.16), lineWidth: 1) }
-                .shadow(color: .black.opacity(0.35), radius: 12, y: 5)
-        }
-        .buttonStyle(.plain)
+        PlatformBackButton { dismiss() }
     }
 
     // MARK: - Hero

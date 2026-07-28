@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import WebKit
 
 struct InAppBrowserItem: Identifiable, Equatable {
@@ -20,7 +21,16 @@ final class InAppBrowserManager: ObservableObject {
     }
 
     static func canDisplayInApp(_ url: URL) -> Bool {
-        C.isTrustedBrowserURL(url)
+        if C.isTrustedBrowserURL(url) {
+            return true
+        }
+        guard url.scheme?.lowercased() == "https",
+              url.host(percentEncoded: false)?.isEmpty == false,
+              url.user == nil,
+              url.password == nil else {
+            return false
+        }
+        return true
     }
 }
 
@@ -33,7 +43,12 @@ struct InAppBrowserView: View {
     @State private var canGoBack = false
     @State private var canGoForward = false
     @State private var isLoading = true
+    @State private var estimatedProgress = 0.0
+    @State private var loadError: String?
+    @State private var copiedLink = false
     @State private var navigationAction: InAppBrowserNavigationAction?
+
+    private var activeURL: URL { currentURL ?? url }
 
     var body: some View {
         NavigationStack {
@@ -45,14 +60,24 @@ struct InAppBrowserView: View {
                     canGoBack: $canGoBack,
                     canGoForward: $canGoForward,
                     isLoading: $isLoading,
+                    estimatedProgress: $estimatedProgress,
+                    loadError: $loadError,
                     navigationAction: $navigationAction
                 )
                 .ignoresSafeArea(edges: .bottom)
 
                 if isLoading {
-                    ProgressView()
-                        .tint(C.watch)
-                        .padding(.top, 8)
+                    GeometryReader { proxy in
+                        Rectangle()
+                            .fill(C.watch)
+                            .frame(width: proxy.size.width * max(0.04, estimatedProgress), height: 2)
+                            .animation(.easeOut(duration: 0.16), value: estimatedProgress)
+                    }
+                    .frame(height: 2)
+                }
+
+                if let loadError {
+                    browserErrorView(loadError)
                 }
             }
             .navigationTitle(title.isEmpty ? displayHost : title)
@@ -61,6 +86,39 @@ struct InAppBrowserView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                         .foregroundStyle(C.watch)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        ShareLink(item: activeURL) {
+                            Label("Share Link", systemImage: "square.and.arrow.up")
+                        }
+                        Button {
+                            UIPasteboard.general.url = activeURL
+                            copiedLink = true
+                            Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                                copiedLink = false
+                            }
+                        } label: {
+                            Label(copiedLink ? "Link Copied" : "Copy Link", systemImage: copiedLink ? "checkmark" : "doc.on.doc")
+                        }
+                        Divider()
+                        Menu {
+                            ForEach(availableBrowsers) { browser in
+                                Button {
+                                    browser.open(activeURL)
+                                } label: {
+                                    Label(browser.title, systemImage: browser.systemImage)
+                                }
+                            }
+                        } label: {
+                            Label("Open in Browser", systemImage: "safari")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.system(size: 17, weight: .semibold))
+                    }
+                    .accessibilityLabel("Browser actions")
                 }
                 ToolbarItemGroup(placement: .bottomBar) {
                     Button {
@@ -79,18 +137,23 @@ struct InAppBrowserView: View {
 
                     Spacer()
 
-                    Text((currentURL ?? url).host(percentEncoded: false) ?? displayHost)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    VStack(spacing: 1) {
+                        Image(systemName: activeURL.scheme == "https" ? "lock.fill" : "globe")
+                            .font(.system(size: 8, weight: .bold))
+                        Text(activeURL.host(percentEncoded: false) ?? displayHost)
+                            .font(.caption2)
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(.secondary)
 
                     Spacer()
 
                     Button {
-                        navigationAction = .reload
+                        navigationAction = isLoading ? .stop : .reload
                     } label: {
-                        Image(systemName: "arrow.clockwise")
+                        Image(systemName: isLoading ? "xmark" : "arrow.clockwise")
                     }
+                    .accessibilityLabel(isLoading ? "Stop loading" : "Reload")
                 }
             }
         }
@@ -101,12 +164,91 @@ struct InAppBrowserView: View {
     private var displayHost: String {
         url.host(percentEncoded: false) ?? "Browser"
     }
+
+    private var availableBrowsers: [ExternalBrowser] {
+        ExternalBrowser.available(for: activeURL)
+    }
+
+    private func browserErrorView(_ message: String) -> some View {
+        VStack(spacing: 14) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 32, weight: .semibold))
+                .foregroundStyle(C.watch)
+            Text("Page Couldn’t Load")
+                .font(.headline)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            HStack(spacing: 10) {
+                Button("Try Again") {
+                    loadError = nil
+                    navigationAction = .reload
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(C.watch)
+                Button("Open in Safari") {
+                    ExternalBrowser.safari.open(activeURL)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(C.bg)
+    }
 }
 
 enum InAppBrowserNavigationAction: Equatable {
     case back
     case forward
     case reload
+    case stop
+}
+
+private struct ExternalBrowser: Identifiable {
+    let id: String
+    let title: String
+    let systemImage: String
+    let appURL: (URL) -> URL?
+
+    static let safari = ExternalBrowser(id: "safari", title: "Safari", systemImage: "safari") { $0 }
+
+    static let candidates: [ExternalBrowser] = [
+        .safari,
+        ExternalBrowser(id: "chrome", title: "Chrome", systemImage: "globe") { url in
+            guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+            components.scheme = url.scheme == "https" ? "googlechromes" : "googlechrome"
+            return components.url
+        },
+        ExternalBrowser(id: "firefox", title: "Firefox", systemImage: "flame") { url in
+            var components = URLComponents(string: "firefox://open-url")
+            components?.queryItems = [URLQueryItem(name: "url", value: url.absoluteString)]
+            return components?.url
+        },
+        ExternalBrowser(id: "edge", title: "Microsoft Edge", systemImage: "globe") { url in
+            guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+            components.scheme = url.scheme == "https" ? "microsoft-edge-https" : "microsoft-edge-http"
+            return components.url
+        },
+        ExternalBrowser(id: "brave", title: "Brave", systemImage: "shield") { url in
+            var components = URLComponents(string: "brave://open-url")
+            components?.queryItems = [URLQueryItem(name: "url", value: url.absoluteString)]
+            return components?.url
+        }
+    ]
+
+    static func available(for pageURL: URL) -> [ExternalBrowser] {
+        candidates.filter { browser in
+            guard let target = browser.appURL(pageURL) else { return false }
+            return browser.id == "safari" || UIApplication.shared.canOpenURL(target)
+        }
+    }
+
+    func open(_ pageURL: URL) {
+        guard let target = appURL(pageURL) else { return }
+        UIApplication.shared.open(target, options: [:])
+    }
 }
 
 private struct InAppWebView: UIViewRepresentable {
@@ -116,6 +258,8 @@ private struct InAppWebView: UIViewRepresentable {
     @Binding var canGoBack: Bool
     @Binding var canGoForward: Bool
     @Binding var isLoading: Bool
+    @Binding var estimatedProgress: Double
+    @Binding var loadError: String?
     @Binding var navigationAction: InAppBrowserNavigationAction?
 
     func makeCoordinator() -> Coordinator {
@@ -150,7 +294,10 @@ private struct InAppWebView: UIViewRepresentable {
             case .forward where webView.canGoForward:
                 webView.goForward()
             case .reload:
+                loadError = nil
                 webView.reload()
+            case .stop:
+                webView.stopLoading()
             default:
                 break
             }
@@ -183,8 +330,36 @@ private struct InAppWebView: UIViewRepresentable {
                 },
                 webView.observe(\.isLoading, options: [.new]) { [weak self] webView, _ in
                     DispatchQueue.main.async { self?.parent.isLoading = webView.isLoading }
+                },
+                webView.observe(\.estimatedProgress, options: [.new]) { [weak self] webView, _ in
+                    DispatchQueue.main.async { self?.parent.estimatedProgress = webView.estimatedProgress }
                 }
             ]
+        }
+
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            parent.loadError = nil
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            didFailProvisionalNavigation navigation: WKNavigation!,
+            withError error: Error
+        ) {
+            show(error)
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            show(error)
+        }
+
+        private func show(_ error: Error) {
+            let nsError = error as NSError
+            guard nsError.code != NSURLErrorCancelled else { return }
+            DispatchQueue.main.async {
+                self.parent.loadError = error.localizedDescription
+                self.parent.isLoading = false
+            }
         }
 
         func webView(

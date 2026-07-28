@@ -104,7 +104,7 @@ struct MoviesBrowseView: View {
     }
 
     private var genrePills: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        WestreemHorizontalScrollView(showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(displayGenres, id: \.self) { genre in
                     GenrePill(label: genre, selected: selectedGenre == genre) {

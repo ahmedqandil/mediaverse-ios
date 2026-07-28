@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
-/// Root tab container: Home · Shorts · Upload · Explore · Me
+/// Root page container: Home · Videos · Shorts · Discover · Profile
 /// All watch/channel/show/microdrama screens are PUSHED on the relevant NavigationStack.
 /// On iOS 26 the tab bar adopts Liquid Glass automatically — UITabBar.appearance()
 /// is skipped on that OS to avoid fighting the compositor.
@@ -11,11 +11,13 @@ struct MainTabView: View {
     @EnvironmentObject private var auth: AuthManager
     @EnvironmentObject private var miniPlayer: MiniPlayerManager
     @EnvironmentObject private var globalUploads: GlobalUploadProgressManager
+    @EnvironmentObject private var platformConfig: PlatformConfigManager
     @AppStorage("playerMuted") private var isMuted: Bool = false
     @StateObject private var shortsPlaybackManager = ShortsPlaybackManager()
     @State private var selectedTab: AppTab = .home
     @State private var lastContentTab: AppTab = .home
     @State private var homePath: [AppRoute] = []
+    @State private var videosPath: [AppRoute] = []
     @State private var explorePath: [AppRoute] = []
     @State private var shortsPath: [AppRoute] = []
     @State private var profilePath: [AppRoute] = []
@@ -32,19 +34,25 @@ struct MainTabView: View {
     @State private var isShortsAdPlaybackActive = false
     @State private var isRoutedShortsPresented = false
     @State private var isUploadEligible = false
+    @State private var activeContextToast: ActiveContext?
+    @State private var contextToastUserID: String?
+    @State private var contextToastDismissTask: Task<Void, Never>?
+    private let socialFeatures = SocialFeatureConfiguration.runtime()
 
     enum AppTab: Int, Hashable {
         case home = 0
-        case shorts = 1
-        case explore = 2
-        case profile = 3
-        case upload = 4
+        case videos = 1
+        case shorts = 2
+        case explore = 3
+        case profile = 4
     }
 
     private var activeNavigationPath: [AppRoute] {
         switch selectedTab {
-        case .home, .upload:
+        case .home:
             return homePath
+        case .videos:
+            return videosPath
         case .shorts:
             return shortsPath
         case .explore:
@@ -62,13 +70,11 @@ struct MainTabView: View {
         isCommentsOverlayPresented || isUploadSheetPresented || isKeyboardVisible || (isPlayerRouteActive && !isRoutedShortsPresented)
     }
 
-    private var isRootTabPagingLocked: Bool {
-        selectedTab == .shorts && isShortsAdPlaybackActive
-    }
-
     private func scrollTarget(for tab: AppTab) -> String {
         switch tab {
-        case .home, .upload:
+        case .home:
+            return "home"
+        case .videos:
             return "home"
         case .shorts:
             return "shorts"
@@ -90,9 +96,9 @@ struct MainTabView: View {
     var body: some View {
         layeredRoot
         .simultaneousGesture(mainScrollActivityGesture)
-        .simultaneousGesture(homeUploadSwipeGesture)
         .animation(.spring(response: 0.26, dampingFraction: 0.88), value: isUploadSheetPresented)
         .animation(.spring(response: 0.24, dampingFraction: 0.86), value: isBottomTabBarCompressed)
+        .animation(.spring(response: 0.28, dampingFraction: 0.88), value: activeContextToast?.id)
         .onAppear {
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
             applyNavigationBarAppearance()
@@ -115,9 +121,11 @@ struct MainTabView: View {
             shortsPlaybackManager.resetForIdentityChange()
             miniPlayer.close()
             homePath = []
+            videosPath = []
             explorePath = []
             shortsPath = []
             profilePath = []
+            dismissContextToast()
             selectedTab = .home
             lastContentTab = .home
             if let context = notification.object as? ActiveContext {
@@ -192,6 +200,7 @@ struct MainTabView: View {
             uploadProgressOverlay
             expandingMiniPlayerOverlay
             uploadOptionsOverlay
+            activeContextToastOverlay
         }
     }
 
@@ -262,27 +271,128 @@ struct MainTabView: View {
         }
     }
 
+    @ViewBuilder
+    private var activeContextToastOverlay: some View {
+        if let context = activeContextToast {
+            HStack(spacing: 10) {
+                MediaverseIcon(
+                    name: contextToastIcon(for: context.type),
+                    fallbackSystemName: contextToastFallbackIcon(for: context.type)
+                )
+                .frame(width: 20, height: 20)
+                .foregroundStyle(C.watch)
+                .frame(width: 36, height: 36)
+                .background(C.watch.opacity(0.12), in: Circle())
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Active context")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(C.textMuted)
+                    Text(context.name)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(C.text)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                Button {
+                    dismissContextToast()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(C.textMuted)
+                        .frame(width: 30, height: 30)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss active context")
+            }
+            .padding(.leading, 10)
+            .padding(.trailing, 6)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(C.border, lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.34), radius: 16, y: 8)
+            .padding(.horizontal, 16)
+            .padding(
+                .bottom,
+                miniPlayer.item == nil
+                    ? C.bottomMenuClearance
+                    : C.bottomMenuClearance + 86
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Active context, \(context.name)")
+            .zIndex(75)
+        }
+    }
+
     private var rootTabView: some View {
         TabView(selection: $selectedTab) {
             NavigationStack(path: $homePath) {
-                HomeView()
-                    .navigationDestination(for: AppRoute.self) { route in
-                        routeDestination(route)
+                Group {
+                    if socialFeatures.atmosphereEnabled {
+                        AtmosphereView()
+                    } else {
+                        HomeView(headerStyle: .home)
                     }
+                }
+                .navigationDestination(for: AppRoute.self) { route in
+                    routeDestination(route)
+                }
             }
             .ignoresSafeArea(edges: .bottom)
-            .tabItem { appTabLabel("Home", icon: "home", fallback: "house") }
+            .toolbar(.hidden, for: .tabBar)
+            .tabItem {
+                appTabLabel(
+                    "Home",
+                    icon: "home",
+                    fallback: "house"
+                )
+            }
             .tag(AppTab.home)
 
-            NavigationStack(path: $shortsPath) {
-                ShortsView(isRootActive: selectedTab == .shorts, playbackManager: shortsPlaybackManager)
-                    .navigationDestination(for: AppRoute.self) { route in
-                        routeDestination(route)
+            if platformConfig.isEnabled("videos", aspect: .nav) {
+                NavigationStack(path: $videosPath) {
+                    Group {
+                        if platformConfig.isEnabled("videos", aspect: .page) {
+                            HomeView(headerStyle: .videos)
+                        } else {
+                            PlatformSectionUnavailableView(item: platformConfig.browseItem(id: "videos"))
+                        }
                     }
+                        .navigationDestination(for: AppRoute.self) { route in
+                            routeDestination(route)
+                        }
+                }
+                .ignoresSafeArea(edges: .bottom)
+                .toolbar(.hidden, for: .tabBar)
+                .tabItem { appTabLabel("Videos", icon: "play", fallback: "play.rectangle") }
+                .tag(AppTab.videos)
             }
-            .ignoresSafeArea(edges: .bottom)
-            .tabItem { appTabLabel("Shorts", icon: "short", fallback: "play.rectangle.on.rectangle") }
-            .tag(AppTab.shorts)
+
+            if platformConfig.isEnabled("shorts", aspect: .nav) {
+                NavigationStack(path: $shortsPath) {
+                    Group {
+                        if platformConfig.isEnabled("shorts", aspect: .page) {
+                            ShortsView(isRootActive: selectedTab == .shorts, playbackManager: shortsPlaybackManager)
+                        } else {
+                            PlatformSectionUnavailableView(item: platformConfig.browseItem(id: "shorts"))
+                        }
+                    }
+                        .navigationDestination(for: AppRoute.self) { route in
+                            routeDestination(route)
+                        }
+                }
+                .ignoresSafeArea(edges: .bottom)
+                .toolbar(.hidden, for: .tabBar)
+                .tabItem { appTabLabel("Shorts", icon: "short", fallback: "play.rectangle.on.rectangle") }
+                .tag(AppTab.shorts)
+            }
 
             NavigationStack(path: $explorePath) {
                 BrowseView(isRootActive: selectedTab == .explore)
@@ -291,31 +401,44 @@ struct MainTabView: View {
                     }
             }
             .ignoresSafeArea(edges: .bottom)
-            .tabItem { appTabLabel("Explore", icon: "explore", fallback: "safari") }
+            .toolbar(.hidden, for: .tabBar)
+            .tabItem { appTabLabel("Discover", icon: "explore", fallback: "safari") }
             .tag(AppTab.explore)
 
             NavigationStack(path: $profilePath) {
-                ProfileView(isRootActive: selectedTab == .profile)
+                MyAtmoProfileView(isRootActive: selectedTab == .profile)
                     .navigationDestination(for: AppRoute.self) { route in
                         routeDestination(route)
                     }
             }
             .ignoresSafeArea(edges: .bottom)
-            .tabItem { appTabLabel("Me", icon: "user", fallback: "person") }
+            .toolbar(.hidden, for: .tabBar)
+            .tabItem { appTabLabel("Profile", icon: "user", fallback: "person") }
             .tag(AppTab.profile)
         }
         .tint(C.watch)
         .toolbar(.hidden, for: .tabBar)
-        .tabViewStyle(.page(indexDisplayMode: .never))
         .ignoresSafeArea(edges: .bottom)
-        .background(RootTabPagingLock(isLocked: isRootTabPagingLocked))
+        .background(SystemTabBarHider())
     }
 
-    private func openUploadOptions() {
-        guard auth.isAuthenticated, isUploadEligible else { return }
-        C.lightHaptic()
+    private func openUploadOptions(provideHaptic: Bool = true) {
+        guard canAccessCreateFlow else { return }
+        if provideHaptic {
+            C.lightHaptic()
+        }
         uploadDrawerDragOffset = 0
         isUploadSheetPresented = true
+    }
+
+    private var canAccessCreateFlow: Bool {
+        let mediaEnabled =
+            platformConfig.isEnabled("videos", aspect: .creation)
+            || platformConfig.isEnabled("shorts", aspect: .creation)
+        let ripplesEnabled =
+            socialFeatures.rippleComposerEnabled
+            && platformConfig.isEnabled("vibes", aspect: .creation)
+        return auth.isAuthenticated && ((isUploadEligible && mediaEnabled) || ripplesEnabled)
     }
 
     private func handleShortsAdPlaybackVisibilityChanged(_ notification: Notification) {
@@ -325,6 +448,7 @@ struct MainTabView: View {
     private func scheduleDeferredStartupWork() {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 700_000_000)
+            await presentStartupContextIfNeeded()
             await refreshUploadEligibility()
 
             try? await Task.sleep(nanoseconds: 250_000_000)
@@ -374,7 +498,7 @@ struct MainTabView: View {
 
     private func applyUploadEligibility(_ isEligible: Bool) {
         isUploadEligible = isEligible
-        if !isEligible {
+        if !canAccessCreateFlow {
             isUploadSheetPresented = false
         }
         NotificationCenter.default.post(name: .uploadEligibilityChanged, object: isEligible)
@@ -403,7 +527,70 @@ struct MainTabView: View {
 
     private func handleAuthenticationChange(oldValue: String?, newValue: String?) {
         shortsPlaybackManager.resetForIdentityChange()
+        dismissContextToast()
+        if newValue == nil {
+            contextToastUserID = nil
+        } else if newValue != oldValue {
+            contextToastUserID = nil
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(550))
+                await presentStartupContextIfNeeded()
+            }
+        }
         scheduleDeferredContextRefresh(isAuthenticated: newValue != nil)
+    }
+
+    @MainActor
+    private func presentStartupContextIfNeeded() async {
+        guard auth.isAuthenticated, let userID = auth.currentUser?.id else { return }
+        guard contextToastUserID != userID else { return }
+
+        do {
+            let response = try await APIClient.shared.fetchContexts()
+            contextToastUserID = userID
+            guard response.contexts.count > 1 else { return }
+            let active = SessionStorage.activeContext ?? response.active
+            activeContextToast = active
+            scheduleContextToastDismiss()
+        } catch {
+            // Startup context visibility is optional and must never block app loading.
+        }
+    }
+
+    private func scheduleContextToastDismiss() {
+        contextToastDismissTask?.cancel()
+        contextToastDismissTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.2)) {
+                activeContextToast = nil
+            }
+            contextToastDismissTask = nil
+        }
+    }
+
+    private func dismissContextToast() {
+        contextToastDismissTask?.cancel()
+        contextToastDismissTask = nil
+        activeContextToast = nil
+    }
+
+    private func contextToastIcon(for type: String) -> String {
+        switch type.lowercased() {
+        case "channel": return "users"
+        case "show": return "tv"
+        case "network": return "network"
+        default: return "user"
+        }
+    }
+
+    private func contextToastFallbackIcon(for type: String) -> String {
+        switch type.lowercased() {
+        case "channel": return "rectangle.stack.person.crop"
+        case "show": return "tv"
+        case "network": return "point.3.connected.trianglepath.dotted"
+        default: return "person"
+        }
     }
 
     private func dismissUploadOptionsAfterSelection() {
@@ -420,28 +607,41 @@ struct MainTabView: View {
     }
 
     private var bottomTabBar: some View {
-        GeometryReader { _ in
+        GeometryReader { proxy in
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
 
                 HStack(spacing: 0) {
-                    bottomTabButton(.home, title: "Home", icon: "home", fallback: "house")
-                    bottomTabButton(.shorts, title: "Shorts", icon: "short", fallback: "bolt")
-                    bottomTabButton(.explore, title: "Explore", icon: "explore", fallback: "safari")
-                    bottomTabButton(.profile, title: "Me", icon: "user", fallback: "person")
+                    bottomTabButton(
+                        .home,
+                        title: "Home",
+                        icon: "home",
+                        fallback: "house"
+                    )
+                    if platformConfig.isEnabled("videos", aspect: .nav) {
+                        bottomTabButton(.videos, title: "Videos", icon: "play", fallback: "play.rectangle")
+                    }
+                    if platformConfig.isEnabled("shorts", aspect: .nav) {
+                        bottomTabButton(.shorts, title: "Shorts", icon: "short", fallback: "bolt")
+                    }
+                    bottomTabButton(.explore, title: "Discover", icon: "explore", fallback: "safari")
+                    bottomTabButton(.profile, title: "Profile", icon: "user", fallback: "person")
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
                 .frame(maxWidth: 392)
-                .background(C.elevated.opacity(0.94), in: Capsule())
+                .background(
+                    C.elevated.opacity(0.94),
+                    in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+                )
                 .overlay {
-                    Capsule()
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
                 }
                 .shadow(color: .black.opacity(0.42), radius: 18, y: 8)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 24)
-                .padding(.bottom, 16)
+                .padding(.bottom, max(10, proxy.safeAreaInsets.bottom))
                 .scaleEffect(isBottomTabBarCompressed ? 0.94 : 1, anchor: .bottom)
                 .opacity(isBottomTabBarCompressed ? 0.90 : 1)
                 .offset(y: isBottomTabBarCompressed ? 4 : 0)
@@ -467,29 +667,6 @@ struct MainTabView: View {
             }
     }
 
-    private var homeUploadSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 28, coordinateSpace: .global)
-            .onEnded { value in
-                guard canOpenUploadFromHomeSwipe else { return }
-                let translation = value.translation
-                let predicted = value.predictedEndTranslation
-                let isRightSwipe = translation.width > 92 || predicted.width > 150
-                let isMostlyHorizontal = abs(translation.width) > abs(translation.height) * 1.65
-                guard isRightSwipe, isMostlyHorizontal else { return }
-                openUploadOptions()
-            }
-    }
-
-    private var canOpenUploadFromHomeSwipe: Bool {
-        selectedTab == .home
-            && isUploadEligible
-            && homePath.isEmpty
-            && !isUploadSheetPresented
-            && !isCommentsOverlayPresented
-            && !isKeyboardVisible
-            && expandingMiniItem == nil
-    }
-
     private func scheduleBottomTabBarRestore() {
         bottomTabBarRestoreTask?.cancel()
         bottomTabBarRestoreTask = Task { @MainActor in
@@ -501,7 +678,7 @@ struct MainTabView: View {
     }
 
     private func bottomTabButton(_ tab: AppTab, title: String, icon: String, fallback: String) -> some View {
-        let isSelected = selectedTab == tab || (tab == .upload && selectedTab == .upload)
+        let isSelected = selectedTab == tab
         let color = isSelected ? C.watch : Color.white.opacity(0.35)
 
         return Button {
@@ -522,10 +699,12 @@ struct MainTabView: View {
             .frame(maxWidth: .infinity)
             .frame(height: 54)
             .background {
-                Capsule()
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(isSelected ? C.watch.opacity(0.14) : Color.clear)
+                    .padding(.horizontal, 1)
+                    .padding(.vertical, 1)
             }
-            .contentShape(Capsule())
+            .contentShape(Rectangle())
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(title)
             .accessibilityAddTraits(isSelected ? [.isSelected] : [])
@@ -561,8 +740,10 @@ struct MainTabView: View {
 
     private func resetNavigationPath(for tab: AppTab) {
         switch tab {
-        case .home, .upload:
+        case .home:
             homePath = []
+        case .videos:
+            videosPath = []
         case .shorts:
             shortsPath = []
         case .explore:
@@ -584,13 +765,20 @@ struct MainTabView: View {
             UploadView(presentationStyle: .createSheet, onOptionSelected: dismissUploadOptionsAfterSelection)
                 .frame(maxWidth: .infinity)
                 .background(C.bg)
-                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .clipShape(
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: 24,
+                        topTrailingRadius: 24
+                    )
+                )
                 .overlay {
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: 24,
+                        topTrailingRadius: 24
+                    )
                         .stroke(C.borderSubtle, lineWidth: 1)
                 }
                 .shadow(color: .black.opacity(0.34), radius: 18, y: 8)
-                .padding(.horizontal, 10)
                 .offset(y: uploadDrawerDragOffset)
                 .gesture(uploadDrawerDismissGesture)
         }
@@ -676,10 +864,10 @@ struct MainTabView: View {
         switch selectedTab {
         case .home:
             homePath.append(route)
+        case .videos:
+            videosPath.append(route)
         case .shorts:
             shortsPath.append(route)
-        case .upload:
-            homePath.append(route)
         case .explore:
             explorePath.append(route)
         case .profile:
@@ -690,6 +878,7 @@ struct MainTabView: View {
     private func openPushRoute(_ route: AppRoute) {
         miniPlayer.close()
         homePath = []
+        videosPath = []
         explorePath = []
         shortsPath = []
         profilePath = []
@@ -801,7 +990,11 @@ struct MainTabView: View {
 
     @ViewBuilder
     private func routeDestination(_ route: AppRoute) -> some View {
-        switch route {
+        if let section = controlledSection(for: route),
+           !platformConfig.isEnabled(section, aspect: .page) {
+            PlatformSectionUnavailableView(item: platformConfig.browseItem(id: section))
+        } else {
+          switch route {
         case .video(let id):
             VideoWatchView(videoId: id)
                 .id(id)
@@ -814,6 +1007,8 @@ struct MainTabView: View {
             ChannelView(handle: handleOrId)
         case .show(let id):
             ShowView(showId: id)
+        case .showSeason(let showId, let seasonId):
+            ShowView(showId: showId, initialSeasonId: seasonId)
         case .showAccess(let showId, let productId, let intent, let handoffId):
             ShowView(
                 showId: showId,
@@ -834,6 +1029,44 @@ struct MainTabView: View {
             PlaylistDetailView(playlistId: id)
         case .collection(let id):
             CollectionDetailView(collectionId: id)
+        case .vibe(let slug):
+            VibeDetailView(slug: slug)
+        case .vibeManagement(let slug, let tab):
+            VibeDetailView(slug: slug, initialManagementTab: tab)
+        case .vibeInvite(let token):
+            VibeInviteAcceptView(token: token)
+        case .event(let slug):
+            VibeEventDetailView(slug: slug)
+        case .eventInvite(let token):
+            VibeEventInviteView(token: token)
+        case .ripple(let postId):
+            RippleDetailView(postId: postId)
+        case .atmo(let handle):
+            AtmoProfileView(handle: handle)
+        case .search(let query):
+            SearchView(initialQuery: query)
+          }
+        }
+    }
+
+    private func controlledSection(for route: AppRoute) -> String? {
+        switch route {
+        case .video:
+            return "videos"
+        case .short:
+            return "shorts"
+        case .episode, .show, .showSeason, .showAccess:
+            return "shows"
+        case .channel:
+            return "channels"
+        case .microdramaShow, .microdramaWatch, .microdramaWatchEp:
+            return "microdramas"
+        case .collection:
+            return "collections"
+        case .vibe, .vibeManagement, .vibeInvite, .ripple, .atmo:
+            return "vibes"
+        case .event, .eventInvite, .handoff, .playlist, .search:
+            return nil
         }
     }
 
@@ -846,11 +1079,41 @@ struct MainTabView: View {
         appearance.shadowColor = UIColor(C.borderSubtle)
         appearance.titleTextAttributes = [.foregroundColor: UIColor(C.text)]
         appearance.largeTitleTextAttributes = [.foregroundColor: UIColor(C.text)]
+        let backIndicator = Self.platformBackIndicatorImage()
+        appearance.setBackIndicatorImage(backIndicator, transitionMaskImage: backIndicator)
 
         UINavigationBar.appearance().standardAppearance = appearance
         UINavigationBar.appearance().scrollEdgeAppearance = appearance
         UINavigationBar.appearance().compactAppearance = appearance
         UINavigationBar.appearance().tintColor = UIColor(C.text)
+    }
+
+    private static func platformBackIndicatorImage() -> UIImage {
+        let size = CGSize(width: 36, height: 36)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { context in
+            let bounds = CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1)
+            let cg = context.cgContext
+            cg.setFillColor(UIColor.black.withAlphaComponent(0.46).cgColor)
+            cg.fillEllipse(in: bounds)
+            cg.setStrokeColor(UIColor.white.withAlphaComponent(0.16).cgColor)
+            cg.setLineWidth(1)
+            cg.strokeEllipse(in: bounds)
+
+            let symbol = UIImage(
+                systemName: "chevron.left",
+                withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
+            )?.withTintColor(.white, renderingMode: .alwaysOriginal)
+            symbol?.draw(
+                in: CGRect(
+                    x: (size.width - 15) / 2 - 1,
+                    y: (size.height - 18) / 2,
+                    width: 15,
+                    height: 18
+                )
+            )
+        }
+        .withRenderingMode(.alwaysOriginal)
     }
 
     private func applyTabBarAppearance() {
@@ -871,12 +1134,58 @@ struct MainTabView: View {
     }
 }
 
+private struct SystemTabBarHider: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> Controller {
+        Controller()
+    }
+
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.hideSystemTabBar()
+    }
+
+    final class Controller: UIViewController {
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            hideSystemTabBar()
+        }
+
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
+            hideSystemTabBar()
+        }
+
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
+            hideSystemTabBar()
+        }
+
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            hideSystemTabBar()
+        }
+
+        func hideSystemTabBar() {
+            var ancestor: UIViewController? = self
+            while let current = ancestor {
+                if let tabController = current as? UITabBarController
+                    ?? current.tabBarController {
+                    tabController.tabBar.isHidden = true
+                    tabController.additionalSafeAreaInsets.bottom = 0
+                    return
+                }
+                ancestor = current.parent
+            }
+        }
+    }
+}
+
 private extension AppRoute {
     var prefersHiddenBottomChrome: Bool {
         switch self {
         case .video, .episode, .microdramaWatch, .microdramaWatchEp:
             return true
-        case .short, .channel, .show, .showAccess, .handoff, .microdramaShow, .playlist, .collection:
+        case .short, .channel, .show, .showSeason, .showAccess, .handoff, .microdramaShow, .playlist, .collection,
+             .vibe, .vibeManagement, .vibeInvite, .event, .eventInvite, .ripple, .atmo, .search:
             return false
         }
     }
@@ -884,44 +1193,6 @@ private extension AppRoute {
     var isShortRoute: Bool {
         if case .short = self { return true }
         return false
-    }
-}
-
-private struct RootTabPagingLock: UIViewRepresentable {
-    let isLocked: Bool
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
-        view.isUserInteractionEnabled = false
-        return view
-    }
-
-    func updateUIView(_ view: UIView, context: Context) {
-        DispatchQueue.main.async {
-            setHorizontalPagingEnabled(!isLocked, from: view)
-        }
-    }
-
-    private func setHorizontalPagingEnabled(_ isEnabled: Bool, from marker: UIView) {
-        guard let root = marker.window else { return }
-        root.allSubviews(of: UIScrollView.self)
-            .filter { scrollView in
-                scrollView.isPagingEnabled
-                    && scrollView.contentSize.width > scrollView.bounds.width + 1
-                    && scrollView.contentSize.height <= scrollView.bounds.height + 1
-            }
-            .forEach { scrollView in
-                scrollView.isScrollEnabled = isEnabled
-            }
-    }
-}
-
-private extension UIView {
-    func allSubviews<T: UIView>(of type: T.Type) -> [T] {
-        subviews.flatMap { subview -> [T] in
-            let matches = subview as? T
-            return [matches].compactMap { $0 } + subview.allSubviews(of: type)
-        }
     }
 }
 
