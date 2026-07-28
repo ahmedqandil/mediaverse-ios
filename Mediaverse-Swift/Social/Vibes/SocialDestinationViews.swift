@@ -12,6 +12,7 @@ struct VibeDetailView: View {
         case affiliations
         case moderation
         case invitations
+        case waves
         case settings
         case composer
 
@@ -173,6 +174,10 @@ struct VibeDetailView: View {
                         capabilities: detail.capabilities,
                         currentRole: detail.membership?.role
                     )
+                }
+            case .waves:
+                VibeWavesManagementView(vibeSlug: slug) {
+                    Task { await load() }
                 }
             case .settings:
                 if let detail {
@@ -525,7 +530,7 @@ struct VibeDetailView: View {
 
     private func optionsSheetHeight(for capabilities: VibeCapabilities) -> CGFloat {
         var count = 0
-        if capabilities.canManageClub { count += 1 }
+        if capabilities.canManageClub { count += 2 }
         if capabilities.canInvite { count += 1 }
         if capabilities.canModerateContent || capabilities.canModerateMembers { count += 1 }
         if capabilities.canManageAffiliations { count += 1 }
@@ -555,6 +560,7 @@ private struct VibeOptionsSheet: View {
 
             if capabilities.canManageClub {
                 option("Settings", detail: "Branding, privacy, posting, and membership", icon: "gearshape", destination: .settings)
+                option("Waves", detail: "Spaces, permissions, posting tools, and alerts", icon: "water.waves", destination: .waves)
             }
             if capabilities.canInvite {
                 option("Invitations", detail: "Create and manage invitation links", icon: "person.badge.plus", destination: .invitations)

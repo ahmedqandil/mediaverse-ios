@@ -538,6 +538,22 @@ public struct VibeWavesResponse: Decodable, Sendable {
     public let waves: [VibeWave]
 }
 
+public struct VibeWaveSettings: Encodable, Sendable {
+    public let name: String
+    public let slug: String
+    public let description: String?
+    public let type: VibeWaveType
+    public let visibility: String
+    public let postingPolicy: String
+    public let position: Int
+    public let commentsEnabled: Bool
+    public let requiresPostApproval: Bool
+    public let allowPolls: Bool
+    public let allowPhotos: Bool
+    public let allowLinks: Bool
+    public let allowEchoes: Bool
+}
+
 public struct VibeWaveSubscription: Codable, Equatable, Sendable {
     public let notificationLevel: String
     public let pushEnabled: Bool

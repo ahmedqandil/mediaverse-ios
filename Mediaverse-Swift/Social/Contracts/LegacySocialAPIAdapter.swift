@@ -154,6 +154,37 @@ public actor LegacySocialAPIAdapter {
         ).waves
     }
 
+    public func createVibeWave(vibeSlug: String, settings: VibeWaveSettings) async throws {
+        _ = try await transport.socialPostData(
+            path: "/api/fan-clubs/\(try segment(vibeSlug))/waves",
+            body: try JSONEncoder().encode(settings)
+        )
+    }
+
+    public func updateVibeWave(
+        vibeSlug: String,
+        waveSlug: String,
+        settings: VibeWaveSettings
+    ) async throws {
+        _ = try await transport.socialPatchData(
+            path: "/api/fan-clubs/\(try segment(vibeSlug))/waves/\(try segment(waveSlug))",
+            body: try JSONEncoder().encode(settings)
+        )
+    }
+
+    public func archiveVibeWave(vibeSlug: String, waveSlug: String) async throws {
+        _ = try await transport.socialDeleteData(
+            path: "/api/fan-clubs/\(try segment(vibeSlug))/waves/\(try segment(waveSlug))"
+        )
+    }
+
+    public func restoreVibeWave(vibeSlug: String, waveSlug: String) async throws {
+        _ = try await transport.socialPatchData(
+            path: "/api/fan-clubs/\(try segment(vibeSlug))/waves/\(try segment(waveSlug))",
+            body: try JSONEncoder().encode(["restore": true])
+        )
+    }
+
     public func waveNotificationSettings(vibeSlug: String, waveSlug: String) async throws -> VibeWaveSubscription {
         try await decode(
             VibeWaveNotificationSettingsResponse.self,

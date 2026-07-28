@@ -33,6 +33,47 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         XCTAssertEqual(object["waveId"] as? String, "w1")
     }
 
+    func testWaveManagementUsesCanonicalMutationEndpointsAndPayload() async throws {
+        let collection = "/api/fan-clubs/cinema/waves"
+        let member = "/api/fan-clubs/cinema/waves/questions"
+        let transport = SocialTransportStub(responses: [
+            collection: #"{"wave":{"id":"w1"}}"#,
+            "PATCH \(member)": #"{"wave":{"id":"w1"}}"#,
+            member: #"{"archived":true}"#,
+        ])
+        let adapter = LegacySocialAPIAdapter(transport: transport)
+        let settings = VibeWaveSettings(
+            name: "Questions",
+            slug: "questions",
+            description: "Ask the community",
+            type: .questions,
+            visibility: "MEMBERS",
+            postingPolicy: "MEMBERS",
+            position: 30,
+            commentsEnabled: true,
+            requiresPostApproval: true,
+            allowPolls: true,
+            allowPhotos: false,
+            allowLinks: true,
+            allowEchoes: true
+        )
+
+        try await adapter.createVibeWave(vibeSlug: "cinema", settings: settings)
+        try await adapter.updateVibeWave(vibeSlug: "cinema", waveSlug: "questions", settings: settings)
+        try await adapter.archiveVibeWave(vibeSlug: "cinema", waveSlug: "questions")
+
+        let postPaths = await transport.postPaths
+        XCTAssertEqual(postPaths, [collection, "PATCH \(member)"])
+        let deletePaths = await transport.deletePaths
+        XCTAssertEqual(deletePaths, [member])
+        let bodies = await transport.postBodies
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: bodies[0]) as? [String: Any])
+        XCTAssertEqual(payload["type"] as? String, "QUESTIONS")
+        XCTAssertEqual(payload["visibility"] as? String, "MEMBERS")
+        XCTAssertEqual(payload["requiresPostApproval"] as? Bool, true)
+        XCTAssertEqual(payload["allowPhotos"] as? Bool, false)
+    }
+
     func testAtmosphereUsesFrozenBareArrayEndpointAndFiltersWebExcludedMedia() async throws {
         let transport = SocialTransportStub(responses: [
             "/api/subscriptions/feed": """

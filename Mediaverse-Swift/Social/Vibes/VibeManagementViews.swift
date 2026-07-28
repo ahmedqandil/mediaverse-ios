@@ -431,6 +431,368 @@ struct VibeSettingsView: View {
     }
 }
 
+struct VibeWavesManagementView: View {
+    let vibeSlug: String
+    let onChanged: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var waves = [VibeWave]()
+    @State private var editingWave: VibeWave?
+    @State private var presentsCreator = false
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+    private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView("Loading Waves…")
+                } else if waves.isEmpty {
+                    ContentUnavailableView(
+                        "No Waves yet",
+                        systemImage: "water.waves",
+                        description: Text("Create the first space for this Vibe’s conversations.")
+                    )
+                } else {
+                    List {
+                        ForEach(waves) { wave in
+                            Button {
+                                editingWave = wave
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: wave.managementIcon)
+                                        .foregroundStyle(C.watch)
+                                        .frame(width: 32, height: 32)
+                                        .background(C.watch.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        HStack(spacing: 6) {
+                                            Text(wave.name).font(.subheadline.weight(.semibold))
+                                            if wave.isDefault { Text("Default").font(.caption2).foregroundStyle(C.watch) }
+                                            if wave.archivedAt != nil { Text("Archived").font(.caption2).foregroundStyle(.orange) }
+                                        }
+                                        Text("\(wave.managementTypeLabel) · \(wave._count?.posts ?? 0) Ripples · \(wave._count?.events ?? 0) Events")
+                                            .font(.caption)
+                                            .foregroundStyle(C.textMuted)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(C.textTertiary)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .scrollContentBackground(.hidden)
+                    .background(C.bg)
+                }
+            }
+            .background(C.bg.ignoresSafeArea())
+            .navigationTitle("Manage Waves")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button { presentsCreator = true } label: {
+                        Label("New Wave", systemImage: "plus")
+                    }
+                }
+            }
+            .task { await load() }
+            .refreshable { await load() }
+            .sheet(isPresented: $presentsCreator) {
+                VibeWaveEditorView(vibeSlug: vibeSlug, wave: nil) {
+                    presentsCreator = false
+                    await load()
+                    onChanged()
+                }
+            }
+            .sheet(item: $editingWave) { wave in
+                VibeWaveEditorView(vibeSlug: vibeSlug, wave: wave) {
+                    editingWave = nil
+                    await load()
+                    onChanged()
+                }
+            }
+            .alert(
+                "Waves couldn’t load",
+                isPresented: Binding(
+                    get: { errorMessage != nil },
+                    set: { if !$0 { errorMessage = nil } }
+                )
+            ) {
+                Button("Retry") { Task { await load() } }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "")
+            }
+        }
+    }
+
+    @MainActor private func load() async {
+        isLoading = waves.isEmpty
+        defer { isLoading = false }
+        do {
+            waves = try await api.vibeWaves(slug: vibeSlug)
+            errorMessage = nil
+        } catch {
+            errorMessage = socialErrorMessage(error)
+        }
+    }
+}
+
+private struct VibeWaveEditorView: View {
+    let vibeSlug: String
+    let wave: VibeWave?
+    let onSaved: @MainActor () async -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String
+    @State private var slug: String
+    @State private var description: String
+    @State private var type: VibeWaveType
+    @State private var visibility: String
+    @State private var postingPolicy: String
+    @State private var position: Int
+    @State private var commentsEnabled: Bool
+    @State private var requiresPostApproval: Bool
+    @State private var allowPolls: Bool
+    @State private var allowPhotos: Bool
+    @State private var allowLinks: Bool
+    @State private var allowEchoes: Bool
+    @State private var notificationLevel: String
+    @State private var pushEnabled: Bool
+    @State private var emailEnabled: Bool
+    @State private var isSaving = false
+    @State private var confirmsArchive = false
+    @State private var errorMessage: String?
+    private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+
+    init(vibeSlug: String, wave: VibeWave?, onSaved: @escaping @MainActor () async -> Void) {
+        self.vibeSlug = vibeSlug
+        self.wave = wave
+        self.onSaved = onSaved
+        _name = State(initialValue: wave?.name ?? "")
+        _slug = State(initialValue: wave?.slug ?? "")
+        _description = State(initialValue: wave?.description ?? "")
+        _type = State(initialValue: wave?.type ?? .custom)
+        _visibility = State(initialValue: wave?.visibility ?? "PUBLIC")
+        _postingPolicy = State(initialValue: wave?.postingPolicy ?? "MEMBERS")
+        _position = State(initialValue: wave?.position ?? 100)
+        _commentsEnabled = State(initialValue: wave?.commentsEnabled ?? true)
+        _requiresPostApproval = State(initialValue: wave?.requiresPostApproval ?? false)
+        _allowPolls = State(initialValue: wave?.allowPolls ?? true)
+        _allowPhotos = State(initialValue: wave?.allowPhotos ?? true)
+        _allowLinks = State(initialValue: wave?.allowLinks ?? true)
+        _allowEchoes = State(initialValue: wave?.allowEchoes ?? true)
+        _notificationLevel = State(initialValue: wave?.subscription?.notificationLevel ?? "INHERIT")
+        _pushEnabled = State(initialValue: wave?.subscription?.pushEnabled ?? true)
+        _emailEnabled = State(initialValue: wave?.subscription?.emailEnabled ?? false)
+    }
+
+    private var canSave: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !slug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !isSaving
+    }
+
+    var body: some View {
+        NavigationStack {
+            WestreemFormPage {
+                WestreemFormPanel("Identity") {
+                    TextField("Wave name", text: $name)
+                        .onChange(of: name) { _, value in
+                            if wave == nil { slug = suggestedSlug(value) }
+                        }
+                        .westreemField()
+                    TextField("Address", text: $slug)
+                        .disabled(wave?.isSystem == true)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .westreemField()
+                    TextField("Description", text: $description, axis: .vertical)
+                        .lineLimit(2...5)
+                        .westreemField(minHeight: 78)
+                    Picker("Wave type", selection: $type) {
+                        ForEach(VibeWaveType.managementCases, id: \.self) { Text($0.managementLabel).tag($0) }
+                    }
+                    .disabled(wave != nil)
+                    .westreemField()
+                    Stepper("Position \(position)", value: $position, in: 0...999)
+                }
+                WestreemFormPanel("Access") {
+                    Picker("Who can view", selection: $visibility) {
+                        Text("Everyone").tag("PUBLIC")
+                        Text("Members").tag("MEMBERS")
+                        Text("Staff").tag("STAFF")
+                    }
+                    .westreemField()
+                    Picker("Who can post", selection: $postingPolicy) {
+                        Text("Everyone").tag("EVERYONE")
+                        Text("Members").tag("MEMBERS")
+                        Text("Moderators").tag("MODERATORS")
+                        Text("Administrators").tag("ADMINS")
+                    }
+                    .westreemField()
+                    Toggle("Require post approval", isOn: $requiresPostApproval)
+                    Toggle("Comments", isOn: $commentsEnabled)
+                }
+                WestreemFormPanel("Ripple tools") {
+                    Toggle("Polls", isOn: $allowPolls)
+                    Toggle("Photos", isOn: $allowPhotos)
+                    Toggle("Links", isOn: $allowLinks)
+                    Toggle("Echoes", isOn: $allowEchoes)
+                }
+                if wave != nil {
+                    WestreemFormPanel("Notifications", helper: "Your personal delivery settings for this Wave.") {
+                        Picker("Notify me", selection: $notificationLevel) {
+                            Text("Use Vibe setting").tag("INHERIT")
+                            Text("All activity").tag("ALL")
+                            Text("Mentions only").tag("MENTIONS")
+                            Text("Muted").tag("MUTED")
+                        }
+                        .westreemField()
+                        Toggle("Push notifications", isOn: $pushEnabled)
+                        Toggle("Email notifications", isOn: $emailEnabled)
+                    }
+                }
+                if let wave, wave.capabilities.canArchive, !wave.isSystem, !wave.isDefault {
+                    WestreemFormPanel("Lifecycle") {
+                        Button(wave.archivedAt == nil ? "Archive Wave" : "Restore Wave", role: wave.archivedAt == nil ? .destructive : nil) {
+                            if wave.archivedAt == nil { confirmsArchive = true }
+                            else { Task { await restore() } }
+                        }
+                    }
+                }
+            }
+            .navigationTitle(wave == nil ? "New Wave" : "Wave Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isSaving ? "Saving…" : "Save") { Task { await save() } }
+                        .disabled(!canSave)
+                }
+            }
+            .confirmationDialog("Archive this Wave?", isPresented: $confirmsArchive, titleVisibility: .visible) {
+                Button("Archive Wave", role: .destructive) { Task { await archive() } }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("New Ripples will stop, but existing content remains available to Vibe managers.")
+            }
+            .alert(
+                "Wave couldn’t be saved",
+                isPresented: Binding(
+                    get: { errorMessage != nil },
+                    set: { if !$0 { errorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "")
+            }
+        }
+    }
+
+    @MainActor private func save() async {
+        isSaving = true
+        defer { isSaving = false }
+        let settings = VibeWaveSettings(
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            slug: slug,
+            description: description.nilIfBlank,
+            type: type,
+            visibility: visibility,
+            postingPolicy: postingPolicy,
+            position: position,
+            commentsEnabled: commentsEnabled,
+            requiresPostApproval: requiresPostApproval,
+            allowPolls: allowPolls,
+            allowPhotos: allowPhotos,
+            allowLinks: allowLinks,
+            allowEchoes: allowEchoes
+        )
+        do {
+            if let wave {
+                try await api.updateVibeWave(vibeSlug: vibeSlug, waveSlug: wave.slug, settings: settings)
+                _ = try await api.updateWaveNotificationSettings(
+                    vibeSlug: vibeSlug,
+                    waveSlug: slug,
+                    notificationLevel: notificationLevel,
+                    pushEnabled: pushEnabled,
+                    emailEnabled: emailEnabled
+                )
+            } else {
+                try await api.createVibeWave(vibeSlug: vibeSlug, settings: settings)
+            }
+            await onSaved()
+            dismiss()
+        } catch {
+            errorMessage = socialErrorMessage(error)
+        }
+    }
+
+    @MainActor private func archive() async {
+        guard let wave else { return }
+        do {
+            try await api.archiveVibeWave(vibeSlug: vibeSlug, waveSlug: wave.slug)
+            await onSaved()
+            dismiss()
+        } catch {
+            errorMessage = socialErrorMessage(error)
+        }
+    }
+
+    @MainActor private func restore() async {
+        guard let wave else { return }
+        do {
+            try await api.restoreVibeWave(vibeSlug: vibeSlug, waveSlug: wave.slug)
+            await onSaved()
+            dismiss()
+        } catch {
+            errorMessage = socialErrorMessage(error)
+        }
+    }
+}
+
+private extension VibeWaveType {
+    static let managementCases: [VibeWaveType] = [
+        .general, .announcements, .questions, .events, .resources, .media, .staff, .custom,
+    ]
+
+    var managementLabel: String {
+        switch self {
+        case .general: "General"
+        case .announcements: "Announcements"
+        case .questions: "Questions"
+        case .events: "Events"
+        case .resources: "Resources"
+        case .media: "Media"
+        case .staff: "Staff"
+        case .custom: "Custom"
+        case .unknown(let value): value.capitalized
+        }
+    }
+}
+
+private extension VibeWave {
+    var managementTypeLabel: String { type.managementLabel }
+
+    var managementIcon: String {
+        switch type {
+        case .announcements: "megaphone"
+        case .questions: "questionmark.bubble"
+        case .events: "calendar"
+        case .resources: "bookmark"
+        case .media: "play.rectangle"
+        case .staff: "lock.shield"
+        case .general, .custom, .unknown: "water.waves"
+        }
+    }
+}
+
 private enum ProfileImageKind { case avatar, banner }
 
 private struct VibeImagePositioning: Identifiable {
