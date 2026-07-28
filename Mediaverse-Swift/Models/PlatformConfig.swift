@@ -497,7 +497,7 @@ struct PlatformSections: Decodable {
     static let `default` = PlatformSections(stories: .default, browse: .default)
 
     enum CodingKeys: String, CodingKey {
-        case stories, browse, shows, videos, movies, microdramas, channels, following, people, vibes, collections
+        case stories, browse, shows, videos, movies, microdramas, channels, following, people, vibes, collections, events
     }
 
     init(stories: PlatformStorySection, browse: PlatformBrowseSection) {
@@ -544,7 +544,7 @@ struct PlatformBrowseSection: Decodable {
     static let `default` = PlatformBrowseSection(sections: PlatformBrowseItem.defaults)
 
     private enum CodingKeys: String, CodingKey {
-        case sections, items, order, shows, videos, movies, microdramas, channels, following, collections
+        case sections, items, order, shows, videos, movies, microdramas, channels, following, collections, events
     }
 
     init(sections: [PlatformBrowseItem]) {
@@ -620,6 +620,7 @@ struct PlatformBrowseItem: Decodable, Identifiable, Hashable {
         PlatformBrowseItem(id: "following", label: "Following", enabled: true),
         PlatformBrowseItem(id: "people", label: "People", enabled: true),
         PlatformBrowseItem(id: "vibes", label: "Vibes", enabled: true),
+        PlatformBrowseItem(id: "events", label: "Events", enabled: true),
         PlatformBrowseItem(id: "collections", label: "Collections", enabled: true),
         PlatformBrowseItem(id: "stories", label: "Flashes", enabled: true),
     ]

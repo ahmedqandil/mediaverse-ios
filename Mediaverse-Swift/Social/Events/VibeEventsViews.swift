@@ -54,6 +54,21 @@ struct VibeEventsView: View {
     @State private var errorMessage: String?
     @State private var showsCreator = false
     @State private var availableScopes: Set<Scope> = [.upcoming]
+    @State private var curationSections = [PageSection]()
+    @State private var selectedCurationSectionID: String?
+    @State private var curationLoaded = false
+
+    private var visibleCurationSections: [PageSection] {
+        curationSections
+            .filter { !($0.assembled ?? []).isEmpty }
+            .sorted { $0.order < $1.order }
+    }
+
+    private var activeCurationSection: PageSection? {
+        visibleCurationSections.first {
+            $0.id == selectedCurationSectionID
+        } ?? visibleCurationSections.first
+    }
 
     var body: some View {
         ScrollView {
@@ -69,8 +84,16 @@ struct VibeEventsView: View {
         .navigationTitle("Events")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await load() }
-        .task(id: scope) { await load() }
-        .task { await discoverAvailableScopes() }
+        .task(id: scope) {
+            guard visibleCurationSections.isEmpty else { return }
+            await load()
+        }
+        .task {
+            await loadCuration()
+            if visibleCurationSections.isEmpty {
+                await discoverAvailableScopes()
+            }
+        }
         .sheet(isPresented: $showsCreator) {
             NavigationStack {
                 VibeEventCreatorView { event in
@@ -109,25 +132,48 @@ struct VibeEventsView: View {
     private var scopePills: some View {
         WestreemHorizontalScrollView(showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(Scope.allCases.filter { availableScopes.contains($0) || $0 == scope }) { item in
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.18)) { scope = item }
-                    } label: {
-                        Text(item.label)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(scope == item ? Color.black : C.textMuted)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
-                            .background(scope == item ? Color.white : C.surface, in: Capsule())
+                if visibleCurationSections.isEmpty {
+                    ForEach(Scope.allCases.filter { availableScopes.contains($0) || $0 == scope }) { item in
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.18)) { scope = item }
+                        } label: {
+                            Text(item.label)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(scope == item ? Color.black : C.textMuted)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 9)
+                                .background(scope == item ? C.watch : C.surface, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
+                } else {
+                    ForEach(visibleCurationSections) { section in
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                selectedCurationSectionID = section.id
+                            }
+                        } label: {
+                            Text(section.name)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(activeCurationSection?.id == section.id ? Color.black : C.textMuted)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 9)
+                                .background(activeCurationSection?.id == section.id ? C.watch : C.surface, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
         }
     }
 
     @ViewBuilder private var content: some View {
-        if loading {
+        if let curated = activeCurationSection {
+            ForEach(curated.assembled ?? []) { listing in
+                NativeCurationListingView(listing: listing)
+                    .padding(.horizontal, -C.pagePad)
+            }
+        } else if loading || !curationLoaded {
             ForEach(0..<4, id: \.self) { _ in
                 RoundedRectangle(cornerRadius: 18)
                     .fill(C.surface)
@@ -147,6 +193,23 @@ struct VibeEventsView: View {
                 }
                 .buttonStyle(.plain)
             }
+        }
+    }
+
+    @MainActor private func loadCuration() async {
+        defer { curationLoaded = true }
+        do {
+            let page = try await CurationManager.shared.fetchPage(key: "events")
+            curationSections = page.sections
+            if selectedCurationSectionID == nil {
+                selectedCurationSectionID = visibleCurationSections.first?.id
+            }
+            if !visibleCurationSections.isEmpty {
+                loading = false
+                errorMessage = nil
+            }
+        } catch {
+            curationSections = []
         }
     }
 
@@ -199,13 +262,24 @@ struct VibeEventCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .topLeading) {
-                AsyncImage(url: C.mediaURL(event.coverUrl)) { phase in
-                    if case .success(let image) = phase { image.resizable().scaledToFill() }
-                    else { LinearGradient(colors: [C.watch.opacity(0.35), Color.purple.opacity(0.25), Color.indigo.opacity(0.35)], startPoint: .topLeading, endPoint: .bottomTrailing) }
-                }
-                .frame(maxWidth: .infinity)
-                .aspectRatio(16 / 9, contentMode: .fill)
-                .clipped()
+                Rectangle()
+                    .fill(C.surfaceAlt)
+                    .overlay {
+                        AsyncImage(url: C.mediaURL(event.coverUrl)) { phase in
+                            if case .success(let image) = phase {
+                                image.resizable().scaledToFill()
+                            } else {
+                                LinearGradient(
+                                    colors: [C.watch.opacity(0.35), Color.purple.opacity(0.25), Color.indigo.opacity(0.35)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                    }
+                    .aspectRatio(16 / 9, contentMode: .fit)
                 HStack {
                     Label(event.status == "LIVE" ? "LIVE NOW" : event.status == "COMPLETED" ? "REPLAY" : "UPCOMING", systemImage: event.status == "LIVE" ? "dot.radiowaves.left.and.right" : "calendar")
                         .font(.system(size: 10, weight: .black))
@@ -264,6 +338,7 @@ struct VibeEventCardView: View {
             }
             .padding(15)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(C.surface)
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(C.borderSubtle, lineWidth: 1))
