@@ -273,6 +273,8 @@ struct VibeEventDetailView: View {
     @State private var showsRippleReport = false
     @State private var didTrackView = false
     @State private var analyticsSessionID = UUID().uuidString
+    @State private var confirmedRSVPStatus: String?
+    @State private var immediateRSVPCounts: VibeEventRSVPCounts?
 
     var body: some View {
         ScrollView {
@@ -431,16 +433,35 @@ struct VibeEventDetailView: View {
             if let date = event.startsAt.vibeEventDate {
                 Label(date.formatted(.dateTime.weekday(.wide).month(.wide).day().hour().minute()), systemImage: "calendar")
             }
-            Label(event.capacity.map { "\(event.goingCount) going · \($0) capacity" } ?? "\(event.goingCount) going", systemImage: "person.2")
+            let counts = immediateRSVPCounts ?? .init(
+                goingCount: event.goingCount,
+                interestedCount: event.interestedCount,
+                waitlistCount: event.waitlistCount
+            )
+            Label(event.capacity.map { "\(counts.goingCount) going · \($0) capacity" } ?? "\(counts.goingCount) going", systemImage: "person.2")
+            if counts.interestedCount > 0 || counts.waitlistCount > 0 {
+                HStack(spacing: 12) {
+                    if counts.interestedCount > 0 {
+                        Label("\(counts.interestedCount) interested", systemImage: "star")
+                    }
+                    if counts.waitlistCount > 0 {
+                        Label("\(counts.waitlistCount) waitlisted", systemImage: "clock")
+                    }
+                }
+                .font(.caption)
+            }
             if event.visibility == "INVITE_ONLY" { Label("Invite only", systemImage: "lock.fill") }
             if response?.capabilities.canRsvp == true {
+                let selectedStatus = confirmedRSVPStatus ?? event.rsvps.first?.status
                 HStack {
-                    Button(event.rsvps.first?.status == "GOING" ? "Going ✓" : "Going") { Task { await rsvp("GOING") } }
+                    Button(selectedStatus == "WAITLISTED" ? "Waitlisted ✓" : selectedStatus == "GOING" ? "Going ✓" : "Going") {
+                        Task { await rsvp("GOING") }
+                    }
                         .buttonStyle(EventPrimaryButtonStyle())
-                    Button(event.rsvps.first?.status == "INTERESTED" ? "Interested ✓" : "Interested") { Task { await rsvp("INTERESTED") } }
+                    Button(selectedStatus == "INTERESTED" ? "Interested ✓" : "Interested") { Task { await rsvp("INTERESTED") } }
                         .buttonStyle(EventSecondaryButtonStyle())
                 }.disabled(rsvpBusy)
-                if event.rsvps.first != nil {
+                if selectedStatus != nil {
                     Button("Not going") { Task { await rsvp("NOT_GOING") } }
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(C.textMuted)
@@ -473,20 +494,62 @@ struct VibeEventDetailView: View {
 
     @MainActor private func load() async {
         loading = response == nil
-        do { response = try await APIClient.shared.fetchVibeEvent(slug: slug); errorMessage = nil }
+        do {
+            response = try await APIClient.shared.fetchVibeEvent(slug: slug)
+            confirmedRSVPStatus = response?.event.rsvps.first?.status
+            immediateRSVPCounts = nil
+            errorMessage = nil
+        }
         catch { if response == nil { errorMessage = error.localizedDescription } }
         loading = false
     }
 
     @MainActor private func rsvp(_ status: String) async {
+        guard let event = response?.event else { return }
         rsvpBusy = true
+        let previousStatus = confirmedRSVPStatus ?? event.rsvps.first?.status
         do {
-            _ = try await APIClient.shared.updateVibeEventRSVP(slug: slug, status: status)
+            let mutation = try await APIClient.shared.updateVibeEventRSVP(slug: slug, status: status)
+            confirmedRSVPStatus = mutation.rsvp.status
+            immediateRSVPCounts = mutation.counts ?? adjustedCounts(
+                event: event,
+                from: previousStatus,
+                to: mutation.rsvp.status
+            )
+            rsvpBusy = false
             await track("rsvp")
             await load()
         }
         catch { errorMessage = error.localizedDescription }
         rsvpBusy = false
+    }
+
+    private func adjustedCounts(
+        event: VibeEventDetailModel,
+        from previous: String?,
+        to current: String
+    ) -> VibeEventRSVPCounts {
+        var going = immediateRSVPCounts?.goingCount ?? event.goingCount
+        var interested = immediateRSVPCounts?.interestedCount ?? event.interestedCount
+        var waitlisted = immediateRSVPCounts?.waitlistCount ?? event.waitlistCount
+
+        func apply(_ status: String?, amount: Int) {
+            switch status {
+            case "GOING": going = max(0, going + amount)
+            case "INTERESTED": interested = max(0, interested + amount)
+            case "WAITLISTED": waitlisted = max(0, waitlisted + amount)
+            default: break
+            }
+        }
+        if previous != current {
+            apply(previous, amount: -1)
+            apply(current, amount: 1)
+        }
+        return .init(
+            goingCount: going,
+            interestedCount: interested,
+            waitlistCount: waitlisted
+        )
     }
 
     private func track(_ action: String) async {

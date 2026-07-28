@@ -2071,13 +2071,30 @@ actor APIClient: LegacySocialTransport {
         )
     }
 
-    func updateVibeEventRSVP(slug: String, status: String) async throws -> VibeEventRSVP {
+    func updateVibeEventRSVP(slug: String, status: String) async throws -> VibeEventRSVPMutation {
         struct Body: Encodable { let status: String }
-        let response: VibeEventRSVPResponse = try await post(
+        struct Response: Decodable {
+            let rsvp: VibeEventRSVP
+            let event: VibeEventRSVPCounts?
+            let goingCount: Int?
+            let interestedCount: Int?
+            let waitlistCount: Int?
+
+            var counts: VibeEventRSVPCounts? {
+                if let event { return event }
+                guard let goingCount, let interestedCount, let waitlistCount else { return nil }
+                return .init(
+                    goingCount: goingCount,
+                    interestedCount: interestedCount,
+                    waitlistCount: waitlistCount
+                )
+            }
+        }
+        let response: Response = try await post(
             "/api/vibe-events/\(C.pathSegment(slug))/rsvp",
             body: Body(status: status)
         )
-        return response.rsvp
+        return .init(rsvp: response.rsvp, counts: response.counts)
     }
 
     func trackVibeEventAnalytics(

@@ -125,6 +125,15 @@ struct VibeEventDetailResponse: Codable, Sendable {
     let capabilities: VibeEventCapabilities
 }
 struct VibeEventRSVPResponse: Codable, Sendable { let rsvp: VibeEventRSVP }
+struct VibeEventRSVPCounts: Codable, Sendable {
+    let goingCount: Int
+    let interestedCount: Int
+    let waitlistCount: Int
+}
+struct VibeEventRSVPMutation: Sendable {
+    let rsvp: VibeEventRSVP
+    let counts: VibeEventRSVPCounts?
+}
 
 struct VibeEventTemplateModel: Codable, Identifiable, Hashable, Sendable {
     let id: String
