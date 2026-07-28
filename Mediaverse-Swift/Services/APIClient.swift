@@ -2112,6 +2112,34 @@ actor APIClient: LegacySocialTransport {
         return .init(rsvp: response.rsvp, counts: response.resolvedCounts)
     }
 
+    func fetchVibeEventReminders(slug: String) async throws -> [VibeEventReminder] {
+        let response: VibeEventRemindersResponse = try await get(
+            "/api/vibe-events/\(C.pathSegment(slug))/reminders"
+        )
+        return response.reminders
+    }
+
+    func setVibeEventReminder(
+        slug: String,
+        leadMinutes: Int,
+        channel: String = "push"
+    ) async throws -> VibeEventReminder {
+        struct Body: Encodable { let leadMinutes: Int; let channel: String }
+        let response: VibeEventReminderResponse = try await post(
+            "/api/vibe-events/\(C.pathSegment(slug))/reminders",
+            body: Body(leadMinutes: leadMinutes, channel: channel)
+        )
+        return response.reminder
+    }
+
+    func removeVibeEventReminder(slug: String, reminderID: String) async throws {
+        struct Body: Encodable { let id: String }
+        let _: VibeEventMutationResponse = try await delete(
+            "/api/vibe-events/\(C.pathSegment(slug))/reminders",
+            body: Body(id: reminderID)
+        )
+    }
+
     func trackVibeEventAnalytics(
         slug: String,
         action: String,

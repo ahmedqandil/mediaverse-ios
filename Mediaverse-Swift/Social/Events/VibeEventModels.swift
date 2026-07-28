@@ -155,6 +155,21 @@ struct VibeEventRSVPMutation: Sendable {
     let counts: VibeEventRSVPCounts?
 }
 
+struct VibeEventReminder: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let leadMinutes: Int
+    let channel: String
+    let sentAt: String?
+}
+
+struct VibeEventRemindersResponse: Codable, Sendable {
+    let reminders: [VibeEventReminder]
+}
+
+struct VibeEventReminderResponse: Codable, Sendable {
+    let reminder: VibeEventReminder
+}
+
 struct VibeEventTemplateModel: Codable, Identifiable, Hashable, Sendable {
     let id: String
     let slug: String

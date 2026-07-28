@@ -401,6 +401,8 @@ struct VibeEventDetailView: View {
     @State private var analyticsSessionID = UUID().uuidString
     @State private var confirmedRSVPStatus: String?
     @State private var immediateRSVPCounts: VibeEventRSVPCounts?
+    @State private var reminders = [VibeEventReminder]()
+    @State private var reminderBusy = false
 
     var body: some View {
         ScrollView {
@@ -592,6 +594,29 @@ struct VibeEventDetailView: View {
                 .font(.caption)
             }
             if event.visibility == "INVITE_ONLY" { Label("Invite only", systemImage: "lock.fill") }
+            if event.status == "SCHEDULED" || event.status == "LIVE" {
+                Menu {
+                    reminderOption("15 minutes before", minutes: 15)
+                    reminderOption("1 hour before", minutes: 60)
+                    reminderOption("1 day before", minutes: 1_440)
+                    if !reminders.isEmpty {
+                        Divider()
+                        ForEach(reminders) { reminder in
+                            Button(role: .destructive) {
+                                Task { await removeReminder(reminder) }
+                            } label: {
+                                Label("Remove \(reminderLabel(reminder.leadMinutes))", systemImage: "bell.slash")
+                            }
+                        }
+                    }
+                } label: {
+                    Label(
+                        reminders.isEmpty ? "Remind me" : "\(reminders.count) reminder\(reminders.count == 1 ? "" : "s") set",
+                        systemImage: reminders.isEmpty ? "bell" : "bell.badge.fill"
+                    )
+                }
+                .disabled(reminderBusy)
+            }
             if response?.capabilities.canRsvp == true {
                 let selectedStatus = confirmedRSVPStatus ?? event.rsvps.first?.status
                 ViewThatFits(in: .horizontal) {
@@ -667,6 +692,7 @@ struct VibeEventDetailView: View {
             response = try await APIClient.shared.fetchVibeEvent(slug: slug)
             confirmedRSVPStatus = response?.event.rsvps.first?.status
             immediateRSVPCounts = nil
+            reminders = (try? await APIClient.shared.fetchVibeEventReminders(slug: slug)) ?? []
             errorMessage = nil
         }
         catch { if response == nil { errorMessage = error.localizedDescription } }
@@ -691,6 +717,52 @@ struct VibeEventDetailView: View {
         }
         catch { errorMessage = error.localizedDescription }
         rsvpBusy = false
+    }
+
+    @ViewBuilder private func reminderOption(_ label: String, minutes: Int) -> some View {
+        let exists = reminders.contains { $0.leadMinutes == minutes && $0.channel == "push" }
+        Button {
+            Task { await setReminder(minutes) }
+        } label: {
+            Label(label, systemImage: exists ? "checkmark" : "bell")
+        }
+        .disabled(exists)
+    }
+
+    @MainActor private func setReminder(_ minutes: Int) async {
+        reminderBusy = true
+        defer { reminderBusy = false }
+        do {
+            let reminder = try await APIClient.shared.setVibeEventReminder(
+                slug: slug,
+                leadMinutes: minutes
+            )
+            reminders.removeAll { $0.id == reminder.id }
+            reminders.append(reminder)
+            reminders.sort { $0.leadMinutes > $1.leadMinutes }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor private func removeReminder(_ reminder: VibeEventReminder) async {
+        reminderBusy = true
+        defer { reminderBusy = false }
+        do {
+            try await APIClient.shared.removeVibeEventReminder(
+                slug: slug,
+                reminderID: reminder.id
+            )
+            reminders.removeAll { $0.id == reminder.id }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func reminderLabel(_ minutes: Int) -> String {
+        if minutes % 1_440 == 0 { return "\(minutes / 1_440)d reminder" }
+        if minutes % 60 == 0 { return "\(minutes / 60)h reminder" }
+        return "\(minutes)m reminder"
     }
 
     private func adjustedCounts(
