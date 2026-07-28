@@ -1304,12 +1304,26 @@ actor APIClient: LegacySocialTransport {
         try await postEmpty("/api/me/subscriptions/\(C.pathSegment(id))/cancel")
     }
 
-    func submitPartnerRequest(reason: String?) async throws {
+    func fetchPartnerRequestStatus() async throws -> PartnerApplicationStatus {
+        try await get("/api/me/partner-request")
+    }
+
+    func submitPartnerRequest(reason: String?) async throws -> PartnerApplicationStatus {
         struct Body: Encodable { let reason: String? }
-        struct Response: Decodable { let ok: Bool }
+        struct Response: Decodable {
+            let status: String
+            let submittedAt: String?
+        }
         let trimmedReason = reason?.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = Body(reason: trimmedReason?.isEmpty == true ? nil : trimmedReason)
-        let _: Response = try await post("/api/me/partner-request", body: body)
+        let response: Response = try await post("/api/me/partner-request", body: body)
+        return PartnerApplicationStatus(
+            status: response.status,
+            message: trimmedReason,
+            notes: nil,
+            submittedAt: response.submittedAt,
+            reviewedAt: nil
+        )
     }
 
     func fetchVideoPlaylist(videoId: String, playlistId: String? = nil) async throws -> VideoPlaylistResponse {

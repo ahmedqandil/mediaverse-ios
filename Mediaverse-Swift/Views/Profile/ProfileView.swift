@@ -39,6 +39,7 @@ struct ProfileView: View {
     @State private var rentals = [UserRental]()
     @State private var cancellingSubscriptionId: String?
     @State private var notificationCounts = [String: Int]()
+    @State private var partnerApplication: PartnerApplicationStatus = .none
     @State private var hasLoadedProfile = false
     @State private var profileLoadGeneration = 0
     @State private var billingLoadGeneration = 0
@@ -98,7 +99,8 @@ struct ProfileView: View {
             }
         }
         .sheet(isPresented: $showPartnerRequest) {
-            PartnerRequestSheet {
+            PartnerRequestSheet(initialStatus: partnerApplication) { status in
+                partnerApplication = status
                 Task { await loadAll() }
             }
         }
@@ -180,6 +182,15 @@ struct ProfileView: View {
 
     private var canRequestPartner: Bool {
         profile?.role?.lowercased() == "viewer"
+    }
+
+    private var partnerRequestSubtitle: String {
+        switch partnerApplication.normalizedStatus {
+        case "pending": return "Application pending review"
+        case "rejected": return "Not approved · Review and reapply"
+        case "approved": return "Approved"
+        default: return "Apply for creator access"
+        }
     }
 
     private var profileHero: some View {
@@ -368,7 +379,12 @@ struct ProfileView: View {
                 }
                 rowDivider
                 if canRequestPartner {
-                    accountRow(iconName: "network", fallbackSystemName: "person.badge.plus", title: "Become a Partner", subtitle: "Apply for creator access") {
+                    accountRow(
+                        iconName: "network",
+                        fallbackSystemName: partnerApplication.normalizedStatus == "pending" ? "clock.badge" : "person.badge.plus",
+                        title: partnerApplication.normalizedStatus == "pending" ? "Partner Application" : "Become a Partner",
+                        subtitle: partnerRequestSubtitle
+                    ) {
                         openPartnerRequest()
                     }
                     rowDivider
@@ -888,13 +904,15 @@ struct ProfileView: View {
         async let subscriptionsTask = APIClient.shared.fetchUserSubscriptions()
         async let rentalsTask = APIClient.shared.fetchUserRentals()
         async let notificationCountsTask = APIClient.shared.fetchNotificationCounts()
+        async let partnerApplicationTask = APIClient.shared.fetchPartnerRequestStatus()
 
-        let (profResult, ctxResult, subscriptionsResult, rentalsResult, notificationCountsResult) = (
+        let (profResult, ctxResult, subscriptionsResult, rentalsResult, notificationCountsResult, partnerApplicationResult) = (
             try? await profTask,
             try? await ctxTask,
             try? await subscriptionsTask,
             try? await rentalsTask,
-            try? await notificationCountsTask
+            try? await notificationCountsTask,
+            try? await partnerApplicationTask
         )
 
         guard profileGeneration == profileLoadGeneration, auth.isAuthenticated else { return }
@@ -911,6 +929,7 @@ struct ProfileView: View {
         if notificationGeneration == notificationLoadGeneration {
             notificationCounts = notificationCountsResult ?? [:]
         }
+        partnerApplication = partnerApplicationResult ?? .none
         hasLoadedProfile = true
         isLoading = false
     }
@@ -967,13 +986,23 @@ struct ProfileView: View {
 }
 
 private struct PartnerRequestSheet: View {
-    let onSubmitted: () -> Void
+    let onSubmitted: (PartnerApplicationStatus) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var application: PartnerApplicationStatus
     @State private var reason = ""
     @State private var isSubmitting = false
     @State private var didSubmit = false
     @State private var errorMessage: String?
+
+    init(
+        initialStatus: PartnerApplicationStatus,
+        onSubmitted: @escaping (PartnerApplicationStatus) -> Void
+    ) {
+        _application = State(initialValue: initialStatus)
+        _reason = State(initialValue: initialStatus.message ?? "")
+        self.onSubmitted = onSubmitted
+    }
 
     var body: some View {
         NavigationStack {
@@ -991,7 +1020,30 @@ private struct PartnerRequestSheet: View {
                                 .lineSpacing(2)
                         }
 
-                        fieldGroup("Reason") {
+                        if application.normalizedStatus == "pending" {
+                            statusBanner(
+                                iconName: "clock.fill",
+                                title: "Application under review",
+                                message: "Your partner request is pending. We’ll notify you when the review is complete.",
+                                color: .orange
+                            )
+                        } else if application.normalizedStatus == "approved" {
+                            statusBanner(
+                                iconName: "checkmark.seal.fill",
+                                title: "Partner access approved",
+                                message: "Your application was approved and creator access is active.",
+                                color: .green
+                            )
+                        } else {
+                            if application.normalizedStatus == "rejected" {
+                                statusBanner(
+                                    iconName: "info.circle.fill",
+                                    title: "Application not approved",
+                                    message: application.notes ?? "You can update your request and apply again.",
+                                    color: .orange
+                                )
+                            }
+                            fieldGroup("Reason") {
                             ZStack(alignment: .topLeading) {
                                 if reason.isEmpty {
                                     Text("Share your channel idea, audience, or content plans...")
@@ -1010,6 +1062,7 @@ private struct PartnerRequestSheet: View {
                             .background(Color.white.opacity(0.05))
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                             .overlay { RoundedRectangle(cornerRadius: 10).stroke(C.border, lineWidth: 1) }
+                            }
                         }
 
                         if didSubmit {
@@ -1039,11 +1092,13 @@ private struct PartnerRequestSheet: View {
                         .foregroundStyle(C.textMuted)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(submitTitle) {
-                        Task { await submit() }
+                    if application.normalizedStatus == "none" || application.normalizedStatus == "rejected" {
+                        Button(submitTitle) {
+                            Task { await submit() }
+                        }
+                        .disabled(isSubmitting || didSubmit)
+                        .foregroundStyle(C.watch)
                     }
-                    .disabled(isSubmitting || didSubmit)
-                    .foregroundStyle(C.watch)
                 }
             }
         }
@@ -1089,9 +1144,10 @@ private struct PartnerRequestSheet: View {
         errorMessage = nil
         defer { isSubmitting = false }
         do {
-            try await APIClient.shared.submitPartnerRequest(reason: reason)
+            let updated = try await APIClient.shared.submitPartnerRequest(reason: reason)
+            application = updated
             didSubmit = true
-            onSubmitted()
+            onSubmitted(updated)
         } catch {
             errorMessage = error.localizedDescription
         }

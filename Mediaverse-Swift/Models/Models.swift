@@ -1151,6 +1151,26 @@ struct FullProfile: Codable {
     let channel: ProfileChannel?
 }
 
+struct PartnerApplicationStatus: Decodable, Equatable {
+    let status: String
+    let message: String?
+    let notes: String?
+    let submittedAt: String?
+    let reviewedAt: String?
+
+    var normalizedStatus: String {
+        status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    static let none = PartnerApplicationStatus(
+        status: "none",
+        message: nil,
+        notes: nil,
+        submittedAt: nil,
+        reviewedAt: nil
+    )
+}
+
 struct ProfileChannel: Codable, Identifiable {
     let id: String
     let name: String
