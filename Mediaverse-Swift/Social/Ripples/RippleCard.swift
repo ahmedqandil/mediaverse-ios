@@ -648,7 +648,7 @@ private struct RippleEditSheet: View {
     }
 }
 
-private struct RippleReportSheet: View {
+struct RippleReportSheet: View {
     let postId: String
     let vibeSlug: String
     @Environment(\.dismiss) private var dismiss
@@ -886,9 +886,87 @@ private struct RippleAttachmentsView: View {
                 EmbeddedRippleView(ripple: echoed)
                     .padding(.horizontal, 14)
             }
+        case .westreemEvent:
+            if let event = attachment.vibeEvent {
+                RippleEventAttachmentView(event: event)
+                    .padding(.horizontal, 14)
+            }
         case .photo, .unknown:
             EmptyView()
         }
+    }
+}
+
+private struct RippleEventAttachmentView: View {
+    let event: RippleEventAttachment
+
+    var body: some View {
+        Group {
+            if let slug = event.slug {
+                NavigationLink(value: AppRoute.event(slug)) { card }
+                    .buttonStyle(.plain)
+            } else {
+                card
+            }
+        }
+    }
+
+    private var card: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            AsyncImage(url: C.mediaURL(event.coverURL)) { phase in
+                if case .success(let image) = phase {
+                    image.resizable().scaledToFill()
+                } else {
+                    LinearGradient(
+                        colors: [C.watch.opacity(0.35), Color.indigo.opacity(0.28)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                }
+            }
+            .aspectRatio(16 / 9, contentMode: .fill)
+            .clipped()
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label(
+                        event.status == "LIVE" ? "LIVE NOW" : "EVENT",
+                        systemImage: event.status == "LIVE" ? "dot.radiowaves.left.and.right" : "calendar"
+                    )
+                    .font(.caption2.weight(.black))
+                    .foregroundStyle(event.status == "LIVE" ? Color.red : C.watch)
+                    Spacer()
+                    if event.visibility == "INVITE_ONLY" {
+                        Image(systemName: "lock.fill").foregroundStyle(C.textMuted)
+                    }
+                }
+                Text(event.title ?? "Event")
+                    .font(.headline)
+                    .foregroundStyle(C.text)
+                    .lineLimit(2)
+                if let summary = event.summary, !summary.isEmpty {
+                    Text(summary)
+                        .font(.subheadline)
+                        .foregroundStyle(C.textMuted)
+                        .lineLimit(2)
+                }
+                HStack(spacing: 12) {
+                    if let startsAt = event.startsAt,
+                       let date = startsAt.vibeEventDate {
+                        Label(date.formatted(.dateTime.month(.abbreviated).day().hour().minute()), systemImage: "clock")
+                    }
+                    if event.goingCount > 0 {
+                        Label("\(event.goingCount) going", systemImage: "person.2")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(C.textMuted)
+            }
+            .padding(14)
+        }
+        .background(C.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(C.borderSubtle))
     }
 }
 

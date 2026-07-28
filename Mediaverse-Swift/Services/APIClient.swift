@@ -2080,6 +2080,41 @@ actor APIClient: LegacySocialTransport {
         return response.rsvp
     }
 
+    func trackVibeEventAnalytics(
+        slug: String,
+        action: String,
+        source: String = "direct",
+        sessionID: String,
+        position: Int? = nil,
+        duration: Int? = nil
+    ) async throws {
+        struct Body: Encodable {
+            let action: String
+            let source: String
+            let sessionId: String
+            let position: Int?
+            let duration: Int?
+        }
+        struct Response: Decodable { let ok: Bool }
+        let _: Response = try await post(
+            "/api/vibe-events/\(C.pathSegment(slug))/analytics",
+            body: Body(
+                action: action,
+                source: source,
+                sessionId: sessionID,
+                position: position,
+                duration: duration
+            )
+        )
+    }
+
+    func fetchVibeEventAnalytics(slug: String) async throws -> VibeEventAnalyticsSummary {
+        let response: VibeEventAnalyticsResponse = try await get(
+            "/api/vibe-events/\(C.pathSegment(slug))/analytics"
+        )
+        return response.analytics
+    }
+
     func fetchVibeEventInvite(token: String) async throws -> VibeEventInvitePreview {
         let response: VibeEventInvitePreviewResponse = try await get("/api/vibe-events/invite/\(C.pathSegment(token))")
         return response.invite

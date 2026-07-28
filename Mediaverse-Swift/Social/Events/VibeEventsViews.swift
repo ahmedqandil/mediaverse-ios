@@ -263,12 +263,16 @@ struct VibeEventCardView: View {
 
 struct VibeEventDetailView: View {
     let slug: String
+    var analyticsSource: String = "direct"
     @Environment(\.openURL) private var openURL
     @State private var response: VibeEventDetailResponse?
     @State private var loading = true
     @State private var rsvpBusy = false
     @State private var errorMessage: String?
     @State private var showsManager = false
+    @State private var showsRippleReport = false
+    @State private var didTrackView = false
+    @State private var analyticsSessionID = UUID().uuidString
 
     var body: some View {
         ScrollView {
@@ -302,7 +306,18 @@ struct VibeEventDetailView: View {
                 }
             }
         }
-        .task { await load() }
+        .sheet(isPresented: $showsRippleReport) {
+            if let ripple = response?.event.associatedPost {
+                RippleReportSheet(postId: ripple.id, vibeSlug: response?.event.club.slug ?? "")
+            }
+        }
+        .task {
+            await load()
+            if response != nil, !didTrackView {
+                didTrackView = true
+                await track("view")
+            }
+        }
         .refreshable { await load() }
     }
 
@@ -395,6 +410,13 @@ struct VibeEventDetailView: View {
                             autoFocusComposer: false,
                             onCountChange: { _ in }
                         )
+                        Button {
+                            showsRippleReport = true
+                        } label: {
+                            Label("Report Ripple", systemImage: "flag")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(C.textMuted)
+                        }
                     }
                 }
                 if let errorMessage { Text(errorMessage).font(.footnote).foregroundStyle(.red) }
@@ -433,7 +455,12 @@ struct VibeEventDetailView: View {
                 ? event.replayUrl
                 : insideLiveWindow ? event.onlineUrl : nil
             if let destination, let url = URL(string: destination) {
-                Button { openURL(url) } label: { Label(event.status == "COMPLETED" ? "Watch replay" : "Join online", systemImage: "video.fill") }
+                Button {
+                    Task {
+                        await track(event.status == "COMPLETED" ? "replay_start" : "join")
+                        openURL(url)
+                    }
+                } label: { Label(event.status == "COMPLETED" ? "Watch replay" : "Join online", systemImage: "video.fill") }
                     .buttonStyle(EventSecondaryButtonStyle())
             }
         }
@@ -453,9 +480,22 @@ struct VibeEventDetailView: View {
 
     @MainActor private func rsvp(_ status: String) async {
         rsvpBusy = true
-        do { _ = try await APIClient.shared.updateVibeEventRSVP(slug: slug, status: status); await load() }
+        do {
+            _ = try await APIClient.shared.updateVibeEventRSVP(slug: slug, status: status)
+            await track("rsvp")
+            await load()
+        }
         catch { errorMessage = error.localizedDescription }
         rsvpBusy = false
+    }
+
+    private func track(_ action: String) async {
+        try? await APIClient.shared.trackVibeEventAnalytics(
+            slug: slug,
+            action: action,
+            source: analyticsSource,
+            sessionID: analyticsSessionID
+        )
     }
 }
 
@@ -537,6 +577,11 @@ private struct EventSecondaryButtonStyle: ButtonStyle {
 }
 
 struct VibeEventCreatorView: View {
+    fileprivate enum AffiliationPicker: String, Identifiable {
+        case show = "Show"
+        case channel = "Channel"
+        var id: String { rawValue }
+    }
     let onCreated: (CreatedVibeEvent) -> Void
     var preselectedVibeSlug: String? = nil
     var editEvent: VibeEventDetailModel? = nil
@@ -572,6 +617,7 @@ struct VibeEventCreatorView: View {
     @State private var creatorLoading = true
     @State private var creatorLoadError: String?
     @State private var errorMessage: String?
+    @State private var affiliationPicker: AffiliationPicker?
 
     var body: some View {
         Group {
@@ -600,6 +646,20 @@ struct VibeEventCreatorView: View {
                 Button(editEvent != nil || selectedTemplate == nil ? "Close" : "Templates") {
                     if editEvent != nil || selectedTemplate == nil { dismiss() } else { selectedTemplate = nil }
                 }.foregroundStyle(C.watch)
+            }
+        }
+        .sheet(item: $affiliationPicker) { picker in
+            NavigationStack {
+                EventAffiliationPicker(
+                    kind: picker,
+                    shows: shows,
+                    channels: channels,
+                    selectedID: picker == .show ? affiliatedShowID : affiliatedChannelID
+                ) { id in
+                    if picker == .show { affiliatedShowID = id }
+                    else { affiliatedChannelID = id }
+                    affiliationPicker = nil
+                }
             }
         }
         .task {
@@ -745,13 +805,27 @@ struct VibeEventCreatorView: View {
                 }
             }
             Section("Affiliations") {
-                Picker("Show", selection: $affiliatedShowID) {
-                    Text("None").tag("")
-                    ForEach(shows) { Text($0.title).tag($0.id) }
+                Button {
+                    affiliationPicker = .show
+                } label: {
+                    HStack {
+                        Text("Show").foregroundStyle(C.text)
+                        Spacer()
+                        Text(shows.first(where: { $0.id == affiliatedShowID })?.title ?? "None")
+                            .foregroundStyle(C.textMuted)
+                        Image(systemName: "chevron.right").foregroundStyle(C.textTertiary)
+                    }
                 }
-                Picker("Channel", selection: $affiliatedChannelID) {
-                    Text("None").tag("")
-                    ForEach(channels) { Text($0.name).tag($0.id) }
+                Button {
+                    affiliationPicker = .channel
+                } label: {
+                    HStack {
+                        Text("Channel").foregroundStyle(C.text)
+                        Spacer()
+                        Text(channels.first(where: { $0.id == affiliatedChannelID })?.name ?? "None")
+                            .foregroundStyle(C.textMuted)
+                        Image(systemName: "chevron.right").foregroundStyle(C.textTertiary)
+                    }
                 }
             }
             Section("Replay") {
@@ -861,6 +935,80 @@ struct VibeEventCreatorView: View {
     }
 }
 
+private struct EventAffiliationPicker: View {
+    let kind: VibeEventCreatorView.AffiliationPicker
+    let shows: [ShowBrowseCard]
+    let channels: [ChannelBrowseCard]
+    let selectedID: String
+    let onSelect: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+
+    private var filteredShows: [ShowBrowseCard] {
+        guard !query.isEmpty else { return shows }
+        return shows.filter { $0.title.localizedCaseInsensitiveContains(query) }
+    }
+
+    private var filteredChannels: [ChannelBrowseCard] {
+        guard !query.isEmpty else { return channels }
+        return channels.filter {
+            $0.name.localizedCaseInsensitiveContains(query)
+                || $0.handle.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    var body: some View {
+        List {
+            Button {
+                onSelect("")
+            } label: {
+                HStack {
+                    Label("No affiliation", systemImage: "nosign")
+                    Spacer()
+                    if selectedID.isEmpty { Image(systemName: "checkmark").foregroundStyle(C.watch) }
+                }
+            }
+            if kind == .show {
+                ForEach(filteredShows) { show in
+                    selectionRow(id: show.id, title: show.title, subtitle: nil, image: show.coverUrl)
+                }
+            } else {
+                ForEach(filteredChannels) { channel in
+                    selectionRow(id: channel.id, title: channel.name, subtitle: "@\(channel.handle)", image: channel.avatarUrl)
+                }
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .background(C.bg)
+        .searchable(text: $query, prompt: "Search \(kind.rawValue.lowercased())s")
+        .navigationTitle("Select \(kind.rawValue)")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Close") { dismiss() }.foregroundStyle(C.watch)
+            }
+        }
+    }
+
+    private func selectionRow(id: String, title: String, subtitle: String?, image: String?) -> some View {
+        Button {
+            onSelect(id)
+        } label: {
+            HStack(spacing: 12) {
+                SocialIdentityAvatar(image: image, name: title, size: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).foregroundStyle(C.text)
+                    if let subtitle {
+                        Text(subtitle).font(.caption).foregroundStyle(C.textMuted)
+                    }
+                }
+                Spacer()
+                if selectedID == id { Image(systemName: "checkmark").foregroundStyle(C.watch) }
+            }
+        }
+    }
+}
+
 struct VibeEventVibeSection: View {
     let vibeSlug: String
     let canManage: Bool
@@ -939,6 +1087,7 @@ struct VibeEventManagerView: View {
         case hosts = "Hosts"
         case invitations = "Invites"
         case attendees = "Attendees"
+        case analytics = "Analytics"
         var id: String { rawValue }
     }
 
@@ -968,6 +1117,8 @@ struct VibeEventManagerView: View {
                     VibeEventInvitesManager(slug: event.slug)
                 case .attendees:
                     VibeEventAttendeesManager(slug: event.slug)
+                case .analytics:
+                    VibeEventAnalyticsManager(slug: event.slug)
                 }
             }
         }
@@ -979,6 +1130,77 @@ struct VibeEventManagerView: View {
                 Button("Done") { dismiss() }.foregroundStyle(C.watch)
             }
         }
+    }
+}
+
+private struct VibeEventAnalyticsManager: View {
+    let slug: String
+    @State private var analytics: VibeEventAnalyticsSummary?
+    @State private var loading = true
+    @State private var errorMessage: String?
+
+    private var metrics: [(String, Int, String)] {
+        guard let analytics else { return [] }
+        return [
+            ("Views", analytics.viewCount, "eye"),
+            ("Joins", analytics.joinCount, "video.fill"),
+            ("Going", analytics.goingCount, "person.2.fill"),
+            ("Interested", analytics.interestedCount, "star.fill"),
+            ("Waitlisted", analytics.waitlistCount, "clock.fill"),
+            ("Comments", analytics.commentCount, "bubble.left.fill"),
+            ("Echoes", analytics.echoCount, "wave.3.right"),
+            ("Energy", analytics.energyCount, "bolt.fill")
+        ]
+    }
+
+    var body: some View {
+        ScrollView {
+            if loading {
+                ProgressView("Loading analytics…")
+                    .tint(C.watch)
+                    .padding(.top, 80)
+            } else if let errorMessage {
+                ContentUnavailableView(
+                    "Analytics unavailable",
+                    systemImage: "chart.bar.xaxis",
+                    description: Text(errorMessage)
+                )
+                .foregroundStyle(C.text)
+                .padding(.top, 60)
+            } else {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    ForEach(metrics, id: \.0) { metric in
+                        VStack(alignment: .leading, spacing: 10) {
+                            Image(systemName: metric.2).foregroundStyle(C.watch)
+                            Text(metric.1.formatted())
+                                .font(.title2.bold())
+                                .foregroundStyle(C.text)
+                            Text(metric.0.uppercased())
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(C.textMuted)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
+                        .padding(14)
+                        .background(C.surface, in: RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(C.borderSubtle))
+                    }
+                }
+                .padding(C.pagePad)
+            }
+        }
+        .refreshable { await load() }
+        .task { await load() }
+    }
+
+    @MainActor private func load() async {
+        loading = analytics == nil
+        do {
+            analytics = try await APIClient.shared.fetchVibeEventAnalytics(slug: slug)
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        loading = false
     }
 }
 
@@ -1022,7 +1244,16 @@ private struct VibeEventHostsManager: View {
                 TextField("Search people", text: $query)
                     .textInputAutocapitalization(.never)
                     .onSubmit { Task { await search() } }
-                Button("Search") { Task { await search() } }.disabled(query.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .task(id: query) {
+                        let cleaned = query.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard cleaned.count >= 2 else {
+                            results = []
+                            return
+                        }
+                        try? await Task.sleep(for: .milliseconds(300))
+                        guard !Task.isCancelled else { return }
+                        await search()
+                    }
                 ForEach(results) { person in
                     Button {
                         Task { await add(person.id) }

@@ -588,6 +588,7 @@ public enum RippleAttachmentKind: String, Decodable, Sendable {
     case westreemCollection = "WESTREEM_COLLECTION"
     case westreemClip = "WESTREEM_CLIP"
     case westreemRipple = "WESTREEM_RIPPLE"
+    case westreemEvent = "WESTREEM_EVENT"
     case unknown
 
     public init(from decoder: Decoder) throws {
@@ -615,13 +616,14 @@ public struct RippleAttachment: Decodable, Identifiable, Sendable {
     public let collection: RippleCollectionAttachment?
     public let userPost: RippleClippingAttachment?
     public let fanClubPost: EmbeddedRipple?
+    public let vibeEvent: RippleEventAttachment?
 
     enum CodingKeys: String, CodingKey {
         case id, type, position, imageURL = "imageUrl", externalURL = "externalUrl"
         case linkTitle, linkDescription, linkImageURL = "linkImageUrl"
         case linkFaviconURL = "linkFaviconUrl", linkDomain
         case likeCount, commentCount, shareCount, likes
-        case video, collection, userPost, fanClubPost
+        case video, collection, userPost, fanClubPost, vibeEvent
     }
 
     public init(from decoder: Decoder) throws {
@@ -644,6 +646,51 @@ public struct RippleAttachment: Decodable, Identifiable, Sendable {
         collection = try values.decodeIfPresent(RippleCollectionAttachment.self, forKey: .collection)
         userPost = try values.decodeIfPresent(RippleClippingAttachment.self, forKey: .userPost)
         fanClubPost = try values.decodeIfPresent(EmbeddedRipple.self, forKey: .fanClubPost)
+        vibeEvent = try values.decodeIfPresent(RippleEventAttachment.self, forKey: .vibeEvent)
+    }
+}
+
+public struct RippleEventAttachment: Decodable, Sendable {
+    public let id: String
+    public let slug: String?
+    public let title: String?
+    public let summary: String?
+    public let coverURL: String?
+    public let startsAt: String?
+    public let status: String?
+    public let visibility: String?
+    public let goingCount: Int
+    public let interestedCount: Int
+    public let club: RippleEventIdentity?
+
+    enum CodingKeys: String, CodingKey {
+        case id, slug, title, summary, startsAt, status, visibility, goingCount, interestedCount, club
+        case coverURL = "coverUrl"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        slug = try values.decodeIfPresent(String.self, forKey: .slug)
+        title = try values.decodeIfPresent(String.self, forKey: .title)
+        summary = try values.decodeIfPresent(String.self, forKey: .summary)
+        coverURL = try values.decodeIfPresent(String.self, forKey: .coverURL)
+        startsAt = try values.decodeIfPresent(String.self, forKey: .startsAt)
+        status = try values.decodeIfPresent(String.self, forKey: .status)
+        visibility = try values.decodeIfPresent(String.self, forKey: .visibility)
+        goingCount = try values.decodeIfPresent(Int.self, forKey: .goingCount) ?? 0
+        interestedCount = try values.decodeIfPresent(Int.self, forKey: .interestedCount) ?? 0
+        club = try values.decodeIfPresent(RippleEventIdentity.self, forKey: .club)
+    }
+}
+
+public struct RippleEventIdentity: Decodable, Sendable {
+    public let name: String?
+    public let avatarURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case avatarURL = "avatarUrl"
     }
 }
 

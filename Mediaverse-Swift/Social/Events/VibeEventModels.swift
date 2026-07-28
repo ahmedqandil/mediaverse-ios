@@ -229,6 +229,46 @@ struct VibeEventInviteDecisionResponse: Decodable, Sendable {
     let eventSlug: String
 }
 
+struct VibeEventAnalyticsSummary: Decodable, Sendable {
+    let viewCount: Int
+    let joinCount: Int
+    let goingCount: Int
+    let interestedCount: Int
+    let waitlistCount: Int
+    let commentCount: Int
+    let echoCount: Int
+    let energyCount: Int
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        viewCount = try values.decodeIfPresent(Int.self, forKey: .viewCount) ?? 0
+        joinCount = try values.decodeIfPresent(Int.self, forKey: .joinCount) ?? 0
+        goingCount = try values.decodeIfPresent(Int.self, forKey: .goingCount) ?? 0
+        interestedCount = try values.decodeIfPresent(Int.self, forKey: .interestedCount) ?? 0
+        waitlistCount = try values.decodeIfPresent(Int.self, forKey: .waitlistCount) ?? 0
+        commentCount = try values.decodeIfPresent(Int.self, forKey: .commentCount) ?? 0
+        echoCount = try values.decodeIfPresent(Int.self, forKey: .echoCount) ?? 0
+        energyCount = try values.decodeIfPresent(Int.self, forKey: .energyCount) ?? 0
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case viewCount, joinCount, goingCount, interestedCount, waitlistCount
+        case commentCount, echoCount, energyCount
+    }
+}
+
+struct VibeEventAnalyticsResponse: Decodable, Sendable {
+    let analytics: VibeEventAnalyticsSummary
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        analytics = try values.decodeIfPresent(VibeEventAnalyticsSummary.self, forKey: .analytics)
+            ?? VibeEventAnalyticsSummary(from: decoder)
+    }
+
+    private enum CodingKeys: String, CodingKey { case analytics }
+}
+
 extension ISO8601DateFormatter {
     static let vibeEvent: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
