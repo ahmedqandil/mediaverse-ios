@@ -995,26 +995,14 @@ struct HomeView: View {
     }
 
     private var homeHeaderTitle: some View {
-        HStack(spacing: 7) {
-            HStack(spacing: 0) {
-                Text("We")
-                    .foregroundStyle(C.text)
-                Text("Streem")
-                    .foregroundStyle(C.watch)
-            }
-            .font(.system(size: 19, weight: .black))
-            .fontDesign(.rounded)
-
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .stroke(C.watch, lineWidth: 2)
-                .frame(width: 18, height: 13)
-                .overlay(alignment: .bottom) {
-                    Capsule()
-                        .fill(C.watch)
-                        .frame(width: 9, height: 2)
-                        .offset(y: 5)
-                }
+        HStack(spacing: 0) {
+            Text("We")
+                .foregroundStyle(C.text)
+            Text("Streem")
+                .foregroundStyle(C.watch)
         }
+        .font(.system(size: 19, weight: .black))
+        .fontDesign(.rounded)
     }
 
     @ViewBuilder

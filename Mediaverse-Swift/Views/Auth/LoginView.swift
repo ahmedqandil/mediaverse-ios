@@ -38,18 +38,10 @@ struct LoginView: View {
 
     private var brandHeader: some View {
         VStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(C.watch.opacity(0.14))
-                    .frame(width: 52, height: 52)
-                    .overlay {
-                        Circle().stroke(C.watch.opacity(0.26), lineWidth: 1)
-                    }
-                Image("westreem-mark")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 36, height: 36)
-            }
+            Image("westreem-mark")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 72, height: 72)
             VStack(spacing: 4) {
                 Text("WeStreem")
                     .font(.system(size: 28, weight: .black))
