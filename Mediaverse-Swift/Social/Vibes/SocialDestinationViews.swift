@@ -295,7 +295,8 @@ struct VibeDetailView: View {
             ? detail.capabilities.canFollow || detail.following
             : detail.capabilities.canJoin
                 || detail.capabilities.canRequestJoin
-                || detail.capabilities.canLeave
+                || (detail.capabilities.canLeave
+                    && detail.membership?.role.uppercased() != "OWNER")
         guard canMutate else { return nil }
         return { Task { await mutateRelationship() } }
     }
@@ -314,7 +315,8 @@ struct VibeDetailView: View {
                     _ = try await api.followVibe(slug: slug)
                     relationshipNotice = "Vibe followed."
                 }
-            } else if detail.capabilities.canLeave {
+            } else if detail.capabilities.canLeave,
+                      detail.membership?.role.uppercased() != "OWNER" {
                 try await api.leaveVibe(slug: slug)
                 relationshipNotice = "You left this Vibe."
             } else {
@@ -1046,7 +1048,8 @@ private struct VibeHero: View {
         if detail.club.isPersonal {
             return detail.following ? "Following" : "Follow"
         }
-        if detail.capabilities.canLeave {
+        if detail.capabilities.canLeave,
+           detail.membership?.role.uppercased() != "OWNER" {
             return "Leave"
         }
         if detail.capabilities.canRequestJoin {
