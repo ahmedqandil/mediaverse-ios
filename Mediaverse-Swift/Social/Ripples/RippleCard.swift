@@ -96,6 +96,7 @@ struct RippleCardActions {
     var openVibe: (() -> Void)?
     var togglePin: (() -> Void)?
     var isPinned = false
+    var pinTarget = "Atmo"
     var edit: (() -> Void)?
     var delete: (() -> Void)?
     var report: (() -> Void)?
@@ -369,7 +370,7 @@ struct RippleCard: View {
                 Menu {
                     if let togglePin = actions.togglePin {
                         Button(
-                            actions.isPinned ? "Unpin from Atmo" : "Pin to Atmo",
+                            actions.isPinned ? "Unpin from \(actions.pinTarget)" : "Pin to \(actions.pinTarget)",
                             systemImage: actions.isPinned ? "pin.slash" : "pin",
                             action: togglePin
                         )

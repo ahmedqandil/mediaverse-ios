@@ -59,6 +59,13 @@ struct VibeDetailView: View {
                     ForEach(ripples) {
                         RippleCard(
                             ripple: $0,
+                            actions: RippleCardActions(
+                                togglePin: detail.capabilities.canModerateContent
+                                    ? vibePinAction(for: $0)
+                                    : nil,
+                                isPinned: $0.pinnedAt != nil,
+                                pinTarget: "Vibe"
+                            ),
                             allowsEngagement: features.rippleEngagementEnabled,
                             activePreviewVideoId: $autoplay.activeVideoID,
                             previewManager: autoplay.previewManager,
@@ -292,6 +299,22 @@ struct VibeDetailView: View {
             nextCursor = page.nextCursor
         } catch {
             errorMessage = socialErrorMessage(error)
+        }
+    }
+
+    private func vibePinAction(for ripple: Ripple) -> () -> Void {
+        {
+            Task {
+                do {
+                    _ = try await api.setRipplePinned(
+                        postId: ripple.id,
+                        pinned: ripple.pinnedAt == nil
+                    )
+                    await load()
+                } catch {
+                    errorMessage = socialErrorMessage(error)
+                }
+            }
         }
     }
 
