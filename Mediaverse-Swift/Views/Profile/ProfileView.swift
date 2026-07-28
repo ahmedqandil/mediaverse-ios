@@ -994,6 +994,8 @@ private struct PartnerRequestSheet: View {
     @State private var isSubmitting = false
     @State private var didSubmit = false
     @State private var errorMessage: String?
+    @State private var showsApplicationForm = false
+    @State private var showsWithdrawalConfirmation = false
 
     init(
         initialStatus: PartnerApplicationStatus,
@@ -1027,6 +1029,20 @@ private struct PartnerRequestSheet: View {
                                 message: "Your partner request is pending. We’ll notify you when the review is complete.",
                                 color: .orange
                             )
+                            if let submittedAt = formattedSubmittedAt {
+                                Text("Submitted \(submittedAt)")
+                                    .font(.caption)
+                                    .foregroundStyle(C.textMuted)
+                            }
+                            Button(role: .destructive) {
+                                showsWithdrawalConfirmation = true
+                            } label: {
+                                Label(isSubmitting ? "Withdrawing..." : "Withdraw application", systemImage: "xmark.circle")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.red)
+                            .disabled(isSubmitting)
                         } else if application.normalizedStatus == "approved" {
                             statusBanner(
                                 iconName: "checkmark.seal.fill",
@@ -1034,7 +1050,7 @@ private struct PartnerRequestSheet: View {
                                 message: "Your application was approved and creator access is active.",
                                 color: .green
                             )
-                        } else {
+                        } else if showsApplicationForm || application.normalizedStatus == "rejected" {
                             if application.normalizedStatus == "rejected" {
                                 statusBanner(
                                     iconName: "info.circle.fill",
@@ -1063,6 +1079,8 @@ private struct PartnerRequestSheet: View {
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                             .overlay { RoundedRectangle(cornerRadius: 10).stroke(C.border, lineWidth: 1) }
                             }
+                        } else {
+                            partnerOverview
                         }
 
                         if didSubmit {
@@ -1092,7 +1110,7 @@ private struct PartnerRequestSheet: View {
                         .foregroundStyle(C.textMuted)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    if application.normalizedStatus == "none" || application.normalizedStatus == "rejected" {
+                    if showsApplicationForm || application.normalizedStatus == "rejected" {
                         Button(submitTitle) {
                             Task { await submit() }
                         }
@@ -1102,12 +1120,84 @@ private struct PartnerRequestSheet: View {
                 }
             }
         }
+        .confirmationDialog(
+            "Withdraw partner application?",
+            isPresented: $showsWithdrawalConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Withdraw application", role: .destructive) {
+                Task { await withdraw() }
+            }
+            Button("Keep application", role: .cancel) {}
+        } message: {
+            Text("Your pending request will be removed. You can apply again later.")
+        }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }
 
     private var submitTitle: String {
         isSubmitting ? "Sending..." : "Submit"
+    }
+
+    private var formattedSubmittedAt: String? {
+        guard let value = application.submittedAt else { return nil }
+        let formatter = ISO8601DateFormatter()
+        guard let date = formatter.date(from: value) else { return nil }
+        return date.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    private var partnerOverview: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Image(systemName: "chart.line.uptrend.xyaxis")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(C.watch)
+                Text("Build your audience on WeStreem")
+                    .font(.title2.bold())
+                    .foregroundStyle(C.text)
+                Text("Partner access gives creators the professional tools to publish, grow, and understand their audience.")
+                    .font(.subheadline)
+                    .foregroundStyle(C.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(spacing: 10) {
+                partnerBenefit("play.rectangle.fill", "Your own channel", "Create a branded home for your audience.")
+                partnerBenefit("arrow.up.circle.fill", "Publish across formats", "Manage videos and shorts from Backstage.")
+                partnerBenefit("chart.bar.fill", "Creator analytics", "Understand reach, watch time, and engagement.")
+                partnerBenefit("dollarsign.circle.fill", "Build a business", "Access monetization tools when eligible.")
+            }
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showsApplicationForm = true
+                }
+            } label: {
+                Text("Proceed to application")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(C.watch)
+        }
+    }
+
+    private func partnerBenefit(_ icon: String, _ title: String, _ message: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .frame(width: 22)
+                .foregroundStyle(C.watch)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(C.text)
+                Text(message).font(.caption).foregroundStyle(C.textMuted)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private func fieldGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -1147,6 +1237,23 @@ private struct PartnerRequestSheet: View {
             let updated = try await APIClient.shared.submitPartnerRequest(reason: reason)
             application = updated
             didSubmit = true
+            onSubmitted(updated)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func withdraw() async {
+        guard !isSubmitting else { return }
+        isSubmitting = true
+        errorMessage = nil
+        defer { isSubmitting = false }
+        do {
+            let updated = try await APIClient.shared.withdrawPartnerRequest()
+            application = updated
+            reason = ""
+            didSubmit = false
+            showsApplicationForm = false
             onSubmitted(updated)
         } catch {
             errorMessage = error.localizedDescription

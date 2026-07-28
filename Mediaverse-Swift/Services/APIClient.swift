@@ -1326,6 +1326,10 @@ actor APIClient: LegacySocialTransport {
         )
     }
 
+    func withdrawPartnerRequest() async throws -> PartnerApplicationStatus {
+        try await delete("/api/me/partner-request")
+    }
+
     func fetchVideoPlaylist(videoId: String, playlistId: String? = nil) async throws -> VideoPlaylistResponse {
         var path = "/api/videos/\(C.pathSegment(videoId))/playlist"
         if let playlistId,
