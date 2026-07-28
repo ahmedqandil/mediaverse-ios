@@ -45,9 +45,10 @@ struct LoginView: View {
                     .overlay {
                         Circle().stroke(C.watch.opacity(0.26), lineWidth: 1)
                     }
-                Image(systemName: "play.fill")
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(C.watch)
+                Image("westreem-mark")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 36, height: 36)
             }
             VStack(spacing: 4) {
                 Text("WeStreem")
