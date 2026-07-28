@@ -139,10 +139,45 @@ public actor LegacySocialAPIAdapter {
         try await uploadVibeImage(toVibe: slug, purpose: "profile", data: data, mimeType: mimeType)
     }
 
-    public func vibeRipples(slug: String, cursor: String? = nil) async throws -> RipplePageResponse {
+    public func vibeRipples(slug: String, cursor: String? = nil, wave: String? = nil) async throws -> RipplePageResponse {
         let base = "/api/fan-clubs/\(try segment(slug))/posts"
-        let query = cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ?? []
+        var query: [URLQueryItem] = []
+        if let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
+        if let wave { query.append(URLQueryItem(name: "wave", value: wave)) }
         return try await decode(RipplePageResponse.self, path: try path(base, query: query))
+    }
+
+    public func vibeWaves(slug: String) async throws -> [VibeWave] {
+        try await decode(
+            VibeWavesResponse.self,
+            path: "/api/fan-clubs/\(try segment(slug))/waves"
+        ).waves
+    }
+
+    public func waveNotificationSettings(vibeSlug: String, waveSlug: String) async throws -> VibeWaveSubscription {
+        try await decode(
+            VibeWaveNotificationSettingsResponse.self,
+            path: "/api/fan-clubs/\(try segment(vibeSlug))/waves/\(try segment(waveSlug))/notification-settings"
+        ).settings
+    }
+
+    public func updateWaveNotificationSettings(
+        vibeSlug: String,
+        waveSlug: String,
+        notificationLevel: String,
+        pushEnabled: Bool,
+        emailEnabled: Bool
+    ) async throws -> VibeWaveSubscription {
+        let path = "/api/fan-clubs/\(try segment(vibeSlug))/waves/\(try segment(waveSlug))/notification-settings"
+        let data = try await transport.socialPatchData(
+            path: path,
+            body: try JSONEncoder().encode(WaveNotificationSettingsRequest(
+                notificationLevel: notificationLevel,
+                pushEnabled: pushEnabled,
+                emailEnabled: emailEnabled
+            ))
+        )
+        return try decoder.decode(VibeWaveNotificationSettingsResponse.self, from: data).settings
     }
 
     public func vibeInvites(slug: String) async throws -> [VibeInvite] {
@@ -610,7 +645,8 @@ public actor LegacySocialAPIAdapter {
         attachments: [RippleCreateAttachment],
         poll: RipplePollDraft? = nil,
         isSpoiler: Bool = false,
-        commentsDisabled: Bool = false
+        commentsDisabled: Bool = false,
+        waveId: String? = nil
     ) async throws -> Ripple {
         let trimmedBody = body?.trimmingCharacters(in: .whitespacesAndNewlines)
         let request = CreateRippleRequest(
@@ -618,7 +654,8 @@ public actor LegacySocialAPIAdapter {
             isSpoiler: isSpoiler,
             commentsDisabled: commentsDisabled,
             attachments: attachments,
-            poll: poll
+            poll: poll,
+            waveId: waveId
         )
         return try await post(
             CreateRippleResponse.self,
@@ -967,6 +1004,13 @@ private struct CreateRippleRequest: Encodable {
     let commentsDisabled: Bool
     let attachments: [RippleCreateAttachment]
     let poll: RipplePollDraft?
+    let waveId: String?
+}
+
+private struct WaveNotificationSettingsRequest: Encodable {
+    let notificationLevel: String
+    let pushEnabled: Bool
+    let emailEnabled: Bool
 }
 
 private struct ResolveAttachmentRequest: Encodable {

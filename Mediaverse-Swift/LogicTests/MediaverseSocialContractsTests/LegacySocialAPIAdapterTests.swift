@@ -2,6 +2,37 @@ import XCTest
 @testable import MediaverseSocialContracts
 
 final class LegacySocialAPIAdapterTests: XCTestCase {
+    func testWaveListAndScopedRippleFeedUseAdditiveContracts() async throws {
+        let wavesPath = "/api/fan-clubs/cinema/waves"
+        let feedPath = "/api/fan-clubs/cinema/posts?cursor=opaque%2B%2F%3D&wave=questions"
+        let createPath = "/api/fan-clubs/cinema/posts"
+        let transport = SocialTransportStub(responses: [
+            wavesPath: """
+            {"waves":[{"id":"w1","name":"Questions","slug":"questions","type":"QUESTIONS",
+            "visibility":"PUBLIC","postingPolicy":"MEMBERS","position":30,"isSystem":false,
+            "isDefault":false,"commentsEnabled":true,"requiresPostApproval":false,
+            "allowPolls":true,"allowPhotos":true,"allowLinks":true,"allowEchoes":true,
+            "archivedAt":null,"capabilities":{"canView":true,"canPost":true,
+            "canCreateEvent":false,"canManage":false,"canArchive":false}}]}
+            """,
+            feedPath: #"{"posts":[],"nextCursor":null}"#,
+            createPath: #"{"post":{"id":"r1","clubId":"v1","status":"PUBLISHED","createdAt":"2026-07-28T00:00:00Z","author":{"id":"u1"}}}"#
+        ])
+        let adapter = LegacySocialAPIAdapter(transport: transport)
+
+        let waves = try await adapter.vibeWaves(slug: "cinema")
+        _ = try await adapter.vibeRipples(slug: "cinema", cursor: "opaque+/=", wave: "questions")
+        _ = try await adapter.createRipple(inVibe: "cinema", body: "Question", attachments: [], waveId: "w1")
+
+        XCTAssertEqual(waves.first?.type, .questions)
+        let paths = await transport.paths
+        XCTAssertEqual(paths, [wavesPath, feedPath])
+        let postBodies = await transport.postBodies
+        let body = try XCTUnwrap(postBodies.last)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(object["waveId"] as? String, "w1")
+    }
+
     func testAtmosphereUsesFrozenBareArrayEndpointAndFiltersWebExcludedMedia() async throws {
         let transport = SocialTransportStub(responses: [
             "/api/subscriptions/feed": """

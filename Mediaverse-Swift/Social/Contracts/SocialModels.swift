@@ -459,6 +459,97 @@ public struct VibeListResponse: Decodable, Sendable {
     public let nextCursor: String?
 }
 
+public enum VibeWaveType: Hashable, Sendable {
+    case general, announcements, questions, events, resources, media, staff, custom
+    case unknown(String)
+}
+
+extension VibeWaveType: Codable {
+    public init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        switch value.uppercased() {
+        case "GENERAL": self = .general
+        case "ANNOUNCEMENTS": self = .announcements
+        case "QUESTIONS": self = .questions
+        case "EVENTS": self = .events
+        case "RESOURCES": self = .resources
+        case "MEDIA": self = .media
+        case "STAFF": self = .staff
+        case "CUSTOM": self = .custom
+        default: self = .unknown(value)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        let value: String
+        switch self {
+        case .general: value = "GENERAL"
+        case .announcements: value = "ANNOUNCEMENTS"
+        case .questions: value = "QUESTIONS"
+        case .events: value = "EVENTS"
+        case .resources: value = "RESOURCES"
+        case .media: value = "MEDIA"
+        case .staff: value = "STAFF"
+        case .custom: value = "CUSTOM"
+        case .unknown(let raw): value = raw
+        }
+        try container.encode(value)
+    }
+}
+
+public struct VibeWaveCapabilities: Decodable, Equatable, Sendable {
+    public let canView: Bool
+    public let canPost: Bool
+    public let canCreateEvent: Bool
+    public let canManage: Bool
+    public let canArchive: Bool
+}
+
+public struct VibeWaveCounts: Decodable, Equatable, Sendable {
+    public let posts: Int
+    public let events: Int
+}
+
+public struct VibeWave: Decodable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let name: String
+    public let slug: String
+    public let description: String?
+    public let type: VibeWaveType
+    public let visibility: String
+    public let postingPolicy: String
+    public let position: Int
+    public let isSystem: Bool
+    public let isDefault: Bool
+    public let commentsEnabled: Bool
+    public let requiresPostApproval: Bool
+    public let allowPolls: Bool
+    public let allowPhotos: Bool
+    public let allowLinks: Bool
+    public let allowEchoes: Bool
+    public let archivedAt: String?
+    public let capabilities: VibeWaveCapabilities
+    public let _count: VibeWaveCounts?
+    public let subscription: VibeWaveSubscription?
+}
+
+public struct VibeWavesResponse: Decodable, Sendable {
+    public let waves: [VibeWave]
+}
+
+public struct VibeWaveSubscription: Codable, Equatable, Sendable {
+    public let notificationLevel: String
+    public let pushEnabled: Bool
+    public let emailEnabled: Bool
+    public let lastReadAt: String?
+    public let inherited: Bool?
+}
+
+public struct VibeWaveNotificationSettingsResponse: Decodable, Sendable {
+    public let settings: VibeWaveSubscription
+}
+
 public struct PostableVibe: Decodable, Identifiable, Equatable, Sendable {
     public let id: String
     public let slug: String
