@@ -52,7 +52,6 @@ struct VibeEventsView: View {
     @State private var events = [VibeEventCardModel]()
     @State private var loading = true
     @State private var errorMessage: String?
-    @State private var showsCreator = false
     @State private var availableScopes: Set<Scope> = [.upcoming]
     @State private var curationSections = [PageSection]()
     @State private var selectedCurationSectionID: String?
@@ -94,14 +93,6 @@ struct VibeEventsView: View {
                 await discoverAvailableScopes()
             }
         }
-        .sheet(isPresented: $showsCreator) {
-            NavigationStack {
-                VibeEventCreatorView { event in
-                    showsCreator = false
-                    Task { await load() }
-                }
-            }
-        }
     }
 
     private var header: some View {
@@ -116,15 +107,6 @@ struct VibeEventsView: View {
                     .foregroundStyle(C.text)
             }
             Spacer()
-            Button { showsCreator = true } label: {
-                Label("Create", systemImage: "plus")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Color.black)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(C.watch, in: Capsule())
-            }
-            .buttonStyle(.plain)
         }
         .padding(.top, 12)
     }
@@ -903,9 +885,18 @@ struct VibeEventCreatorView: View {
                     return
                 }
                 if selectedVibeID.isEmpty {
-                    selectedVibeID = vibes.first(where: { $0.slug == preselectedVibeSlug })?.id
-                        ?? vibes.first?.id
-                        ?? ""
+                    if editEvent == nil {
+                        guard let preselectedVibeSlug,
+                              let hostingVibe = vibes.first(where: { $0.slug == preselectedVibeSlug }) else {
+                            creatorLoadError = "Create an Event from the Vibe that will host it."
+                            creatorLoading = false
+                            return
+                        }
+                        selectedVibeID = hostingVibe.id
+                        vibes = [hostingVibe]
+                    } else {
+                        selectedVibeID = vibes.first?.id ?? ""
+                    }
                 }
                 if let event = editEvent {
                     selectedTemplate = templates.first(where: { $0.slug == "blank" }) ?? templates.first
@@ -977,7 +968,7 @@ struct VibeEventCreatorView: View {
         Form {
             Section("Basics") {
                 Picker("Hosting Vibe", selection: $selectedVibeID) { ForEach(vibes) { Text($0.name).tag($0.id) } }
-                    .disabled(editEvent != nil)
+                    .disabled(true)
                 TextField("Event title", text: $title)
                 TextField("Summary", text: $summary, axis: .vertical).lineLimit(3...5)
                 TextField("About", text: $details, axis: .vertical).lineLimit(4...8)
