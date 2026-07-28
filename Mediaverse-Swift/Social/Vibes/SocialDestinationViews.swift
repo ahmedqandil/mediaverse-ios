@@ -14,6 +14,7 @@ struct VibeDetailView: View {
     }
 
     let slug: String
+    var initialWaveSlug: String? = nil
     var initialManagementTab: String? = nil
     @State private var detail: VibeDetailResponse?
     @State private var ripples: [Ripple] = []

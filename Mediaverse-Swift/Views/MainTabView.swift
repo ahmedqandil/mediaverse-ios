@@ -1031,6 +1031,8 @@ struct MainTabView: View {
             CollectionDetailView(collectionId: id)
         case .vibe(let slug):
             VibeDetailView(slug: slug)
+        case .vibeWave(let vibeSlug, let waveSlug):
+            VibeDetailView(slug: vibeSlug, initialWaveSlug: waveSlug)
         case .vibeManagement(let slug, let tab):
             VibeDetailView(slug: slug, initialManagementTab: tab)
         case .vibeInvite(let token):
@@ -1065,7 +1067,7 @@ struct MainTabView: View {
             return "microdramas"
         case .collection:
             return "collections"
-        case .vibe, .vibeManagement, .vibeInvite, .ripple, .atmo:
+        case .vibe, .vibeWave, .vibeManagement, .vibeInvite, .ripple, .atmo:
             return "vibes"
         case .flash:
             return "stories"
@@ -1189,7 +1191,7 @@ private extension AppRoute {
         case .video, .episode, .microdramaWatch, .microdramaWatchEp, .flash:
             return true
         case .short, .channel, .show, .showSeason, .showAccess, .handoff, .microdramaShow, .playlist, .collection,
-             .vibe, .vibeManagement, .vibeInvite, .event, .eventInvite, .ripple, .atmo, .search:
+             .vibe, .vibeWave, .vibeManagement, .vibeInvite, .event, .eventInvite, .ripple, .atmo, .search:
             return false
         }
     }

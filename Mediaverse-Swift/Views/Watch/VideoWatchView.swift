@@ -2682,6 +2682,7 @@ struct VideoWatchView: View {
         case .microdramaWatch(let id): MicrodramaWatchView(showId: id)
         case .microdramaWatchEp(let id, let episodeNumber): MicrodramaWatchView(showId: id, startEpisodeNumber: episodeNumber)
         case .vibe(let slug): VibeDetailView(slug: slug)
+        case .vibeWave(let vibeSlug, let waveSlug): VibeDetailView(slug: vibeSlug, initialWaveSlug: waveSlug)
         case .vibeManagement(let slug, let tab): VibeDetailView(slug: slug, initialManagementTab: tab)
         case .vibeInvite(let token): VibeInviteAcceptView(token: token)
         case .event(let slug): VibeEventDetailView(slug: slug)

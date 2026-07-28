@@ -21,6 +21,7 @@ public enum AppRoute: Hashable, Identifiable {
         case .playlist(let s):         return "playlist_\(s)"
         case .collection(let s):       return "collection_\(s)"
         case .vibe(let s):             return "vibe_\(s)"
+        case .vibeWave(let vibeSlug, let waveSlug): return "vibeWave_\(vibeSlug)_\(waveSlug)"
         case .vibeManagement(let slug, let tab): return "vibeManagement_\(slug)_\(tab)"
         case .vibeInvite(let s):       return "vibeInvite_\(s)"
         case .event(let s):            return "event_\(s)"
@@ -45,6 +46,7 @@ public enum AppRoute: Hashable, Identifiable {
     case playlist(String)           // playlist id
     case collection(String)         // collection id
     case vibe(String)               // Vibe slug
+    case vibeWave(vibeSlug: String, waveSlug: String) // selected Wave in a Vibe
     case vibeManagement(slug: String, tab: String) // Vibe management destination
     case vibeInvite(String)         // opaque Vibe invitation token
     case event(String)              // Vibe Event slug
@@ -103,6 +105,9 @@ extension AppRoute {
             return .event(slug)
         }
         if let slug = stringValue(for: ["vibeSlug", "vibe_slug", "clubSlug", "club_slug", "fanClubSlug", "fan_club_slug", "targetVibeSlug", "target_vibe_slug"], in: userInfo) {
+            if let waveSlug = stringValue(for: ["waveSlug", "wave_slug", "targetWaveSlug", "target_wave_slug"], in: userInfo) {
+                return .vibeWave(vibeSlug: slug, waveSlug: waveSlug)
+            }
             if normalizedType?.contains("affiliation") == true || normalizedType?.contains("moderation") == true || normalizedType?.contains("join") == true {
                 let tab = normalizedType?.contains("affiliation") == true ? "affiliations" : normalizedType?.contains("join") == true ? "requests" : "moderation"
                 return .vibeManagement(slug: slug, tab: tab)
@@ -215,6 +220,12 @@ extension AppRoute {
         if parts.count >= 3, ["fan-clubs", "fanclubs", "clubs"].contains(parts[0]), parts[2] == "manage" {
             let tab = queryValue(["tab"], in: queryItems) ?? "settings"
             return .vibeManagement(slug: parts[1], tab: tab)
+        }
+        if parts.count >= 4, parts[0] == "vibes", parts[2] == "waves" {
+            return .vibeWave(vibeSlug: parts[1], waveSlug: parts[3])
+        }
+        if parts.count >= 4, ["fan-clubs", "fanclubs", "clubs"].contains(parts[0]), parts[2] == "waves" {
+            return .vibeWave(vibeSlug: parts[1], waveSlug: parts[3])
         }
         if parts.count >= 2, parts[0] == "vibes" { return .vibe(parts[1]) }
         if parts.count >= 2, ["vibe", "fan-clubs", "fanclubs", "clubs"].contains(parts[0]) { return .vibe(parts[1]) }

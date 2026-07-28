@@ -98,6 +98,25 @@ final class AppRouteContractTests: XCTestCase {
             AppRoute.notificationRoute(userInfo: ["type": "flash_energy", "story_id": "flash-12"]),
             .flash("flash-12")
         )
+        XCTAssertEqual(
+            AppRoute.notificationRoute(userInfo: ["type": "vibe_new_ripple", "vibe_slug": "cinema", "wave_slug": "events"]),
+            .vibeWave(vibeSlug: "cinema", waveSlug: "events")
+        )
+    }
+
+    func testWaveLinksPreserveVibeAndWaveIdentity() {
+        XCTAssertEqual(
+            AppRoute.route(link: "https://westreem.com/vibes/cinema/waves/events"),
+            .vibeWave(vibeSlug: "cinema", waveSlug: "events")
+        )
+        XCTAssertEqual(
+            AppRoute.route(link: "westreem://vibes/cinema/waves/questions"),
+            .vibeWave(vibeSlug: "cinema", waveSlug: "questions")
+        )
+        XCTAssertNotEqual(
+            AppRoute.vibeWave(vibeSlug: "cinema", waveSlug: "events").id,
+            AppRoute.vibeWave(vibeSlug: "cinema", waveSlug: "questions").id
+        )
     }
 
     func testNotificationPayloadPrecedence() {
