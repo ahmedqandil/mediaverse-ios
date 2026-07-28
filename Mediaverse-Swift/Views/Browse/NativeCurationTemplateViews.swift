@@ -1349,6 +1349,7 @@ private struct NativeCurationEntityCard: View {
 
     static func width(for item: ContentItem, mode: Mode) -> CGFloat {
         switch item.normalizedEntityType {
+        case "event": return mode == .carousel ? 280 : 160
         case "video", "episode": return 160
         case "show", "season", "short": return 140
         case "channel", "person", "vibe", "topic": return 160
@@ -1558,6 +1559,7 @@ private extension ContentItem {
     var entityTypeDisplayName: String {
         switch normalizedEntityType {
         case "show": return metaString("showType")?.capitalized ?? "Series"
+        case "event": return "Event"
         case "video": return "Video"
         case "short": return "Short"
         case "episode": return "Episode"
@@ -1574,6 +1576,7 @@ private extension ContentItem {
     var curationTypePill: String? {
         switch normalizedEntityType {
         case "show": return nil
+        case "event": return metaString("status") == "LIVE" ? "Live" : "Event"
         case "short": return "Short"
         case "video": return "Video"
         case "episode": return "Ep"
@@ -1596,6 +1599,11 @@ private extension ContentItem {
 
     var curationSubtitle: String {
         switch normalizedEntityType {
+        case "event":
+            return [metaString("startsAt"), metaString("vibeName") ?? metaString("clubName")]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " · ")
         case "show":
             return [metaString("productionYear"), seasonText, metaString("genre")]
                 .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -1644,6 +1652,7 @@ private extension ContentItem {
 
     var cardAspectRatio: CGFloat {
         switch normalizedEntityType {
+        case "event": return 16.0 / 9.0
         case "show": return 2.0 / 3.0
         case "short": return 9.0 / 16.0
         case "channel": return 1.0
@@ -1671,6 +1680,7 @@ private extension ContentItem {
 
     var primaryActionTitle: String {
         switch normalizedEntityType {
+        case "event": return "Open Event"
         case "channel": return "Open Channel"
         case "person": return "Open Atmo"
         case "vibe": return "Open Vibe"
@@ -1686,6 +1696,7 @@ private extension ContentItem {
 
     var fallbackIconName: String {
         switch normalizedEntityType {
+        case "event": return "calendar"
         case "show": return "tv"
         case "video": return "play.rectangle"
         case "short": return "bolt.fill"

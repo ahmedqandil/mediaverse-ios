@@ -79,6 +79,7 @@ struct VibeEventsView: View {
             .padding(.horizontal, C.pagePad)
             .padding(.bottom, 110)
         }
+        .frame(maxWidth: .infinity)
         .background(C.bg)
         .navigationTitle("Events")
         .navigationBarTitleDisplayMode(.inline)
@@ -338,9 +339,15 @@ struct EventRsvpButtons: View {
     var body: some View {
         if ["SCHEDULED", "LIVE"].contains(eventStatus) {
             VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 8) {
-                    rsvpButton("Going", status: "GOING", selectedStatus: ["GOING", "WAITLISTED"])
-                    rsvpButton("Interested", status: "INTERESTED", selectedStatus: ["INTERESTED"])
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        rsvpButton("Going", status: "GOING", selectedStatus: ["GOING", "WAITLISTED"])
+                        rsvpButton("Interested", status: "INTERESTED", selectedStatus: ["INTERESTED"])
+                    }
+                    VStack(alignment: .leading, spacing: 7) {
+                        rsvpButton("Going", status: "GOING", selectedStatus: ["GOING", "WAITLISTED"])
+                        rsvpButton("Interested", status: "INTERESTED", selectedStatus: ["INTERESTED"])
+                    }
                 }
                 if let errorMessage {
                     Text(errorMessage).font(.caption2).foregroundStyle(.red)
@@ -406,7 +413,8 @@ struct VibeEventDetailView: View {
                     .foregroundStyle(C.text).padding(.top, 100)
             }
         }
-        .background(C.bg)
+        .frame(maxWidth: .infinity)
+        .background(C.bg.ignoresSafeArea())
         .navigationTitle("Event")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -449,20 +457,31 @@ struct VibeEventDetailView: View {
                 if case .success(let image) = phase { image.resizable().scaledToFill() }
                 else { LinearGradient(colors: [C.watch.opacity(0.35), Color.indigo.opacity(0.35)], startPoint: .topLeading, endPoint: .bottomTrailing) }
             }
-            .aspectRatio(16 / 9, contentMode: .fill).clipped()
+            .frame(maxWidth: .infinity)
+            .aspectRatio(16 / 9, contentMode: .fill)
+            .clipped()
             VStack(alignment: .leading, spacing: 16) {
                 Text(event.status == "LIVE" ? "LIVE NOW" : event.status)
                     .font(.caption2.weight(.black)).foregroundStyle(event.status == "LIVE" ? Color.red : C.watch)
-                Text(event.title).font(.system(size: 30, weight: .black, design: .rounded)).foregroundStyle(C.text)
+                Text(event.title)
+                    .font(.system(size: 30, weight: .black, design: .rounded))
+                    .foregroundStyle(C.text)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
                     AsyncImage(url: C.mediaURL(event.club.avatarUrl)) { image in image.resizable().scaledToFill() } placeholder: { Circle().fill(C.surface) }
                         .frame(width: 42, height: 42).clipShape(Circle())
                     Text(event.club.name).font(.headline).foregroundStyle(C.text)
                 }
                 infoCard(event)
-                Text(event.summary).font(.title3.weight(.medium)).foregroundStyle(C.text)
+                Text(event.summary)
+                    .font(.title3.weight(.medium))
+                    .foregroundStyle(C.text)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let description = event.description, !description.isEmpty {
-                    Text(description).font(.body).foregroundStyle(C.textMuted)
+                    Text(description)
+                        .font(.body)
+                        .foregroundStyle(C.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if !event.topics.isEmpty {
                     WestreemHorizontalScrollView(showsIndicators: false) {
@@ -542,9 +561,12 @@ struct VibeEventDetailView: View {
                 }
                 if let errorMessage { Text(errorMessage).font(.footnote).foregroundStyle(.red) }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, C.pagePad)
         }
-        .padding(.bottom, 100)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipped()
+        .padding(.bottom, C.bottomMenuClearance + 24)
     }
 
     private func infoCard(_ event: VibeEventDetailModel) -> some View {
@@ -572,14 +594,17 @@ struct VibeEventDetailView: View {
             if event.visibility == "INVITE_ONLY" { Label("Invite only", systemImage: "lock.fill") }
             if response?.capabilities.canRsvp == true {
                 let selectedStatus = confirmedRSVPStatus ?? event.rsvps.first?.status
-                HStack {
-                    Button(selectedStatus == "WAITLISTED" ? "Waitlisted ✓" : selectedStatus == "GOING" ? "Going ✓" : "Going") {
-                        Task { await rsvp("GOING") }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        goingButton(selectedStatus)
+                        interestedButton(selectedStatus)
                     }
-                        .buttonStyle(EventPrimaryButtonStyle())
-                    Button(selectedStatus == "INTERESTED" ? "Interested ✓" : "Interested") { Task { await rsvp("INTERESTED") } }
-                        .buttonStyle(EventSecondaryButtonStyle())
-                }.disabled(rsvpBusy)
+                    VStack(spacing: 10) {
+                        goingButton(selectedStatus)
+                        interestedButton(selectedStatus)
+                    }
+                }
+                .disabled(rsvpBusy)
                 if selectedStatus != nil {
                     Button("Not going") { Task { await rsvp("NOT_GOING") } }
                         .font(.caption.weight(.semibold))
@@ -620,6 +645,20 @@ struct VibeEventDetailView: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(C.surface, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func goingButton(_ selectedStatus: String?) -> some View {
+        Button(selectedStatus == "WAITLISTED" ? "Waitlisted ✓" : selectedStatus == "GOING" ? "Going ✓" : "Going") {
+            Task { await rsvp("GOING") }
+        }
+        .buttonStyle(EventPrimaryButtonStyle())
+    }
+
+    private func interestedButton(_ selectedStatus: String?) -> some View {
+        Button(selectedStatus == "INTERESTED" ? "Interested ✓" : "Interested") {
+            Task { await rsvp("INTERESTED") }
+        }
+        .buttonStyle(EventSecondaryButtonStyle())
     }
 
     @MainActor private func load() async {
@@ -965,13 +1004,19 @@ struct VibeEventCreatorView: View {
     }
 
     private func editor(_ template: VibeEventTemplateModel) -> some View {
-        Form {
-            Section("Basics") {
+        WestreemFormPage {
+            WestreemFormPanel("Basics") {
                 Picker("Hosting Vibe", selection: $selectedVibeID) { ForEach(vibes) { Text($0.name).tag($0.id) } }
                     .disabled(true)
+                    .westreemField()
                 TextField("Event title", text: $title)
-                TextField("Summary", text: $summary, axis: .vertical).lineLimit(3...5)
-                TextField("About", text: $details, axis: .vertical).lineLimit(4...8)
+                    .westreemField()
+                TextField("Summary", text: $summary, axis: .vertical)
+                    .lineLimit(3...5)
+                    .westreemField(minHeight: 86)
+                TextField("About", text: $details, axis: .vertical)
+                    .lineLimit(4...8)
+                    .westreemField(minHeight: 112)
                 if !coverURL.isEmpty {
                     AsyncImage(url: C.mediaURL(coverURL)) { image in
                         image.resizable().scaledToFill()
@@ -984,6 +1029,11 @@ struct VibeEventCreatorView: View {
                 }
                 PhotosPicker(selection: $coverItem, matching: .images) {
                     Label(uploadingCover ? "Uploading cover…" : "Choose cover image", systemImage: "photo")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(C.watch)
+                        .frame(maxWidth: .infinity, minHeight: 46, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .background(C.elevated, in: RoundedRectangle(cornerRadius: 9))
                 }
                 .disabled(uploadingCover)
                 .onChange(of: coverItem) { _, item in
@@ -996,45 +1046,63 @@ struct VibeEventCreatorView: View {
                     HStack { Text("Vertical"); Slider(value: $coverFocusY, in: 0...100) }
                 }
             }
-            Section("Schedule") {
-                DatePicker("Starts", selection: $startsAt, in: Date()...)
+            WestreemFormPanel("Schedule") {
+                DatePicker("Starts", selection: $startsAt, in: Date()...).westreemField()
                 Picker("Duration", selection: $duration) { ForEach([30,45,60,75,90,120,180], id: \.self) { Text("\($0) minutes").tag($0) } }
+                    .westreemField()
             }
-            Section("Online experience") {
-                TextField("https://", text: $onlineURL).textInputAutocapitalization(.never).keyboardType(.URL)
-                TextField("Access instructions", text: $accessInstructions, axis: .vertical).lineLimit(2...5)
+            WestreemFormPanel("Online experience", helper: "Add a secure link, access instructions, or both.") {
+                TextField("https://", text: $onlineURL)
+                    .textInputAutocapitalization(.never).keyboardType(.URL)
+                    .westreemField()
+                TextField("Access instructions", text: $accessInstructions, axis: .vertical)
+                    .lineLimit(2...5)
+                    .westreemField(minHeight: 82)
                 Toggle("Set join opening", isOn: $hasJoinOpening)
                 if hasJoinOpening {
-                    DatePicker("Join opens", selection: $joinOpensAt)
+                    DatePicker("Join opens", selection: $joinOpensAt).westreemField()
                 }
                 Toggle("Set join closing", isOn: $hasJoinClosing)
                 if hasJoinClosing {
-                    DatePicker("Join closes", selection: $joinClosesAt)
+                    DatePicker("Join closes", selection: $joinClosesAt).westreemField()
                 }
             }
-            Section("Access and RSVP") {
+            WestreemFormPanel("Access and RSVP") {
                 Toggle("Invite only", isOn: $inviteOnly).disabled(template.allowedVisibility == ["INVITE_ONLY"])
-                TextField("Capacity (optional)", text: $capacity).keyboardType(.numberPad)
+                TextField("Capacity (optional)", text: $capacity).keyboardType(.numberPad).westreemField()
                 Toggle("RSVP deadline", isOn: $hasRSVPDeadline)
                 if hasRSVPDeadline {
-                    DatePicker("Deadline", selection: $rsvpDeadline, in: Date()...startsAt)
+                    DatePicker("Deadline", selection: $rsvpDeadline, in: Date()...startsAt).westreemField()
                 }
             }
-            Section("Topics and agenda") {
-                TextField("Topics, separated by commas", text: $topicsText)
+            WestreemFormPanel("Topics and agenda") {
+                TextField("Topics, separated by commas", text: $topicsText).westreemField()
                 ForEach($agenda) { $item in
-                    TextField("Agenda title", text: $item.title)
-                    TextField("Details (optional)", text: Binding(
-                        get: { item.detail ?? "" },
-                        set: { item.detail = $0.isEmpty ? nil : $0 }
-                    ))
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Agenda item")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(C.textMuted)
+                            Spacer()
+                            Button(role: .destructive) {
+                                agenda.removeAll { $0.id == item.id }
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        TextField("Agenda title", text: $item.title).westreemField()
+                        TextField("Details (optional)", text: Binding(
+                            get: { item.detail ?? "" },
+                            set: { item.detail = $0.isEmpty ? nil : $0 }
+                        )).westreemField()
+                    }
                 }
-                .onDelete { agenda.remove(atOffsets: $0) }
                 Button("Add agenda item") {
                     agenda.append(.init(id: UUID().uuidString, title: "", detail: nil))
                 }
             }
-            Section("Affiliations") {
+            WestreemFormPanel("Affiliations", helper: "Optionally connect this Event to one Show and one Channel.") {
                 Button {
                     affiliationPicker = .show
                 } label: {
@@ -1058,12 +1126,13 @@ struct VibeEventCreatorView: View {
                     }
                 }
             }
-            Section("Replay") {
+            WestreemFormPanel("Replay") {
                 TextField("Replay URL (optional)", text: $replayURL)
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
+                    .westreemField()
             }
-            Section("Preview") {
+            WestreemFormPanel("Preview") {
                 VStack(alignment: .leading, spacing: 8) {
                     if !coverURL.isEmpty {
                         AsyncImage(url: C.mediaURL(coverURL)) { image in
@@ -1094,14 +1163,24 @@ struct VibeEventCreatorView: View {
                     }
                 }
             }
-            if vibes.isEmpty { Section { Text("You need to manage a community Vibe before creating an Event.").foregroundStyle(.orange) } }
-            if let errorMessage { Section { Text(errorMessage).foregroundStyle(.red) } }
-            Section {
+            if vibes.isEmpty {
+                WestreemFeedbackBanner(
+                    message: "You need to manage a community Vibe before creating an Event.",
+                    kind: .warning
+                )
+            }
+            if let errorMessage {
+                WestreemFeedbackBanner(message: errorMessage, kind: .error)
+            }
+            WestreemFormPanel {
                 Button { Task { await save(status: editEvent?.status ?? "SCHEDULED") } } label: {
                     HStack { Spacer(); if busy { ProgressView() } else { Text(editEvent == nil ? "Publish Event" : "Save changes").fontWeight(.bold) }; Spacer() }
-                }.disabled(busy || vibes.isEmpty || title.trimmingCharacters(in: .whitespaces).isEmpty || summary.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                .buttonStyle(WestreemPrimaryButtonStyle(isBusy: busy))
+                .disabled(busy || vibes.isEmpty || title.trimmingCharacters(in: .whitespaces).isEmpty || summary.trimmingCharacters(in: .whitespaces).isEmpty)
                 if editEvent == nil {
                     Button("Save draft") { Task { await save(status: "DRAFT") } }
+                    .buttonStyle(WestreemSecondaryButtonStyle())
                     .disabled(busy || vibes.isEmpty || title.trimmingCharacters(in: .whitespaces).isEmpty || summary.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 if editEvent != nil {
@@ -1110,8 +1189,6 @@ struct VibeEventCreatorView: View {
                 }
             }
         }
-        .scrollContentBackground(.hidden)
-        .tint(C.watch)
     }
 
     @MainActor private func save(status: String) async {
@@ -1290,72 +1367,43 @@ private struct EventAffiliationPicker: View {
 struct VibeEventVibeSection: View {
     let vibeSlug: String
     let canManage: Bool
-    @State private var events = [VibeEventCardModel]()
-    @State private var loading = true
     @State private var showsCreator = false
 
     var body: some View {
         Group {
-            if loading {
-                ProgressView()
-                    .tint(C.watch)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 18)
-            } else if !events.isEmpty || canManage {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Events")
-                            .font(.title3.bold())
+            if canManage {
+                Button {
+                    showsCreator = true
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "calendar.badge.plus")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(C.watch)
+                        Text("Create an Event for this Vibe")
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(C.text)
                         Spacer()
-                        if canManage {
-                            Button {
-                                showsCreator = true
-                            } label: {
-                                Label("Create Event", systemImage: "calendar.badge.plus")
-                                    .font(.caption.bold())
-                                    .foregroundStyle(C.watch)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    if events.isEmpty {
-                        Text("Create the first online Event for this Vibe.")
-                            .font(.subheadline)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.bold))
                             .foregroundStyle(C.textMuted)
-                            .padding(.vertical, 8)
-                    } else {
-                        ForEach(events.prefix(3)) { event in
-                            NavigationLink(value: AppRoute.event(event.slug)) {
-                                VibeEventCardView(event: event)
-                            }
-                            .buttonStyle(.plain)
-                        }
                     }
+                    .padding(12)
+                    .background(C.surface)
+                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(C.borderSubtle))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .padding(.horizontal, C.pagePad)
             }
         }
-        .task(id: vibeSlug) { await load() }
         .sheet(isPresented: $showsCreator) {
             NavigationStack {
                 VibeEventCreatorView(onCreated: { _ in
                     showsCreator = false
-                    Task { await load() }
                 }, preselectedVibeSlug: vibeSlug)
             }
         }
-    }
-
-    @MainActor private func load() async {
-        loading = true
-        async let live = try? APIClient.shared.fetchVibeEvents(scope: "live", vibe: vibeSlug)
-        async let upcoming = try? APIClient.shared.fetchVibeEvents(scope: "upcoming", vibe: vibeSlug)
-        async let past = try? APIClient.shared.fetchVibeEvents(scope: "past", vibe: vibeSlug)
-        let combined = await ((live ?? []) + (upcoming ?? []) + (past ?? []))
-        var seen = Set<String>()
-        events = combined.filter { seen.insert($0.id).inserted }
-        loading = false
     }
 }
 
