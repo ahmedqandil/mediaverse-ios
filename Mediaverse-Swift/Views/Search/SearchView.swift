@@ -1144,6 +1144,7 @@ struct SearchView: View {
         case .event(let slug): VibeEventDetailView(slug: slug)
         case .eventInvite(let token): VibeEventInviteView(token: token)
         case .ripple(let postId): RippleDetailView(postId: postId)
+        case .flash(let storyId): FlashDeepLinkView(storyId: storyId)
         case .atmo(let handle): AtmoProfileView(handle: handle)
         case .search(let query): SearchView(initialQuery: query)
         }

@@ -1041,6 +1041,8 @@ struct MainTabView: View {
             VibeEventInviteView(token: token)
         case .ripple(let postId):
             RippleDetailView(postId: postId)
+        case .flash(let storyId):
+            FlashDeepLinkView(storyId: storyId)
         case .atmo(let handle):
             AtmoProfileView(handle: handle)
         case .search(let query):
@@ -1065,6 +1067,8 @@ struct MainTabView: View {
             return "collections"
         case .vibe, .vibeManagement, .vibeInvite, .ripple, .atmo:
             return "vibes"
+        case .flash:
+            return "stories"
         case .event, .eventInvite, .handoff, .playlist, .search:
             return nil
         }
@@ -1182,7 +1186,7 @@ private struct SystemTabBarHider: UIViewControllerRepresentable {
 private extension AppRoute {
     var prefersHiddenBottomChrome: Bool {
         switch self {
-        case .video, .episode, .microdramaWatch, .microdramaWatchEp:
+        case .video, .episode, .microdramaWatch, .microdramaWatchEp, .flash:
             return true
         case .short, .channel, .show, .showSeason, .showAccess, .handoff, .microdramaShow, .playlist, .collection,
              .vibe, .vibeManagement, .vibeInvite, .event, .eventInvite, .ripple, .atmo, .search:

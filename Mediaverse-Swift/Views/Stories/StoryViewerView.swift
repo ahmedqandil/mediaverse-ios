@@ -21,6 +21,7 @@ enum StoryInteractionNormalizer {
 struct StoryViewerView: View {
     @ObservedObject var repository: StoriesRepository
     let initialGroupId: String
+    var initialStoryId: String? = nil
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var inAppBrowser: InAppBrowserManager
@@ -571,10 +572,11 @@ struct StoryViewerView: View {
     }
 
     private func start() {
-        if let startIndex = groups.firstIndex(where: { $0.id == initialGroupId }) {
+        if !selectInitialStoryIfAvailable(),
+           let startIndex = groups.firstIndex(where: { $0.id == initialGroupId }) {
             groupIndex = startIndex
+            storyIndex = firstUnseenStoryIndex(in: currentGroup) ?? 0
         }
-        storyIndex = firstUnseenStoryIndex(in: currentGroup) ?? 0
         beginCurrentStory()
         startBackendRefreshLoop()
     }
@@ -606,8 +608,26 @@ struct StoryViewerView: View {
             return
         }
 
+        if selectInitialStoryIfAvailable() {
+            beginCurrentStory()
+            return
+        }
+
         clampIndexes()
         beginCurrentStory()
+    }
+
+    @discardableResult
+    private func selectInitialStoryIfAvailable() -> Bool {
+        guard let initialStoryId,
+              let targetGroupIndex = groups.firstIndex(where: { group in
+                  group.stories.contains { $0.id == initialStoryId }
+              }),
+              let targetStoryIndex = groups[targetGroupIndex].stories.firstIndex(where: { $0.id == initialStoryId })
+        else { return false }
+        groupIndex = targetGroupIndex
+        storyIndex = targetStoryIndex
+        return true
     }
 
     private func beginCurrentStory() {
@@ -1185,6 +1205,19 @@ struct StoryViewerView: View {
     private func openCTA(_ value: String?) {
         guard let value, let url = URL(string: value) else { return }
         inAppBrowser.open(url)
+    }
+}
+
+struct FlashDeepLinkView: View {
+    let storyId: String
+    @StateObject private var repository = StoriesRepository()
+
+    var body: some View {
+        StoryViewerView(
+            repository: repository,
+            initialGroupId: "",
+            initialStoryId: storyId
+        )
     }
 }
 

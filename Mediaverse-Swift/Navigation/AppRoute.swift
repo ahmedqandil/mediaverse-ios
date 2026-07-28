@@ -26,6 +26,7 @@ public enum AppRoute: Hashable, Identifiable {
         case .event(let s):            return "event_\(s)"
         case .eventInvite(let s):      return "eventInvite_\(s)"
         case .ripple(let s):           return "ripple_\(s)"
+        case .flash(let s):            return "flash_\(s)"
         case .atmo(let s):             return "atmo_\(s)"
         case .search(let s):           return "search_\(s)"
         }
@@ -49,6 +50,7 @@ public enum AppRoute: Hashable, Identifiable {
     case event(String)              // Vibe Event slug
     case eventInvite(String)        // opaque Vibe Event invitation token
     case ripple(String)             // Ripple id
+    case flash(String)              // Flash/story id
     case atmo(String)               // user handle
     case search(String)             // prefilled native search query
 }
@@ -65,6 +67,7 @@ extension AppRoute {
         let type = stringValue(for: ["type", "contentType", "content_type", "mediaType", "media_type", "kind"], in: userInfo)
         let showId = stringValue(for: ["showId", "show_id", "targetShowId", "target_show_id"], in: userInfo)
         let channelId = stringValue(for: ["channelId", "channel_id", "targetChannelId", "target_channel_id"], in: userInfo)
+        let normalizedType = type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
         if let id = stringValue(for: ["shortId", "short_id", "targetShortId", "target_short_id"], in: userInfo) {
             return .short(id, showId: showId, channelId: channelId)
@@ -81,8 +84,35 @@ extension AppRoute {
             }
             return .microdramaShow(id)
         }
+        if let id = stringValue(for: ["rippleId", "ripple_id", "postId", "post_id", "fanClubPostId", "fan_club_post_id", "targetRippleId", "target_ripple_id"], in: userInfo) {
+            return .ripple(id)
+        }
+        if let id = stringValue(for: ["storyId", "story_id", "flashId", "flash_id", "targetStoryId", "target_story_id"], in: userInfo) {
+            return .flash(id)
+        }
+        if let token = stringValue(for: ["eventInviteToken", "event_invite_token"], in: userInfo) {
+            return .eventInvite(token)
+        }
+        if let token = stringValue(for: ["vibeInviteToken", "vibe_invite_token", "fanClubInviteToken", "fan_club_invite_token"], in: userInfo) {
+            return .vibeInvite(token)
+        }
+        if let token = stringValue(for: ["inviteToken", "invite_token"], in: userInfo) {
+            return normalizedType?.contains("event") == true ? .eventInvite(token) : .vibeInvite(token)
+        }
+        if let slug = stringValue(for: ["eventSlug", "event_slug", "targetEventSlug", "target_event_slug"], in: userInfo) {
+            return .event(slug)
+        }
+        if let slug = stringValue(for: ["vibeSlug", "vibe_slug", "clubSlug", "club_slug", "fanClubSlug", "fan_club_slug", "targetVibeSlug", "target_vibe_slug"], in: userInfo) {
+            if normalizedType?.contains("affiliation") == true || normalizedType?.contains("moderation") == true || normalizedType?.contains("join") == true {
+                let tab = normalizedType?.contains("affiliation") == true ? "affiliations" : normalizedType?.contains("join") == true ? "requests" : "moderation"
+                return .vibeManagement(slug: slug, tab: tab)
+            }
+            return .vibe(slug)
+        }
+        if let handle = stringValue(for: ["atmoHandle", "atmo_handle", "userHandle", "user_handle", "profileHandle", "profile_handle"], in: userInfo) {
+            return .atmo(handle.removingPrefix("@"))
+        }
         if let id = showId {
-            let normalizedType = type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             return normalizedType?.contains("micro") == true ? .microdramaShow(id) : .show(id)
         }
         if let id = stringValue(for: ["channelHandle", "channel_handle", "targetChannelHandle", "target_channel_handle", "channelId", "channel_id", "targetChannelId", "target_channel_id"], in: userInfo) {
@@ -123,6 +153,21 @@ extension AppRoute {
         let queryEpisodeNumber = queryValue(["episodeNumber", "episode_number", "ep"], in: queryItems).flatMap(Int.init)
         let looksLikeShort = notificationType?.lowercased().contains("short") == true || queryType?.lowercased() == "short"
 
+        if let id = queryValue(["rippleId", "ripple_id", "postId", "post_id", "fanClubPostId", "fan_club_post_id"], in: queryItems) {
+            return .ripple(id)
+        }
+        if let id = queryValue(["storyId", "story_id", "flashId", "flash_id"], in: queryItems) {
+            return .flash(id)
+        }
+        if let slug = queryValue(["eventSlug", "event_slug"], in: queryItems) {
+            return .event(slug)
+        }
+        if let slug = queryValue(["vibeSlug", "vibe_slug", "clubSlug", "club_slug", "fanClubSlug", "fan_club_slug"], in: queryItems) {
+            return .vibe(slug)
+        }
+        if let handle = queryValue(["atmoHandle", "atmo_handle", "userHandle", "user_handle"], in: queryItems) {
+            return .atmo(handle.removingPrefix("@"))
+        }
         if let id = queryValue(["shortId", "short_id"], in: queryItems) {
             return .short(id, showId: queryShowId, channelId: queryChannelId)
         }
@@ -156,16 +201,26 @@ extension AppRoute {
         if parts.count >= 2, parts[0] == "collections" { return .collection(parts[1]) }
         if parts.count >= 2, parts[0] == "collection" { return .collection(parts[1]) }
         if parts.count >= 3, parts[0] == "vibes", parts[1] == "invite" { return .vibeInvite(parts[2]) }
+        if parts.count >= 3, ["fan-clubs", "fanclubs", "clubs"].contains(parts[0]), parts[1] == "invite" { return .vibeInvite(parts[2]) }
         if parts.count >= 3, parts[0] == "events", parts[1] == "invite" { return .eventInvite(parts[2]) }
+        if parts.count >= 3, ["vibe-events", "vibe_event"].contains(parts[0]), parts[1] == "invite" { return .eventInvite(parts[2]) }
         if parts.count >= 2, parts[0] == "events" { return .event(parts[1]) }
+        if parts.count >= 2, ["event", "vibe-events", "vibe_event"].contains(parts[0]) { return .event(parts[1]) }
         if parts.count >= 4, parts[0] == "vibes", parts[2] == "posts" { return .ripple(parts[3]) }
+        if parts.count >= 4, ["fan-clubs", "fanclubs", "clubs"].contains(parts[0]), ["posts", "ripples"].contains(parts[2]) { return .ripple(parts[3]) }
         if parts.count >= 3, parts[0] == "vibes", parts[2] == "manage" {
             let tab = queryValue(["tab"], in: queryItems) ?? "settings"
             return .vibeManagement(slug: parts[1], tab: tab)
         }
+        if parts.count >= 3, ["fan-clubs", "fanclubs", "clubs"].contains(parts[0]), parts[2] == "manage" {
+            let tab = queryValue(["tab"], in: queryItems) ?? "settings"
+            return .vibeManagement(slug: parts[1], tab: tab)
+        }
         if parts.count >= 2, parts[0] == "vibes" { return .vibe(parts[1]) }
-        if parts.count >= 2, parts[0] == "atmo" { return .atmo(parts[1]) }
-        if parts.count >= 2, parts[0] == "ripples" { return .ripple(parts[1]) }
+        if parts.count >= 2, ["vibe", "fan-clubs", "fanclubs", "clubs"].contains(parts[0]) { return .vibe(parts[1]) }
+        if parts.count >= 2, ["atmo", "atmosphere", "glow", "u"].contains(parts[0]) { return .atmo(parts[1].removingPrefix("@")) }
+        if parts.count >= 2, ["ripples", "ripple", "posts"].contains(parts[0]) { return .ripple(parts[1]) }
+        if parts.count >= 2, ["stories", "story", "flashes", "flash"].contains(parts[0]) { return .flash(parts[1]) }
         if parts.first == "discover",
            let topic = queryValue(["topic", "q", "query"], in: queryItems) {
             return .search(topic)
@@ -224,5 +279,11 @@ extension AppRoute {
             }
         }
         return nil
+    }
+}
+
+private extension String {
+    func removingPrefix(_ prefix: Character) -> String {
+        first == prefix ? String(dropFirst()) : self
     }
 }

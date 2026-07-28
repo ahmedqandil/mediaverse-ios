@@ -66,6 +66,38 @@ final class AppRouteContractTests: XCTestCase {
             AppRoute.route(link: "/vibes/cinema/manage?tab=requests"),
             .vibeManagement(slug: "cinema", tab: "requests")
         )
+        XCTAssertEqual(AppRoute.route(link: "westreem://vibe/cinema"), .vibe("cinema"))
+        XCTAssertEqual(AppRoute.route(link: "/fan-clubs/cinema/posts/ripple-9"), .ripple("ripple-9"))
+        XCTAssertEqual(AppRoute.route(link: "/glow/@ahmed"), .atmo("ahmed"))
+        XCTAssertEqual(AppRoute.route(link: "westreem://event/premiere-night"), .event("premiere-night"))
+        XCTAssertEqual(AppRoute.route(link: "/stories/flash-12"), .flash("flash-12"))
+    }
+
+    func testSocialNotificationIdentifiersResolveWithoutFullURL() {
+        XCTAssertEqual(
+            AppRoute.notificationRoute(userInfo: ["type": "ripple_energy", "ripple_id": "ripple-11"]),
+            .ripple("ripple-11")
+        )
+        XCTAssertEqual(
+            AppRoute.notificationRoute(userInfo: ["type": "vibe_affiliation_approved", "vibe_slug": "cinema"]),
+            .vibeManagement(slug: "cinema", tab: "affiliations")
+        )
+        XCTAssertEqual(
+            AppRoute.notificationRoute(userInfo: ["type": "vibe_join_request", "club_slug": "cinema"]),
+            .vibeManagement(slug: "cinema", tab: "requests")
+        )
+        XCTAssertEqual(
+            AppRoute.notificationRoute(userInfo: ["type": "vibe_event_invite", "event_invite_token": "secret"]),
+            .eventInvite("secret")
+        )
+        XCTAssertEqual(
+            AppRoute.notificationRoute(userInfo: ["type": "mention", "user_handle": "@ahmed"]),
+            .atmo("ahmed")
+        )
+        XCTAssertEqual(
+            AppRoute.notificationRoute(userInfo: ["type": "flash_energy", "story_id": "flash-12"]),
+            .flash("flash-12")
+        )
     }
 
     func testNotificationPayloadPrecedence() {
