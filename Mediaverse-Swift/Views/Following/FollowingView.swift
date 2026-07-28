@@ -23,6 +23,21 @@ struct FollowingView: View {
         self.isBrowseActive = isBrowseActive
     }
     private var pageConfig: PlatformBrowseItem { platformConfig.browseItem(id: "following") }
+    private var visibleTabs: [Tab] {
+        Tab.allCases.filter { tab in
+            switch tab {
+            case .videos:
+                platformConfig.isEnabled("videos", aspect: .feed)
+            case .shorts:
+                platformConfig.isEnabled("shorts", aspect: .feed)
+            case .episodes:
+                platformConfig.hasVisibleEpisodeTypes
+            }
+        }
+    }
+    private var activeTab: Tab {
+        visibleTabs.contains(selectedTab) ? selectedTab : (visibleTabs.first ?? .videos)
+    }
 
     private var videos:   [FollowingFeedItem] { items.filter { $0._kind != "episode" && $0.type != "short" } }
     private var shorts:   [FollowingFeedItem] { items.filter { $0._kind != "episode" && $0.type == "short" } }
@@ -87,14 +102,14 @@ struct FollowingView: View {
 
     private var tabBar: some View {
         MediaverseUnderlineTabStrip(
-            items: Tab.allCases.map { tab in
+            items: visibleTabs.map { tab in
                 MediaverseTabItem(id: tab.id, label: tab.label, count: tabItems(tab).count)
             },
-            selectedID: selectedTab.id,
+            selectedID: activeTab.id,
             fillsWidth: true,
             background: C.surface
         ) { id in
-            guard let tab = Tab.allCases.first(where: { $0.id == id }) else { return }
+            guard let tab = visibleTabs.first(where: { $0.id == id }) else { return }
             selectedTab = tab
         }
     }
@@ -103,11 +118,11 @@ struct FollowingView: View {
 
     @ViewBuilder
     private var tabContent: some View {
-        let current = tabItems(selectedTab)
+        let current = tabItems(activeTab)
         if current.isEmpty {
-            emptyForTab(selectedTab)
+            emptyForTab(activeTab)
         } else {
-            switch selectedTab {
+            switch activeTab {
             case .videos:
                 videoGrid(current)
             case .shorts:

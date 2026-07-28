@@ -28,6 +28,12 @@ final class PlatformConfigManager: ObservableObject {
         browseItem(id: id).isEnabled(aspect)
     }
 
+    var hasVisibleEpisodeTypes: Bool {
+        ["shows", "movies", "microdramas"].contains {
+            isEnabled($0, aspect: .feed) && isEnabled($0, aspect: .page)
+        }
+    }
+
     func refresh() async {
         do {
             config = try await APIClient.shared.fetchPlatformConfig()
