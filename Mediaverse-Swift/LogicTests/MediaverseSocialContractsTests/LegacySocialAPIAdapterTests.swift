@@ -74,6 +74,55 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         XCTAssertEqual(payload["allowPhotos"] as? Bool, false)
     }
 
+    func testRulesQuestionsAndResourcesUseCanonicalSpecializationEndpoints() async throws {
+        let rulesPath = "/api/fan-clubs/cinema/rules"
+        let bookmarkPath = "/api/fan-club-posts/resource-1/bookmark"
+        let answerPath = "/api/fan-club-posts/question-1/accepted-answer"
+        let transport = SocialTransportStub(responses: [
+            rulesPath: #"{"rules":[{"id":"rule-1","title":"Be kind","description":"Respect people","enabled":true}]}"#,
+            bookmarkPath: #"{"bookmarked":true}"#,
+            "PATCH \(answerPath)": #"{"acceptedAnswerId":"comment-1","questionStatus":"ANSWERED"}"#,
+        ])
+        let adapter = LegacySocialAPIAdapter(transport: transport)
+
+        let rules = try await adapter.vibeRules(slug: "cinema")
+        let bookmarked = try await adapter.setResourceBookmarked(postId: "resource-1", bookmarked: true)
+        let answer = try await adapter.acceptQuestionAnswer(postId: "question-1", commentId: "comment-1")
+
+        XCTAssertEqual(rules.rules.first?.title, "Be kind")
+        XCTAssertTrue(bookmarked)
+        XCTAssertEqual(answer.questionStatus, "ANSWERED")
+        let requestPaths = await transport.paths
+        let mutationPaths = await transport.postPaths
+        XCTAssertEqual(requestPaths, [rulesPath])
+        XCTAssertEqual(mutationPaths, [bookmarkPath, "PATCH \(answerPath)"])
+        let bodies = await transport.postBodies
+        let answerBody = try XCTUnwrap(JSONSerialization.jsonObject(with: bodies.last!) as? [String: Any])
+        XCTAssertEqual(answerBody["commentId"] as? String, "comment-1")
+    }
+
+    func testResourceRippleCreationIncludesRequiredCategory() async throws {
+        let path = "/api/fan-clubs/cinema/posts"
+        let transport = SocialTransportStub(responses: [
+            path: #"{"post":{"id":"r1","clubId":"v1","createdAt":"2026-07-28T00:00:00Z","author":{"id":"u1"}}}"#
+        ])
+        let adapter = LegacySocialAPIAdapter(transport: transport)
+
+        _ = try await adapter.createRipple(
+            inVibe: "cinema",
+            body: "Useful guide",
+            attachments: [.link(externalURL: "https://example.com")],
+            waveId: "resources-wave",
+            resourceCategory: "Guides"
+        )
+
+        let bodies = await transport.postBodies
+        let body = try XCTUnwrap(bodies.last)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(payload["waveId"] as? String, "resources-wave")
+        XCTAssertEqual(payload["resourceCategory"] as? String, "Guides")
+    }
+
     func testAtmosphereUsesFrozenBareArrayEndpointAndFiltersWebExcludedMedia() async throws {
         let transport = SocialTransportStub(responses: [
             "/api/subscriptions/feed": """

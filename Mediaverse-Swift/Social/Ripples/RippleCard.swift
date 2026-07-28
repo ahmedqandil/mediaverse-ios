@@ -130,6 +130,9 @@ struct RippleCard: View {
     @State private var editedSpoiler: Bool?
     @State private var editedCommentsDisabled: Bool?
     @State private var displayedCommentCount: Int
+    @State private var isResourceBookmarked: Bool
+    @State private var isUpdatingResourceBookmark = false
+    @State private var specializedError: String?
 
     init(
         ripple: Ripple,
@@ -153,6 +156,7 @@ struct RippleCard: View {
         self.onVideoHandoff = onVideoHandoff
         _engagement = StateObject(wrappedValue: RippleEngagementController(ripple: ripple))
         _displayedCommentCount = State(initialValue: ripple.commentCount)
+        _isResourceBookmarked = State(initialValue: ripple.bookmarked)
     }
 
     var body: some View {
@@ -195,6 +199,12 @@ struct RippleCard: View {
                 ) { optionIds in
                     Task { await engagement.vote(optionIds: optionIds) }
                 }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+            }
+
+            if ripple.wave?.type == .questions || ripple.wave?.type == .resources {
+                specializedWaveMetadata
                     .padding(.horizontal, 12)
                     .padding(.top, 10)
             }
@@ -326,6 +336,83 @@ struct RippleCard: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(engagement.errorMessage ?? "")
+        }
+        .alert(
+            "Resource update failed",
+            isPresented: Binding(
+                get: { specializedError != nil },
+                set: { if !$0 { specializedError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(specializedError ?? "")
+        }
+    }
+
+    @ViewBuilder
+    private var specializedWaveMetadata: some View {
+        if ripple.wave?.type == .questions {
+            HStack(spacing: 8) {
+                Image(systemName: ripple.questionStatus == "ANSWERED"
+                    ? "checkmark.seal.fill"
+                    : "questionmark.bubble.fill")
+                Text(ripple.questionStatus == "ANSWERED" ? "Answered Question" : "Open Question")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+            }
+            .foregroundStyle(ripple.questionStatus == "ANSWERED" ? Color.green : C.watch)
+            .padding(.horizontal, 11)
+            .frame(height: 36)
+            .background((ripple.questionStatus == "ANSWERED" ? Color.green : C.watch).opacity(0.11))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .accessibilityLabel(ripple.questionStatus == "ANSWERED" ? "Answered Question" : "Open Question")
+        } else if ripple.wave?.type == .resources {
+            HStack(spacing: 9) {
+                Image(systemName: "folder")
+                    .foregroundStyle(C.watch)
+                Text(ripple.resourceCategory ?? "Resource")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(C.textMuted)
+                    .lineLimit(1)
+                Spacer()
+                if allowsEngagement {
+                    Button {
+                        Task { await toggleResourceBookmark() }
+                    } label: {
+                        Label(
+                            isResourceBookmarked ? "Saved" : "Save",
+                            systemImage: isResourceBookmarked ? "bookmark.fill" : "bookmark"
+                        )
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(isResourceBookmarked ? C.watch : C.text)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isUpdatingResourceBookmark)
+                    .accessibilityLabel(isResourceBookmarked ? "Remove Resource bookmark" : "Bookmark Resource")
+                }
+            }
+            .padding(.horizontal, 11)
+            .frame(height: 38)
+            .background(C.elevated.opacity(0.72))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    @MainActor
+    private func toggleResourceBookmark() async {
+        guard !isUpdatingResourceBookmark else { return }
+        isUpdatingResourceBookmark = true
+        defer { isUpdatingResourceBookmark = false }
+        do {
+            isResourceBookmarked = try await LegacySocialAPIAdapter(
+                transport: APIClient.shared
+            ).setResourceBookmarked(
+                postId: ripple.id,
+                bookmarked: !isResourceBookmarked
+            )
+        } catch {
+            specializedError = socialErrorMessage(error)
         }
     }
 

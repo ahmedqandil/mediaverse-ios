@@ -154,6 +154,13 @@ public actor LegacySocialAPIAdapter {
         ).waves
     }
 
+    public func vibeRules(slug: String) async throws -> VibeRulesResponse {
+        try await decode(
+            VibeRulesResponse.self,
+            path: "/api/fan-clubs/\(try segment(slug))/rules"
+        )
+    }
+
     public func createVibeWave(vibeSlug: String, settings: VibeWaveSettings) async throws {
         _ = try await transport.socialPostData(
             path: "/api/fan-clubs/\(try segment(vibeSlug))/waves",
@@ -677,7 +684,8 @@ public actor LegacySocialAPIAdapter {
         poll: RipplePollDraft? = nil,
         isSpoiler: Bool = false,
         commentsDisabled: Bool = false,
-        waveId: String? = nil
+        waveId: String? = nil,
+        resourceCategory: String? = nil
     ) async throws -> Ripple {
         let trimmedBody = body?.trimmingCharacters(in: .whitespacesAndNewlines)
         let request = CreateRippleRequest(
@@ -686,13 +694,37 @@ public actor LegacySocialAPIAdapter {
             commentsDisabled: commentsDisabled,
             attachments: attachments,
             poll: poll,
-            waveId: waveId
+            waveId: waveId,
+            resourceCategory: nonempty(resourceCategory)
         )
         return try await post(
             CreateRippleResponse.self,
             path: "/api/fan-clubs/\(try segment(slug))/posts",
             body: try JSONEncoder().encode(request)
         ).post
+    }
+
+    public func setResourceBookmarked(postId: String, bookmarked: Bool) async throws -> Bool {
+        let path = "/api/fan-club-posts/\(try segment(postId))/bookmark"
+        let data = bookmarked
+            ? try await transport.socialPostData(path: path, body: Data("{}".utf8))
+            : try await transport.socialDeleteData(path: path)
+        return try decoder.decode(RippleBookmarkResponse.self, from: data).bookmarked
+    }
+
+    public func acceptQuestionAnswer(postId: String, commentId: String) async throws -> AcceptedAnswerResponse {
+        let data = try await transport.socialPatchData(
+            path: "/api/fan-club-posts/\(try segment(postId))/accepted-answer",
+            body: try JSONEncoder().encode(AcceptedAnswerRequest(commentId: commentId))
+        )
+        return try decoder.decode(AcceptedAnswerResponse.self, from: data)
+    }
+
+    public func reopenQuestion(postId: String) async throws -> AcceptedAnswerResponse {
+        let data = try await transport.socialDeleteData(
+            path: "/api/fan-club-posts/\(try segment(postId))/accepted-answer"
+        )
+        return try decoder.decode(AcceptedAnswerResponse.self, from: data)
     }
 
     public func setRipplePinned(postId: String, pinned: Bool) async throws -> RipplePinMutation.Post {
@@ -1036,6 +1068,11 @@ private struct CreateRippleRequest: Encodable {
     let attachments: [RippleCreateAttachment]
     let poll: RipplePollDraft?
     let waveId: String?
+    let resourceCategory: String?
+}
+
+private struct AcceptedAnswerRequest: Encodable {
+    let commentId: String
 }
 
 private struct WaveNotificationSettingsRequest: Encodable {

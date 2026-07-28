@@ -613,6 +613,40 @@ public struct VibeWavesResponse: Decodable, Sendable {
     public let waves: [VibeWave]
 }
 
+public struct VibeRule: Decodable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let title: String
+    public let description: String
+    public let position: Int
+    public let enabled: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, description, position, enabled
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        title = try values.decodeIfPresent(String.self, forKey: .title) ?? "Rule"
+        description = try values.decodeIfPresent(String.self, forKey: .description) ?? ""
+        position = try values.decodeIfPresent(Int.self, forKey: .position) ?? 0
+        enabled = try values.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+    }
+}
+
+public struct VibeRulesResponse: Decodable, Sendable {
+    public let rules: [VibeRule]
+    public let rolloutPending: Bool
+
+    private enum CodingKeys: String, CodingKey { case rules, rolloutPending }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        rules = try values.decodeIfPresent([VibeRule].self, forKey: .rules) ?? []
+        rolloutPending = try values.decodeIfPresent(Bool.self, forKey: .rolloutPending) ?? false
+    }
+}
+
 public struct VibeWaveSettings: Encodable, Sendable {
     public let name: String
     public let slug: String
@@ -734,12 +768,19 @@ public struct Ripple: Decodable, Identifiable, Sendable {
     public let author: RippleAuthor
     public let attachments: [RippleAttachment]
     public let poll: RipplePoll?
+    public let wave: RippleWaveIdentity?
+    public let questionStatus: String?
+    public let acceptedAnswerId: String?
+    public let acceptedAnswerAt: String?
+    public let resourceCategory: String?
+    public let bookmarked: Bool
 
     enum CodingKeys: String, CodingKey {
         case id, clubId, club, body, status, isSpoiler, commentsDisabled
         case likeCount, commentCount, shareCount, echoCount
         case energyCount, energyTotal, energyTags
-        case pinnedAt, publishedAt, createdAt, liked, author, attachments, poll
+        case pinnedAt, publishedAt, createdAt, liked, author, attachments, poll, wave
+        case questionStatus, acceptedAnswerId, acceptedAnswerAt, resourceCategory, bookmarked
     }
 
     public init(from decoder: Decoder) throws {
@@ -765,7 +806,29 @@ public struct Ripple: Decodable, Identifiable, Sendable {
         author = try values.decode(RippleAuthor.self, forKey: .author)
         attachments = try values.decodeIfPresent([RippleAttachment].self, forKey: .attachments) ?? []
         poll = try values.decodeIfPresent(RipplePoll.self, forKey: .poll)
+        wave = try values.decodeIfPresent(RippleWaveIdentity.self, forKey: .wave)
+        questionStatus = try values.decodeIfPresent(String.self, forKey: .questionStatus)
+        acceptedAnswerId = try values.decodeIfPresent(String.self, forKey: .acceptedAnswerId)
+        acceptedAnswerAt = try values.decodeIfPresent(String.self, forKey: .acceptedAnswerAt)
+        resourceCategory = try values.decodeIfPresent(String.self, forKey: .resourceCategory)
+        bookmarked = try values.decodeIfPresent(Bool.self, forKey: .bookmarked) ?? false
     }
+}
+
+public struct RippleWaveIdentity: Decodable, Equatable, Sendable {
+    public let id: String
+    public let slug: String
+    public let name: String
+    public let type: VibeWaveType
+}
+
+public struct RippleBookmarkResponse: Decodable, Equatable, Sendable {
+    public let bookmarked: Bool
+}
+
+public struct AcceptedAnswerResponse: Decodable, Equatable, Sendable {
+    public let acceptedAnswerId: String?
+    public let questionStatus: String
 }
 
 public struct RipplePinMutation: Decodable, Sendable {

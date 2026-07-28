@@ -13,6 +13,7 @@ struct VibeDetailView: View {
         case moderation
         case invitations
         case waves
+        case rules
         case settings
         case composer
 
@@ -179,6 +180,8 @@ struct VibeDetailView: View {
                 VibeWavesManagementView(vibeSlug: slug) {
                     Task { await load() }
                 }
+            case .rules:
+                VibeRulesView(vibeSlug: slug)
             case .settings:
                 if let detail {
                     VibeSettingsView(detail: detail) { updatedClub in
@@ -352,6 +355,20 @@ struct VibeDetailView: View {
                 ForEach(waves) { wave in
                     waveTab(title: wave.name, slug: wave.slug, systemImage: waveSystemImage(wave))
                 }
+                Button {
+                    activeSheet = .rules
+                } label: {
+                    Label("Rules", systemImage: "list.bullet.clipboard")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(C.text)
+                        .padding(.horizontal, 14)
+                        .frame(height: 38)
+                        .background(C.surface)
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(C.borderSubtle))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("View Vibe Rules")
             }
             .padding(.horizontal, C.pagePad)
         }
@@ -541,6 +558,94 @@ struct VibeDetailView: View {
         activeSheet = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
             activeSheet = destination
+        }
+    }
+}
+
+private struct VibeRulesView: View {
+    let vibeSlug: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var response: VibeRulesResponse?
+    @State private var errorMessage: String?
+    private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let response {
+                    if response.rolloutPending {
+                        ContentUnavailableView(
+                            "Rules are being prepared",
+                            systemImage: "clock.badge",
+                            description: Text("This Vibe’s structured Rules are not available on this server yet.")
+                        )
+                    } else if response.rules.isEmpty {
+                        ContentUnavailableView(
+                            "No Rules published",
+                            systemImage: "list.bullet.clipboard",
+                            description: Text("This Vibe has not published structured community Rules.")
+                        )
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                ForEach(Array(response.rules.enumerated()), id: \.element.id) { index, rule in
+                                    HStack(alignment: .top, spacing: 12) {
+                                        Text("\(index + 1)")
+                                            .font(.caption.bold())
+                                            .foregroundStyle(C.bg)
+                                            .frame(width: 28, height: 28)
+                                            .background(C.watch, in: Circle())
+                                        VStack(alignment: .leading, spacing: 5) {
+                                            Text(rule.title)
+                                                .font(.headline)
+                                                .foregroundStyle(C.text)
+                                            Text(rule.description)
+                                                .font(.subheadline)
+                                                .foregroundStyle(C.textMuted)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                        Spacer(minLength: 0)
+                                    }
+                                    .padding(16)
+                                    .background(C.surface)
+                                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(C.borderSubtle))
+                                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                                }
+                            }
+                            .padding(C.pagePad)
+                        }
+                    }
+                } else if let errorMessage {
+                    SocialUnavailable(
+                        title: "Rules couldn’t load",
+                        message: errorMessage,
+                        retry: { Task { await load() } }
+                    )
+                } else {
+                    ProgressView("Loading Rules…").tint(C.watch)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(C.bg.ignoresSafeArea())
+            .navigationTitle("Vibe Rules")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .task(id: vibeSlug) { await load() }
+    }
+
+    @MainActor
+    private func load() async {
+        response = nil
+        errorMessage = nil
+        do {
+            response = try await api.vibeRules(slug: vibeSlug)
+        } catch {
+            errorMessage = socialErrorMessage(error)
         }
     }
 }

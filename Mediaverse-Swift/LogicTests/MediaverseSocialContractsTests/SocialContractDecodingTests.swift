@@ -50,6 +50,59 @@ final class SocialContractDecodingTests: XCTestCase {
         XCTAssertEqual(partial._count?.events, 0)
     }
 
+    func testStructuredRulesFailClosedForOmittedAdditiveFields() throws {
+        let response = try decoder.decode(
+            VibeRulesResponse.self,
+            from: Data(
+                """
+                {"rules":[
+                  {"id":"r1","title":"Be kind","description":"Respect everyone.","position":2,"enabled":true},
+                  {"id":"r2"}
+                ],"futurePolicy":"server-owned"}
+                """.utf8
+            )
+        )
+
+        XCTAssertFalse(response.rolloutPending)
+        XCTAssertEqual(response.rules.count, 2)
+        XCTAssertEqual(response.rules[0].title, "Be kind")
+        XCTAssertTrue(response.rules[0].enabled)
+        XCTAssertEqual(response.rules[1].title, "Rule")
+        XCTAssertFalse(response.rules[1].enabled)
+
+        let pending = try decoder.decode(
+            VibeRulesResponse.self,
+            from: Data(#"{"rolloutPending":true}"#.utf8)
+        )
+        XCTAssertTrue(pending.rolloutPending)
+        XCTAssertTrue(pending.rules.isEmpty)
+    }
+
+    func testQuestionAndResourceRippleFieldsAreAdditive() throws {
+        let response = try decoder.decode(
+            RipplePageResponse.self,
+            from: Data(
+                """
+                {"posts":[
+                  {"id":"q1","clubId":"v1","createdAt":"2026-07-28T00:00:00Z",
+                   "author":{"id":"u1"},"questionStatus":"ANSWERED","acceptedAnswerId":"c1",
+                   "wave":{"id":"wq","slug":"questions","name":"Questions","type":"QUESTIONS"}},
+                  {"id":"r1","clubId":"v1","createdAt":"2026-07-28T00:00:01Z",
+                   "author":{"id":"u1"},"resourceCategory":"Guides","bookmarked":true,
+                   "wave":{"id":"wr","slug":"resources","name":"Resources","type":"RESOURCES"}}
+                ],"nextCursor":null,"resourceCategories":["Guides"],"futureSpecialization":true}
+                """.utf8
+            )
+        )
+
+        XCTAssertEqual(response.posts[0].wave?.type, .questions)
+        XCTAssertEqual(response.posts[0].questionStatus, "ANSWERED")
+        XCTAssertEqual(response.posts[0].acceptedAnswerId, "c1")
+        XCTAssertEqual(response.posts[1].wave?.type, .resources)
+        XCTAssertEqual(response.posts[1].resourceCategory, "Guides")
+        XCTAssertTrue(response.posts[1].bookmarked)
+    }
+
     func testWaveNotificationSettingsDefaultToInheritedDelivery() throws {
         let subscription = try decoder.decode(
             VibeWaveSubscription.self,

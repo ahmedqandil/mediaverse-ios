@@ -25,6 +25,7 @@ struct RippleComposer: View {
     @State private var bodyText = ""
     @State private var isSpoiler = false
     @State private var commentsDisabled = false
+    @State private var resourceCategory = ""
     @State private var pollOpen = false
     @State private var pollQuestion = ""
     @State private var pollOptions = ["", "", "", ""]
@@ -95,6 +96,20 @@ struct RippleComposer: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .zIndex(10)
+
+            if isResourceWave {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Resource category", systemImage: "bookmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(C.textMuted)
+                    TextField("Guide, Tool, Reference…", text: $resourceCategory)
+                        .textInputAutocapitalization(.words)
+                        .westreemField()
+                    Text("A Resource needs both a category and a pasted link.")
+                        .font(.caption2)
+                        .foregroundStyle(C.textTertiary)
+                }
+            }
 
             if isResolving || attachment != nil {
                 attachmentPreview
@@ -298,7 +313,18 @@ struct RippleComposer: View {
     private var canPublish: Bool {
         let hasBody = !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasPoll = pollDraft != nil
-        return hasBody || attachment != nil || !photos.isEmpty || hasPoll
+        let hasContent = hasBody || attachment != nil || !photos.isEmpty || hasPoll
+        if isResourceWave {
+            return hasContent
+                && !resourceCategory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && attachment != nil
+        }
+        return hasContent
+    }
+
+    private var isResourceWave: Bool {
+        if case .wave(_, _, let wave) = destination { return wave.type == .resources }
+        return false
     }
 
     private var pollDraft: RipplePollDraft? {
@@ -694,7 +720,8 @@ struct RippleComposer: View {
                 poll: pollDraft,
                 isSpoiler: isSpoiler,
                 commentsDisabled: commentsDisabled,
-                waveId: waveId
+                waveId: waveId,
+                resourceCategory: isResourceWave ? resourceCategory : nil
             )
             reset()
             notice = created.status == "PENDING_REVIEW"
@@ -711,6 +738,7 @@ struct RippleComposer: View {
         bodyText = ""
         isSpoiler = false
         commentsDisabled = false
+        resourceCategory = ""
         pollOpen = false
         pollQuestion = ""
         pollOptions = ["", "", "", ""]
