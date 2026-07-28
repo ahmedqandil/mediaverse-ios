@@ -635,6 +635,20 @@ public struct VibeWaveSubscription: Codable, Equatable, Sendable {
     public let emailEnabled: Bool
     public let lastReadAt: String?
     public let inherited: Bool?
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        notificationLevel = try values.decodeIfPresent(String.self, forKey: .notificationLevel) ?? "INHERIT"
+        pushEnabled = try values.decodeIfPresent(Bool.self, forKey: .pushEnabled) ?? true
+        emailEnabled = try values.decodeIfPresent(Bool.self, forKey: .emailEnabled) ?? false
+        lastReadAt = try values.decodeIfPresent(String.self, forKey: .lastReadAt)
+        inherited = try values.decodeIfPresent(Bool.self, forKey: .inherited)
+    }
+
+    /// Resolves the Wave override without guessing a server-side Vibe value.
+    public func effectiveNotificationLevel(inheriting parentLevel: String) -> String {
+        notificationLevel == "INHERIT" ? parentLevel : notificationLevel
+    }
 }
 
 public struct VibeWaveNotificationSettingsResponse: Decodable, Sendable {

@@ -7,7 +7,8 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .library(name: "MediaverseRouting", targets: ["MediaverseRouting"]),
-        .library(name: "MediaverseSocialContracts", targets: ["MediaverseSocialContracts"])
+        .library(name: "MediaverseSocialContracts", targets: ["MediaverseSocialContracts"]),
+        .library(name: "MediaverseEventContracts", targets: ["MediaverseEventContracts"])
     ],
     targets: [
         .target(
@@ -19,6 +20,12 @@ let package = Package(
             name: "MediaverseSocialContracts",
             path: "Social/Contracts"
         ),
+        .target(
+            name: "MediaverseEventContracts",
+            path: "Social/Events",
+            exclude: ["VibeEventsViews.swift"],
+            sources: ["VibeEventModels.swift"]
+        ),
         .testTarget(
             name: "MediaverseRoutingTests",
             dependencies: ["MediaverseRouting"],
@@ -28,6 +35,12 @@ let package = Package(
             name: "MediaverseSocialContractsTests",
             dependencies: ["MediaverseSocialContracts"],
             path: "LogicTests/MediaverseSocialContractsTests"
+        ),
+        .testTarget(
+            name: "MediaverseEventContractsTests",
+            dependencies: ["MediaverseEventContracts"],
+            path: "LogicTests/MediaverseEventContractsTests",
+            resources: [.copy("Fixtures")]
         )
     ]
 )

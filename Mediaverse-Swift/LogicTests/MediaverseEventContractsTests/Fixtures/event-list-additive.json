@@ -1,0 +1,11 @@
+{
+  "events": [{
+    "id": "event-1",
+    "slug": "summer-screening",
+    "title": "Summer Screening",
+    "startsAt": "2026-08-01T18:00:00Z",
+    "club": {"id": "vibe-1", "slug": "cinema", "name": "Cinema", "avatarUrl": null},
+    "futureServerField": {"version": 2}
+  }],
+  "futurePageMetadata": true
+}

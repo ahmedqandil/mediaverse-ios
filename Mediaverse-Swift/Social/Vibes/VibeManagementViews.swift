@@ -646,7 +646,12 @@ private struct VibeWaveEditorView: View {
                     Toggle("Echoes", isOn: $allowEchoes)
                 }
                 if wave != nil {
-                    WestreemFormPanel("Notifications", helper: "Your personal delivery settings for this Wave.") {
+                    WestreemFormPanel(
+                        "Notifications",
+                        helper: notificationLevel == "INHERIT"
+                            ? "This Wave currently uses your Vibe activity preference."
+                            : "This Wave overrides your Vibe activity preference."
+                    ) {
                         Picker("Notify me", selection: $notificationLevel) {
                             Text("Use Vibe setting").tag("INHERIT")
                             Text("All activity").tag("ALL")
@@ -656,6 +661,11 @@ private struct VibeWaveEditorView: View {
                         .westreemField()
                         Toggle("Push notifications", isOn: $pushEnabled)
                         Toggle("Email notifications", isOn: $emailEnabled)
+                        if notificationLevel == "MUTED" {
+                            Text("Delivery channels are retained for when you unmute this Wave.")
+                                .font(.caption)
+                                .foregroundStyle(C.textMuted)
+                        }
                     }
                 }
                 if let wave, wave.capabilities.canArchive, !wave.isSystem, !wave.isDefault {

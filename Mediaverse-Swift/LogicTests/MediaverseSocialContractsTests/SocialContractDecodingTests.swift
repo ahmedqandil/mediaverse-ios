@@ -50,6 +50,33 @@ final class SocialContractDecodingTests: XCTestCase {
         XCTAssertEqual(partial._count?.events, 0)
     }
 
+    func testWaveNotificationSettingsDefaultToInheritedDelivery() throws {
+        let subscription = try decoder.decode(
+            VibeWaveSubscription.self,
+            from: Data(#"{"futureDeliveryPolicy":"digest"}"#.utf8)
+        )
+
+        XCTAssertEqual(subscription.notificationLevel, "INHERIT")
+        XCTAssertTrue(subscription.pushEnabled)
+        XCTAssertFalse(subscription.emailEnabled)
+        XCTAssertEqual(
+            subscription.effectiveNotificationLevel(inheriting: "MENTIONS"),
+            "MENTIONS"
+        )
+    }
+
+    func testWaveNotificationOverrideWinsOverInheritedVibeLevel() throws {
+        let subscription = try decoder.decode(
+            VibeWaveSubscription.self,
+            from: Data(#"{"notificationLevel":"MUTED","pushEnabled":false,"emailEnabled":false}"#.utf8)
+        )
+
+        XCTAssertEqual(
+            subscription.effectiveNotificationLevel(inheriting: "ALL"),
+            "MUTED"
+        )
+    }
+
     func testVibeDetailDefaultsMissingCapabilitiesToDenied() throws {
         let data = Data(
             """

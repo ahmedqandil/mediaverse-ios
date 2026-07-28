@@ -43,6 +43,31 @@ struct VibeEventCardModel: Codable, Identifiable, Hashable, Sendable {
     let wave: VibeEventWaveIdentity?
     let affiliatedShow: VibeEventAffiliation?
     let affiliatedChannel: VibeEventAffiliation?
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        slug = try c.decode(String.self, forKey: .slug)
+        title = try c.decode(String.self, forKey: .title)
+        summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        coverUrl = try c.decodeIfPresent(String.self, forKey: .coverUrl)
+        coverFocus = try c.decodeIfPresent(String.self, forKey: .coverFocus)
+        startsAt = try c.decode(String.self, forKey: .startsAt)
+        endsAt = try c.decodeIfPresent(String.self, forKey: .endsAt) ?? startsAt
+        timeZone = try c.decodeIfPresent(String.self, forKey: .timeZone) ?? "UTC"
+        visibility = try c.decodeIfPresent(String.self, forKey: .visibility) ?? "PUBLIC"
+        status = try c.decodeIfPresent(String.self, forKey: .status) ?? "SCHEDULED"
+        goingCount = try c.decodeIfPresent(Int.self, forKey: .goingCount) ?? 0
+        interestedCount = try c.decodeIfPresent(Int.self, forKey: .interestedCount) ?? 0
+        waitlistCount = try c.decodeIfPresent(Int.self, forKey: .waitlistCount) ?? 0
+        viewerRsvpStatus = try c.decodeIfPresent(String.self, forKey: .viewerRsvpStatus)
+        capacity = try c.decodeIfPresent(Int.self, forKey: .capacity)
+        replayUrl = try c.decodeIfPresent(String.self, forKey: .replayUrl)
+        club = try c.decode(VibeEventIdentity.self, forKey: .club)
+        wave = try c.decodeIfPresent(VibeEventWaveIdentity.self, forKey: .wave)
+        affiliatedShow = try c.decodeIfPresent(VibeEventAffiliation.self, forKey: .affiliatedShow)
+        affiliatedChannel = try c.decodeIfPresent(VibeEventAffiliation.self, forKey: .affiliatedChannel)
+    }
 }
 
 struct VibeEventHostIdentity: Codable, Hashable, Sendable {
@@ -134,11 +159,29 @@ struct VibeEventCapabilities: Codable, Sendable {
     let joinWindowState: String
     let joinOpensAt: String?
     let joinClosesAt: String?
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        canManage = try c.decodeIfPresent(Bool.self, forKey: .canManage) ?? false
+        canRsvp = try c.decodeIfPresent(Bool.self, forKey: .canRsvp) ?? false
+        canShare = try c.decodeIfPresent(Bool.self, forKey: .canShare) ?? false
+        canJoin = try c.decodeIfPresent(Bool.self, forKey: .canJoin) ?? false
+        joinWindowOpen = try c.decodeIfPresent(Bool.self, forKey: .joinWindowOpen) ?? false
+        joinWindowState = try c.decodeIfPresent(String.self, forKey: .joinWindowState) ?? "unavailable"
+        joinOpensAt = try c.decodeIfPresent(String.self, forKey: .joinOpensAt)
+        joinClosesAt = try c.decodeIfPresent(String.self, forKey: .joinClosesAt)
+    }
 }
 
 struct VibeEventListResponse: Codable, Sendable {
     let events: [VibeEventCardModel]
     let nextCursor: String?
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        events = try c.decodeIfPresent([VibeEventCardModel].self, forKey: .events) ?? []
+        nextCursor = try c.decodeIfPresent(String.self, forKey: .nextCursor)
+    }
 }
 struct VibeEventDetailResponse: Codable, Sendable {
     let event: VibeEventDetailModel
@@ -149,6 +192,19 @@ struct VibeEventRSVPCounts: Codable, Sendable {
     let goingCount: Int
     let interestedCount: Int
     let waitlistCount: Int
+
+    init(goingCount: Int, interestedCount: Int, waitlistCount: Int) {
+        self.goingCount = goingCount
+        self.interestedCount = interestedCount
+        self.waitlistCount = waitlistCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        goingCount = try c.decodeIfPresent(Int.self, forKey: .goingCount) ?? 0
+        interestedCount = try c.decodeIfPresent(Int.self, forKey: .interestedCount) ?? 0
+        waitlistCount = try c.decodeIfPresent(Int.self, forKey: .waitlistCount) ?? 0
+    }
 }
 struct VibeEventRSVPMutation: Sendable {
     let rsvp: VibeEventRSVP
@@ -160,6 +216,14 @@ struct VibeEventReminder: Codable, Identifiable, Hashable, Sendable {
     let leadMinutes: Int
     let channel: String
     let sentAt: String?
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        leadMinutes = try c.decodeIfPresent(Int.self, forKey: .leadMinutes) ?? 15
+        channel = try c.decodeIfPresent(String.self, forKey: .channel) ?? "push"
+        sentAt = try c.decodeIfPresent(String.self, forKey: .sentAt)
+    }
 }
 
 struct VibeEventRemindersResponse: Codable, Sendable {

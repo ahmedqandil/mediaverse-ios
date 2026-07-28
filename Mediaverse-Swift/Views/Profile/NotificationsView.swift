@@ -45,6 +45,7 @@ private struct NotificationPreferencesView: View {
                                 ],
                                 preferences: preferences
                             )
+                            notificationInheritanceGuide(vibeActivityEnabled: preferences.notifyVibeActivity)
                             if let errorMessage {
                                 Text(errorMessage)
                                     .font(.footnote)
@@ -68,6 +69,54 @@ private struct NotificationPreferencesView: View {
                 }
             }
             .task { await load() }
+        }
+    }
+
+    private func notificationInheritanceGuide(vibeActivityEnabled: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("VIBE, WAVE & EVENT DELIVERY")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(C.textMuted)
+            VStack(alignment: .leading, spacing: 14) {
+                inheritanceRow(
+                    icon: "person.3",
+                    title: "Vibes",
+                    detail: vibeActivityEnabled
+                        ? "Vibe activity is enabled by your global setting above."
+                        : "Vibe activity is muted by your global setting above."
+                )
+                Divider().overlay(C.borderSubtle)
+                inheritanceRow(
+                    icon: "water.waves",
+                    title: "Waves",
+                    detail: "Each Wave uses its Vibe setting by default. A Wave’s settings can override it with All activity, Mentions only, or Muted."
+                )
+                Divider().overlay(C.borderSubtle)
+                inheritanceRow(
+                    icon: "calendar",
+                    title: "Events",
+                    detail: "Events inherit Vibe activity. Scheduled Event pages also support explicit 15-minute, 1-hour, and 1-day push reminders."
+                )
+            }
+            .padding(14)
+            .background(C.surface, in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(C.borderSubtle))
+        }
+    }
+
+    private func inheritanceRow(icon: String, title: String, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .foregroundStyle(C.watch)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(C.text)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(C.textMuted)
+            }
         }
     }
 
