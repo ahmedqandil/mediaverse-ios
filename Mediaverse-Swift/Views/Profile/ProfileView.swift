@@ -101,7 +101,9 @@ struct ProfileView: View {
         .sheet(isPresented: $showPartnerRequest) {
             PartnerRequestSheet(initialStatus: partnerApplication) { status in
                 partnerApplication = status
-                Task { await loadAll() }
+                if status.normalizedStatus != "none" {
+                    Task { await loadAll() }
+                }
             }
         }
         .navigationDestination(item: $profileDestination) { destination in
@@ -1255,6 +1257,7 @@ private struct PartnerRequestSheet: View {
             didSubmit = false
             showsApplicationForm = false
             onSubmitted(updated)
+            dismiss()
         } catch {
             errorMessage = error.localizedDescription
         }
