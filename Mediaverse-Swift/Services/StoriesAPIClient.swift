@@ -157,6 +157,9 @@ actor StoriesAPIClient {
         var request = URLRequest(url: resolvedURL)
         request.httpMethod = "PUT"
         request.setValue(mimeType, forHTTPHeaderField: "Content-Type")
+        // Same-site proxy uploads require the mobile session. Presigned R2
+        // destinations are external and intentionally receive no credentials.
+        attachAuth(&request)
 
         await MainActor.run { onProgress(0) }
         let progressDelegate = StoriesUploadProgressDelegate(onProgress: onProgress)
@@ -265,6 +268,12 @@ actor StoriesAPIClient {
             return url
         }
         return URL(string: url.absoluteString, relativeTo: baseURL)?.absoluteURL ?? url
+    }
+
+    func resolvedAllowedUploadURL(from rawValue: String) -> URL? {
+        guard let rawURL = URL(string: rawValue) else { return nil }
+        let resolved = resolvedUploadURL(from: rawURL)
+        return StoriesRequestPolicy.isAllowedUploadURL(resolved) ? resolved : nil
     }
 
     private func attachAuth(_ request: inout URLRequest) {

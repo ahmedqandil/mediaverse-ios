@@ -2004,8 +2004,7 @@ private enum StoryUploadPipeline {
         let uploadMimeType = export.mimeType
 
         let upload = try await StoriesAPIClient.shared.getUploadUrl(mimeType: uploadMimeType)
-        guard let uploadURL = URL(string: upload.uploadUrl),
-              StoriesRequestPolicy.isAllowedUploadURL(uploadURL) else {
+        guard let uploadURL = await StoriesAPIClient.shared.resolvedAllowedUploadURL(from: upload.uploadUrl) else {
             throw StoriesError.badURL
         }
         try await StoriesAPIClient.shared.uploadMedia(
@@ -2057,8 +2056,7 @@ private enum StoryUploadPipeline {
 
     private static func uploadThumbnail(data: Data) async throws -> String {
         let upload = try await StoriesAPIClient.shared.getUploadUrl(mimeType: thumbnailMimeType)
-        guard let uploadURL = URL(string: upload.uploadUrl),
-              StoriesRequestPolicy.isAllowedUploadURL(uploadURL) else {
+        guard let uploadURL = await StoriesAPIClient.shared.resolvedAllowedUploadURL(from: upload.uploadUrl) else {
             throw StoriesError.badURL
         }
         try await StoriesAPIClient.shared.uploadMedia(

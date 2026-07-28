@@ -229,9 +229,22 @@ private struct NativeCurationFlashesTray: View {
     }
 
     private func refreshActivePublisher() {
-        guard auth.isAuthenticated,
-              let context = SessionStorage.activeContext else {
+        guard auth.isAuthenticated else {
             activePublisher = nil
+            return
+        }
+
+        guard let context = SessionStorage.activeContext else {
+            if let user = auth.currentUser {
+                activePublisher = UploadContext(
+                    type: "user",
+                    id: user.id,
+                    name: user.name ?? "My Atmosphere",
+                    avatarUrl: user.image
+                )
+            } else {
+                activePublisher = nil
+            }
             return
         }
 

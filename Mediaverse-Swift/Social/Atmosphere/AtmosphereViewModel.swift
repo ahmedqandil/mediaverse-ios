@@ -64,10 +64,13 @@ final class AtmosphereViewModel: ObservableObject {
     }
 
     var beforeFeedListings: [AssembledListing] {
-        guard let index = curationListings.firstIndex(where: { $0.normalizedTemplateType == "atmosphere_feed" }) else {
-            return []
-        }
         let injected = Set(atmosphereFeedListing?.feedSlots?.map(\.listingId) ?? [])
+        guard let index = curationListings.firstIndex(where: { $0.normalizedTemplateType == "atmosphere_feed" }) else {
+            return curationListings.filter {
+                $0.normalizedTemplateType != "atmosphere_feed"
+                    && !injected.contains($0.listingId)
+            }
+        }
         return curationListings[..<index].filter { !injected.contains($0.listingId) }
     }
 
