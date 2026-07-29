@@ -2,6 +2,47 @@ import XCTest
 @testable import MediaverseSocialContracts
 
 final class SocialContractDecodingTests: XCTestCase {
+    func testCommunityVibePresentationAlwaysStartsInWaveDirectory() {
+        XCTAssertEqual(
+            VibeDestinationPresentation.resolve(
+                isPersonal: false,
+                selectedWaveSlug: nil,
+                showsHomeConversation: false
+            ),
+            .waveDirectory
+        )
+    }
+
+    func testSelectedWaveAlwaysUsesConversationPresentation() {
+        XCTAssertEqual(
+            VibeDestinationPresentation.resolve(
+                isPersonal: false,
+                selectedWaveSlug: "general",
+                showsHomeConversation: false
+            ),
+            .waveConversation
+        )
+        XCTAssertEqual(
+            VibeDestinationPresentation.resolve(
+                isPersonal: false,
+                selectedWaveSlug: nil,
+                showsHomeConversation: true
+            ),
+            .waveConversation
+        )
+    }
+
+    func testPersonalVibeKeepsFeedPresentation() {
+        XCTAssertEqual(
+            VibeDestinationPresentation.resolve(
+                isPersonal: true,
+                selectedWaveSlug: "ignored",
+                showsHomeConversation: true
+            ),
+            .personalFeed
+        )
+    }
+
     private let decoder = JSONDecoder()
 
     func testMatrixSessionAndWaveBindingFailClosed() throws {

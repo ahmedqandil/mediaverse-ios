@@ -214,6 +214,28 @@ public struct VibeDetailResponse: Decodable, Sendable {
     public let following: Bool
 }
 
+/// Chooses the visible Vibe experience independently from transport rollout.
+///
+/// Community Vibes always start in the Wave directory and selected Waves always
+/// use the conversational presentation. Matrix readiness only augments that
+/// conversation with realtime state; it never selects the presentation itself.
+public enum VibeDestinationPresentation: Equatable, Sendable {
+    case personalFeed
+    case waveDirectory
+    case waveConversation
+
+    public static func resolve(
+        isPersonal: Bool,
+        selectedWaveSlug: String?,
+        showsHomeConversation: Bool
+    ) -> Self {
+        guard !isPersonal else { return .personalFeed }
+        return selectedWaveSlug != nil || showsHomeConversation
+            ? .waveConversation
+            : .waveDirectory
+    }
+}
+
 public enum VibeInviteRole: String, Codable, Sendable, CaseIterable {
     case member = "MEMBER"
     case moderator = "MODERATOR"

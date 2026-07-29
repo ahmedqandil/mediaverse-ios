@@ -68,9 +68,9 @@ struct VibeDetailView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: isCompactCommunityConversation ? 3 : 12) {
+            LazyVStack(spacing: isCommunityConversation ? 3 : 12) {
                 if let detail {
-                    if !isCompactCommunityConversation {
+                    if !isCommunityConversation {
                         VibeHero(
                             detail: detail,
                             isBusy: isMutatingRelationship,
@@ -84,11 +84,11 @@ struct VibeDetailView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, C.pagePad)
                     }
-                    if isCompactCommunityDirectory {
+                    if isCommunityDirectory {
                         mobileWaveDirectory(for: detail)
                             .padding(.horizontal, C.pagePad)
                     }
-                    if !isCompactCommunityDirectory,
+                    if !isCommunityDirectory,
                        !detail.club.isPersonal,
                        !waves.isEmpty,
                        horizontalSizeClass != .compact {
@@ -97,7 +97,7 @@ struct VibeDetailView: View {
                         waveContextCard
                             .padding(.horizontal, C.pagePad)
                     }
-                    if isCompactCommunityConversation {
+                    if isCommunityConversation {
                         mobileWaveConversationHeader(for: detail)
                             .padding(.horizontal, C.pagePad)
                         if matrixRealtimeEnabled {
@@ -109,17 +109,17 @@ struct VibeDetailView: View {
                         waveSummaryCard
                             .padding(.horizontal, C.pagePad)
                     }
-                    if !isCompactCommunityDirectory, selectedWave?.type == .resources {
+                    if !isCommunityDirectory, selectedWave?.type == .resources {
                         resourceFilters
                     }
-                    if !isCompactCommunityDirectory,
+                    if !isCommunityDirectory,
                        features.rippleComposerEnabled,
                        canPost(in: detail),
-                       !isCompactCommunityConversation {
+                       !isCommunityConversation {
                         rippleComposerPrompt(for: detail)
                             .padding(.horizontal, C.pagePad)
                     }
-                    if !isCompactCommunityDirectory,
+                    if !isCommunityDirectory,
                        !detail.club.isPersonal,
                        showsEventsSection {
                         VibeEventVibeSection(
@@ -129,12 +129,12 @@ struct VibeDetailView: View {
                             waveID: selectedWave?.type == .events ? selectedWave?.id : nil
                         )
                     }
-                    if !isCompactCommunityDirectory, isSwitchingWave {
+                    if !isCommunityDirectory, isSwitchingWave {
                         ProgressView()
                             .tint(C.watch)
                             .padding(.vertical, 28)
                     }
-                    if !isCompactCommunityDirectory {
+                    if !isCommunityDirectory {
                     ForEach(pendingChatRipples) { pending in
                         pendingRippleRow(pending)
                             .padding(.horizontal, horizontalSizeClass == .compact ? 0 : C.pagePad)
@@ -176,7 +176,7 @@ struct VibeDetailView: View {
                         .padding(.horizontal, horizontalSizeClass == .compact ? 0 : C.pagePad)
                     }
                     }
-                    if !isCompactCommunityDirectory, nextCursor != nil {
+                    if !isCommunityDirectory, nextCursor != nil {
                         ProgressView()
                             .tint(C.watch)
                             .task { await loadMore() }
@@ -193,11 +193,11 @@ struct VibeDetailView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .padding(.bottom, isCompactCommunityConversation ? 0 : 16)
+            .padding(.bottom, isCommunityConversation ? 0 : 16)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if let detail,
-               isCompactCommunityConversation,
+               isCommunityConversation,
                features.rippleComposerEnabled,
                canPost(in: detail) {
                 waveChatComposerEntry(for: detail)
@@ -755,17 +755,20 @@ struct VibeDetailView: View {
         }
     }
 
-    private var isCompactCommunityDirectory: Bool {
-        horizontalSizeClass == .compact
-            && detail?.club.isPersonal == false
-            && selectedWaveSlug == nil
-            && !showsCommunityHomeConversation
+    private var vibePresentation: VibeDestinationPresentation {
+        VibeDestinationPresentation.resolve(
+            isPersonal: detail?.club.isPersonal ?? true,
+            selectedWaveSlug: selectedWaveSlug,
+            showsHomeConversation: showsCommunityHomeConversation
+        )
     }
 
-    private var isCompactCommunityConversation: Bool {
-        horizontalSizeClass == .compact
-            && detail?.club.isPersonal == false
-            && (selectedWaveSlug != nil || showsCommunityHomeConversation)
+    private var isCommunityDirectory: Bool {
+        vibePresentation == .waveDirectory
+    }
+
+    private var isCommunityConversation: Bool {
+        vibePresentation == .waveConversation
     }
 
     private func mobileWaveDirectory(for detail: VibeDetailResponse) -> some View {
