@@ -17,8 +17,19 @@ private struct RipplePhotoPositioning: Identifiable {
     var id: String { photo.imageURL }
 }
 
+enum RippleComposerTool: String, CaseIterable, Identifiable {
+    case photo
+    case poll
+    case voice
+    case video
+    case link
+
+    var id: String { rawValue }
+}
+
 struct RippleComposer: View {
     let destination: RippleComposerDestination
+    let initialTool: RippleComposerTool?
     let onCreated: (Ripple) -> Void
 
     @EnvironmentObject private var auth: AuthManager
@@ -52,9 +63,21 @@ struct RippleComposer: View {
     @StateObject private var voiceRecorder = RippleVoiceRecorder()
     @StateObject private var mediaUploads = RippleMediaUploadCoordinator.shared
     @FocusState private var isBodyFocused: Bool
+    @State private var didApplyInitialTool = false
 
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
     private var isCompactWidth: Bool { horizontalSizeClass == .compact }
+
+    init(
+        destination: RippleComposerDestination,
+        initialTool: RippleComposerTool? = nil,
+        onCreated: @escaping (Ripple) -> Void
+    ) {
+        self.destination = destination
+        self.initialTool = initialTool
+        self.onCreated = onCreated
+        _pollOpen = State(initialValue: initialTool == .poll)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -148,6 +171,7 @@ struct RippleComposer: View {
                 mediaUploadPanel(mediaJob)
             }
 
+            if initialTool == nil {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Add to your Ripple")
                     .font(.caption.weight(.semibold))
@@ -212,7 +236,9 @@ struct RippleComposer: View {
                 }
                 }
             }
+            }
 
+            if initialTool == nil {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Post options")
                     .font(.caption.weight(.semibold))
@@ -225,6 +251,7 @@ struct RippleComposer: View {
                         isOn: $commentsDisabled
                     )
                 }
+            }
             }
 
             if let errorMessage {
@@ -310,6 +337,22 @@ struct RippleComposer: View {
                 onCancel: { showsCamera = false }
             )
             .ignoresSafeArea()
+        }
+        .task {
+            guard !didApplyInitialTool else { return }
+            didApplyInitialTool = true
+            switch initialTool {
+            case .photo:
+                showsPhotoSourceChooser = true
+            case .voice:
+                await voiceRecorder.start()
+            case .video:
+                showsVideoLibrary = true
+            case .link:
+                isBodyFocused = true
+            case .poll, .none:
+                break
+            }
         }
     }
 

@@ -615,6 +615,8 @@ public struct VibeWave: Decodable, Identifiable, Equatable, Sendable {
     public let requiresPostApproval: Bool
     public let allowPolls: Bool
     public let allowPhotos: Bool
+    public let allowVoiceMessages: Bool
+    public let allowVideoMessages: Bool
     public let allowLinks: Bool
     public let allowEchoes: Bool
     public let archivedAt: String?
@@ -632,7 +634,8 @@ public struct VibeWave: Decodable, Identifiable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, name, slug, description, type, visibility, postingPolicy, position
         case isSystem, isDefault, commentsEnabled, requiresPostApproval
-        case allowPolls, allowPhotos, allowLinks, allowEchoes, archivedAt
+        case allowPolls, allowPhotos, allowVoiceMessages, allowVideoMessages
+        case allowLinks, allowEchoes, archivedAt
         case capabilities, _count, subscription
         case unreadCount, lastActivityAt, activeConversationCount, conversationCount, lastParticipant
         case directorySummary, realtimeCapabilities, matrixBinding
@@ -654,6 +657,14 @@ public struct VibeWave: Decodable, Identifiable, Equatable, Sendable {
         requiresPostApproval = try values.decodeIfPresent(Bool.self, forKey: .requiresPostApproval) ?? true
         allowPolls = try values.decodeIfPresent(Bool.self, forKey: .allowPolls) ?? false
         allowPhotos = try values.decodeIfPresent(Bool.self, forKey: .allowPhotos) ?? false
+        allowVoiceMessages = try values.decodeIfPresent(
+            Bool.self,
+            forKey: .allowVoiceMessages
+        ) ?? false
+        allowVideoMessages = try values.decodeIfPresent(
+            Bool.self,
+            forKey: .allowVideoMessages
+        ) ?? false
         allowLinks = try values.decodeIfPresent(Bool.self, forKey: .allowLinks) ?? false
         allowEchoes = try values.decodeIfPresent(Bool.self, forKey: .allowEchoes) ?? false
         archivedAt = try values.decodeIfPresent(String.self, forKey: .archivedAt)

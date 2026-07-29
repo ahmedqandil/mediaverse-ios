@@ -1,6 +1,78 @@
 import AVKit
 import SwiftUI
 
+private struct WaveAttachmentTray: View {
+    let wave: VibeWave?
+    let choose: (RippleComposerTool) -> Void
+
+    private var tools: [(RippleComposerTool, String, String)] {
+        var result: [(RippleComposerTool, String, String)] = []
+        if wave?.allowPhotos != false {
+            result.append((.photo, "Photos", "photo.on.rectangle.angled"))
+        }
+        if wave?.allowPolls != false {
+            result.append((.poll, "Poll", "chart.bar.fill"))
+        }
+        if wave?.allowVoiceMessages != false {
+            result.append((.voice, "Voice", "waveform"))
+        }
+        if wave?.allowVideoMessages != false {
+            result.append((.video, "Video", "video.fill"))
+        }
+        if wave?.allowLinks != false {
+            result.append((.link, "Link", "link"))
+        }
+        return result
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Add to \(wave?.name ?? "this Wave")")
+                    .font(.headline)
+                    .foregroundStyle(C.text)
+                Text("Choose what you want to send.")
+                    .font(.footnote)
+                    .foregroundStyle(C.textMuted)
+            }
+
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.flexible()), count: 3),
+                spacing: 12
+            ) {
+                ForEach(tools, id: \.0.id) { tool, title, icon in
+                    Button {
+                        C.lightHaptic()
+                        choose(tool)
+                    } label: {
+                        VStack(spacing: 9) {
+                            Image(systemName: icon)
+                                .font(.title3.weight(.semibold))
+                                .foregroundStyle(C.watch)
+                                .frame(width: 42, height: 42)
+                                .background(C.watch.opacity(0.12), in: Circle())
+                            Text(title)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(C.text)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 92)
+                        .background(C.elevated, in: RoundedRectangle(cornerRadius: 14))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(C.borderSubtle)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(C.bg.ignoresSafeArea())
+    }
+}
+
 struct VibeDetailView: View {
     private struct CachedWaveFeed {
         var ripples: [Ripple]
@@ -22,6 +94,7 @@ struct VibeDetailView: View {
         case waves
         case rules
         case settings
+        case attachmentTray
         case composer
 
         var id: String { rawValue }
@@ -50,6 +123,7 @@ struct VibeDetailView: View {
     @State private var relationshipNotice: String?
     @State private var errorMessage: String?
     @State private var activeSheet: VibeSheet?
+    @State private var selectedComposerTool: RippleComposerTool?
     @State private var showsWaveDirectory = false
     @State private var chatDraft = ""
     @State private var isSendingChatRipple = false
@@ -282,12 +356,23 @@ struct VibeDetailView: View {
                         )
                     }
                 }
+            case .attachmentTray:
+                WaveAttachmentTray(
+                    wave: selectedWave,
+                    choose: { tool in
+                        selectedComposerTool = tool
+                        activeSheet = .composer
+                    }
+                )
+                .presentationDetents([.height(310)])
+                .presentationDragIndicator(.visible)
             case .composer:
                 if let detail {
                     NavigationStack {
                         ScrollView {
                             RippleComposer(
-                                destination: composerDestination(for: detail)
+                                destination: composerDestination(for: detail),
+                                initialTool: selectedComposerTool
                             ) { ripple in
                                 ripples.insert(ripple, at: 0)
                                 cacheCurrentFeed()
@@ -424,7 +509,7 @@ struct VibeDetailView: View {
         HStack(alignment: .bottom, spacing: 8) {
             Button {
                 C.lightHaptic()
-                activeSheet = .composer
+                activeSheet = .attachmentTray
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 17, weight: .semibold))
