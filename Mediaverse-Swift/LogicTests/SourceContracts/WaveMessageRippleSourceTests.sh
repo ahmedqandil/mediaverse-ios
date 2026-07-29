@@ -3,6 +3,7 @@ set -eu
 
 card="Social/Ripples/RippleCard.swift"
 vibe="Social/Vibes/SocialDestinationViews.swift"
+tabs="Views/MainTabView.swift"
 
 require() {
   pattern="$1"
@@ -32,6 +33,18 @@ require "isCompactWaveMessage, !usesCompactWaveGrouping" "$card" "Only group lea
 require "? Color.clear" "$card" "Compact Wave messages must remove legacy card fill."
 require "waveChatComposerEntry" "$vibe" "Wave conversations must expose a persistent chat-style composer entry."
 require ".safeAreaInset(edge: .bottom" "$vibe" "The Wave composer must remain visible while reading."
+require 'TextField(' "$vibe" "The Wave composer must accept text inline."
+require "sendChatRipple(in: detail)" "$vibe" "The Wave composer must send without opening the legacy composer."
+require "api.createRipple(" "$vibe" "Inline Wave messages must reuse the canonical Ripple post API."
+require "conversationReplies.prefix(2)" "$card" "Wave Ripples may preview no more than two replies."
+require 'Text("Open discussion")' "$card" "Additional replies must expose the dedicated discussion affordance."
+require "RippleDiscussionView(" "$card" "Additional replies must open a native discussion screen."
+require ".vibe, .vibeWave:" "$tabs" "Vibe and Wave routes must hide global bottom chrome."
+
+if grep -Fq 'accessibilityLabel("Back to Waves")' "$vibe"; then
+  echo "FAIL: Wave conversations must not render a redundant back control." >&2
+  exit 1
+fi
 
 energy_line=$(grep -n 'title: "Add Energy"' "$card" | head -1 | cut -d: -f1)
 reply_line=$(grep -n 'title: waveReplyActionTitle' "$card" | head -1 | cut -d: -f1)

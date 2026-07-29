@@ -51,6 +51,8 @@ struct VibeDetailView: View {
     @State private var errorMessage: String?
     @State private var activeSheet: VibeSheet?
     @State private var showsWaveDirectory = false
+    @State private var chatDraft = ""
+    @State private var isSendingChatRipple = false
     @StateObject private var autoplay = SocialFeedAutoplayController()
     @AppStorage("playerMuted") private var playerMuted = false
     @EnvironmentObject private var auth: AuthManager
@@ -174,7 +176,7 @@ struct VibeDetailView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .padding(.bottom, C.bottomMenuClearance)
+            .padding(.bottom, isCompactCommunityConversation ? 0 : 16)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if let detail,
@@ -196,16 +198,6 @@ struct VibeDetailView: View {
         .navigationTitle(detail?.club.name ?? "Vibe")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if isCompactCommunityConversation {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        returnToWaveDirectory()
-                    } label: {
-                        Image(systemName: "chevron.left")
-                    }
-                    .accessibilityLabel("Back to Waves")
-                }
-            }
             if hasVibeOptions {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -401,41 +393,96 @@ struct VibeDetailView: View {
     }
 
     private func waveChatComposerEntry(for detail: VibeDetailResponse) -> some View {
-        Button {
-            C.lightHaptic()
-            activeSheet = .composer
-        } label: {
-            HStack(spacing: 10) {
-                SocialIdentityAvatar(
-                    image: auth.currentUser?.image,
-                    name: auth.currentUser?.name,
-                    size: 34
-                )
-                Text(composerPrompt(for: detail))
-                    .font(.subheadline)
-                    .foregroundStyle(C.textMuted)
-                    .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
-                    .padding(.horizontal, 14)
-                    .background(C.elevated)
-                    .clipShape(Capsule())
-                Image(systemName: "paperplane.fill")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(C.bg)
+        HStack(alignment: .bottom, spacing: 8) {
+            Button {
+                C.lightHaptic()
+                activeSheet = .composer
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(C.text)
                     .frame(width: 42, height: 42)
-                    .background(C.watch)
-                    .clipShape(Circle())
+                    .background(C.elevated, in: Circle())
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(.ultraThinMaterial)
-            .overlay(alignment: .top) {
-                Rectangle().fill(C.borderSubtle).frame(height: 1)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add photos, poll, or attachment")
+
+            TextField(
+                "Message \(selectedWave?.name ?? detail.club.name)",
+                text: $chatDraft,
+                axis: .vertical
+            )
+            .font(.body)
+            .foregroundStyle(C.text)
+            .lineLimit(1...5)
+            .submitLabel(.send)
+            .onSubmit {
+                Task { await sendChatRipple(in: detail) }
             }
-            .contentShape(Rectangle())
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(minHeight: 42)
+            .background(C.elevated)
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+            Button {
+                Task { await sendChatRipple(in: detail) }
+            } label: {
+                Group {
+                    if isSendingChatRipple {
+                        ProgressView().tint(C.bg)
+                    } else {
+                        Image(systemName: "paperplane.fill")
+                    }
+                }
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(C.bg)
+                .frame(width: 42, height: 42)
+                .background(canSendChatRipple ? C.watch : C.textTertiary)
+                .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canSendChatRipple)
+            .accessibilityLabel("Send Ripple")
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) {
+            Rectangle().fill(C.borderSubtle).frame(height: 1)
+        }
         .accessibilityIdentifier("wave.composer.dock")
-        .accessibilityLabel("Create a Ripple in \(selectedWave?.name ?? detail.club.name)")
+    }
+
+    private var canSendChatRipple: Bool {
+        !chatDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !isSendingChatRipple
+    }
+
+    @MainActor
+    private func sendChatRipple(in detail: VibeDetailResponse) async {
+        let text = chatDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !isSendingChatRipple else { return }
+        isSendingChatRipple = true
+        errorMessage = nil
+        do {
+            let created = try await api.createRipple(
+                inVibe: detail.club.slug,
+                body: text,
+                attachments: [],
+                waveId: selectedWave?.id
+            )
+            chatDraft = ""
+            if created.status == "PENDING_REVIEW" {
+                relationshipNotice = "Ripple submitted for moderator review."
+            } else {
+                ripples.insert(created, at: 0)
+                cacheCurrentFeed()
+            }
+        } catch {
+            errorMessage = socialErrorMessage(error)
+        }
+        isSendingChatRipple = false
     }
 
     private func load() async {

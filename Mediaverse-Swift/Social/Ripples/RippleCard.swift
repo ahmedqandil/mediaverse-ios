@@ -258,7 +258,7 @@ struct RippleCard: View {
                 .padding(.top, 10)
             }
 
-            if presentation == .waveConversation {
+            if presentation == .waveConversation, conversationReplyCount > 0 {
                 waveConversationPreview
                     .padding(.horizontal, 12)
                     .padding(.top, 12)
@@ -421,84 +421,58 @@ struct RippleCard: View {
 
     @ViewBuilder
     private var waveConversationPreview: some View {
-        Button {
-            guard canOpenDiscussion else { return }
-            withAnimation(.easeInOut(duration: 0.2)) {
-                showsComments = true
-            }
-        } label: {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 7) {
-                    Label(conversationStateLabel, systemImage: conversationStateIcon)
-                        .foregroundStyle(conversationIsLocked ? C.textMuted : C.watch)
-                    if conversationUnreadCount > 0 {
-                        Text("\(conversationUnreadCount) new")
-                            .foregroundStyle(C.watch)
-                            .accessibilityLabel("\(conversationUnreadCount) unread replies")
-                    }
-                    Spacer()
-                }
-                .font(.caption2.weight(.bold))
-
-                if !conversationReplies.isEmpty {
-                    ForEach(conversationReplies.prefix(3)) { comment in
-                        HStack(alignment: .top, spacing: 8) {
-                            SocialIdentityAvatar(
-                                image: comment.user.image,
-                                name: comment.user.name ?? comment.user.handle,
-                                size: 26
-                            )
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(comment.user.name ?? comment.user.handle.map { "@\($0)" } ?? "Westreem user")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(C.text)
-                                    .lineLimit(1)
-                                Text(comment.content)
-                                    .font(.caption)
-                                    .foregroundStyle(C.textMuted)
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.leading)
-                            }
-                            Spacer(minLength: 0)
-                        }
-                    }
-                }
-
-                HStack(spacing: 8) {
-                    participantAvatars
-                    if conversationReplyCount > 0 {
-                        Text("\(conversationReplyCount) \(conversationReplyCount == 1 ? "reply" : "replies")")
-                    } else {
-                        Text(conversationIsLocked ? "No replies" : "Start the conversation")
-                    }
-                    if let conversationLastActivityAt {
-                        Text("· active \(relativeActivity(conversationLastActivityAt))")
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(conversationReplies.prefix(2)) { comment in
+                HStack(alignment: .top, spacing: 8) {
+                    SocialIdentityAvatar(
+                        image: comment.user.image,
+                        name: comment.user.name ?? comment.user.handle,
+                        size: 24
+                    )
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(comment.user.name ?? comment.user.handle.map { "@\($0)" } ?? "Westreem user")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(C.text)
+                            .lineLimit(1)
+                        Text(comment.content)
+                            .font(.caption)
+                            .foregroundStyle(C.textMuted)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
                     }
                     Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.bold))
                 }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(C.textMuted)
             }
-            .padding(.vertical, isCompactWaveMessage ? 6 : 11)
-            .padding(.horizontal, isCompactWaveMessage ? 0 : 11)
-            .background(isCompactWaveMessage ? Color.clear : C.elevated.opacity(0.58))
-            .clipShape(
-                RoundedRectangle(
-                    cornerRadius: isCompactWaveMessage ? 0 : 12,
-                    style: .continuous
-                )
-            )
-            .contentShape(Rectangle())
+
+            if conversationReplyCount > min(2, conversationReplies.count), canOpenDiscussion {
+                NavigationLink {
+                    RippleDiscussionView(
+                        ripple: ripple,
+                        allowsReplies: canReplyToConversation,
+                        canManageAcceptedAnswer: canManageQuestionAnswer,
+                        onAcceptAnswer: { commentId in
+                            try await acceptQuestionAnswer(commentId: commentId)
+                        }
+                    )
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Open discussion")
+                        Text("· \(conversationReplyCount) replies")
+                            .foregroundStyle(C.textTertiary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(C.watch)
+                    .frame(minHeight: 32)
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(!canOpenDiscussion)
-        .accessibilityLabel(
-            conversationReplyCount > 0
-                ? "Open discussion with \(conversationReplyCount) replies"
-                : "Start this discussion"
-        )
+        .padding(.vertical, isCompactWaveMessage ? 5 : 10)
+        .padding(.horizontal, isCompactWaveMessage ? 0 : 10)
+        .background(isCompactWaveMessage ? Color.clear : C.elevated.opacity(0.58))
+        .clipShape(RoundedRectangle(cornerRadius: isCompactWaveMessage ? 0 : 12))
     }
 
     @ViewBuilder
@@ -520,9 +494,9 @@ struct RippleCard: View {
 
     private var conversationReplies: [RippleConversationReply] {
         if let summary = ripple.conversationSummary {
-            return summary.latestReplies
+            return Array(summary.latestReplies.prefix(2))
         }
-        return ripple.commentPreview.prefix(3).map {
+        return ripple.commentPreview.prefix(2).map {
             RippleConversationReply(
                 id: $0.id,
                 content: $0.content,
@@ -1022,6 +996,56 @@ struct RippleCard: View {
     private var shareURL: URL? {
         guard let slug = ripple.club?.slug else { return nil }
         return URL(string: "\(C.baseURL)/vibes/\(C.pathSegment(slug))/posts/\(C.pathSegment(ripple.id))")
+    }
+}
+
+private struct RippleDiscussionView: View {
+    let ripple: Ripple
+    let allowsReplies: Bool
+    let canManageAcceptedAnswer: Bool
+    let onAcceptAnswer: ((String) async throws -> Void)?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 10) {
+                SocialIdentityAvatar(
+                    image: ripple.author.image,
+                    name: ripple.author.name ?? ripple.author.handle,
+                    size: 36
+                )
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(ripple.author.name ?? ripple.author.handle.map { "@\($0)" } ?? "Westreem user")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(C.text)
+                    if let body = ripple.body, !body.isEmpty {
+                        MentionText(
+                            plain: body,
+                            html: nil,
+                            font: .body,
+                            color: C.text
+                        )
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(16)
+            .background(C.surface)
+
+            Divider().background(C.borderSubtle)
+
+            CommentThreadView(
+                target: .ripple(ripple.id),
+                inputPosition: .bottom,
+                showsHeader: false,
+                allowsReplies: allowsReplies,
+                acceptedAnswerId: ripple.acceptedAnswerId,
+                canManageAcceptedAnswer: canManageAcceptedAnswer,
+                onAcceptAnswer: onAcceptAnswer
+            )
+        }
+        .background(C.bg.ignoresSafeArea())
+        .navigationTitle("Discussion")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

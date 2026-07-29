@@ -1188,10 +1188,10 @@ private struct SystemTabBarHider: UIViewControllerRepresentable {
 private extension AppRoute {
     var prefersHiddenBottomChrome: Bool {
         switch self {
-        case .video, .episode, .microdramaWatch, .microdramaWatchEp, .flash:
+        case .video, .episode, .microdramaWatch, .microdramaWatchEp, .flash, .vibe, .vibeWave:
             return true
         case .short, .channel, .show, .showSeason, .showAccess, .handoff, .microdramaShow, .playlist, .collection,
-             .vibe, .vibeWave, .vibeManagement, .vibeInvite, .event, .eventInvite, .ripple, .atmo, .search:
+             .vibeManagement, .vibeInvite, .event, .eventInvite, .ripple, .atmo, .search:
             return false
         }
     }
