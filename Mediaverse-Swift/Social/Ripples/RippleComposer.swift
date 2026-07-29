@@ -9,6 +9,11 @@ enum RippleComposerDestination: Equatable {
     case wave(vibeSlug: String, vibeName: String, wave: VibeWave)
 }
 
+enum RippleComposerPresentation {
+    case full
+    case waveMessage
+}
+
 private struct RipplePhotoPositioning: Identifiable {
     let index: Int
     let photo: UploadedRipplePhoto
@@ -18,6 +23,7 @@ private struct RipplePhotoPositioning: Identifiable {
 
 struct RippleComposer: View {
     let destination: RippleComposerDestination
+    var presentation: RippleComposerPresentation = .full
     let onCreated: (Ripple) -> Void
 
     @EnvironmentObject private var auth: AuthManager
@@ -50,6 +56,63 @@ struct RippleComposer: View {
     private var isCompactWidth: Bool { horizontalSizeClass == .compact }
 
     var body: some View {
+        Group {
+            if presentation == .waveMessage {
+                waveMessageComposer
+            } else {
+                fullComposer
+            }
+        }
+        .confirmationDialog(
+            "Add an attachment",
+            isPresented: $showsPhotoSourceChooser,
+            titleVisibility: .visible
+        ) {
+            if waveAllowsPhotos {
+                Button("Take Photo") {
+                    if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                        showsCamera = true
+                    } else {
+                        errorMessage = "The camera is not available on this device."
+                    }
+                }
+                Button("Choose Photos") {
+                    showsPhotoLibrary = true
+                }
+            }
+            if waveAllowsPolls {
+                Button(pollOpen ? "Remove Poll" : "Add Poll") {
+                    pollOpen.toggle()
+                    if !pollOpen {
+                        pollQuestion = ""
+                        pollOptions = ["", "", "", ""]
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .photosPicker(
+            isPresented: $showsPhotoLibrary,
+            selection: $photoSelections,
+            maxSelectionCount: max(0, 10 - photos.count),
+            matching: .images
+        )
+        .onChange(of: photoSelections) { _, items in
+            Task { await upload(items) }
+        }
+        .fullScreenCover(isPresented: $showsCamera) {
+            RipplePhotoCameraPicker(
+                onCapture: { image in
+                    showsCamera = false
+                    Task { await uploadCapturedPhoto(image) }
+                },
+                onCancel: { showsCamera = false }
+            )
+            .ignoresSafeArea()
+        }
+    }
+
+    private var fullComposer: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 10) {
                 SocialIdentityAvatar(
@@ -205,43 +268,113 @@ struct RippleComposer: View {
         .background(C.surface)
         .overlay(RoundedRectangle(cornerRadius: C.cardRadius).stroke(C.borderSubtle))
         .clipShape(RoundedRectangle(cornerRadius: C.cardRadius))
-        .confirmationDialog(
-            "Add a photo",
-            isPresented: $showsPhotoSourceChooser,
-            titleVisibility: .visible
-        ) {
-            Button("Take Photo") {
-                if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                    showsCamera = true
-                } else {
-                    errorMessage = "The camera is not available on this device."
-                }
-            }
-            Button("Choose from Library") {
-                showsPhotoLibrary = true
-            }
-            Button("Cancel", role: .cancel) {}
-        }
-        .photosPicker(
-            isPresented: $showsPhotoLibrary,
-            selection: $photoSelections,
-            maxSelectionCount: max(0, 10 - photos.count),
-            matching: .images
-        )
-        .onChange(of: photoSelections) { _, items in
-            Task { await upload(items) }
-        }
-        .fullScreenCover(isPresented: $showsCamera) {
-            RipplePhotoCameraPicker(
-                onCapture: { image in
-                    showsCamera = false
-                    Task { await uploadCapturedPhoto(image) }
-                },
-                onCancel: { showsCamera = false }
-            )
-            .ignoresSafeArea()
-        }
     }
+
+    private var waveMessageComposer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if isResolving || attachment != nil {
+                attachmentPreview
+            }
+            if !photos.isEmpty {
+                photoGrid
+            }
+            if pollOpen {
+                pollEditor
+            }
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                Button {
+                    isBodyFocused = false
+                    showsPhotoSourceChooser = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.body.bold())
+                        .frame(width: 42, height: 42)
+                        .background(C.elevated, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(C.text)
+                .accessibilityLabel("Add an attachment")
+                .disabled(isUploadingPhotos || (!waveAllowsPhotos && !waveAllowsPolls))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    TextField(placeholder, text: $bodyText, axis: .vertical)
+                        .lineLimit(1...5)
+                        .focused($isBodyFocused)
+                        .textInputAutocapitalization(.sentences)
+                        .foregroundStyle(C.text)
+                        .tint(C.watch)
+                        .onChange(of: bodyText) { _, value in
+                            resolvePastedLinkIfNeeded(in: value)
+                        }
+                    MentionAutocompletePanel(text: $bodyText)
+                        .zIndex(30)
+                }
+                .padding(.horizontal, 13)
+                .padding(.vertical, 10)
+                .background(C.elevated.opacity(0.86))
+                .clipShape(RoundedRectangle(cornerRadius: 20))
+
+                Menu {
+                    Button {
+                        isSpoiler.toggle()
+                    } label: {
+                        Label(isSpoiler ? "Remove spoiler" : "Mark as spoiler", systemImage: "eye.slash")
+                    }
+                    if waveCommentsEnabled {
+                        Button {
+                            commentsDisabled.toggle()
+                        } label: {
+                            Label(commentsDisabled ? "Open replies" : "Close replies", systemImage: "bubble.left.and.exclamationmark")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.body.bold())
+                        .frame(width: 38, height: 42)
+                        .contentShape(Rectangle())
+                }
+                .foregroundStyle(isSpoiler || commentsDisabled ? C.watch : C.textMuted)
+                .accessibilityLabel("Ripple options")
+
+                Button {
+                    isBodyFocused = false
+                    Task { await publish() }
+                } label: {
+                    Group {
+                        if isPublishing {
+                            ProgressView().tint(C.bg)
+                        } else {
+                            Image(systemName: "paperplane.fill")
+                        }
+                    }
+                    .frame(width: 42, height: 42)
+                    .background(C.watch, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(C.bg)
+                .accessibilityLabel("Send Ripple")
+                .disabled(!canPublish || isPublishing || isResolving || isUploadingPhotos)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) { Divider().opacity(0.25) }
+    }
+
+    private var destinationWave: VibeWave? {
+        if case .wave(_, _, let wave) = destination { return wave }
+        return nil
+    }
+
+    private var waveAllowsPhotos: Bool { destinationWave?.allowPhotos ?? true }
+    private var waveAllowsPolls: Bool { destinationWave?.allowPolls ?? true }
+    private var waveCommentsEnabled: Bool { destinationWave?.commentsEnabled ?? true }
 
     @ViewBuilder
     private func composerToolLabel(

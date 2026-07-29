@@ -14,6 +14,8 @@ struct VibeDetailView: View {
         case invitations
         case settings
         case composer
+        case createWave
+        case waveSettings
 
         var id: String { rawValue }
     }
@@ -58,12 +60,15 @@ struct VibeDetailView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, C.pagePad)
                     }
-                    if !detail.club.isPersonal && !waves.isEmpty {
-                        waveTabs
+                    if !detail.club.isPersonal && selectedWave == nil {
+                        waveDirectory(detail: detail)
                     }
-                    if features.rippleComposerEnabled && canPost(in: detail) {
+                    if features.rippleComposerEnabled && canPost(in: detail) && selectedWave == nil {
                         rippleComposerPrompt(for: detail)
                             .padding(.horizontal, C.pagePad)
+                    }
+                    if let selectedWave {
+                        activeWaveHeader(selectedWave)
                     }
                     if !detail.club.isPersonal && showsEventsSection {
                         VibeEventVibeSection(
@@ -134,7 +139,18 @@ struct VibeDetailView: View {
         .background(C.bg.ignoresSafeArea())
         .navigationTitle(detail?.club.name ?? "Vibe")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(selectedWave != nil)
         .toolbar {
+            if selectedWave != nil {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        Task { await switchWave(to: nil) }
+                    } label: {
+                        Label("Waves", systemImage: "chevron.left")
+                    }
+                    .accessibilityLabel("Back to Wave list")
+                }
+            }
             if hasVibeOptions {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -214,6 +230,39 @@ struct VibeDetailView: View {
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
                 }
+            case .createWave:
+                if let detail {
+                    VibeWaveEditorView(vibeSlug: detail.club.slug, wave: nil) { updatedWaves in
+                        waves = visibleWaves(updatedWaves)
+                        activeSheet = nil
+                    }
+                }
+            case .waveSettings:
+                if let detail, let selectedWave {
+                    VibeWaveEditorView(vibeSlug: detail.club.slug, wave: selectedWave) { updatedWaves in
+                        waves = visibleWaves(updatedWaves)
+                        if !waves.contains(where: { $0.slug == selectedWave.slug }) {
+                            Task { await switchWave(to: nil) }
+                        }
+                        activeSheet = nil
+                    }
+                }
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let detail, let selectedWave,
+               features.rippleComposerEnabled, selectedWave.capabilities.canPost {
+                RippleComposer(
+                    destination: .wave(
+                        vibeSlug: detail.club.slug,
+                        vibeName: detail.club.name,
+                        wave: selectedWave
+                    ),
+                    presentation: .waveMessage
+                ) { ripple in
+                    ripples.insert(ripple, at: 0)
+                    cacheCurrentFeed()
+                }
             }
         }
         .task(id: slug) { await load() }
@@ -290,7 +339,7 @@ struct VibeDetailView: View {
             async let loadedWaves = detail.club.isPersonal ? [] : api.vibeWaves(slug: slug)
             let (page, availableWaves) = try await (loadedPage, loadedWaves)
             self.detail = detail
-            waves = availableWaves.filter { $0.archivedAt == nil && $0.capabilities.canView }
+            waves = visibleWaves(availableWaves)
             selectedWaveSlug = waves.contains(where: { $0.slug == initialWaveSlug })
                 ? initialWaveSlug
                 : nil
@@ -340,34 +389,119 @@ struct VibeDetailView: View {
         }
     }
 
-    private var waveTabs: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                waveTab(title: "Home", slug: nil, systemImage: "house")
-                ForEach(waves) { wave in
-                    waveTab(title: wave.name, slug: wave.slug, systemImage: waveSystemImage(wave))
+    private func waveDirectory(detail: VibeDetailResponse) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Waves")
+                        .font(.title3.bold())
+                    Text("Choose a conversation space")
+                        .font(.caption)
+                        .foregroundStyle(C.textMuted)
+                }
+                Spacer()
+                if detail.capabilities.canManageClub {
+                    Button {
+                        activeSheet = .settings
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Vibe settings")
+                    Button {
+                        activeSheet = .createWave
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.body.bold())
+                            .frame(width: 36, height: 36)
+                            .background(C.watch, in: Circle())
+                    }
+                    .foregroundStyle(C.bg)
+                    .accessibilityLabel("Add Wave")
                 }
             }
-            .padding(.horizontal, C.pagePad)
+            ForEach(waves) { wave in
+                Button {
+                    Task { await switchWave(to: wave.slug) }
+                } label: {
+                    HStack(spacing: 13) {
+                        Image(systemName: waveSystemImage(wave))
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(C.watch)
+                            .frame(width: 42, height: 42)
+                            .background(C.watch.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(wave.name)
+                                    .font(.headline)
+                                    .foregroundStyle(C.text)
+                                if wave.requiresPostApproval {
+                                    Text("Approval")
+                                        .font(.caption2.bold())
+                                        .foregroundStyle(.orange)
+                                }
+                            }
+                            Text(wave.description ?? wavePurpose(wave))
+                                .font(.caption)
+                                .foregroundStyle(C.textMuted)
+                                .lineLimit(2)
+                            if let count = wave._count?.posts, count > 0 {
+                                Text("\(count) \(count == 1 ? "Ripple" : "Ripples")")
+                                    .font(.caption2)
+                                    .foregroundStyle(C.textTertiary)
+                            }
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.bold())
+                            .foregroundStyle(C.textTertiary)
+                    }
+                    .padding(13)
+                    .background(C.surface)
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(C.borderSubtle))
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                }
+                .buttonStyle(.plain)
+            }
+            if waves.isEmpty {
+                ContentUnavailableView(
+                    "No Waves yet",
+                    systemImage: "wave.3.right",
+                    description: Text(detail.capabilities.canManageClub
+                        ? "Create the first conversation space."
+                        : "Conversation spaces will appear here.")
+                )
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
+            }
         }
+        .padding(.horizontal, C.pagePad)
     }
 
-    private func waveTab(title: String, slug: String?, systemImage: String) -> some View {
-        let selected = selectedWaveSlug == slug
-        return Button {
-            Task { await switchWave(to: slug) }
-        } label: {
-            Label(title, systemImage: systemImage)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(selected ? C.bg : C.text)
-                .padding(.horizontal, 14)
-                .frame(height: 38)
-                .background(selected ? C.watch : C.surface)
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke(selected ? Color.clear : C.borderSubtle))
+    private func activeWaveHeader(_ wave: VibeWave) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: waveSystemImage(wave))
+                .foregroundStyle(C.watch)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(wave.name)
+                    .font(.headline)
+                Text(wave.description ?? wavePurpose(wave))
+                    .font(.caption)
+                    .foregroundStyle(C.textMuted)
+                    .lineLimit(1)
+            }
+            Spacer()
+            if wave.capabilities.canManage {
+                Button {
+                    activeSheet = .waveSettings
+                } label: {
+                    Image(systemName: "gearshape")
+                        .frame(width: 36, height: 36)
+                        .background(C.elevated, in: Circle())
+                }
+                .accessibilityLabel("Wave settings")
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(isSwitchingWave && selected)
+        .padding(.horizontal, C.pagePad)
     }
 
     @MainActor
@@ -455,6 +589,22 @@ struct VibeDetailView: View {
         }
     }
 
+    private func wavePurpose(_ wave: VibeWave) -> String {
+        switch wave.type {
+        case .announcements: "Official updates"
+        case .questions: "Questions and answers"
+        case .events: "Gatherings and events"
+        case .resources: "Useful links and knowledge"
+        case .media: "Media conversations"
+        case .staff: "Staff workspace"
+        case .general, .custom, .unknown: "Community conversation"
+        }
+    }
+
+    private func visibleWaves(_ values: [VibeWave]) -> [VibeWave] {
+        values.filter { $0.archivedAt == nil && $0.capabilities.canView }
+    }
+
     private func vibePinAction(for ripple: Ripple) -> () -> Void {
         {
             Task {
@@ -536,6 +686,205 @@ struct VibeDetailView: View {
         activeSheet = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
             activeSheet = destination
+        }
+    }
+}
+
+private struct VibeWaveEditorView: View {
+    let vibeSlug: String
+    let wave: VibeWave?
+    let onSaved: ([VibeWave]) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String
+    @State private var description: String
+    @State private var type: String
+    @State private var visibility: String
+    @State private var postingPolicy: String
+    @State private var commentsEnabled: Bool
+    @State private var requiresPostApproval: Bool
+    @State private var allowPolls: Bool
+    @State private var allowPhotos: Bool
+    @State private var allowLinks: Bool
+    @State private var allowEchoes: Bool
+    @State private var isSaving = false
+    @State private var confirmsArchive = false
+    @State private var errorMessage: String?
+    private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+
+    init(vibeSlug: String, wave: VibeWave?, onSaved: @escaping ([VibeWave]) -> Void) {
+        self.vibeSlug = vibeSlug
+        self.wave = wave
+        self.onSaved = onSaved
+        _name = State(initialValue: wave?.name ?? "")
+        _description = State(initialValue: wave?.description ?? "")
+        _type = State(initialValue: Self.typeValue(wave?.type))
+        _visibility = State(initialValue: wave?.visibility ?? "PUBLIC")
+        _postingPolicy = State(initialValue: wave?.postingPolicy ?? "MEMBERS")
+        _commentsEnabled = State(initialValue: wave?.commentsEnabled ?? true)
+        _requiresPostApproval = State(initialValue: wave?.requiresPostApproval ?? false)
+        _allowPolls = State(initialValue: wave?.allowPolls ?? true)
+        _allowPhotos = State(initialValue: wave?.allowPhotos ?? true)
+        _allowLinks = State(initialValue: wave?.allowLinks ?? true)
+        _allowEchoes = State(initialValue: wave?.allowEchoes ?? true)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Wave") {
+                    TextField("Name", text: $name)
+                    TextField("Description", text: $description, axis: .vertical)
+                        .lineLimit(2...5)
+                    if wave == nil {
+                        Picker("Purpose", selection: $type) {
+                            Text("Conversation").tag("CUSTOM")
+                            Text("Questions").tag("QUESTIONS")
+                            Text("Resources").tag("RESOURCES")
+                            Text("Media").tag("MEDIA")
+                            Text("Events").tag("EVENTS")
+                            Text("Staff").tag("STAFF")
+                        }
+                    }
+                }
+                Section("Access") {
+                    Picker("Visibility", selection: $visibility) {
+                        Text("Public").tag("PUBLIC")
+                        Text("Members").tag("MEMBERS")
+                        Text("Staff").tag("STAFF")
+                    }
+                    Picker("Who can publish", selection: $postingPolicy) {
+                        Text("Everyone").tag("EVERYONE")
+                        Text("Members").tag("MEMBERS")
+                        Text("Moderators").tag("MODERATORS")
+                        Text("Administrators").tag("ADMINS")
+                    }
+                    Toggle("Require Ripple approval", isOn: $requiresPostApproval)
+                }
+                Section("Conversation") {
+                    Toggle("Allow replies", isOn: $commentsEnabled)
+                    Toggle("Allow photos", isOn: $allowPhotos)
+                    Toggle("Allow polls", isOn: $allowPolls)
+                    Toggle("Allow links", isOn: $allowLinks)
+                    Toggle("Allow Echoes", isOn: $allowEchoes)
+                }
+                if let wave, wave.capabilities.canArchive, !wave.isSystem, !wave.isDefault {
+                    Section {
+                        Button("Archive Wave", role: .destructive) {
+                            confirmsArchive = true
+                        }
+                    } footer: {
+                        Text("Existing Ripples are preserved. Active Events may prevent archival.")
+                    }
+                }
+                if let errorMessage {
+                    Section {
+                        Text(errorMessage)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(C.bg)
+            .navigationTitle(wave == nil ? "Add Wave" : "Wave Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isSaving ? "Saving…" : "Save") {
+                        Task { await save() }
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving)
+                }
+            }
+            .confirmationDialog(
+                "Archive \(wave?.name ?? "this Wave")?",
+                isPresented: $confirmsArchive,
+                titleVisibility: .visible
+            ) {
+                Button("Archive Wave", role: .destructive) {
+                    Task { await archive() }
+                }
+                Button("Cancel", role: .cancel) {}
+            }
+        }
+    }
+
+    @MainActor
+    private func save() async {
+        guard !isSaving else { return }
+        isSaving = true
+        errorMessage = nil
+        defer { isSaving = false }
+        do {
+            let updated: [VibeWave]
+            if let wave {
+                updated = try await api.updateVibeWave(
+                    vibeSlug: vibeSlug,
+                    wave: wave,
+                    name: name,
+                    description: description,
+                    visibility: visibility,
+                    postingPolicy: postingPolicy,
+                    commentsEnabled: commentsEnabled,
+                    requiresPostApproval: requiresPostApproval,
+                    allowPolls: allowPolls,
+                    allowPhotos: allowPhotos,
+                    allowLinks: allowLinks,
+                    allowEchoes: allowEchoes
+                )
+            } else {
+                updated = try await api.createVibeWave(
+                    vibeSlug: vibeSlug,
+                    name: name,
+                    type: Self.waveType(type),
+                    description: description,
+                    visibility: visibility,
+                    postingPolicy: postingPolicy
+                )
+            }
+            onSaved(updated)
+            dismiss()
+        } catch {
+            errorMessage = socialErrorMessage(error)
+        }
+    }
+
+    @MainActor
+    private func archive() async {
+        guard let wave, !isSaving else { return }
+        isSaving = true
+        errorMessage = nil
+        defer { isSaving = false }
+        do {
+            onSaved(try await api.archiveVibeWave(vibeSlug: vibeSlug, waveSlug: wave.slug))
+            dismiss()
+        } catch {
+            errorMessage = socialErrorMessage(error)
+        }
+    }
+
+    private static func waveType(_ value: String) -> VibeWaveType {
+        switch value {
+        case "QUESTIONS": .questions
+        case "RESOURCES": .resources
+        case "MEDIA": .media
+        case "EVENTS": .events
+        case "STAFF": .staff
+        default: .custom
+        }
+    }
+
+    private static func typeValue(_ value: VibeWaveType?) -> String {
+        switch value {
+        case .questions: "QUESTIONS"
+        case .resources: "RESOURCES"
+        case .media: "MEDIA"
+        case .events: "EVENTS"
+        case .staff: "STAFF"
+        default: "CUSTOM"
         }
     }
 }

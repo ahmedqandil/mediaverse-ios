@@ -33,6 +33,58 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         XCTAssertEqual(object["waveId"] as? String, "w1")
     }
 
+    func testWaveManagementUsesContextualCreateUpdateArchiveContracts() async throws {
+        let collectionPath = "/api/fan-clubs/cinema/waves"
+        let itemPath = "/api/fan-clubs/cinema/waves/questions"
+        let waveList = """
+        {"waves":[{"id":"w1","name":"Questions","slug":"questions","type":"QUESTIONS",
+        "visibility":"PUBLIC","postingPolicy":"MEMBERS","position":30,"isSystem":false,
+        "isDefault":false,"commentsEnabled":true,"requiresPostApproval":false,
+        "allowPolls":true,"allowPhotos":true,"allowLinks":true,"allowEchoes":true,
+        "archivedAt":null,"capabilities":{"canView":true,"canPost":true,
+        "canCreateEvent":false,"canManage":true,"canArchive":true}}]}
+        """
+        let transport = SocialTransportStub(responses: [
+            collectionPath: waveList,
+            "PATCH \(itemPath)": #"{"wave":{"id":"w1"}}"#,
+            itemPath: #"{"ok":true}"#
+        ])
+        let adapter = LegacySocialAPIAdapter(transport: transport)
+
+        _ = try await adapter.createVibeWave(
+            vibeSlug: "cinema",
+            name: "Questions",
+            type: .questions,
+            description: "Ask the community",
+            visibility: "PUBLIC",
+            postingPolicy: "MEMBERS"
+        )
+        let listedWaves = try await adapter.vibeWaves(slug: "cinema")
+        let wave = try XCTUnwrap(listedWaves.first)
+        _ = try await adapter.updateVibeWave(
+            vibeSlug: "cinema",
+            wave: wave,
+            name: "Questions",
+            description: "Updated",
+            visibility: "MEMBERS_ONLY",
+            postingPolicy: "MODERATORS",
+            commentsEnabled: true,
+            requiresPostApproval: true,
+            allowPolls: true,
+            allowPhotos: false,
+            allowLinks: true,
+            allowEchoes: false
+        )
+        _ = try await adapter.archiveVibeWave(vibeSlug: "cinema", waveSlug: "questions")
+
+        let posts = await transport.postPaths
+        XCTAssertEqual(posts, [collectionPath, "PATCH \(itemPath)"])
+        let deletes = await transport.deletePaths
+        XCTAssertEqual(deletes, [itemPath])
+        let reads = await transport.paths
+        XCTAssertEqual(reads, [collectionPath, collectionPath, collectionPath, collectionPath])
+    }
+
     func testAtmosphereUsesFrozenBareArrayEndpointAndFiltersWebExcludedMedia() async throws {
         let transport = SocialTransportStub(responses: [
             "/api/subscriptions/feed": """

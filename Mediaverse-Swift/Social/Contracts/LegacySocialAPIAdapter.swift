@@ -154,6 +154,73 @@ public actor LegacySocialAPIAdapter {
         ).waves
     }
 
+    public func createVibeWave(
+        vibeSlug: String,
+        name: String,
+        type: VibeWaveType,
+        description: String,
+        visibility: String,
+        postingPolicy: String
+    ) async throws -> [VibeWave] {
+        _ = try await transport.socialPostData(
+            path: "/api/fan-clubs/\(try segment(vibeSlug))/waves",
+            body: try JSONEncoder().encode(VibeWaveMutationRequest(
+                name: name,
+                description: description,
+                type: type,
+                visibility: visibility,
+                postingPolicy: postingPolicy,
+                commentsEnabled: true,
+                requiresPostApproval: false,
+                allowPolls: true,
+                allowPhotos: true,
+                allowLinks: true,
+                allowEchoes: true
+            ))
+        )
+        return try await vibeWaves(slug: vibeSlug)
+    }
+
+    public func updateVibeWave(
+        vibeSlug: String,
+        wave: VibeWave,
+        name: String,
+        description: String,
+        visibility: String,
+        postingPolicy: String,
+        commentsEnabled: Bool,
+        requiresPostApproval: Bool,
+        allowPolls: Bool,
+        allowPhotos: Bool,
+        allowLinks: Bool,
+        allowEchoes: Bool
+    ) async throws -> [VibeWave] {
+        _ = try await transport.socialPatchData(
+            path: "/api/fan-clubs/\(try segment(vibeSlug))/waves/\(try segment(wave.slug))",
+            body: try JSONEncoder().encode(VibeWaveMutationRequest(
+                name: name,
+                description: description,
+                type: nil,
+                visibility: visibility,
+                postingPolicy: postingPolicy,
+                commentsEnabled: commentsEnabled,
+                requiresPostApproval: requiresPostApproval,
+                allowPolls: allowPolls,
+                allowPhotos: allowPhotos,
+                allowLinks: allowLinks,
+                allowEchoes: allowEchoes
+            ))
+        )
+        return try await vibeWaves(slug: vibeSlug)
+    }
+
+    public func archiveVibeWave(vibeSlug: String, waveSlug: String) async throws -> [VibeWave] {
+        _ = try await transport.socialDeleteData(
+            path: "/api/fan-clubs/\(try segment(vibeSlug))/waves/\(try segment(waveSlug))"
+        )
+        return try await vibeWaves(slug: vibeSlug)
+    }
+
     public func waveNotificationSettings(vibeSlug: String, waveSlug: String) async throws -> VibeWaveSubscription {
         try await decode(
             VibeWaveNotificationSettingsResponse.self,
@@ -1011,6 +1078,20 @@ private struct WaveNotificationSettingsRequest: Encodable {
     let notificationLevel: String
     let pushEnabled: Bool
     let emailEnabled: Bool
+}
+
+private struct VibeWaveMutationRequest: Encodable {
+    let name: String
+    let description: String
+    let type: VibeWaveType?
+    let visibility: String
+    let postingPolicy: String
+    let commentsEnabled: Bool
+    let requiresPostApproval: Bool
+    let allowPolls: Bool
+    let allowPhotos: Bool
+    let allowLinks: Bool
+    let allowEchoes: Bool
 }
 
 private struct ResolveAttachmentRequest: Encodable {
