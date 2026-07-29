@@ -198,6 +198,7 @@ struct VibeDetailView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if let detail,
                isCommunityConversation,
+               selectedWave != nil,
                features.rippleComposerEnabled,
                canPost(in: detail) {
                 waveChatComposerEntry(for: detail)
@@ -488,10 +489,17 @@ struct VibeDetailView: View {
     @MainActor
     private func sendChatRipple(in detail: VibeDetailResponse) async {
         let text = chatDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isSendingChatRipple else { return }
+        guard
+            !text.isEmpty,
+            !isSendingChatRipple,
+            let selectedWave
+        else {
+            errorMessage = "Choose a Wave before sending a message."
+            return
+        }
         let pending = PendingWaveRipple(
             vibeSlug: detail.club.slug,
-            waveId: selectedWave?.id,
+            waveId: selectedWave.id,
             body: text
         )
         pendingChatRipples.append(pending)
