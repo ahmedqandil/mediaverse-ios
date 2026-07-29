@@ -594,9 +594,15 @@ struct VibeDetailView: View {
 
     private func waveChatComposerEntry(for detail: VibeDetailResponse) -> some View {
         HStack(alignment: .bottom, spacing: 8) {
-            Button {
-                C.lightHaptic()
-                activeSheet = .attachmentTray
+            Menu {
+                ForEach(waveComposerTools(for: detail), id: \.0.id) { tool, title, icon in
+                    Button {
+                        C.lightHaptic()
+                        openFocusedComposer(tool)
+                    } label: {
+                        Label(title, systemImage: icon)
+                    }
+                }
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 17, weight: .semibold))
@@ -604,7 +610,6 @@ struct VibeDetailView: View {
                     .frame(width: 42, height: 42)
                     .background(C.elevated, in: Circle())
             }
-            .buttonStyle(.plain)
             .accessibilityLabel("Add a message, photo, camera, poll, sticker, voice, video, link, or Event")
 
             TextField(
@@ -652,6 +657,59 @@ struct VibeDetailView: View {
             Rectangle().fill(C.borderSubtle).frame(height: 1)
         }
         .accessibilityIdentifier("wave.composer.dock")
+    }
+
+    private func waveComposerTools(
+        for detail: VibeDetailResponse
+    ) -> [(RippleComposerTool, String, String)] {
+        let wave = selectedWave
+        var tools: [(RippleComposerTool, String, String)] = []
+        switch wave?.type {
+        case .questions:
+            tools.append((.text, "Question", "questionmark.bubble"))
+        case .announcements:
+            tools.append((.text, "Announcement", "megaphone"))
+        case .resources:
+            tools.append((.link, "Resource", "bookmark"))
+        default:
+            tools.append((.text, "Message", "text.bubble"))
+        }
+        if wave?.allowPhotos ?? true {
+            tools.append((.photo, "Photos", "photo.on.rectangle.angled"))
+            tools.append((.camera, "Camera", "camera.fill"))
+        }
+        if wave?.allowPolls ?? true {
+            tools.append((.poll, "Poll", "chart.bar.fill"))
+        }
+        let voiceEnabled = wave == nil
+            ? features.voiceRipplesEnabled
+            : SocialRealtimeRollout.voiceRipplesEnabled(
+                local: features,
+                server: wave?.realtimeCapabilities
+            )
+        if wave?.allowVoiceMessages ?? true, voiceEnabled {
+            tools.append((.voice, "Voice message", "waveform"))
+        }
+        let videoEnabled = wave == nil
+            ? features.videoRipplesEnabled
+            : SocialRealtimeRollout.videoRipplesEnabled(
+                local: features,
+                server: wave?.realtimeCapabilities
+            )
+        if wave?.allowVideoMessages ?? true, videoEnabled {
+            tools.append((.video, "Video message", "video.fill"))
+        }
+        if wave?.allowLinks ?? true, wave?.type != .resources {
+            tools.append((.link, "Westreem / Link", "link"))
+        }
+        if wave == nil || wave?.realtimeCapabilities?.stickers == true {
+            tools.append((.sticker, "Sticker", "face.smiling"))
+        }
+        if wave?.capabilities.canCreateEvent
+            ?? detail.capabilities.canManageClub {
+            tools.append((.event, "Event", "calendar.badge.plus"))
+        }
+        return tools
     }
 
     private var canSendChatRipple: Bool {
