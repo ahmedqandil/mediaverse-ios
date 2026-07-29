@@ -149,6 +149,20 @@ struct EventLiveControllerResponse: Decodable, Equatable, Sendable {
     let controller: EventLiveController
 }
 
+struct EventLiveConnection: Decodable, Equatable, Sendable {
+    let provider: String
+    let url: String
+    let token: String
+    let roomName: String
+    let canPublish: Bool
+    let voiceEnabled: Bool
+    let videoEnabled: Bool
+}
+
+struct EventLiveConnectionResponse: Decodable, Equatable, Sendable {
+    let connection: EventLiveConnection
+}
+
 enum EventWatchCommandAction: String, Encodable, Sendable {
     case play = "PLAY"
     case pause = "PAUSE"

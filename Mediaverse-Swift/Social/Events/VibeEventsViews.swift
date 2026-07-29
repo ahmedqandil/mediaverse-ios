@@ -734,6 +734,13 @@ struct VibeEventDetailView: View {
                             : "Stage controls remain unavailable until RTC is ready."
                     )
                     if room.readiness == .ready {
+                        NavigationLink {
+                            EventLiveRoomView(slug: slug)
+                        } label: {
+                            Label("Join live room", systemImage: "waveform.and.mic")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(C.watch)
                         if controller.capabilities.canRequestSpeaker {
                             Button(controller.speakerRequest == nil ? "Request to speak" : "Cancel speaker request") {
                                 Task {

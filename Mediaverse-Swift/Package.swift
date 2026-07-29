@@ -23,7 +23,7 @@ let package = Package(
         .target(
             name: "MediaverseEventContracts",
             path: "Social/Events",
-            exclude: ["VibeEventsViews.swift"],
+            exclude: ["VibeEventsViews.swift", "EventLiveRoomView.swift"],
             sources: ["VibeEventModels.swift"]
         ),
         .testTarget(

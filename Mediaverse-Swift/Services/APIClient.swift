@@ -2009,6 +2009,15 @@ actor APIClient: LegacySocialTransport {
         return response.controller
     }
 
+    func joinVibeEventLiveRoom(slug: String) async throws -> EventLiveConnection {
+        struct Body: Encodable {}
+        let response: EventLiveConnectionResponse = try await post(
+            "/api/vibe-events/\(C.pathSegment(slug))/live/join",
+            body: Body()
+        )
+        return response.connection
+    }
+
     func sendVibeEventWatchCommand(
         slug: String,
         request: EventWatchCommandRequest

@@ -90,6 +90,8 @@
 		A4C0C00D301A000100000001 /* VibeManagementViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C01D301A000100000001 /* VibeManagementViews.swift */; };
 		E7100001301A000100000001 /* VibeEventModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7100011301A000100000001 /* VibeEventModels.swift */; };
 		E7100002301A000100000001 /* VibeEventsViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7100012301A000100000001 /* VibeEventsViews.swift */; };
+		E7200004301A000100000001 /* EventLiveRoomView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7200005301A000100000001 /* EventLiveRoomView.swift */; };
+		E7200001301A000100000001 /* LiveKit in Frameworks */ = {isa = PBXBuildFile; productRef = E7200002301A000100000001 /* LiveKit */; };
 		846788EC2FFC2BD700DED05E /* StoriesAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846788EB2FFC2BD700DED05E /* StoriesAPIClient.swift */; };
 		846788EE2FFC2BF700DED05E /* StoriesModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846788ED2FFC2BF700DED05E /* StoriesModels.swift */; };
 		846788F02FFC2C0200DED05E /* StoriesRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846788EF2FFC2C0200DED05E /* StoriesRepository.swift */; };
@@ -225,6 +227,7 @@
 		A4C0C01D301A000100000001 /* VibeManagementViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeManagementViews.swift; sourceTree = "<group>"; };
 		E7100011301A000100000001 /* VibeEventModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeEventModels.swift; sourceTree = "<group>"; };
 		E7100012301A000100000001 /* VibeEventsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeEventsViews.swift; sourceTree = "<group>"; };
+		E7200005301A000100000001 /* EventLiveRoomView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventLiveRoomView.swift; sourceTree = "<group>"; };
 		A4C0C019301A000100000001 /* EchoVibeSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoVibeSheet.swift; sourceTree = "<group>"; };
 		A4C0C01A301A000100000001 /* RippleComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleComposer.swift; sourceTree = "<group>"; };
 		846788EB2FFC2BD700DED05E /* StoriesAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoriesAPIClient.swift; sourceTree = "<group>"; };
@@ -307,6 +310,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				846789102FFD119E00DED05E /* MetalPetal in Frameworks */,
+				E7200001301A000100000001 /* LiveKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -620,6 +624,7 @@
 			children = (
 				E7100011301A000100000001 /* VibeEventModels.swift */,
 				E7100012301A000100000001 /* VibeEventsViews.swift */,
+				E7200005301A000100000001 /* EventLiveRoomView.swift */,
 			);
 			name = "Social Events";
 			path = Social/Events;
@@ -786,6 +791,7 @@
 			mainGroup = BF9221F1E8462137A4A4E0A9;
 			packageReferences = (
 				8467890E2FFD119E00DED05E /* XCRemoteSwiftPackageReference "MetalPetal" */,
+				E7200003301A000100000001 /* XCRemoteSwiftPackageReference "client-sdk-swift" */,
 			);
 			productRefGroup = 0B8536557FEB21A0EFA66E4F /* Products */;
 			projectDirPath = "";
@@ -867,6 +873,7 @@
 				A4C0C00D301A000100000001 /* VibeManagementViews.swift in Sources */,
 				E7100001301A000100000001 /* VibeEventModels.swift in Sources */,
 				E7100002301A000100000001 /* VibeEventsViews.swift in Sources */,
+				E7200004301A000100000001 /* EventLiveRoomView.swift in Sources */,
 				8467891E2FFD942100DED05E /* ViewerCountChip.swift in Sources */,
 				846788FD2FFC316000DED05E /* StoryProjectModel.swift in Sources */,
 				846788FF2FFC318000DED05E /* ProjectStore.swift in Sources */,
@@ -1262,6 +1269,14 @@
 				minimumVersion = 1.25.2;
 			};
 		};
+		E7200003301A000100000001 /* XCRemoteSwiftPackageReference "client-sdk-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/livekit/client-sdk-swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1269,6 +1284,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 8467890E2FFD119E00DED05E /* XCRemoteSwiftPackageReference "MetalPetal" */;
 			productName = MetalPetal;
+		};
+		E7200002301A000100000001 /* LiveKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E7200003301A000100000001 /* XCRemoteSwiftPackageReference "client-sdk-swift" */;
+			productName = LiveKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
