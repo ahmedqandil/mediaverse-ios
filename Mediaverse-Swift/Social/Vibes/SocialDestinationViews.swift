@@ -46,34 +46,43 @@ private struct WaveAttachmentTray: View {
                     .foregroundStyle(C.textMuted)
             }
 
-            LazyVGrid(
-                columns: Array(repeating: GridItem(.flexible()), count: 3),
-                spacing: 12
-            ) {
-                ForEach(tools, id: \.0.id) { tool, title, icon in
-                    Button {
-                        C.lightHaptic()
-                        choose(tool)
-                    } label: {
-                        VStack(spacing: 9) {
-                            Image(systemName: icon)
-                                .font(.title3.weight(.semibold))
-                                .foregroundStyle(C.watch)
-                                .frame(width: 42, height: 42)
-                                .background(C.watch.opacity(0.12), in: Circle())
-                            Text(title)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(C.text)
+            if tools.isEmpty {
+                ContentUnavailableView(
+                    "Attachments unavailable",
+                    systemImage: "paperclip",
+                    description: Text("This Wave currently accepts text messages only.")
+                )
+                .frame(maxWidth: .infinity, minHeight: 150)
+            } else {
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.flexible()), count: 3),
+                    spacing: 12
+                ) {
+                    ForEach(tools, id: \.0.id) { tool, title, icon in
+                        Button {
+                            C.lightHaptic()
+                            choose(tool)
+                        } label: {
+                            VStack(spacing: 9) {
+                                Image(systemName: icon)
+                                    .font(.title3.weight(.semibold))
+                                    .foregroundStyle(C.watch)
+                                    .frame(width: 42, height: 42)
+                                    .background(C.watch.opacity(0.12), in: Circle())
+                                Text(title)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(C.text)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 92)
+                            .background(C.elevated, in: RoundedRectangle(cornerRadius: 14))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(C.borderSubtle)
+                            )
                         }
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 92)
-                        .background(C.elevated, in: RoundedRectangle(cornerRadius: 14))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(C.borderSubtle)
-                        )
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }

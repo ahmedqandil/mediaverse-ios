@@ -19,5 +19,13 @@ grep -Fq 'guard selectedComposerTool == tool, selectedWave != nil else { return 
   echo "FAIL: delayed composer transition must preserve its Wave and selected tool."
   exit 1
 }
+grep -Fq '"Attachments unavailable"' "$view" || {
+  echo "FAIL: a text-only Wave must explain why its attachment tray is empty."
+  exit 1
+}
+grep -Fq '"This Wave currently accepts text messages only."' "$view" || {
+  echo "FAIL: text-only attachment state must remain actionable and clear."
+  exit 1
+}
 
 echo "Swift Wave attachment tray source contracts passed."

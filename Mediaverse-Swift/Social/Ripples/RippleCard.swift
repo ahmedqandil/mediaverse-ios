@@ -134,6 +134,7 @@ struct RippleCard: View {
     @State private var showsEdit = false
     @State private var showsReport = false
     @State private var confirmsDelete = false
+    @State private var canRetryShare = false
     @State private var isDeleted = false
     @State private var isBodyExpanded = false
     @State private var editedBody: String?
@@ -265,12 +266,10 @@ struct RippleCard: View {
                     .padding(.top, 12)
             }
 
-            if !isCompactWaveMessage || isLastInMessageGroup || showsComments {
-                actionBar
-                    .padding(.horizontal, 4)
-                    .padding(.top, presentation == .waveConversation ? 2 : 5)
-                    .padding(.bottom, 5)
-            }
+            actionBar
+                .padding(.horizontal, 4)
+                .padding(.top, presentation == .waveConversation ? 2 : 5)
+                .padding(.bottom, 5)
 
             if showsComments {
                 Divider().background(C.borderSubtle)
@@ -351,11 +350,14 @@ struct RippleCard: View {
         }
         .sheet(isPresented: $showsShare) {
             if let shareURL {
-                NativeShareSheet(items: [shareURL])
-                    .ignoresSafeArea()
-                    .onAppear {
-                        Task { await engagement.recordNativeShare() }
+                NativeShareSheet(items: [shareURL]) { completed in
+                    showsShare = false
+                    guard completed else { return }
+                    Task {
+                        canRetryShare = !(await engagement.recordNativeShare())
                     }
+                }
+                    .ignoresSafeArea()
             }
         }
         .sheet(isPresented: $showsEcho) {
@@ -403,6 +405,13 @@ struct RippleCard: View {
                 set: { if !$0 { engagement.errorMessage = nil } }
             )
         ) {
+            if canRetryShare {
+                Button("Retry Share") {
+                    engagement.errorMessage = nil
+                    canRetryShare = false
+                    showsShare = true
+                }
+            }
             Button("OK", role: .cancel) {}
         } message: {
             Text(engagement.errorMessage ?? "")
@@ -2853,9 +2862,19 @@ private struct FlowLayout: Layout {
 
 private struct NativeShareSheet: UIViewControllerRepresentable {
     let items: [Any]
+    let onCompletion: (Bool) -> Void
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
+        let controller = UIActivityViewController(
+            activityItems: items,
+            applicationActivities: nil
+        )
+        controller.completionWithItemsHandler = { _, completed, _, _ in
+            DispatchQueue.main.async {
+                onCompletion(completed)
+            }
+        }
+        return controller
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
@@ -2976,7 +2995,13 @@ struct SocialEnergyForm: View {
                                     .controlSize(.small)
                                     .tint(C.bg)
                             }
-                            Text(isSaving ? "Sending…" : isUpdate ? "Update Energy" : "Send Energy")
+                            Text(
+                                isSaving
+                                    ? "Sending…"
+                                    : errorMessage != nil
+                                        ? "Retry Energy"
+                                        : isUpdate ? "Update Energy" : "Send Energy"
+                            )
                                 .font(.subheadline.bold())
                         }
                         .foregroundStyle(C.bg)

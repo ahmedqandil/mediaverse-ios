@@ -29,6 +29,30 @@ grep -Fq 'shareCount = try await api.recordShare' "$controller" || {
   echo "FAIL: share count must use the authoritative response."
   exit 1
 }
+grep -Fq 'completionWithItemsHandler' "$card" || {
+  echo "FAIL: native Share accounting must wait for activity completion."
+  exit 1
+}
+if grep -Fq 'Task { await engagement.recordNativeShare() }' "$card"; then
+  echo "FAIL: opening the Share sheet must not record a completed share."
+  exit 1
+fi
+grep -Fq 'guard completed else { return }' "$card" || {
+  echo "FAIL: cancelled Share activities must not mutate counts."
+  exit 1
+}
+grep -Fq 'Button("Retry Share")' "$card" || {
+  echo "FAIL: failed Share accounting must preserve a retry action."
+  exit 1
+}
+grep -Fq '"Retry Energy"' "$card" || {
+  echo "FAIL: failed Energy submission must expose retry intent."
+  exit 1
+}
+if grep -Fq 'if !isCompactWaveMessage || isLastInMessageGroup || showsComments' "$card"; then
+  echo "FAIL: every grouped Ripple must retain its action bar."
+  exit 1
+fi
 grep -Fq 'echoCount += max(0, count)' "$controller" || {
   echo "FAIL: Echo success must update the visible count."
   exit 1

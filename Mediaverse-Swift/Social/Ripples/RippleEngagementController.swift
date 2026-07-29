@@ -86,14 +86,17 @@ final class RippleEngagementController: ObservableObject {
         }
     }
 
-    func recordNativeShare() async {
+    @discardableResult
+    func recordNativeShare() async -> Bool {
         do {
             shareCount = try await api.recordShare(
                 ofRipple: rippleId,
                 channel: .native
             ).shareCount
+            return true
         } catch {
             errorMessage = message(for: error)
+            return false
         }
     }
 
