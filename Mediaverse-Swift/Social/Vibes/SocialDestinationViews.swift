@@ -595,13 +595,17 @@ struct VibeDetailView: View {
     private func waveChatComposerEntry(for detail: VibeDetailResponse) -> some View {
         HStack(alignment: .bottom, spacing: 8) {
             Menu {
-                ForEach(waveComposerTools(for: detail), id: \.0.id) { tool, title, icon in
+                ForEach(waveComposerTools(for: detail), id: \.0.id) { tool, title, icon, enabled in
                     Button {
                         C.lightHaptic()
                         openFocusedComposer(tool)
                     } label: {
-                        Label(title, systemImage: icon)
+                        Label(
+                            enabled ? title : "\(title) — unavailable in this Wave",
+                            systemImage: enabled ? icon : "lock"
+                        )
                     }
+                    .disabled(!enabled)
                 }
             } label: {
                 Image(systemName: "plus")
@@ -661,54 +665,68 @@ struct VibeDetailView: View {
 
     private func waveComposerTools(
         for detail: VibeDetailResponse
-    ) -> [(RippleComposerTool, String, String)] {
+    ) -> [(RippleComposerTool, String, String, Bool)] {
         let wave = selectedWave
-        var tools: [(RippleComposerTool, String, String)] = []
+        var tools: [(RippleComposerTool, String, String, Bool)] = []
         switch wave?.type {
         case .questions:
-            tools.append((.text, "Question", "questionmark.bubble"))
+            tools.append((.text, "Question", "questionmark.bubble", true))
         case .announcements:
-            tools.append((.text, "Announcement", "megaphone"))
+            tools.append((.text, "Announcement", "megaphone", true))
         case .resources:
-            tools.append((.link, "Resource", "bookmark"))
+            tools.append((.link, "Resource", "bookmark", true))
         default:
-            tools.append((.text, "Message", "text.bubble"))
+            tools.append((.text, "Message", "text.bubble", true))
         }
-        if wave?.allowPhotos ?? true {
-            tools.append((.photo, "Photos", "photo.on.rectangle.angled"))
-            tools.append((.camera, "Camera", "camera.fill"))
-        }
-        if wave?.allowPolls ?? true {
-            tools.append((.poll, "Poll", "chart.bar.fill"))
-        }
+        let photosEnabled = wave?.allowPhotos ?? true
+        tools.append((.photo, "Photos", "photo.on.rectangle.angled", photosEnabled))
+        tools.append((.camera, "Camera", "camera.fill", photosEnabled))
+        tools.append((.poll, "Poll", "chart.bar.fill", wave?.allowPolls ?? true))
         let voiceEnabled = wave == nil
             ? features.voiceRipplesEnabled
             : SocialRealtimeRollout.voiceRipplesEnabled(
                 local: features,
                 server: wave?.realtimeCapabilities
             )
-        if wave?.allowVoiceMessages ?? true, voiceEnabled {
-            tools.append((.voice, "Voice message", "waveform"))
-        }
+        tools.append((
+            .voice,
+            "Voice message",
+            "waveform",
+            (wave?.allowVoiceMessages ?? true) && voiceEnabled
+        ))
         let videoEnabled = wave == nil
             ? features.videoRipplesEnabled
             : SocialRealtimeRollout.videoRipplesEnabled(
                 local: features,
                 server: wave?.realtimeCapabilities
             )
-        if wave?.allowVideoMessages ?? true, videoEnabled {
-            tools.append((.video, "Video message", "video.fill"))
+        tools.append((
+            .video,
+            "Video message",
+            "video.fill",
+            (wave?.allowVideoMessages ?? true) && videoEnabled
+        ))
+        if wave?.type != .resources {
+            tools.append((
+                .link,
+                "Westreem / Link",
+                "link",
+                wave?.allowLinks ?? true
+            ))
         }
-        if wave?.allowLinks ?? true, wave?.type != .resources {
-            tools.append((.link, "Westreem / Link", "link"))
-        }
-        if wave == nil || wave?.realtimeCapabilities?.stickers == true {
-            tools.append((.sticker, "Sticker", "face.smiling"))
-        }
-        if wave?.capabilities.canCreateEvent
-            ?? detail.capabilities.canManageClub {
-            tools.append((.event, "Event", "calendar.badge.plus"))
-        }
+        tools.append((
+            .sticker,
+            "Sticker",
+            "face.smiling",
+            wave == nil || wave?.realtimeCapabilities?.stickers == true
+        ))
+        tools.append((
+            .event,
+            "Event",
+            "calendar.badge.plus",
+            wave?.capabilities.canCreateEvent
+                ?? detail.capabilities.canManageClub
+        ))
         return tools
     }
 
