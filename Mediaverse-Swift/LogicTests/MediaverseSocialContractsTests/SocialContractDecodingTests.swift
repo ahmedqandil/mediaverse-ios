@@ -676,7 +676,7 @@ final class SocialContractDecodingTests: XCTestCase {
         XCTAssertTrue(configuration.atmosphereEnabled)
         XCTAssertTrue(configuration.discoverEnabled)
         XCTAssertFalse(configuration.rippleEngagementEnabled)
-        XCTAssertFalse(configuration.matrixRealtimeEnabled)
+        XCTAssertTrue(configuration.matrixRealtimeEnabled)
         suite.removePersistentDomain(forName: "SocialContractDecodingTests")
     }
 

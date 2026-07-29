@@ -11,8 +11,9 @@ public struct SocialFeatureConfiguration: Equatable, Sendable {
     public var rippleEngagementEnabled: Bool
     public var rippleComposerEnabled: Bool
     public var flashesEnergyEnabled: Bool
-    /// Matrix-backed realtime transport is opt-in until the server advertises
-    /// compatible homeserver and identity bindings.
+    /// Matrix-backed realtime transport remains server-gated. Local defaults
+    /// are enabled for the production client now that the rollout endpoints
+    /// are live; an explicitly stored false remains the device kill switch.
     public var matrixRealtimeEnabled: Bool
     public var wavePresenceEnabled: Bool
     public var directMessagesEnabled: Bool
@@ -92,7 +93,7 @@ public struct SocialFeatureConfiguration: Equatable, Sendable {
     }
 
     private static func optInValue(for key: String, in userDefaults: UserDefaults) -> Bool {
-        guard userDefaults.object(forKey: key) != nil else { return false }
+        guard userDefaults.object(forKey: key) != nil else { return true }
         return userDefaults.bool(forKey: key)
     }
 
