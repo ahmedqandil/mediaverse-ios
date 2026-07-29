@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
-/// Root page container: Home · Videos · Shorts · Discover · Profile
+/// Root page container: Home · Videos · Shorts · Discover · My Vibes
 /// All watch/channel/show/microdrama screens are PUSHED on the relevant NavigationStack.
 /// On iOS 26 the tab bar adopts Liquid Glass automatically — UITabBar.appearance()
 /// is skipped on that OS to avoid fighting the compositor.
@@ -20,7 +20,8 @@ struct MainTabView: View {
     @State private var videosPath: [AppRoute] = []
     @State private var explorePath: [AppRoute] = []
     @State private var shortsPath: [AppRoute] = []
-    @State private var profilePath: [AppRoute] = []
+    @State private var myVibesPath: [AppRoute] = []
+    @State private var isProfilePresented = false
     @State private var isUploadSheetPresented = false
     @State private var uploadDrawerDragOffset: CGFloat = 0
     @State private var expandingMiniItem: MiniPlayerManager.Item?
@@ -44,7 +45,7 @@ struct MainTabView: View {
         case videos = 1
         case shorts = 2
         case explore = 3
-        case profile = 4
+        case myVibes = 4
     }
 
     private var activeNavigationPath: [AppRoute] {
@@ -57,8 +58,8 @@ struct MainTabView: View {
             return shortsPath
         case .explore:
             return explorePath
-        case .profile:
-            return profilePath
+        case .myVibes:
+            return myVibesPath
         }
     }
 
@@ -80,8 +81,8 @@ struct MainTabView: View {
             return "shorts"
         case .explore:
             return "explore"
-        case .profile:
-            return "profile"
+        case .myVibes:
+            return "my-vibes"
         }
     }
 
@@ -94,7 +95,7 @@ struct MainTabView: View {
     }
 
     var body: some View {
-        layeredRoot
+        layeredRootWithProfile
         .simultaneousGesture(mainScrollActivityGesture)
         .animation(.spring(response: 0.26, dampingFraction: 0.88), value: isUploadSheetPresented)
         .animation(.spring(response: 0.24, dampingFraction: 0.86), value: isBottomTabBarCompressed)
@@ -124,7 +125,7 @@ struct MainTabView: View {
             videosPath = []
             explorePath = []
             shortsPath = []
-            profilePath = []
+            myVibesPath = []
             dismissContextToast()
             selectedTab = .home
             lastContentTab = .home
@@ -137,8 +138,7 @@ struct MainTabView: View {
             openUploadOptions()
         }
         .onReceive(NotificationCenter.default.publisher(for: .profileTabRequested)) { _ in
-            selectedTab = .profile
-            lastContentTab = .profile
+            isProfilePresented = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .exploreSectionRequested)) { _ in
             explorePath = []
@@ -190,6 +190,13 @@ struct MainTabView: View {
             shortsPlaybackManager.setMuted(muted)
         }
         .onChange(of: auth.currentUser?.id, handleAuthenticationChange)
+    }
+
+    private var layeredRootWithProfile: some View {
+        layeredRoot
+            .sheet(isPresented: $isProfilePresented) {
+                ProfileNavigationSheet(isPresented: $isProfilePresented)
+            }
     }
 
     private var layeredRoot: some View {
@@ -405,16 +412,16 @@ struct MainTabView: View {
             .tabItem { appTabLabel("Discover", icon: "explore", fallback: "safari") }
             .tag(AppTab.explore)
 
-            NavigationStack(path: $profilePath) {
-                MyAtmoProfileView(isRootActive: selectedTab == .profile)
+            NavigationStack(path: $myVibesPath) {
+                AtmosphereView(initialTab: .myVibes, visibleTabs: [.myVibes])
                     .navigationDestination(for: AppRoute.self) { route in
                         routeDestination(route)
                     }
             }
             .ignoresSafeArea(edges: .bottom)
             .toolbar(.hidden, for: .tabBar)
-            .tabItem { appTabLabel("Profile", icon: "user", fallback: "person") }
-            .tag(AppTab.profile)
+            .tabItem { appTabLabel("My Vibes", icon: "users", fallback: "person.3") }
+            .tag(AppTab.myVibes)
         }
         .tint(C.watch)
         .toolbar(.hidden, for: .tabBar)
@@ -625,7 +632,7 @@ struct MainTabView: View {
                         bottomTabButton(.shorts, title: "Shorts", icon: "short", fallback: "bolt")
                     }
                     bottomTabButton(.explore, title: "Discover", icon: "explore", fallback: "safari")
-                    bottomTabButton(.profile, title: "Profile", icon: "user", fallback: "person")
+                    bottomTabButton(.myVibes, title: "My Vibes", icon: "users", fallback: "person.3")
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -748,8 +755,8 @@ struct MainTabView: View {
             shortsPath = []
         case .explore:
             explorePath = []
-        case .profile:
-            profilePath = []
+        case .myVibes:
+            myVibesPath = []
         }
     }
 
@@ -870,8 +877,8 @@ struct MainTabView: View {
             shortsPath.append(route)
         case .explore:
             explorePath.append(route)
-        case .profile:
-            profilePath.append(route)
+        case .myVibes:
+            myVibesPath.append(route)
         }
     }
 
@@ -881,7 +888,7 @@ struct MainTabView: View {
         videosPath = []
         explorePath = []
         shortsPath = []
-        profilePath = []
+        myVibesPath = []
         isRoutedShortsPresented = route.isShortRoute
         selectedTab = .home
         lastContentTab = .home
@@ -902,8 +909,7 @@ struct MainTabView: View {
         case "channel":
             homePath.append(.channel(context.channelId ?? context.id))
         case "user":
-            selectedTab = .profile
-            lastContentTab = .profile
+            isProfilePresented = true
         default:
             break
         }
@@ -1137,6 +1143,23 @@ struct MainTabView: View {
 
         UITabBar.appearance().standardAppearance   = appearance
         UITabBar.appearance().scrollEdgeAppearance = appearance
+    }
+}
+
+private struct ProfileNavigationSheet: View {
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        NavigationStack {
+            MyAtmoProfileView(isRootActive: isPresented)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Done") {
+                            isPresented = false
+                        }
+                    }
+                }
+        }
     }
 }
 

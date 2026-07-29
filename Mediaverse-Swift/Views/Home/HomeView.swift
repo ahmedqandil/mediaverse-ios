@@ -1030,6 +1030,13 @@ struct HomeView: View {
                 toolbarIcon("search", fallback: "magnifyingglass")
             }
             .accessibilityLabel("Search")
+
+            Button {
+                NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+            } label: {
+                toolbarIcon("user", fallback: "person.crop.circle")
+            }
+            .accessibilityLabel("Me")
         }
     }
 

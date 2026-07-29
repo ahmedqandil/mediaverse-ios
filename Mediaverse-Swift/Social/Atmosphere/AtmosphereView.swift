@@ -3,11 +3,13 @@ import AVKit
 import UIKit
 
 struct AtmosphereView: View {
+    private let visibleTabs: [AtmosphereViewModel.Tab]
+
     @AppStorage("playerMuted") private var playerMuted = false
     @EnvironmentObject private var auth: AuthManager
     @EnvironmentObject private var miniPlayer: MiniPlayerManager
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @StateObject private var model = AtmosphereViewModel()
+    @StateObject private var model: AtmosphereViewModel
     @StateObject private var previewManager = FeedPreviewPlayerManager()
     @State private var activePreviewVideoId: String?
     @State private var previewFrames: [String: CGRect] = [:]
@@ -21,23 +23,33 @@ struct AtmosphereView: View {
     @State private var isHorizontalCarouselInteracting = false
     private let socialFeatures = SocialFeatureConfiguration.runtime()
 
+    init(
+        initialTab: AtmosphereViewModel.Tab = .atmosphere,
+        visibleTabs: [AtmosphereViewModel.Tab] = [.atmosphere, .discover]
+    ) {
+        self.visibleTabs = visibleTabs
+        _model = StateObject(wrappedValue: AtmosphereViewModel(selectedTab: initialTab))
+    }
+
     private var isCompactWidth: Bool { horizontalSizeClass == .compact }
     private var feedCardInset: CGFloat { isCompactWidth ? 0 : C.pagePad }
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            MediaverseUnderlineTabStrip(
-                items: AtmosphereViewModel.Tab.allCases.map {
-                    MediaverseTabItem(id: $0.id, label: $0.title)
-                },
-                selectedID: model.selectedTab.id,
-                fillsWidth: true,
-                horizontalPadding: 0,
-                loadingID: isSelectedTabLoading ? model.selectedTab.id : nil
-            ) { id in
-                guard let tab = AtmosphereViewModel.Tab(rawValue: id) else { return }
-                model.select(tab)
+            if visibleTabs.count > 1 {
+                MediaverseUnderlineTabStrip(
+                    items: visibleTabs.map {
+                        MediaverseTabItem(id: $0.id, label: $0.title)
+                    },
+                    selectedID: model.selectedTab.id,
+                    fillsWidth: true,
+                    horizontalPadding: 0,
+                    loadingID: isSelectedTabLoading ? model.selectedTab.id : nil
+                ) { id in
+                    guard let tab = AtmosphereViewModel.Tab(rawValue: id) else { return }
+                    model.select(tab)
+                }
             }
             content
         }
@@ -110,7 +122,7 @@ struct AtmosphereView: View {
                 let predictedHorizontal = value.predictedEndTranslation.width
                 guard abs(horizontal) > abs(vertical) * 1.15,
                       abs(horizontal) > 48 || abs(predictedHorizontal) > 80 else { return }
-                let tabs = AtmosphereViewModel.Tab.allCases
+                let tabs = visibleTabs
                 guard let index = tabs.firstIndex(of: model.selectedTab) else { return }
                 let direction = abs(predictedHorizontal) > abs(horizontal) ? predictedHorizontal : horizontal
                 if direction > 0, model.selectedTab == .atmosphere {
@@ -198,6 +210,13 @@ struct AtmosphereView: View {
                 headerIcon("search", fallback: "magnifyingglass")
             }
             .accessibilityLabel("Search")
+
+            Button {
+                NotificationCenter.default.post(name: .profileTabRequested, object: nil)
+            } label: {
+                headerIcon("user", fallback: "person.crop.circle")
+            }
+            .accessibilityLabel("Me")
         }
     }
 
@@ -666,7 +685,7 @@ struct AtmosphereView: View {
             }
             .refreshable { await model.reload(.myVibes) }
             .onReceive(NotificationCenter.default.publisher(for: .mainTabScrollToTopRequested)) { notification in
-                guard notification.object as? String == "home" else { return }
+                guard notification.object as? String == "my-vibes" else { return }
                 withAnimation(.easeOut(duration: 0.28)) {
                     proxy.scrollTo("atmosphere-vibes-top", anchor: .top)
                 }

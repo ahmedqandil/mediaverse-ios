@@ -38,7 +38,11 @@ final class AtmosphereViewModel: ObservableObject {
     private var hasLoadedCuration = false
     private var hasCheckedAffiliatedAvailability = false
 
-    init(api: LegacySocialAPIAdapter = LegacySocialAPIAdapter(transport: APIClient.shared)) {
+    init(
+        selectedTab: Tab = .atmosphere,
+        api: LegacySocialAPIAdapter = LegacySocialAPIAdapter(transport: APIClient.shared)
+    ) {
+        self.selectedTab = selectedTab
         self.api = api
     }
 
