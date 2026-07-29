@@ -1,3 +1,4 @@
+import AVFoundation
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -45,6 +46,11 @@ struct RippleComposer: View {
     @State private var positioningPhoto: RipplePhotoPositioning?
     @State private var isUploadingPhotos = false
     @State private var uploadProgress = 0
+    @State private var videoSelection: PhotosPickerItem?
+    @State private var showsVideoLibrary = false
+    @State private var selectedMediaJobID: UUID?
+    @StateObject private var voiceRecorder = RippleVoiceRecorder()
+    @StateObject private var mediaUploads = RippleMediaUploadCoordinator.shared
     @FocusState private var isBodyFocused: Bool
 
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
@@ -135,13 +141,22 @@ struct RippleComposer: View {
             if pollOpen {
                 pollEditor
             }
+            if voiceRecorder.state != .idle {
+                voiceRecordingPanel
+            }
+            if let mediaJob {
+                mediaUploadPanel(mediaJob)
+            }
 
             VStack(alignment: .leading, spacing: 10) {
                 Text("Add to your Ripple")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(C.textMuted)
 
-                HStack(spacing: 10) {
+                LazyVGrid(
+                    columns: [GridItem(.flexible()), GridItem(.flexible())],
+                    spacing: 10
+                ) {
                 Button {
                     isBodyFocused = false
                     showsPhotoSourceChooser = true
@@ -166,6 +181,34 @@ struct RippleComposer: View {
                         systemImage: "chart.bar",
                         selected: pollOpen
                     )
+                }
+                if voiceRipplesEnabled {
+                    Button {
+                        isBodyFocused = false
+                        Task { await voiceRecorder.start() }
+                    } label: {
+                        composerToolLabel(
+                            "Voice",
+                            systemImage: "waveform",
+                            selected: voiceRecorder.state != .idle
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(selectedMediaJobID != nil || voiceRecorder.state != .idle)
+                }
+                if videoRipplesEnabled {
+                    Button {
+                        isBodyFocused = false
+                        showsVideoLibrary = true
+                    } label: {
+                        composerToolLabel(
+                            "Video",
+                            systemImage: "video",
+                            selected: mediaJob?.kind == .video
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(selectedMediaJobID != nil || voiceRecorder.state != .idle)
                 }
                 }
             }
@@ -214,7 +257,10 @@ struct RippleComposer: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(C.watch)
-            .disabled(!canPublish || isPublishing || isResolving || isUploadingPhotos)
+            .disabled(
+                !canPublish || isPublishing || isResolving || isUploadingPhotos
+                    || mediaJobIsBusy
+            )
         }
         .padding(isCompactWidth ? 14 : 18)
         .background(C.surface)
@@ -245,6 +291,15 @@ struct RippleComposer: View {
         )
         .onChange(of: photoSelections) { _, items in
             Task { await upload(items) }
+        }
+        .photosPicker(
+            isPresented: $showsVideoLibrary,
+            selection: $videoSelection,
+            matching: .videos
+        )
+        .onChange(of: videoSelection) { _, item in
+            guard let item else { return }
+            Task { await prepareVideoMessage(item) }
         }
         .fullScreenCover(isPresented: $showsCamera) {
             RipplePhotoCameraPicker(
@@ -314,6 +369,7 @@ struct RippleComposer: View {
         let hasBody = !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasPoll = pollDraft != nil
         let hasContent = hasBody || attachment != nil || !photos.isEmpty || hasPoll
+            || mediaJob?.createAttachment != nil
         if isResourceWave {
             return hasContent && SpecializedWaveUIRules.canPublishResource(
                 category: resourceCategory,
@@ -321,6 +377,137 @@ struct RippleComposer: View {
             )
         }
         return hasContent
+    }
+
+    private var featureConfiguration: SocialFeatureConfiguration {
+        .runtime()
+    }
+
+    private var destinationRealtimeCapabilities: SocialRealtimeCapabilities? {
+        guard case .wave(_, _, let wave) = destination else { return nil }
+        return wave.realtimeCapabilities
+    }
+
+    private var voiceRipplesEnabled: Bool {
+        SocialRealtimeRollout.voiceRipplesEnabled(
+            local: featureConfiguration,
+            server: destinationRealtimeCapabilities
+        )
+    }
+
+    private var videoRipplesEnabled: Bool {
+        SocialRealtimeRollout.videoRipplesEnabled(
+            local: featureConfiguration,
+            server: destinationRealtimeCapabilities
+        )
+    }
+
+    private var mediaJob: RippleMediaUploadJob? {
+        guard let selectedMediaJobID else { return nil }
+        return mediaUploads.jobs.first { $0.id == selectedMediaJobID }
+    }
+
+    private var mediaJobIsBusy: Bool {
+        guard let state = mediaJob?.state else { return false }
+        return [.preparing, .queued, .uploading, .processing].contains(state)
+    }
+
+    private var voiceRecordingPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Voice Ripple", systemImage: "waveform")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(formatDuration(voiceRecorder.elapsedSeconds))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(C.textMuted)
+            }
+            switch voiceRecorder.state {
+            case .requestingPermission:
+                ProgressView("Requesting microphone access…").tint(C.watch)
+            case .recording, .paused, .ready:
+                HStack(spacing: 10) {
+                    if voiceRecorder.state == .recording || voiceRecorder.state == .paused {
+                        Button {
+                            voiceRecorder.pauseOrResume()
+                        } label: {
+                            Label(
+                                voiceRecorder.state == .recording ? "Pause" : "Resume",
+                                systemImage: voiceRecorder.state == .recording ? "pause.fill" : "mic.fill"
+                            )
+                        }
+                        Button("Finish", systemImage: "stop.fill") { voiceRecorder.finish() }
+                    }
+                    if voiceRecorder.state == .ready {
+                        Button("Upload voice", systemImage: "arrow.up.circle.fill") {
+                            enqueueVoiceMessage()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(C.watch)
+                    }
+                    Spacer()
+                    Button("Discard", systemImage: "trash", role: .destructive) {
+                        voiceRecorder.discard()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            case .denied:
+                Text("Microphone access is disabled. Enable it in iPhone Settings to record a Voice Ripple.")
+                    .font(.caption)
+                    .foregroundStyle(C.textMuted)
+                Button("Dismiss") { voiceRecorder.discard() }
+            case .failed(let reason):
+                Text(reason).font(.caption).foregroundStyle(.red)
+                Button("Dismiss") { voiceRecorder.discard() }
+            case .idle:
+                EmptyView()
+            }
+        }
+        .padding(12)
+        .background(C.elevated.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func mediaUploadPanel(_ job: RippleMediaUploadJob) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(
+                    job.kind == .voice ? "Voice Ripple" : "Video Ripple",
+                    systemImage: job.kind == .voice ? "waveform" : "video.fill"
+                )
+                .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(mediaStateLabel(job.state))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(job.state == .failed ? .red : C.textMuted)
+            }
+            if job.state == .uploading {
+                ProgressView(value: job.progress)
+                    .tint(C.watch)
+            } else if [.preparing, .queued, .processing].contains(job.state) {
+                ProgressView().tint(C.watch)
+            }
+            if let reason = job.failureMessage, job.state == .failed {
+                Text(reason).font(.caption).foregroundStyle(.red)
+            }
+            HStack {
+                if job.state == .failed {
+                    Button("Retry", systemImage: "arrow.clockwise") {
+                        mediaUploads.retry(id: job.id)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                Spacer()
+                Button("Remove", systemImage: "xmark", role: .destructive) {
+                    mediaUploads.remove(id: job.id)
+                    selectedMediaJobID = nil
+                }
+                .buttonStyle(.bordered)
+            }
+            .controlSize(.small)
+        }
+        .padding(12)
+        .background(C.elevated.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var isResourceWave: Bool {
@@ -659,6 +846,80 @@ struct RippleComposer: View {
         }
     }
 
+    @MainActor
+    private func enqueueVoiceMessage() {
+        guard voiceRipplesEnabled,
+              let sourceURL = voiceRecorder.fileURL else { return }
+        do {
+            selectedMediaJobID = try mediaUploads.enqueue(
+                sourceURL: sourceURL,
+                vibeSlug: tryVoiceDestinationSlug(),
+                kind: .voice,
+                mimeType: "audio/mp4",
+                durationMilliseconds: Int(voiceRecorder.elapsedSeconds * 1_000)
+            )
+            voiceRecorder.discard()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func prepareVideoMessage(_ item: PhotosPickerItem) async {
+        guard videoRipplesEnabled, selectedMediaJobID == nil else {
+            videoSelection = nil
+            return
+        }
+        errorMessage = nil
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self),
+                  !data.isEmpty, data.count <= 250 * 1024 * 1024 else {
+                throw CocoaError(.fileReadTooLarge)
+            }
+            let sourceURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("ripple-video-\(UUID().uuidString).mov")
+            try data.write(to: sourceURL, options: .atomic)
+            let duration = try? await AVURLAsset(url: sourceURL).load(.duration)
+            let milliseconds = duration.map {
+                Int(max(0, CMTimeGetSeconds($0)) * 1_000)
+            }
+            selectedMediaJobID = try mediaUploads.enqueue(
+                sourceURL: sourceURL,
+                vibeSlug: tryVoiceDestinationSlug(),
+                kind: .video,
+                mimeType: "video/quicktime",
+                durationMilliseconds: milliseconds
+            )
+            try? FileManager.default.removeItem(at: sourceURL)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        videoSelection = nil
+    }
+
+    private func tryVoiceDestinationSlug() throws -> String {
+        guard case .wave(let vibeSlug, _, _) = destination else {
+            throw LegacySocialAPIError.invalidPath
+        }
+        return vibeSlug
+    }
+
+    private func formatDuration(_ seconds: TimeInterval) -> String {
+        let value = max(0, Int(seconds))
+        return "\(value / 60):\(String(format: "%02d", value % 60))"
+    }
+
+    private func mediaStateLabel(_ state: RippleMediaUploadState) -> String {
+        switch state {
+        case .preparing: "Preparing"
+        case .queued: "Waiting for connection"
+        case .uploading: "Uploading"
+        case .processing: "Processing"
+        case .ready: "Ready"
+        case .failed: "Upload failed"
+        }
+    }
+
     /// Keeps the existing R2 upload contract while staying below the web proxy's
     /// request-body ceiling. Rendering also normalizes camera orientation and HEIC.
     private func preparedPhotoData(from originalData: Data) -> Data? {
@@ -717,7 +978,8 @@ struct RippleComposer: View {
                 inVibe: slug,
                 body: bodyText,
                 attachments: photos.map { .photo(imageURL: $0.imageURL) }
-                    + (attachment.map { [$0] } ?? []),
+                    + (attachment.map { [$0] } ?? [])
+                    + (mediaJob?.createAttachment.map { [$0] } ?? []),
                 poll: pollDraft,
                 isSpoiler: isSpoiler,
                 commentsDisabled: commentsDisabled,
@@ -736,6 +998,10 @@ struct RippleComposer: View {
     }
 
     private func reset() {
+        if let selectedMediaJobID {
+            mediaUploads.remove(id: selectedMediaJobID)
+        }
+        voiceRecorder.discard()
         bodyText = ""
         isSpoiler = false
         commentsDisabled = false
@@ -748,6 +1014,8 @@ struct RippleComposer: View {
         resolvedURL = nil
         photoSelections = []
         photos = []
+        selectedMediaJobID = nil
+        videoSelection = nil
     }
 }
 

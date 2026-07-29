@@ -52,7 +52,7 @@ public enum ConversationalMediaKind: String, Codable, Sendable {
     case video = "VIDEO"
 }
 
-public enum ConversationalMediaProcessingStatus: String, Decodable, Sendable {
+public enum ConversationalMediaProcessingStatus: String, Codable, Sendable {
     case preparing = "PREPARING"
     case uploading = "UPLOADING"
     case processing = "PROCESSING"
@@ -63,7 +63,7 @@ public enum ConversationalMediaProcessingStatus: String, Decodable, Sendable {
 
 /// Stable, delivery-safe media metadata. URLs may be absent while processing;
 /// clients must not infer readiness from the presence of a thumbnail.
-public struct ConversationalMedia: Decodable, Equatable, Sendable {
+public struct ConversationalMedia: Codable, Equatable, Sendable {
     public let id: String
     public let kind: ConversationalMediaKind
     public let status: ConversationalMediaProcessingStatus
@@ -114,6 +114,32 @@ public struct ConversationalMedia: Decodable, Equatable, Sendable {
     public var isPlayable: Bool {
         status == .ready && playbackURL?.isEmpty == false
     }
+}
+
+public struct ConversationalMediaUploadPreparation: Decodable, Sendable {
+    public let mediaId: String
+    public let uploadURL: String
+    public let objectKey: String?
+    public let method: String
+    public let headers: [String: String]
+
+    private enum CodingKeys: String, CodingKey {
+        case mediaId, objectKey, method, headers
+        case uploadURL = "uploadUrl"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        mediaId = try values.decode(String.self, forKey: .mediaId)
+        uploadURL = try values.decode(String.self, forKey: .uploadURL)
+        objectKey = try values.decodeIfPresent(String.self, forKey: .objectKey)
+        method = try values.decodeIfPresent(String.self, forKey: .method) ?? "PUT"
+        headers = try values.decodeIfPresent([String: String].self, forKey: .headers) ?? [:]
+    }
+}
+
+public struct ConversationalMediaUploadCompletion: Decodable, Sendable {
+    public let media: ConversationalMedia
 }
 
 /// Resolves local and server gates together. This prevents a debug preference

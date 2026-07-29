@@ -2,6 +2,65 @@ import XCTest
 @testable import MediaverseSocialContracts
 
 final class LegacySocialAPIAdapterTests: XCTestCase {
+    func testConversationalMediaPreparationAndCompletionUseStableMediaIDContract() async throws {
+        let preparePath = "/api/fan-clubs/cinema/media-messages/upload-url"
+        let completePath = "/api/fan-clubs/cinema/media-messages/media-1/complete"
+        let statusPath = "/api/fan-clubs/cinema/media-messages/media-1"
+        let transport = SocialTransportStub(responses: [
+            preparePath: """
+            {"mediaId":"media-1","uploadUrl":"https://upload.example/media-1",
+             "objectKey":"ripple-media/voice/media-1.m4a","method":"PUT",
+             "headers":{"x-upload-token":"opaque"}}
+            """,
+            completePath: """
+            {"media":{"id":"media-1","kind":"VOICE","status":"PROCESSING",
+             "durationMilliseconds":42000}}
+            """,
+            statusPath: """
+            {"media":{"id":"media-1","kind":"VOICE","status":"READY",
+             "playbackUrl":"https://cdn.example/media-1.m4a","durationMilliseconds":42000}}
+            """
+        ])
+        let adapter = LegacySocialAPIAdapter(transport: transport)
+
+        let prepared = try await adapter.prepareConversationalMediaUpload(
+            toVibe: "cinema",
+            kind: .voice,
+            mimeType: "audio/mp4",
+            size: 24_000,
+            durationMilliseconds: 42_000
+        )
+        let media = try await adapter.completeConversationalMediaUpload(
+            inVibe: "cinema",
+            mediaId: prepared.mediaId,
+            objectKey: prepared.objectKey
+        )
+        let ready = try await adapter.conversationalMediaStatus(
+            inVibe: "cinema",
+            mediaId: prepared.mediaId
+        )
+
+        XCTAssertEqual(prepared.mediaId, "media-1")
+        XCTAssertEqual(prepared.method, "PUT")
+        XCTAssertEqual(media.status, .processing)
+        XCTAssertTrue(ready.isPlayable)
+        let paths = await transport.postPaths
+        XCTAssertEqual(paths, [preparePath, completePath])
+        let reads = await transport.paths
+        XCTAssertEqual(reads, [statusPath])
+        let bodies = await transport.postBodies
+        let prepare = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: bodies[0]) as? [String: Any]
+        )
+        XCTAssertEqual(prepare["kind"] as? String, "VOICE")
+        XCTAssertEqual(prepare["mimeType"] as? String, "audio/mp4")
+        XCTAssertEqual(prepare["durationMilliseconds"] as? Int, 42_000)
+        let completion = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: bodies[1]) as? [String: Any]
+        )
+        XCTAssertEqual(completion["objectKey"] as? String, "ripple-media/voice/media-1.m4a")
+    }
+
     func testWaveListAndScopedRippleFeedUseAdditiveContracts() async throws {
         let wavesPath = "/api/fan-clubs/cinema/waves"
         let feedPath = "/api/fan-clubs/cinema/posts?cursor=opaque%2B%2F%3D&wave=questions"

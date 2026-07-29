@@ -762,6 +762,51 @@ public actor LegacySocialAPIAdapter {
         try await uploadVibeImage(toVibe: slug, purpose: "post", data: data, mimeType: mimeType)
     }
 
+    public func prepareConversationalMediaUpload(
+        toVibe slug: String,
+        kind: ConversationalMediaKind,
+        mimeType: String,
+        size: Int,
+        durationMilliseconds: Int?
+    ) async throws -> ConversationalMediaUploadPreparation {
+        try await post(
+            ConversationalMediaUploadPreparation.self,
+            path: "/api/fan-clubs/\(try segment(slug))/media-messages/upload-url",
+            body: try JSONEncoder().encode(
+                ConversationalMediaUploadRequest(
+                    kind: kind,
+                    mimeType: mimeType,
+                    size: size,
+                    durationMilliseconds: durationMilliseconds
+                )
+            )
+        )
+    }
+
+    public func completeConversationalMediaUpload(
+        inVibe slug: String,
+        mediaId: String,
+        objectKey: String?
+    ) async throws -> ConversationalMedia {
+        try await post(
+            ConversationalMediaUploadCompletion.self,
+            path: "/api/fan-clubs/\(try segment(slug))/media-messages/\(try segment(mediaId))/complete",
+            body: try JSONEncoder().encode(
+                ConversationalMediaUploadCompleteRequest(objectKey: objectKey)
+            )
+        ).media
+    }
+
+    public func conversationalMediaStatus(
+        inVibe slug: String,
+        mediaId: String
+    ) async throws -> ConversationalMedia {
+        try await decode(
+            ConversationalMediaUploadCompletion.self,
+            path: "/api/fan-clubs/\(try segment(slug))/media-messages/\(try segment(mediaId))"
+        ).media
+    }
+
     private func uploadVibeImage(
         toVibe slug: String,
         purpose: String,
@@ -1117,6 +1162,17 @@ private struct ResolveAttachmentRequest: Encodable {
 private struct RipplePhotoUploadRequest: Encodable {
     let mimeType: String
     let size: Int
+}
+
+private struct ConversationalMediaUploadRequest: Encodable {
+    let kind: ConversationalMediaKind
+    let mimeType: String
+    let size: Int
+    let durationMilliseconds: Int?
+}
+
+private struct ConversationalMediaUploadCompleteRequest: Encodable {
+    let objectKey: String?
 }
 
 private func nonempty(_ value: String?) -> String? {

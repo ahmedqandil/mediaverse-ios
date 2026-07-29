@@ -1,3 +1,4 @@
+import AVKit
 import SwiftUI
 import UIKit
 
@@ -1431,16 +1432,68 @@ private struct RippleAttachmentsView: View {
 /// inline playback remain gated until the native media pipeline is enabled.
 private struct RippleConversationalMediaStatusView: View {
     let media: ConversationalMedia
+    @State private var player: AVPlayer?
+    @State private var isPlaying = false
 
     var body: some View {
-        Group {
-            if media.isPlayable, let value = media.playbackURL, let url = URL(string: value) {
-                Link(destination: url) { content(showPlay: true) }
+        VStack(spacing: 0) {
+            if media.isPlayable,
+               media.kind == .video,
+               let player {
+                VideoPlayer(player: player)
+                    .aspectRatio(videoAspectRatio, contentMode: .fit)
+                    .frame(maxHeight: 420)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            } else if media.isPlayable,
+                      media.kind == .voice,
+                      let player {
+                voicePlayer(player)
             } else {
                 content(showPlay: false)
             }
         }
-        .buttonStyle(.plain)
+        .task(id: media.playbackURL) {
+            guard media.isPlayable,
+                  let value = media.playbackURL,
+                  let url = URL(string: value) else {
+                player = nil
+                return
+            }
+            player = AVPlayer(url: url)
+        }
+        .onDisappear { player?.pause() }
+    }
+
+    private func voicePlayer(_ player: AVPlayer) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                if isPlaying {
+                    player.pause()
+                } else {
+                    player.play()
+                }
+                isPlaying.toggle()
+            } label: {
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    .frame(width: 38, height: 38)
+                    .foregroundStyle(.black)
+                    .background(C.watch, in: Circle())
+            }
+            .buttonStyle(.plain)
+            Image(systemName: "waveform")
+                .foregroundStyle(C.watch)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Voice Ripple")
+                    .font(.subheadline.weight(.semibold))
+                Text(statusText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(C.textMuted)
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(C.surface, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(C.borderSubtle))
     }
 
     private func content(showPlay: Bool) -> some View {
@@ -1489,6 +1542,12 @@ private struct RippleConversationalMediaStatusView: View {
         case .unavailable: return "Media unavailable"
         case .ready: return "Playback unavailable"
         }
+    }
+
+    private var videoAspectRatio: CGFloat {
+        guard let width = media.width, let height = media.height,
+              width > 0, height > 0 else { return 16 / 9 }
+        return CGFloat(width) / CGFloat(height)
     }
 }
 

@@ -75,6 +75,8 @@
 		A4C0C001301A000100000001 /* SocialModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C011301A000100000001 /* SocialModels.swift */; };
 		A4C0C002301A000100000001 /* SocialFeatureConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C012301A000100000001 /* SocialFeatureConfiguration.swift */; };
 		B5D1C001301A000100000001 /* SocialRealtimeContracts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5D1C011301A000100000001 /* SocialRealtimeContracts.swift */; };
+		B5D1C002301A000100000001 /* RippleMediaUploadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5D1C012301A000100000001 /* RippleMediaUploadCoordinator.swift */; };
+		B5D1C003301A000100000001 /* RippleVoiceRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5D1C013301A000100000001 /* RippleVoiceRecorder.swift */; };
 		A4C0C003301A000100000001 /* LegacySocialAPIAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C013301A000100000001 /* LegacySocialAPIAdapter.swift */; };
 		A4C0C004301A000100000001 /* AtmosphereViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C014301A000100000001 /* AtmosphereViewModel.swift */; };
 		A4C0C005301A000100000001 /* AtmosphereView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C015301A000100000001 /* AtmosphereView.swift */; };
@@ -210,6 +212,8 @@
 		A4C0C011301A000100000001 /* SocialModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocialModels.swift; sourceTree = "<group>"; };
 		A4C0C012301A000100000001 /* SocialFeatureConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocialFeatureConfiguration.swift; sourceTree = "<group>"; };
 		B5D1C011301A000100000001 /* SocialRealtimeContracts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocialRealtimeContracts.swift; sourceTree = "<group>"; };
+		B5D1C012301A000100000001 /* RippleMediaUploadCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleMediaUploadCoordinator.swift; sourceTree = "<group>"; };
+		B5D1C013301A000100000001 /* RippleVoiceRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleVoiceRecorder.swift; sourceTree = "<group>"; };
 		A4C0C013301A000100000001 /* LegacySocialAPIAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacySocialAPIAdapter.swift; sourceTree = "<group>"; };
 		A4C0C014301A000100000001 /* AtmosphereViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtmosphereViewModel.swift; sourceTree = "<group>"; };
 		A4C0C015301A000100000001 /* AtmosphereView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtmosphereView.swift; sourceTree = "<group>"; };
@@ -580,6 +584,8 @@
 				A4C0C017301A000100000001 /* RippleEngagementController.swift */,
 				A4C0C019301A000100000001 /* EchoVibeSheet.swift */,
 				A4C0C01A301A000100000001 /* RippleComposer.swift */,
+				B5D1C012301A000100000001 /* RippleMediaUploadCoordinator.swift */,
+				B5D1C013301A000100000001 /* RippleVoiceRecorder.swift */,
 				E50000000000000000000015 /* IncomingShareSheet.swift */,
 			);
 			name = "Social Ripples";
@@ -853,6 +859,8 @@
 				A4C0C008301A000100000001 /* SocialDestinationViews.swift in Sources */,
 				A4C0C009301A000100000001 /* EchoVibeSheet.swift in Sources */,
 				A4C0C00A301A000100000001 /* RippleComposer.swift in Sources */,
+				B5D1C002301A000100000001 /* RippleMediaUploadCoordinator.swift in Sources */,
+				B5D1C003301A000100000001 /* RippleVoiceRecorder.swift in Sources */,
 				E50000000000000000000004 /* IncomingShareSheet.swift in Sources */,
 				A4C0C00B301A000100000001 /* VibeAffiliationsView.swift in Sources */,
 				A4C0C00C301A000100000001 /* VibeInvitationsView.swift in Sources */,
