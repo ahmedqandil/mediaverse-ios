@@ -971,7 +971,7 @@ struct VibeDetailView: View {
                 }
             }
 
-            Section("All Waves") {
+            Section("Vibe Home") {
                 if filteredDirectoryWaves.count == waves.count {
                     mobileWaveDirectoryRow(
                         title: "Vibe Home",
@@ -984,9 +984,18 @@ struct VibeDetailView: View {
                         Task { await switchWave(to: nil) }
                     }
                 }
+            }
 
-                ForEach(filteredDirectoryWaves) { wave in
-                    mobileWaveRow(for: wave)
+            ForEach(waveDirectoryCategories, id: \.self) { category in
+                let categoryWaves = filteredDirectoryWaves.filter {
+                    waveDirectoryCategory(for: $0) == category
+                }
+                if !categoryWaves.isEmpty {
+                    Section(category) {
+                        ForEach(categoryWaves) { wave in
+                            mobileWaveRow(for: wave)
+                        }
+                    }
                 }
             }
 
@@ -1039,6 +1048,23 @@ struct VibeDetailView: View {
             $0.name.localizedCaseInsensitiveContains(query)
                 || ($0.description?.localizedCaseInsensitiveContains(query) ?? false)
                 || waveTypeLabel($0.type).localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private var waveDirectoryCategories: [String] {
+        ["START HERE", "CONVERSATIONS", "LIVE", "TEAM"]
+    }
+
+    private func waveDirectoryCategory(for wave: VibeWave) -> String {
+        switch wave.type {
+        case .announcements:
+            return "START HERE"
+        case .events:
+            return "LIVE"
+        case .staff:
+            return "TEAM"
+        default:
+            return "CONVERSATIONS"
         }
     }
 
@@ -1178,10 +1204,13 @@ struct VibeDetailView: View {
     }
 
     private func mobileWaveConversationHeader(for detail: VibeDetailResponse) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 Image(systemName: selectedWave.map(waveSystemImage) ?? "house.fill")
                     .foregroundStyle(C.watch)
+                    .frame(width: 38, height: 38)
+                    .background(C.watch.opacity(0.11))
+                    .clipShape(RoundedRectangle(cornerRadius: 11))
                 Text(selectedWave?.name ?? "Vibe Home")
                     .font(.headline)
                     .foregroundStyle(C.text)
@@ -1190,6 +1219,10 @@ struct VibeDetailView: View {
                     Text(waveTypeLabel(wave.type))
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(C.watch)
+                        .padding(.horizontal, 8)
+                        .frame(height: 24)
+                        .background(C.watch.opacity(0.1))
+                        .clipShape(Capsule())
                 }
             }
             Text(selectedWave?.description
@@ -1205,10 +1238,12 @@ struct VibeDetailView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(C.elevated)
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(C.borderSubtle))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(C.borderSubtle)
+                .frame(height: 1)
+        }
     }
 
     private var homeDirectoryPreview: WaveDirectoryPreview? {

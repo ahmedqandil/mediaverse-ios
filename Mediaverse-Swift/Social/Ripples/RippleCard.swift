@@ -914,7 +914,7 @@ struct RippleCard: View {
     }
 
     private var isCompactWaveMessage: Bool {
-        presentation == .waveConversation && horizontalSizeClass == .compact
+        presentation == .waveConversation
     }
 
     private var usesCompactWaveGrouping: Bool {
