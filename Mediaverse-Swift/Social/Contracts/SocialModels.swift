@@ -1359,14 +1359,16 @@ public struct RippleComment: Decodable, Identifiable, Sendable {
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id)
-        userId = try values.decode(String.self, forKey: .userId)
+        user = try values.decode(SocialIdentity.self, forKey: .user)
+        // Canonical conversation previews already carry the author identity and
+        // intentionally omit the redundant legacy userId field.
+        userId = try values.decodeIfPresent(String.self, forKey: .userId) ?? user.id
         content = try values.decode(String.self, forKey: .content)
         contentHTML = try values.decodeIfPresent(String.self, forKey: .contentHTML)
         parentId = try values.decodeIfPresent(String.self, forKey: .parentId)
         likeCount = try values.decodeIfPresent(Int.self, forKey: .likeCount) ?? 0
         createdAt = try values.decode(String.self, forKey: .createdAt)
         editedAt = try values.decodeIfPresent(String.self, forKey: .editedAt)
-        user = try values.decode(SocialIdentity.self, forKey: .user)
         replies = try values.decodeIfPresent([RippleComment].self, forKey: .replies) ?? []
         viewerLiked = (try? values.decodeIfPresent([IdentifierOnly].self, forKey: .likes))??.isEmpty == false
     }

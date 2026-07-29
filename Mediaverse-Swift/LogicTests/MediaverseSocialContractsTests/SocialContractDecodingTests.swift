@@ -166,6 +166,43 @@ final class SocialContractDecodingTests: XCTestCase {
         XCTAssertTrue(summary.capabilities.canOpenDiscussion)
     }
 
+    func testCanonicalCommentPreviewDerivesLegacyUserIDFromEmbeddedIdentity() throws {
+        let data = Data(
+            """
+            {
+              "posts":[{
+                "id":"r-production",
+                "createdAt":"2026-07-29T01:07:23.053Z",
+                "author":{"id":"author-1","name":"Author"},
+                "commentPreview":[{
+                  "id":"reply-1",
+                  "content":"Production preview",
+                  "parentId":null,
+                  "createdAt":"2026-07-29T01:07:32.944Z",
+                  "user":{"id":"user-1","name":"Reader"}
+                }],
+                "conversationSummary":{
+                  "latestReplies":[],
+                  "participants":[],
+                  "replyCount":1,
+                  "unreadCount":0,
+                  "state":"OPEN",
+                  "locked":false,
+                  "capabilities":{"canReply":true,"canOpenDiscussion":true}
+                }
+              }]
+            }
+            """.utf8
+        )
+
+        let response = try JSONDecoder().decode(RipplePageResponse.self, from: data)
+        let preview = try XCTUnwrap(response.posts.first?.commentPreview.first)
+        XCTAssertEqual(preview.userId, "user-1")
+        XCTAssertEqual(preview.user.id, "user-1")
+        XCTAssertEqual(preview.likeCount, 0)
+        XCTAssertTrue(preview.replies.isEmpty)
+    }
+
     func testConversationSummaryDefaultsCapabilitiesClosedAndCountsNonnegative() throws {
         let response = try decoder.decode(
             RipplePageResponse.self,
