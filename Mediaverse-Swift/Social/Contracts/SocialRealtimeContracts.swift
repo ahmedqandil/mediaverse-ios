@@ -142,6 +142,405 @@ public struct ConversationalMediaUploadCompletion: Decodable, Sendable {
     public let media: ConversationalMedia
 }
 
+/// Short-lived credentials issued by Westreem's authenticated session broker.
+/// Clients keep this value in memory only and must never log or persist it.
+public struct MatrixClientSession: Decodable, Equatable, Sendable {
+    public let accessToken: String
+    public let deviceId: String
+    public let userId: String
+    public let homeserverURL: String
+    public let expiresAt: Date
+
+    private enum CodingKeys: String, CodingKey {
+        case accessToken, deviceId, userId, expiresAt
+        case homeserverURL = "homeserverUrl"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        accessToken = try values.decode(String.self, forKey: .accessToken)
+        deviceId = try values.decode(String.self, forKey: .deviceId)
+        userId = try values.decode(String.self, forKey: .userId)
+        homeserverURL = try values.decode(String.self, forKey: .homeserverURL)
+        let rawExpiry = try values.decode(String.self, forKey: .expiresAt)
+        guard
+            !accessToken.isEmpty,
+            !deviceId.isEmpty,
+            userId.hasPrefix("@"),
+            let url = URL(string: homeserverURL),
+            url.scheme == "https",
+            let expiry = ISO8601DateFormatter().date(from: rawExpiry)
+        else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .accessToken,
+                in: values,
+                debugDescription: "Invalid Matrix client session"
+            )
+        }
+        expiresAt = expiry
+    }
+
+    public func isUsable(at date: Date = Date()) -> Bool {
+        expiresAt.timeIntervalSince(date) > 30
+    }
+}
+
+public struct MatrixClientSessionEnvelope: Decodable, Equatable, Sendable {
+    public let session: MatrixClientSession
+}
+
+/// Server-safe health response. It deliberately contains no credentials.
+public struct MatrixSyncStatus: Decodable, Equatable, Sendable {
+    public let available: Bool
+    public let identityReady: Bool
+    public let degradedMode: Bool
+    public let retryAfterSeconds: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case available, identityReady, degradedMode, retryAfterSeconds
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        available = try values.decodeIfPresent(Bool.self, forKey: .available) ?? false
+        identityReady = try values.decodeIfPresent(Bool.self, forKey: .identityReady) ?? false
+        degradedMode = try values.decodeIfPresent(Bool.self, forKey: .degradedMode) ?? true
+        retryAfterSeconds = try values.decodeIfPresent(Int.self, forKey: .retryAfterSeconds)
+            .map { min(max($0, 1), 3_600) }
+    }
+
+    public var canStartClient: Bool {
+        available && identityReady && !degradedMode
+    }
+}
+
+/// Additive Wave binding returned only to authorized Wave viewers.
+public struct MatrixWaveBinding: Decodable, Equatable, Sendable {
+    public let roomId: String
+    public let syncEnabled: Bool
+
+    private enum CodingKeys: String, CodingKey { case roomId, syncEnabled }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        roomId = try values.decodeIfPresent(String.self, forKey: .roomId) ?? ""
+        syncEnabled = try values.decodeIfPresent(Bool.self, forKey: .syncEnabled) ?? false
+    }
+
+    public var isUsable: Bool {
+        syncEnabled
+            && roomId.hasPrefix("!")
+            && !roomId.contains("/")
+            && !roomId.contains("?")
+    }
+}
+
+public enum MatrixSyncConnectionState: String, Equatable, Sendable {
+    case disabled
+    case connecting
+    case connected
+    case degraded
+}
+
+public enum RippleLocalDeliveryState: String, Codable, Equatable, Sendable {
+    case queued = "QUEUED"
+    case sending = "SENDING"
+    case retrying = "RETRYING"
+    case sent = "SENT"
+    case failed = "FAILED"
+}
+
+/// View-safe local echo. It contains no Matrix credential or SDK type.
+public struct PendingWaveRipple: Identifiable, Codable, Equatable, Sendable {
+    public let id: UUID
+    public let vibeSlug: String
+    public let waveId: String?
+    public let body: String
+    public let idempotencyKey: String
+    public var state: RippleLocalDeliveryState
+    public var attemptCount: Int
+    public var lastError: String?
+
+    public init(
+        id: UUID = UUID(),
+        vibeSlug: String,
+        waveId: String?,
+        body: String,
+        idempotencyKey: String = UUID().uuidString,
+        state: RippleLocalDeliveryState = .queued,
+        attemptCount: Int = 0,
+        lastError: String? = nil
+    ) {
+        self.id = id
+        self.vibeSlug = vibeSlug
+        self.waveId = waveId
+        self.body = body
+        self.idempotencyKey = idempotencyKey
+        self.state = state
+        self.attemptCount = max(0, attemptCount)
+        self.lastError = lastError
+    }
+}
+
+public struct MatrixWaveActivity: Equatable, Sendable {
+    public var typingUserIds: [String]
+    public var unreadCount: Int
+    public var latestEventId: String?
+
+    public init(
+        typingUserIds: [String] = [],
+        unreadCount: Int = 0,
+        latestEventId: String? = nil
+    ) {
+        self.typingUserIds = Array(typingUserIds.prefix(5))
+        self.unreadCount = max(0, unreadCount)
+        self.latestEventId = latestEventId
+    }
+}
+
+/// Narrow `/sync` projection consumed by the native adapter. Unknown Matrix
+/// events remain inside the adapter and never leak into SwiftUI.
+public struct MatrixSyncResponse: Decodable, Equatable, Sendable {
+    public let nextBatch: String
+    public let joinedRooms: [String: JoinedRoom]
+
+    public struct JoinedRoom: Decodable, Equatable, Sendable {
+        public let unreadCount: Int
+        public let latestEventId: String?
+        public let typingUserIds: [String]
+
+        private enum CodingKeys: String, CodingKey {
+            case unreadNotifications = "unread_notifications"
+            case timeline, ephemeral
+        }
+
+        private struct Unread: Decodable {
+            let notificationCount: Int
+            private enum CodingKeys: String, CodingKey {
+                case notificationCount = "notification_count"
+            }
+        }
+
+        private struct Events: Decodable {
+            let events: [Event]
+        }
+
+        private struct Event: Decodable {
+            let type: String
+            let eventId: String?
+            let content: Content?
+            private enum CodingKeys: String, CodingKey {
+                case type, content
+                case eventId = "event_id"
+            }
+        }
+
+        private struct Content: Decodable {
+            let userIds: [String]
+            private enum CodingKeys: String, CodingKey { case userIds = "user_ids" }
+
+            init(from decoder: Decoder) throws {
+                let values = try decoder.container(keyedBy: CodingKeys.self)
+                userIds = try values.decodeIfPresent([String].self, forKey: .userIds) ?? []
+            }
+        }
+
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            unreadCount = max(
+                0,
+                try values.decodeIfPresent(Unread.self, forKey: .unreadNotifications)?
+                    .notificationCount ?? 0
+            )
+            latestEventId = try values.decodeIfPresent(Events.self, forKey: .timeline)?
+                .events.last?.eventId
+            typingUserIds = Array(
+                (try values.decodeIfPresent(Events.self, forKey: .ephemeral)?
+                    .events
+                    .last(where: { $0.type == "m.typing" })?
+                    .content?
+                    .userIds ?? [])
+                    .prefix(5)
+            )
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case nextBatch = "next_batch", rooms }
+    private struct Rooms: Decodable { let join: [String: JoinedRoom] }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        nextBatch = try values.decode(String.self, forKey: .nextBatch)
+        joinedRooms = try values.decodeIfPresent(Rooms.self, forKey: .rooms)?.join ?? [:]
+    }
+}
+
+public enum MatrixClientError: Error, Equatable, Sendable {
+    case disabled
+    case invalidResponse
+    case unauthorized
+    case unavailable
+}
+
+/// Small native transport boundary that can later be backed by Matrix Rust SDK
+/// without changing any SwiftUI model. Credentials live only inside this actor.
+public actor MatrixWaveClient {
+    private struct TypingRequest: Encodable {
+        let typing: Bool
+        let timeout: Int
+    }
+
+    private let sessionBroker: any LegacySocialTransport
+    private let urlSession: URLSession
+    private let decoder = JSONDecoder()
+    private var session: MatrixClientSession?
+    private var syncToken: String?
+    private var typingState: [String: (isTyping: Bool, sentAt: Date)] = [:]
+
+    public init(
+        sessionBroker: any LegacySocialTransport,
+        urlSession: URLSession = .shared
+    ) {
+        self.sessionBroker = sessionBroker
+        self.urlSession = urlSession
+    }
+
+    public func connect(deviceName: String = "Westreem iOS") async throws {
+        let body = try JSONEncoder().encode(["deviceName": String(deviceName.prefix(120))])
+        let data = try await sessionBroker.socialPostData(path: "/api/matrix/session", body: body)
+        let envelope = try decoder.decode(MatrixClientSessionEnvelope.self, from: data)
+        guard envelope.session.isUsable() else { throw MatrixClientError.invalidResponse }
+        session = envelope.session
+        syncToken = nil
+        typingState = [:]
+    }
+
+    public func disconnect() {
+        session = nil
+        syncToken = nil
+        typingState = [:]
+    }
+
+    public func sync(roomId: String, timeoutMilliseconds: Int = 25_000) async throws -> MatrixWaveActivity {
+        guard
+            let session,
+            session.isUsable(),
+            roomId.hasPrefix("!"),
+            !roomId.contains("/"),
+            !roomId.contains("?")
+        else {
+            throw MatrixClientError.disabled
+        }
+        var query = [
+            URLQueryItem(name: "timeout", value: String(min(max(timeoutMilliseconds, 0), 30_000)))
+        ]
+        if let syncToken {
+            query.append(URLQueryItem(name: "since", value: syncToken))
+        }
+        let data = try await request(
+            session: session,
+            method: "GET",
+            path: "/_matrix/client/v3/sync",
+            query: query
+        )
+        let response = try decoder.decode(MatrixSyncResponse.self, from: data)
+        syncToken = response.nextBatch
+        guard let room = response.joinedRooms[roomId] else {
+            return MatrixWaveActivity()
+        }
+        return MatrixWaveActivity(
+            typingUserIds: room.typingUserIds.filter { $0 != session.userId },
+            unreadCount: room.unreadCount,
+            latestEventId: room.latestEventId
+        )
+    }
+
+    public func setTyping(_ typing: Bool, roomId: String, timeoutMilliseconds: Int = 6_000) async throws {
+        guard
+            let session,
+            session.isUsable(),
+            roomId.hasPrefix("!"),
+            !roomId.contains("/"),
+            !roomId.contains("?")
+        else {
+            throw MatrixClientError.disabled
+        }
+        if let previous = typingState[roomId],
+           previous.isTyping == typing,
+           Date().timeIntervalSince(previous.sentAt) < 4 {
+            return
+        }
+        let body = try JSONEncoder().encode(TypingRequest(
+            typing: typing,
+            timeout: typing ? min(max(timeoutMilliseconds, 1_000), 30_000) : 0
+        ))
+        _ = try await request(
+            session: session,
+            method: "PUT",
+            path: "/_matrix/client/v3/rooms/\(roomId)/typing/\(session.userId)",
+            body: body
+        )
+        typingState[roomId] = (typing, Date())
+    }
+
+    public func markRead(roomId: String, eventId: String) async throws {
+        guard
+            let session,
+            session.isUsable(),
+            roomId.hasPrefix("!"),
+            !roomId.contains("/"),
+            !roomId.contains("?"),
+            eventId.hasPrefix("$"),
+            !eventId.contains("/"),
+            !eventId.contains("?")
+        else {
+            throw MatrixClientError.disabled
+        }
+        _ = try await request(
+            session: session,
+            method: "POST",
+            path: "/_matrix/client/v3/rooms/\(roomId)/receipt/m.read/\(eventId)",
+            body: Data("{}".utf8)
+        )
+    }
+
+    private func request(
+        session: MatrixClientSession,
+        method: String,
+        path: String,
+        query: [URLQueryItem] = [],
+        body: Data? = nil
+    ) async throws -> Data {
+        guard var components = URLComponents(string: session.homeserverURL) else {
+            throw MatrixClientError.invalidResponse
+        }
+        components.path = path
+        components.queryItems = query.isEmpty ? nil : query
+        guard let url = components.url else { throw MatrixClientError.invalidResponse }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if body != nil {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        request.httpBody = body
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw MatrixClientError.invalidResponse
+        }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            self.session = nil
+            throw MatrixClientError.unauthorized
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw MatrixClientError.unavailable
+        }
+        return data
+    }
+
+}
+
 /// Resolves local and server gates together. This prevents a debug preference
 /// from activating an incomplete server capability.
 public enum SocialRealtimeRollout {
@@ -168,5 +567,18 @@ public enum SocialRealtimeRollout {
         matrixEnabled(local: local, server: server)
             && local.videoRipplesEnabled
             && server?.videoRipples == true
+    }
+
+    public static func waveRealtimeEnabled(
+        local: SocialFeatureConfiguration,
+        server: SocialRealtimeCapabilities?,
+        binding: MatrixWaveBinding?
+    ) -> Bool {
+        matrixEnabled(local: local, server: server)
+            && local.wavePresenceEnabled
+            && server?.typing == true
+            && server?.readReceipts == true
+            && server?.offlineSend == true
+            && binding?.isUsable == true
     }
 }

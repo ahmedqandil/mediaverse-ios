@@ -81,7 +81,13 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
 
         let waves = try await adapter.vibeWaves(slug: "cinema")
         _ = try await adapter.vibeRipples(slug: "cinema", cursor: "opaque+/=", wave: "questions")
-        _ = try await adapter.createRipple(inVibe: "cinema", body: "Question", attachments: [], waveId: "w1")
+        _ = try await adapter.createRipple(
+            inVibe: "cinema",
+            body: "Question",
+            attachments: [],
+            waveId: "w1",
+            clientRequestId: "ios-stable-1"
+        )
 
         XCTAssertEqual(waves.first?.type, .questions)
         let paths = await transport.paths
@@ -90,6 +96,7 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         let body = try XCTUnwrap(postBodies.last)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
         XCTAssertEqual(object["waveId"] as? String, "w1")
+        XCTAssertEqual(object["clientRequestId"] as? String, "ios-stable-1")
     }
 
     func testWaveManagementUsesCanonicalMutationEndpointsAndPayload() async throws {

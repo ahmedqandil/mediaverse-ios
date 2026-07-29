@@ -4,6 +4,86 @@ import XCTest
 final class SocialContractDecodingTests: XCTestCase {
     private let decoder = JSONDecoder()
 
+    func testMatrixSessionAndWaveBindingFailClosed() throws {
+        let envelope = try decoder.decode(
+            MatrixClientSessionEnvelope.self,
+            from: Data(
+                """
+                {"session":{"accessToken":"ephemeral","deviceId":"IOS1","userId":"@u:matrix.test",
+                "homeserverUrl":"https://matrix.test","expiresAt":"2099-07-29T12:00:00Z"}}
+                """.utf8
+            )
+        )
+        XCTAssertTrue(envelope.session.isUsable(at: Date(timeIntervalSince1970: 0)))
+
+        let response = try decoder.decode(
+            VibeWavesResponse.self,
+            from: Data(
+                """
+                {"waves":[
+                  {"id":"legacy","name":"Legacy","slug":"legacy"},
+                  {"id":"ready","name":"Ready","slug":"ready",
+                   "matrixBinding":{"roomId":"!wave:matrix.test","syncEnabled":true}}
+                ]}
+                """.utf8
+            )
+        )
+        XCTAssertNil(response.waves[0].matrixBinding)
+        XCTAssertTrue(response.waves[1].matrixBinding?.isUsable == true)
+
+        let unavailable = try decoder.decode(
+            MatrixSyncStatus.self,
+            from: Data(#"{"available":true,"identityReady":true}"#.utf8)
+        )
+        XCTAssertFalse(unavailable.canStartClient)
+    }
+
+    func testMatrixSyncNormalizesTypingUnreadAndLatestEvent() throws {
+        let response = try decoder.decode(
+            MatrixSyncResponse.self,
+            from: Data(
+                """
+                {
+                  "next_batch":"s72595_4483",
+                  "rooms":{"join":{"!wave:matrix.test":{
+                    "unread_notifications":{"notification_count":4},
+                    "timeline":{"events":[
+                      {"type":"m.room.message","event_id":"$one","content":{"body":"one"}},
+                      {"type":"m.room.message","event_id":"$two","content":{"body":"two"}}
+                    ]},
+                    "ephemeral":{"events":[
+                      {"type":"m.typing","content":{"user_ids":["@a:test","@b:test"]}}
+                    ]}
+                  }}}
+                }
+                """.utf8
+            )
+        )
+        let room = try XCTUnwrap(response.joinedRooms["!wave:matrix.test"])
+        XCTAssertEqual(response.nextBatch, "s72595_4483")
+        XCTAssertEqual(room.unreadCount, 4)
+        XCTAssertEqual(room.latestEventId, "$two")
+        XCTAssertEqual(room.typingUserIds, ["@a:test", "@b:test"])
+    }
+
+    func testPendingWaveRippleKeepsIdempotencyAcrossRetryState() throws {
+        var pending = PendingWaveRipple(
+            vibeSlug: "cinema",
+            waveId: "wave-1",
+            body: "Hello",
+            idempotencyKey: "ios-stable-1"
+        )
+        pending.state = .retrying
+        pending.attemptCount += 1
+        let restored = try decoder.decode(
+            PendingWaveRipple.self,
+            from: JSONEncoder().encode(pending)
+        )
+        XCTAssertEqual(restored.idempotencyKey, "ios-stable-1")
+        XCTAssertEqual(restored.state, .retrying)
+        XCTAssertEqual(restored.attemptCount, 1)
+    }
+
     func testWaveTypePreservesUnknownServerValues() throws {
         let data = Data(
             """

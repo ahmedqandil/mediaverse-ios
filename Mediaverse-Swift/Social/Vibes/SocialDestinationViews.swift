@@ -53,12 +53,16 @@ struct VibeDetailView: View {
     @State private var showsWaveDirectory = false
     @State private var chatDraft = ""
     @State private var isSendingChatRipple = false
+    @State private var pendingChatRipples: [PendingWaveRipple] = []
+    @State private var matrixConnectionState: MatrixSyncConnectionState = .disabled
+    @State private var matrixActivity = MatrixWaveActivity()
     @StateObject private var autoplay = SocialFeedAutoplayController()
     @AppStorage("playerMuted") private var playerMuted = false
     @EnvironmentObject private var auth: AuthManager
     @EnvironmentObject private var miniPlayer: MiniPlayerManager
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+    private let matrixClient = MatrixWaveClient(sessionBroker: APIClient.shared)
     private let features = SocialFeatureConfiguration.runtime()
 
     var body: some View {
@@ -95,6 +99,10 @@ struct VibeDetailView: View {
                     if isCompactCommunityConversation {
                         mobileWaveConversationHeader(for: detail)
                             .padding(.horizontal, C.pagePad)
+                        if matrixRealtimeEnabled {
+                            waveRealtimeStatus
+                                .padding(.horizontal, C.pagePad)
+                        }
                     }
                     if !isCompactCommunityDirectory, selectedWave?.type == .resources {
                         resourceFilters
@@ -122,6 +130,10 @@ struct VibeDetailView: View {
                             .padding(.vertical, 28)
                     }
                     if !isCompactCommunityDirectory {
+                    ForEach(pendingChatRipples) { pending in
+                        pendingRippleRow(pending)
+                            .padding(.horizontal, horizontalSizeClass == .compact ? 0 : C.pagePad)
+                    }
                     ForEach(Array(ripples.enumerated()), id: \.element.id) { index, ripple in
                         RippleCard(
                             ripple: ripple,
@@ -193,7 +205,16 @@ struct VibeDetailView: View {
         .onChange(of: isAutoplayBlocked) { _, blocked in
             autoplay.setBlocked(blocked, ripples: ripples)
         }
-        .onDisappear { autoplay.stop() }
+        .onDisappear {
+            autoplay.stop()
+            Task { await matrixClient.disconnect() }
+        }
+        .task(id: matrixTaskIdentity) {
+            await runMatrixRealtime()
+        }
+        .onChange(of: chatDraft) { _, draft in
+            updateMatrixTyping(!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
         .background(C.bg.ignoresSafeArea())
         .navigationTitle(detail?.club.name ?? "Vibe")
         .navigationBarTitleDisplayMode(.inline)
@@ -463,16 +484,38 @@ struct VibeDetailView: View {
     private func sendChatRipple(in detail: VibeDetailResponse) async {
         let text = chatDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSendingChatRipple else { return }
+        let pending = PendingWaveRipple(
+            vibeSlug: detail.club.slug,
+            waveId: selectedWave?.id,
+            body: text
+        )
+        pendingChatRipples.append(pending)
+        chatDraft = ""
         isSendingChatRipple = true
         errorMessage = nil
+        await sendPendingRipple(pending, in: detail)
+        isSendingChatRipple = false
+    }
+
+    @MainActor
+    private func sendPendingRipple(_ pending: PendingWaveRipple, in detail: VibeDetailResponse) async {
+        guard let index = pendingChatRipples.firstIndex(where: { $0.id == pending.id }) else {
+            return
+        }
+        pendingChatRipples[index].state = pendingChatRipples[index].attemptCount > 0
+            ? .retrying
+            : .sending
+        pendingChatRipples[index].attemptCount += 1
+        pendingChatRipples[index].lastError = nil
         do {
             let created = try await api.createRipple(
                 inVibe: detail.club.slug,
-                body: text,
+                body: pending.body,
                 attachments: [],
-                waveId: selectedWave?.id
+                waveId: pending.waveId,
+                clientRequestId: pending.idempotencyKey
             )
-            chatDraft = ""
+            pendingChatRipples.removeAll { $0.id == pending.id }
             if created.status == "PENDING_REVIEW" {
                 relationshipNotice = "Ripple submitted for moderator review."
             } else {
@@ -480,9 +523,123 @@ struct VibeDetailView: View {
                 cacheCurrentFeed()
             }
         } catch {
+            if let failedIndex = pendingChatRipples.firstIndex(where: { $0.id == pending.id }) {
+                pendingChatRipples[failedIndex].state = .failed
+                pendingChatRipples[failedIndex].lastError = "Not sent"
+            }
             errorMessage = socialErrorMessage(error)
         }
-        isSendingChatRipple = false
+    }
+
+    private var matrixRealtimeEnabled: Bool {
+        guard let wave = selectedWave else { return false }
+        return SocialRealtimeRollout.waveRealtimeEnabled(
+            local: features,
+            server: wave.realtimeCapabilities,
+            binding: wave.matrixBinding
+        )
+    }
+
+    private var matrixTaskIdentity: String {
+        guard matrixRealtimeEnabled, let wave = selectedWave else { return "legacy" }
+        return "\(wave.id):\(wave.matrixBinding?.roomId ?? "")"
+    }
+
+    @MainActor
+    private func runMatrixRealtime() async {
+        guard
+            matrixRealtimeEnabled,
+            let roomId = selectedWave?.matrixBinding?.roomId
+        else {
+            matrixConnectionState = .disabled
+            matrixActivity = MatrixWaveActivity()
+            await matrixClient.disconnect()
+            return
+        }
+        matrixConnectionState = .connecting
+        do {
+            try await matrixClient.connect()
+            matrixConnectionState = .connected
+            while !Task.isCancelled {
+                let activity = try await matrixClient.sync(roomId: roomId)
+                guard !Task.isCancelled else { return }
+                matrixActivity = activity
+                if !isLoading, let eventId = activity.latestEventId {
+                    try? await matrixClient.markRead(roomId: roomId, eventId: eventId)
+                    matrixActivity.unreadCount = 0
+                }
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            // Realtime degradation never takes down the legacy Wave feed.
+            matrixConnectionState = .degraded
+        }
+    }
+
+    private func updateMatrixTyping(_ isTyping: Bool) {
+        guard
+            matrixRealtimeEnabled,
+            let roomId = selectedWave?.matrixBinding?.roomId
+        else { return }
+        Task {
+            try? await matrixClient.setTyping(isTyping, roomId: roomId)
+        }
+    }
+
+    private var waveRealtimeStatus: some View {
+        HStack(spacing: 7) {
+            Circle()
+                .fill(matrixConnectionState == .connected ? C.watch : C.textTertiary)
+                .frame(width: 7, height: 7)
+            if !matrixActivity.typingUserIds.isEmpty {
+                Text(matrixActivity.typingUserIds.count == 1
+                    ? "Someone is typing…"
+                    : "\(matrixActivity.typingUserIds.count) people are typing…")
+            } else if matrixConnectionState == .degraded {
+                Text("Live updates paused")
+            } else {
+                Text("Live Wave")
+            }
+            Spacer()
+            if matrixActivity.unreadCount > 0 {
+                Text("\(matrixActivity.unreadCount) unread")
+                    .fontWeight(.semibold)
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(C.textMuted)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func pendingRippleRow(_ pending: PendingWaveRipple) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(pending.body)
+                .font(.body)
+                .foregroundStyle(C.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 6) {
+                Image(systemName: pending.state == .failed ? "exclamationmark.circle" : "clock")
+                Text(pending.state == .failed ? "Not sent" : "Sending…")
+                Spacer()
+                if pending.state == .failed, let detail {
+                    Button("Retry") {
+                        Task { await sendPendingRipple(pending, in: detail) }
+                    }
+                    .fontWeight(.semibold)
+                    Button("Remove") {
+                        pendingChatRipples.removeAll { $0.id == pending.id }
+                    }
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(pending.state == .failed ? Color.red : C.textMuted)
+        }
+        .padding(.horizontal, C.pagePad)
+        .padding(.vertical, 10)
+        .background(C.surface)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(pending.body), \(pending.state.rawValue.lowercased())")
     }
 
     private func load() async {

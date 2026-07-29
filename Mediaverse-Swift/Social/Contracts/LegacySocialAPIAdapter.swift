@@ -695,7 +695,8 @@ public actor LegacySocialAPIAdapter {
         isSpoiler: Bool = false,
         commentsDisabled: Bool = false,
         waveId: String? = nil,
-        resourceCategory: String? = nil
+        resourceCategory: String? = nil,
+        clientRequestId: String? = nil
     ) async throws -> Ripple {
         let trimmedBody = body?.trimmingCharacters(in: .whitespacesAndNewlines)
         let request = CreateRippleRequest(
@@ -705,7 +706,8 @@ public actor LegacySocialAPIAdapter {
             attachments: attachments,
             poll: poll,
             waveId: waveId,
-            resourceCategory: nonempty(resourceCategory)
+            resourceCategory: nonempty(resourceCategory),
+            clientRequestId: nonempty(clientRequestId)
         )
         return try await post(
             CreateRippleResponse.self,
@@ -1124,6 +1126,7 @@ private struct CreateRippleRequest: Encodable {
     let poll: RipplePollDraft?
     let waveId: String?
     let resourceCategory: String?
+    let clientRequestId: String?
 }
 
 private struct AcceptedAnswerRequest: Encodable {
