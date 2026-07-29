@@ -115,6 +115,7 @@ struct VibeDetailView: View {
                     if !isCommunityDirectory,
                        features.rippleComposerEnabled,
                        canPost(in: detail),
+                       selectedWave != nil,
                        !isCommunityConversation {
                         rippleComposerPrompt(for: detail)
                             .padding(.horizontal, C.pagePad)
@@ -151,7 +152,7 @@ struct VibeDetailView: View {
                                 canManageQuestionAnswers: detail.capabilities.canModerateContent
                             ),
                             allowsEngagement: features.rippleEngagementEnabled,
-                            presentation: detail.club.isPersonal ? .social : .waveConversation,
+                            presentation: isCommunityConversation ? .waveConversation : .social,
                             isGroupedWithPrevious: isWaveMessageGrouped(
                                 ripple,
                                 after: index > 0 ? ripples[index - 1] : nil

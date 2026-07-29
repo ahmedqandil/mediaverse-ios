@@ -22,13 +22,16 @@ final class SocialContractDecodingTests: XCTestCase {
             ),
             .waveConversation
         )
+    }
+
+    func testCommunityHomeRestoresOverviewPresentation() {
         XCTAssertEqual(
             VibeDestinationPresentation.resolve(
                 isPersonal: false,
                 selectedWaveSlug: nil,
                 showsHomeConversation: true
             ),
-            .waveConversation
+            .communityOverview
         )
     }
 

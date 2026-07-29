@@ -222,6 +222,7 @@ public struct VibeDetailResponse: Decodable, Sendable {
 public enum VibeDestinationPresentation: Equatable, Sendable {
     case personalFeed
     case waveDirectory
+    case communityOverview
     case waveConversation
 
     public static func resolve(
@@ -230,9 +231,9 @@ public enum VibeDestinationPresentation: Equatable, Sendable {
         showsHomeConversation: Bool
     ) -> Self {
         guard !isPersonal else { return .personalFeed }
-        return selectedWaveSlug != nil || showsHomeConversation
-            ? .waveConversation
-            : .waveDirectory
+        if selectedWaveSlug != nil { return .waveConversation }
+        if showsHomeConversation { return .communityOverview }
+        return .waveDirectory
     }
 }
 
