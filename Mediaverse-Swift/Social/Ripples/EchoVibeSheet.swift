@@ -116,7 +116,6 @@ struct EchoVibeSheet: View {
     @State private var selectedSlugs = Set<String>()
     @State private var query = ""
     @State private var quote = ""
-    @State private var isQuoteEcho = false
     @State private var isLoading = true
     @State private var isPublishing = false
     @State private var errorMessage: String?
@@ -137,17 +136,15 @@ struct EchoVibeSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                LazyVStack(alignment: .leading, spacing: 14) {
                     preview
 
                     if isLoading {
-                        ProgressView("Loading destinations…")
+                        ProgressView("Loading conversations…")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 30)
                     } else {
                         destinationPicker
-                        echoMode
-                        publishButton
                     }
 
                     if let errorMessage {
@@ -166,12 +163,15 @@ struct EchoVibeSheet: View {
                 .padding(16)
             }
             .background(C.bg)
-            .navigationTitle("Echo")
+            .navigationTitle("Send an Echo")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Close", action: dismiss.callAsFunction)
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel", action: dismiss.callAsFunction)
                 }
+            }
+            .safeAreaInset(edge: .bottom) {
+                chatComposer
             }
         }
         .task { await loadDestinations() }
@@ -179,38 +179,16 @@ struct EchoVibeSheet: View {
 
     private var preview: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Echo preview")
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(1.6)
-                .textCase(.uppercase)
-                .foregroundStyle(C.textTertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-
-            Divider().overlay(C.borderSubtle)
-
             HStack(spacing: 12) {
                 previewArtwork
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(content.eyebrow)
-                        .font(.system(size: 10, weight: .bold))
-                        .tracking(1.2)
-                        .foregroundStyle(C.watch)
                     Text(content.title)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(C.text.opacity(0.92))
                         .lineLimit(2)
-                    if let description = content.description,
-                       !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text(description)
-                            .font(.system(size: 12))
-                            .foregroundStyle(C.textMuted)
-                            .lineLimit(2)
-                    }
                     if let source = content.sourceName ?? content.subtitle {
-                        Text(source)
+                        Label(source, systemImage: "wave.3.right")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(C.textTertiary)
                             .lineLimit(1)
@@ -221,7 +199,7 @@ struct EchoVibeSheet: View {
             .frame(minHeight: 96)
             .padding(12)
         }
-        .background(C.surface.opacity(0.72))
+        .background(C.elevated.opacity(0.82))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(C.borderSubtle))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .combine)
@@ -256,21 +234,29 @@ struct EchoVibeSheet: View {
 
     @ViewBuilder
     private var destinationPicker: some View {
+        Text("Send to")
+            .font(.headline)
+            .foregroundStyle(C.text)
+
         if let personal = destinations.first(where: \.isPersonal) {
-            destinationRow(personal, subtitle: "Echo directly to My Pulse")
+            destinationRow(personal, subtitle: "Your personal conversation")
         }
 
         VStack(alignment: .leading, spacing: 8) {
-            Text("Find a Vibe")
-                .font(.caption.bold())
-                .foregroundStyle(C.textMuted)
-            TextField("Search by Vibe name", text: $query)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .westreemField(minHeight: 48)
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(C.textMuted)
+                TextField("Search Vibes", text: $query)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+            .padding(.horizontal, 13)
+            .frame(minHeight: 46)
+            .background(C.elevated)
+            .clipShape(Capsule())
 
             if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("Vibes appear after you start typing.")
+                Text("Start typing to find a Vibe conversation.")
                     .font(.caption)
                     .foregroundStyle(C.textMuted)
                     .frame(maxWidth: .infinity)
@@ -289,69 +275,85 @@ struct EchoVibeSheet: View {
         }
 
         if !selectedSlugs.isEmpty {
-            HStack {
-                Text("\(selectedSlugs.count) destination\(selectedSlugs.count == 1 ? "" : "s") selected")
-                    .font(.caption.weight(.semibold))
-                Spacer()
-                Button("Clear") { selectedSlugs.removeAll() }
-                    .font(.caption.bold())
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Recipients")
+                        .font(.caption.weight(.semibold))
+                    Spacer()
+                    Button("Clear") { selectedSlugs.removeAll() }
+                        .font(.caption.bold())
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(selectedDestinations) { vibe in
+                            HStack(spacing: 6) {
+                                SocialIdentityAvatar(image: vibe.avatarURL, name: vibe.name, size: 24)
+                                Text(vibe.isPersonal ? "My Pulse" : vibe.name)
+                                    .font(.caption.weight(.semibold))
+                                    .lineLimit(1)
+                                Button {
+                                    selectedSlugs.remove(vibe.slug)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(C.textMuted)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Remove \(vibe.name)")
+                            }
+                            .padding(.leading, 5)
+                            .padding(.trailing, 8)
+                            .padding(.vertical, 5)
+                            .background(C.elevated)
+                            .clipShape(Capsule())
+                        }
+                    }
+                }
             }
-            .foregroundStyle(C.watch)
         }
     }
 
-    private var echoMode: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 6) {
-                echoModeButton("Echo", selected: !isQuoteEcho) { isQuoteEcho = false }
-                echoModeButton("Quote Echo", selected: isQuoteEcho) { isQuoteEcho = true }
-            }
-            .padding(4)
-            .background(C.elevated)
-            .clipShape(RoundedRectangle(cornerRadius: 11))
-
-            if isQuoteEcho {
-                TextField("Add your take…", text: $quote, axis: .vertical)
-                    .lineLimit(3...6)
-                    .westreemField(minHeight: 104)
-            }
-        }
+    private var selectedDestinations: [PostableVibe] {
+        destinations.filter { selectedSlugs.contains($0.slug) }
     }
 
-    private func echoModeButton(
-        _ title: String,
-        selected: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(selected ? C.bg : C.text.opacity(0.78))
-                .frame(maxWidth: .infinity)
-                .frame(height: 36)
-                .background(selected ? C.watch : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-    }
+    private var chatComposer: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            TextField("Add a message (optional)", text: $quote, axis: .vertical)
+                .lineLimit(1...4)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .background(C.elevated)
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
 
-    private var publishButton: some View {
-        Button {
-            Task { await publish() }
-        } label: {
-            Label(
-                isPublishing
-                    ? "Echoing…"
-                    : "Echo\(selectedSlugs.count > 1 ? " to \(selectedSlugs.count)" : "")",
-                systemImage: "dot.radiowaves.left.and.right"
+            Button {
+                Task { await publish() }
+            } label: {
+                Group {
+                    if isPublishing {
+                        ProgressView()
+                            .tint(C.bg)
+                    } else {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 17, weight: .bold))
+                    }
+                }
+                .frame(width: 44, height: 44)
+                .foregroundStyle(C.bg)
+                .background(selectedSlugs.isEmpty ? C.textTertiary : C.watch)
+                .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedSlugs.isEmpty || isPublishing)
+            .accessibilityLabel(
+                selectedSlugs.isEmpty
+                    ? "Select a destination"
+                    : "Echo to \(selectedSlugs.count) destination\(selectedSlugs.count == 1 ? "" : "s")"
             )
-            .font(.subheadline.bold())
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
         }
-        .buttonStyle(.borderedProminent)
-        .tint(C.watch)
-        .disabled(selectedSlugs.isEmpty || isPublishing)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) { Divider().overlay(C.borderSubtle) }
     }
 
     private var matchingVibes: [PostableVibe] {
@@ -385,13 +387,13 @@ struct EchoVibeSheet: View {
                     }
                 }
                 Spacer()
-                Image(systemName: selectedSlugs.contains(vibe.slug) ? "checkmark.square.fill" : "square")
+                Image(systemName: selectedSlugs.contains(vibe.slug) ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
                     .foregroundStyle(selectedSlugs.contains(vibe.slug) ? C.watch : C.textMuted)
             }
-            .padding(10)
-            .background(C.surface)
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(C.borderSubtle))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -426,7 +428,7 @@ struct EchoVibeSheet: View {
                     do {
                         let created = try await api.createRipple(
                             inVibe: slug,
-                            body: isQuoteEcho ? quote : nil,
+                            body: quote,
                             attachments: [content.attachment]
                         )
                         return (slug, .success(created))
