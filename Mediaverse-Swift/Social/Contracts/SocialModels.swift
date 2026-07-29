@@ -894,6 +894,8 @@ public struct Ripple: Decodable, Identifiable, Sendable {
     public let attachments: [RippleAttachment]
     public let poll: RipplePoll?
     public let wave: RippleWaveIdentity?
+    public let commentPreview: [RippleComment]
+    public let conversationSummary: RippleConversationSummary?
     public let questionStatus: String?
     public let acceptedAnswerId: String?
     public let acceptedAnswerAt: String?
@@ -904,7 +906,8 @@ public struct Ripple: Decodable, Identifiable, Sendable {
         case id, clubId, club, body, status, isSpoiler, commentsDisabled
         case likeCount, commentCount, shareCount, echoCount
         case energyCount, energyTotal, energyTags
-        case pinnedAt, publishedAt, createdAt, liked, author, attachments, poll, wave
+        case pinnedAt, publishedAt, createdAt, liked, author, attachments, poll, wave, commentPreview
+        case conversationSummary
         case questionStatus, acceptedAnswerId, acceptedAnswerAt, resourceCategory, bookmarked
     }
 
@@ -932,11 +935,90 @@ public struct Ripple: Decodable, Identifiable, Sendable {
         attachments = try values.decodeIfPresent([RippleAttachment].self, forKey: .attachments) ?? []
         poll = try values.decodeIfPresent(RipplePoll.self, forKey: .poll)
         wave = try values.decodeIfPresent(RippleWaveIdentity.self, forKey: .wave)
+        commentPreview = try values.decodeIfPresent([RippleComment].self, forKey: .commentPreview) ?? []
+        conversationSummary = try values.decodeIfPresent(
+            RippleConversationSummary.self,
+            forKey: .conversationSummary
+        )
         questionStatus = try values.decodeIfPresent(String.self, forKey: .questionStatus)
         acceptedAnswerId = try values.decodeIfPresent(String.self, forKey: .acceptedAnswerId)
         acceptedAnswerAt = try values.decodeIfPresent(String.self, forKey: .acceptedAnswerAt)
         resourceCategory = try values.decodeIfPresent(String.self, forKey: .resourceCategory)
         bookmarked = try values.decodeIfPresent(Bool.self, forKey: .bookmarked) ?? false
+    }
+}
+
+public struct RippleConversationReply: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let content: String
+    public let parentId: String?
+    public let createdAt: String
+    public let user: SocialIdentity
+}
+
+public struct RippleConversationCapabilities: Decodable, Equatable, Sendable {
+    public let canReply: Bool
+    public let canOpenDiscussion: Bool
+
+    enum CodingKeys: CodingKey {
+        case canReply, canOpenDiscussion
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        canReply = try values.decodeIfPresent(Bool.self, forKey: .canReply) ?? false
+        canOpenDiscussion = try values.decodeIfPresent(Bool.self, forKey: .canOpenDiscussion) ?? true
+    }
+}
+
+public struct RippleConversationSummary: Decodable, Sendable {
+    public let latestReplies: [RippleConversationReply]
+    public let participants: [SocialIdentity]
+    public let replyCount: Int
+    public let lastActivityAt: String?
+    public let unreadCount: Int
+    public let firstUnreadReplyId: String?
+    public let state: String
+    public let locked: Bool
+    public let capabilities: RippleConversationCapabilities
+
+    enum CodingKeys: CodingKey {
+        case latestReplies, participants, replyCount, lastActivityAt, unreadCount
+        case firstUnreadReplyId, state, locked, capabilities
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        latestReplies = Array(
+            (try values.decodeIfPresent([RippleConversationReply].self, forKey: .latestReplies) ?? [])
+                .prefix(3)
+        )
+        participants = Array(
+            (try values.decodeIfPresent([SocialIdentity].self, forKey: .participants) ?? [])
+                .reduce(into: [SocialIdentity]()) { result, participant in
+                    if !result.contains(where: { $0.id == participant.id }) {
+                        result.append(participant)
+                    }
+                }
+                .prefix(3)
+        )
+        replyCount = max(0, try values.decodeIfPresent(Int.self, forKey: .replyCount) ?? 0)
+        lastActivityAt = try values.decodeIfPresent(String.self, forKey: .lastActivityAt)
+        unreadCount = max(0, try values.decodeIfPresent(Int.self, forKey: .unreadCount) ?? 0)
+        firstUnreadReplyId = try values.decodeIfPresent(String.self, forKey: .firstUnreadReplyId)
+        state = try values.decodeIfPresent(String.self, forKey: .state) ?? "OPEN"
+        locked = (try values.decodeIfPresent(Bool.self, forKey: .locked)) ?? (state == "LOCKED")
+        capabilities = try values.decodeIfPresent(
+            RippleConversationCapabilities.self,
+            forKey: .capabilities
+        ) ?? RippleConversationCapabilities()
+    }
+}
+
+private extension RippleConversationCapabilities {
+    init() {
+        canReply = false
+        canOpenDiscussion = true
     }
 }
 

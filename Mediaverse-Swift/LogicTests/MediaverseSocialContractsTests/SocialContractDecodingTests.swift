@@ -104,6 +104,89 @@ final class SocialContractDecodingTests: XCTestCase {
         XCTAssertEqual(response.resourceCategories, ["Guides"])
     }
 
+    func testWaveRippleDecodesLatestReplyPreviewWithoutChangingLegacyDefaults() throws {
+        let response = try decoder.decode(
+            RipplePageResponse.self,
+            from: Data(
+                """
+                {"posts":[
+                  {"id":"with-preview","createdAt":"2026-07-29T10:00:00Z","author":{"id":"u1"},
+                   "commentCount":4,"commentPreview":[
+                     {"id":"c1","userId":"u2","content":"Latest thought","createdAt":"2026-07-29T10:03:00Z",
+                      "user":{"id":"u2","name":"Maya"}}
+                   ]},
+                  {"id":"legacy","createdAt":"2026-07-29T10:01:00Z","author":{"id":"u1"}}
+                ]}
+                """.utf8
+            )
+        )
+
+        XCTAssertEqual(response.posts[0].commentPreview.first?.content, "Latest thought")
+        XCTAssertEqual(response.posts[0].commentPreview.first?.user.name, "Maya")
+        XCTAssertTrue(response.posts[1].commentPreview.isEmpty)
+    }
+
+    func testWaveRippleDecodesNormalizedConversationSummaryAndBoundsPresentationData() throws {
+        let response = try decoder.decode(
+            RipplePageResponse.self,
+            from: Data(
+                """
+                {"posts":[{
+                  "id":"conversation","createdAt":"2026-07-29T10:00:00Z","author":{"id":"u1"},
+                  "commentCount":99,
+                  "conversationSummary":{
+                    "latestReplies":[
+                      {"id":"r1","content":"One","parentId":null,"createdAt":"2026-07-29T10:01:00Z","user":{"id":"u2","name":"Maya"}},
+                      {"id":"r2","content":"Two","parentId":"r1","createdAt":"2026-07-29T10:02:00Z","user":{"id":"u3","name":"Omar"}},
+                      {"id":"r3","content":"Three","parentId":null,"createdAt":"2026-07-29T10:03:00Z","user":{"id":"u2","name":"Maya"}},
+                      {"id":"r4","content":"Hidden from preview","parentId":null,"createdAt":"2026-07-29T10:04:00Z","user":{"id":"u4","name":"Noor"}}
+                    ],
+                    "participants":[
+                      {"id":"u2","name":"Maya"},{"id":"u3","name":"Omar"},
+                      {"id":"u2","name":"Maya"},{"id":"u4","name":"Noor"}
+                    ],
+                    "replyCount":12,"lastActivityAt":"2026-07-29T10:04:00Z",
+                    "unreadCount":3,"firstUnreadReplyId":"r2","state":"LOCKED","locked":true,
+                    "capabilities":{"canReply":false,"canOpenDiscussion":true}
+                  }
+                }]}
+                """.utf8
+            )
+        )
+
+        let summary = try XCTUnwrap(response.posts[0].conversationSummary)
+        XCTAssertEqual(summary.latestReplies.map(\.id), ["r1", "r2", "r3"])
+        XCTAssertEqual(summary.participants.map(\.id), ["u2", "u3", "u4"])
+        XCTAssertEqual(summary.replyCount, 12)
+        XCTAssertEqual(summary.unreadCount, 3)
+        XCTAssertEqual(summary.firstUnreadReplyId, "r2")
+        XCTAssertEqual(summary.state, "LOCKED")
+        XCTAssertTrue(summary.locked)
+        XCTAssertFalse(summary.capabilities.canReply)
+        XCTAssertTrue(summary.capabilities.canOpenDiscussion)
+    }
+
+    func testConversationSummaryDefaultsCapabilitiesClosedAndCountsNonnegative() throws {
+        let response = try decoder.decode(
+            RipplePageResponse.self,
+            from: Data(
+                """
+                {"posts":[{
+                  "id":"safe","createdAt":"2026-07-29T10:00:00Z","author":{"id":"u1"},
+                  "conversationSummary":{"replyCount":-4,"unreadCount":-2,"state":"LOCKED"}
+                }]}
+                """.utf8
+            )
+        )
+
+        let summary = try XCTUnwrap(response.posts[0].conversationSummary)
+        XCTAssertEqual(summary.replyCount, 0)
+        XCTAssertEqual(summary.unreadCount, 0)
+        XCTAssertTrue(summary.locked)
+        XCTAssertFalse(summary.capabilities.canReply)
+        XCTAssertTrue(summary.capabilities.canOpenDiscussion)
+    }
+
     func testSpecializedWaveUIPolicyGatesSensitiveControls() {
         XCTAssertTrue(SpecializedWaveUIRules.canManageQuestionAnswer(isAuthor: true, canModerate: false))
         XCTAssertTrue(SpecializedWaveUIRules.canManageQuestionAnswer(isAuthor: false, canModerate: true))

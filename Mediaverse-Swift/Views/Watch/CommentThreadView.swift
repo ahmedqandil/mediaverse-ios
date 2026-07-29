@@ -114,6 +114,7 @@ struct CommentThreadView: View {
     var showsHeader: Bool = true
     var previewLimit: Int? = nil
     var autoFocusComposer: Bool = false
+    var allowsReplies: Bool = true
     var onShowMore: ((Int) -> Void)? = nil
     var onCountChange: ((Int) -> Void)? = nil
     var acceptedAnswerId: String? = nil
@@ -144,6 +145,7 @@ struct CommentThreadView: View {
         showsHeader: Bool = true,
         previewLimit: Int? = nil,
         autoFocusComposer: Bool = false,
+        allowsReplies: Bool = true,
         onShowMore: ((Int) -> Void)? = nil,
         onCountChange: ((Int) -> Void)? = nil,
         acceptedAnswerId: String? = nil,
@@ -156,6 +158,7 @@ struct CommentThreadView: View {
         self.showsHeader = showsHeader
         self.previewLimit = previewLimit
         self.autoFocusComposer = autoFocusComposer
+        self.allowsReplies = allowsReplies
         self.onShowMore = onShowMore
         self.onCountChange = onCountChange
         self.acceptedAnswerId = acceptedAnswerId
@@ -178,10 +181,12 @@ struct CommentThreadView: View {
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     VStack(spacing: 0) {
                         Divider().background(C.borderSubtle)
-                        composer
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                            .background(C.bg)
+                        if allowsReplies {
+                            composer
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                                .background(C.bg)
+                        }
                     }
                     .background(C.bg)
                 }
@@ -192,7 +197,9 @@ struct CommentThreadView: View {
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(C.text)
                     }
-                    composer
+                    if allowsReplies {
+                        composer
+                    }
                     threadContent
                 }
             }
@@ -365,6 +372,7 @@ struct CommentThreadView: View {
                         comment: comment,
                         depth: 0,
                         usesExternalReplyComposer: inputPosition == .bottom,
+                        allowsReplies: allowsReplies,
                         allowsManagement: supportsCommentManagement,
                         allowsFlagging: supportsCommentFlags,
                         likedCommentIds: $likedCommentIds,
@@ -670,6 +678,7 @@ private struct SharedCommentRow: View {
     let comment: Comment
     let depth: Int
     let usesExternalReplyComposer: Bool
+    let allowsReplies: Bool
     let allowsManagement: Bool
     let allowsFlagging: Bool
     @Binding var likedCommentIds: Set<String>
@@ -745,6 +754,7 @@ private struct SharedCommentRow: View {
                                 comment: reply,
                                 depth: depth + 1,
                                 usesExternalReplyComposer: usesExternalReplyComposer,
+                                allowsReplies: allowsReplies,
                                 allowsManagement: allowsManagement,
                                 allowsFlagging: allowsFlagging,
                                 likedCommentIds: $likedCommentIds,
@@ -794,7 +804,7 @@ private struct SharedCommentRow: View {
             }
             .buttonStyle(.plain)
 
-            if auth.isAuthenticated, depth < 2 {
+            if allowsReplies, auth.isAuthenticated, depth < 2 {
                 Button {
                     if usesExternalReplyComposer {
                         onBeginReply(comment)

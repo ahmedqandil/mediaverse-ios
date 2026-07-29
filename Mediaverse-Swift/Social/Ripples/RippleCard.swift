@@ -105,10 +105,16 @@ struct RippleCardActions {
     static let readOnly = RippleCardActions()
 }
 
+enum RippleCardPresentation {
+    case social
+    case waveConversation
+}
+
 struct RippleCard: View {
     let ripple: Ripple
     let actions: RippleCardActions
     let allowsEngagement: Bool
+    let presentation: RippleCardPresentation
     @Binding private var activePreviewVideoId: String?
     private let previewManager: FeedPreviewPlayerManager?
     private let isAutoplayBlocked: Bool
@@ -142,6 +148,7 @@ struct RippleCard: View {
         ripple: Ripple,
         actions: RippleCardActions = .readOnly,
         allowsEngagement: Bool = false,
+        presentation: RippleCardPresentation = .social,
         activePreviewVideoId: Binding<String?> = .constant(nil),
         previewManager: FeedPreviewPlayerManager? = nil,
         isAutoplayBlocked: Bool = true,
@@ -152,6 +159,7 @@ struct RippleCard: View {
         self.ripple = ripple
         self.actions = actions
         self.allowsEngagement = allowsEngagement
+        self.presentation = presentation
         _activePreviewVideoId = activePreviewVideoId
         self.previewManager = previewManager
         self.isAutoplayBlocked = isAutoplayBlocked
@@ -238,6 +246,12 @@ struct RippleCard: View {
                 .padding(.top, 10)
             }
 
+            if presentation == .waveConversation {
+                waveConversationPreview
+                    .padding(.horizontal, 12)
+                    .padding(.top, 12)
+            }
+
             actionBar
                 .padding(.horizontal, 4)
                 .padding(.vertical, 5)
@@ -248,7 +262,8 @@ struct RippleCard: View {
                     target: .ripple(ripple.id),
                     inputPosition: .top,
                     showsHeader: true,
-                    autoFocusComposer: true,
+                    autoFocusComposer: canReplyToConversation,
+                    allowsReplies: canReplyToConversation,
                     onCountChange: { displayedCommentCount = $0 },
                     acceptedAnswerId: displayedAcceptedAnswerId,
                     canManageAcceptedAnswer: canManageQuestionAnswer,
@@ -359,6 +374,182 @@ struct RippleCard: View {
         } message: {
             Text(specializedError ?? "")
         }
+    }
+
+    @ViewBuilder
+    private var waveConversationPreview: some View {
+        Button {
+            guard canOpenDiscussion else { return }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showsComments = true
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 7) {
+                    Label(conversationStateLabel, systemImage: conversationStateIcon)
+                        .foregroundStyle(conversationIsLocked ? C.textMuted : C.watch)
+                    if conversationUnreadCount > 0 {
+                        Text("\(conversationUnreadCount) new")
+                            .foregroundStyle(C.watch)
+                            .accessibilityLabel("\(conversationUnreadCount) unread replies")
+                    }
+                    Spacer()
+                }
+                .font(.caption2.weight(.bold))
+
+                if !conversationReplies.isEmpty {
+                    ForEach(conversationReplies.prefix(3)) { comment in
+                        HStack(alignment: .top, spacing: 8) {
+                            SocialIdentityAvatar(
+                                image: comment.user.image,
+                                name: comment.user.name ?? comment.user.handle,
+                                size: 26
+                            )
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(comment.user.name ?? comment.user.handle.map { "@\($0)" } ?? "Westreem user")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(C.text)
+                                    .lineLimit(1)
+                                Text(comment.content)
+                                    .font(.caption)
+                                    .foregroundStyle(C.textMuted)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    participantAvatars
+                    if conversationReplyCount > 0 {
+                        Text("\(conversationReplyCount) \(conversationReplyCount == 1 ? "reply" : "replies")")
+                    } else {
+                        Text(conversationIsLocked ? "No replies" : "Start the conversation")
+                    }
+                    if let conversationLastActivityAt {
+                        Text("· active \(relativeActivity(conversationLastActivityAt))")
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(C.textMuted)
+            }
+            .padding(11)
+            .background(C.elevated.opacity(0.58))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!canOpenDiscussion)
+        .accessibilityLabel(
+            conversationReplyCount > 0
+                ? "Open discussion with \(conversationReplyCount) replies"
+                : "Start this discussion"
+        )
+    }
+
+    @ViewBuilder
+    private var participantAvatars: some View {
+        HStack(spacing: -7) {
+            ForEach(Array(conversationParticipants.enumerated()), id: \.element.id) { index, participant in
+                SocialIdentityAvatar(
+                    image: participant.image,
+                    name: participant.name ?? participant.handle,
+                    size: 22
+                )
+                .overlay {
+                    Circle().stroke(C.surface, lineWidth: 2)
+                }
+                .zIndex(Double(3 - index))
+            }
+        }
+    }
+
+    private var conversationReplies: [RippleConversationReply] {
+        if let summary = ripple.conversationSummary {
+            return summary.latestReplies
+        }
+        return ripple.commentPreview.prefix(3).map {
+            RippleConversationReply(
+                id: $0.id,
+                content: $0.content,
+                parentId: $0.parentId,
+                createdAt: $0.createdAt,
+                user: $0.user
+            )
+        }
+    }
+
+    private var conversationParticipants: [SocialIdentity] {
+        if let summary = ripple.conversationSummary, !summary.participants.isEmpty {
+            return Array(summary.participants.prefix(3))
+        }
+        var seen = Set<String>()
+        return ripple.commentPreview
+            .map(\.user)
+            .filter { seen.insert($0.id).inserted }
+            .prefix(3)
+            .map { $0 }
+    }
+
+    private var conversationReplyCount: Int {
+        ripple.conversationSummary?.replyCount ?? displayedCommentCount
+    }
+
+    private var conversationLastActivityAt: String? {
+        ripple.conversationSummary?.lastActivityAt ?? ripple.commentPreview.last?.createdAt
+    }
+
+    private var conversationUnreadCount: Int {
+        ripple.conversationSummary?.unreadCount ?? 0
+    }
+
+    private var conversationIsLocked: Bool {
+        ripple.conversationSummary?.locked
+            ?? (editedCommentsDisabled ?? ripple.commentsDisabled)
+    }
+
+    private var conversationStateLabel: String {
+        switch ripple.conversationSummary?.state {
+        case "ANSWERED": "Answered"
+        case "CLOSED": "Closed"
+        case "LOCKED": "Locked"
+        default: "Open discussion"
+        }
+    }
+
+    private var conversationStateIcon: String {
+        switch ripple.conversationSummary?.state {
+        case "ANSWERED": "checkmark.seal.fill"
+        case "CLOSED": "xmark.circle.fill"
+        case "LOCKED": "lock.fill"
+        default: "bubble.left.and.bubble.right.fill"
+        }
+    }
+
+    private var canOpenDiscussion: Bool {
+        ripple.conversationSummary?.capabilities.canOpenDiscussion ?? true
+    }
+
+    private var canReplyToConversation: Bool {
+        guard presentation == .waveConversation else {
+            return !(editedCommentsDisabled ?? ripple.commentsDisabled)
+        }
+        return ripple.conversationSummary?.capabilities.canReply
+            ?? !(editedCommentsDisabled ?? ripple.commentsDisabled)
+    }
+
+    private func relativeActivity(_ value: String) -> String {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let date = fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value) else {
+            return "recently"
+        }
+        return RelativeDateTimeFormatter().localizedString(for: date, relativeTo: Date())
     }
 
     @ViewBuilder
@@ -583,14 +774,15 @@ struct RippleCard: View {
                 handler: actions.addEnergy ?? (allowsEngagement ? { showsEnergy = true } : nil)
             )
             action(
-                title: "Comment",
-                systemImage: "bubble.left",
+                title: presentation == .waveConversation ? "Reply" : "Comment",
+                systemImage: presentation == .waveConversation ? "arrowshape.turn.up.left.fill" : "bubble.left",
                 count: displayedCommentCount,
                 handler: actions.comment ?? (
-                    allowsEngagement && !(editedCommentsDisabled ?? ripple.commentsDisabled)
+                    allowsEngagement && canReplyToConversation
                         ? { withAnimation(.easeInOut(duration: 0.2)) { showsComments.toggle() } }
                         : nil
-                )
+                ),
+                isPrimary: presentation == .waveConversation
             )
             action(
                 title: "Echo",
@@ -614,7 +806,8 @@ struct RippleCard: View {
         title: String,
         systemImage: String,
         count: Int,
-        handler: (() -> Void)?
+        handler: (() -> Void)?,
+        isPrimary: Bool = false
     ) -> some View {
         Button(action: { handler?() }) {
             HStack(spacing: 4) {
@@ -625,7 +818,7 @@ struct RippleCard: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
             }
-            .foregroundStyle(handler == nil ? C.textTertiary : C.textMuted)
+            .foregroundStyle(handler == nil ? C.textTertiary : isPrimary ? C.watch : C.textMuted)
             .frame(maxWidth: .infinity)
             .frame(height: 40)
             .contentShape(Rectangle())

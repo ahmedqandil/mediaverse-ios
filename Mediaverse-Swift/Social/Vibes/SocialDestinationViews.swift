@@ -103,6 +103,7 @@ struct VibeDetailView: View {
                                 canManageQuestionAnswers: detail.capabilities.canModerateContent
                             ),
                             allowsEngagement: features.rippleEngagementEnabled,
+                            presentation: detail.club.isPersonal ? .social : .waveConversation,
                             activePreviewVideoId: $autoplay.activeVideoID,
                             previewManager: autoplay.previewManager,
                             isAutoplayBlocked: isAutoplayBlocked,
