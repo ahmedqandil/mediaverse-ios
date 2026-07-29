@@ -32,8 +32,8 @@ assert_contains 'presentation: RippleCardPresentation = .social' "$card" \
   "RippleCard must remain social by default." || failures=$((failures + 1))
 assert_contains 'presentation: detail.club.isPersonal ? .social : .waveConversation' "$destination" \
   "Only community Vibes may opt into the Wave conversation treatment." || failures=$((failures + 1))
-assert_contains 'ForEach(conversationReplies.prefix(3))' "$card" \
-  "Swift must preview up to three replies, matching the shared Web/API contract." || failures=$((failures + 1))
+assert_contains 'ForEach(conversationReplies.prefix(2))' "$card" \
+  "Swift must preview up to two replies before opening the full discussion." || failures=$((failures + 1))
 assert_contains 'private var conversationParticipants: [SocialIdentity]' "$card" \
   "Participant avatars must be deduplicated by canonical user id." || failures=$((failures + 1))
 assert_not_contains 'guard !(editedCommentsDisabled ?? ripple.commentsDisabled) else { return }' "$card" \
