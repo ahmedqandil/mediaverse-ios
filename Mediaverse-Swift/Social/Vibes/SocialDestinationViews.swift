@@ -4,12 +4,12 @@ import SwiftUI
 private struct WaveAttachmentTray: View {
     let wave: VibeWave?
     let features: SocialFeatureConfiguration
+    let canCreateEvent: Bool
     let choose: (RippleComposerTool) -> Void
 
     private var tools: [(RippleComposerTool, String, String)] {
-        guard let wave else { return [] }
         var result: [(RippleComposerTool, String, String)] = []
-        switch wave.type {
+        switch wave?.type {
         case .questions:
             result.append((.text, "Question", "questionmark.bubble"))
         case .announcements:
@@ -19,36 +19,40 @@ private struct WaveAttachmentTray: View {
         default:
             result.append((.text, "Message", "text.bubble"))
         }
-        if wave.allowPhotos {
+        if wave?.allowPhotos ?? true {
             result.append((.photo, "Photos", "photo.on.rectangle.angled"))
             result.append((.camera, "Camera", "camera.fill"))
         }
-        if wave.allowPolls {
+        if wave?.allowPolls ?? true {
             result.append((.poll, "Poll", "chart.bar.fill"))
         }
-        if wave.allowVoiceMessages,
-           SocialRealtimeRollout.voiceRipplesEnabled(
-               local: features,
-               server: wave.realtimeCapabilities
-           ) {
+        if wave?.allowVoiceMessages ?? true,
+           wave == nil
+                ? features.voiceRipplesEnabled
+                : SocialRealtimeRollout.voiceRipplesEnabled(
+                    local: features,
+                    server: wave?.realtimeCapabilities
+                ) {
             result.append((.voice, "Voice", "waveform"))
         }
-        if wave.allowVideoMessages,
-           SocialRealtimeRollout.videoRipplesEnabled(
-               local: features,
-               server: wave.realtimeCapabilities
-           ) {
+        if wave?.allowVideoMessages ?? true,
+           wave == nil
+                ? features.videoRipplesEnabled
+                : SocialRealtimeRollout.videoRipplesEnabled(
+                    local: features,
+                    server: wave?.realtimeCapabilities
+                ) {
             result.append((.video, "Video", "video.fill"))
         }
-        if wave.allowLinks {
-            if wave.type != .resources {
+        if wave?.allowLinks ?? true {
+            if wave?.type != .resources {
                 result.append((.link, "Westreem / Link", "link"))
             }
         }
-        if wave.realtimeCapabilities?.stickers == true {
+        if wave == nil || wave?.realtimeCapabilities?.stickers == true {
             result.append((.sticker, "Sticker", "face.smiling"))
         }
-        if wave.capabilities.canCreateEvent {
+        if canCreateEvent {
             result.append((.event, "Event", "calendar.badge.plus"))
         }
         return result
@@ -417,6 +421,9 @@ struct VibeDetailView: View {
                 WaveAttachmentTray(
                     wave: selectedWave,
                     features: features,
+                    canCreateEvent: selectedWave?.capabilities.canCreateEvent
+                        ?? detail?.capabilities.canManageClub
+                        ?? false,
                     choose: { tool in
                         openFocusedComposer(tool)
                     }
@@ -598,7 +605,7 @@ struct VibeDetailView: View {
                     .background(C.elevated, in: Circle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Add a photo, poll, voice message, video message, or link")
+            .accessibilityLabel("Add a message, photo, camera, poll, sticker, voice, video, link, or Event")
 
             TextField(
                 "Message \(selectedWave?.name ?? detail.club.name)",
@@ -1771,7 +1778,9 @@ struct VibeDetailView: View {
             selectedComposerTool = nil
             activeSheet = nil
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
-                guard selectedWave?.capabilities.canCreateEvent == true else { return }
+                guard selectedWave?.capabilities.canCreateEvent == true
+                    || (selectedWave == nil && detail?.capabilities.canManageClub == true)
+                else { return }
                 activeSheet = .eventCreator
             }
             return
