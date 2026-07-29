@@ -9,8 +9,19 @@ private struct WaveAttachmentTray: View {
     private var tools: [(RippleComposerTool, String, String)] {
         guard let wave else { return [] }
         var result: [(RippleComposerTool, String, String)] = []
+        switch wave.type {
+        case .questions:
+            result.append((.text, "Question", "questionmark.bubble"))
+        case .announcements:
+            result.append((.text, "Announcement", "megaphone"))
+        case .resources:
+            result.append((.link, "Resource", "bookmark"))
+        default:
+            result.append((.text, "Message", "text.bubble"))
+        }
         if wave.allowPhotos {
             result.append((.photo, "Photos", "photo.on.rectangle.angled"))
+            result.append((.camera, "Camera", "camera.fill"))
         }
         if wave.allowPolls {
             result.append((.poll, "Poll", "chart.bar.fill"))
@@ -30,7 +41,15 @@ private struct WaveAttachmentTray: View {
             result.append((.video, "Video", "video.fill"))
         }
         if wave.allowLinks {
-            result.append((.link, "Link", "link"))
+            if wave.type != .resources {
+                result.append((.link, "Westreem / Link", "link"))
+            }
+        }
+        if wave.realtimeCapabilities?.stickers == true {
+            result.append((.sticker, "Sticker", "face.smiling"))
+        }
+        if wave.capabilities.canCreateEvent {
+            result.append((.event, "Event", "calendar.badge.plus"))
         }
         return result
     }
@@ -114,6 +133,7 @@ struct VibeDetailView: View {
         case settings
         case attachmentTray
         case composer
+        case eventCreator
 
         var id: String { rawValue }
     }
@@ -401,7 +421,7 @@ struct VibeDetailView: View {
                         openFocusedComposer(tool)
                     }
                 )
-                .presentationDetents([.height(310)])
+                .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
             case .composer:
                 if let detail {
@@ -432,6 +452,17 @@ struct VibeDetailView: View {
                     }
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
+                }
+            case .eventCreator:
+                NavigationStack {
+                    VibeEventCreatorView(
+                        onCreated: { _ in
+                            activeSheet = nil
+                            Task { await load() }
+                        },
+                        preselectedVibeSlug: slug,
+                        preselectedWaveID: selectedWave?.type == .events ? selectedWave?.id : nil
+                    )
                 }
             }
         }
@@ -1736,6 +1767,15 @@ struct VibeDetailView: View {
     }
 
     private func openFocusedComposer(_ tool: RippleComposerTool) {
+        if tool == .event {
+            selectedComposerTool = nil
+            activeSheet = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
+                guard selectedWave?.capabilities.canCreateEvent == true else { return }
+                activeSheet = .eventCreator
+            }
+            return
+        }
         selectedComposerTool = tool
         activeSheet = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {

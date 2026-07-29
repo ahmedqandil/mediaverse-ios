@@ -954,6 +954,30 @@ public struct PostableVibesResponse: Decodable, Sendable {
     public let vibes: [PostableVibe]
 }
 
+public struct ApprovedSticker: Decodable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let key: String
+    public let label: String
+    public let mediaURL: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, key, label
+        case mediaURL = "mediaUrl"
+    }
+}
+
+public struct ApprovedStickerPack: Decodable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let slug: String
+    public let name: String
+    public let version: Int
+    public let stickers: [ApprovedSticker]
+}
+
+public struct ApprovedStickerPacksResponse: Decodable, Sendable {
+    public let packs: [ApprovedStickerPack]
+}
+
 public struct RippleAuthor: Decodable, Equatable, Sendable {
     public let id: String
     public let name: String?
@@ -1570,6 +1594,7 @@ public struct VibeJoinResponse: Decodable, Sendable {
 
 public enum RippleCreateAttachment: Encodable, Equatable, Sendable {
     case photo(imageURL: String)
+    case sticker(id: String)
     case voice(mediaId: String)
     case videoMessage(mediaId: String)
     case link(externalURL: String)
@@ -1580,7 +1605,7 @@ public enum RippleCreateAttachment: Encodable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case type, imageURL = "imageUrl", externalURL = "externalUrl"
-        case videoId, collectionId, userPostId, fanClubPostId, mediaId
+        case videoId, collectionId, userPostId, fanClubPostId, mediaId, stickerId
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1589,6 +1614,9 @@ public enum RippleCreateAttachment: Encodable, Equatable, Sendable {
         case .photo(let imageURL):
             try values.encode("PHOTO", forKey: .type)
             try values.encode(imageURL, forKey: .imageURL)
+        case .sticker(let id):
+            try values.encode("STICKER", forKey: .type)
+            try values.encode(id, forKey: .stickerId)
         case .voice(let mediaId):
             try values.encode("VOICE_MESSAGE", forKey: .type)
             try values.encode(mediaId, forKey: .mediaId)

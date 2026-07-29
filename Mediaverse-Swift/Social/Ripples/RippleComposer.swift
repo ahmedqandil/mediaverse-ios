@@ -18,11 +18,15 @@ private struct RipplePhotoPositioning: Identifiable {
 }
 
 enum RippleComposerTool: String, CaseIterable, Identifiable {
+    case text
     case photo
+    case camera
     case poll
+    case sticker
     case voice
     case video
     case link
+    case event
 
     var id: String { rawValue }
 }
@@ -52,6 +56,7 @@ struct RippleComposer: View {
     @State private var showsPhotoSourceChooser = false
     @State private var showsPhotoLibrary = false
     @State private var showsCamera = false
+    @State private var showsStickerPicker = false
     @State private var photos: [UploadedRipplePhoto] = []
     @State private var photoSourceImages: [String: UIImage] = [:]
     @State private var positioningPhoto: RipplePhotoPositioning?
@@ -338,19 +343,33 @@ struct RippleComposer: View {
             )
             .ignoresSafeArea()
         }
+        .sheet(isPresented: $showsStickerPicker) {
+            RippleStickerPicker { sticker in
+                attachment = .sticker(id: sticker.id)
+                showsStickerPicker = false
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
         .task {
             guard !didApplyInitialTool else { return }
             didApplyInitialTool = true
             switch initialTool {
+            case .text:
+                isBodyFocused = true
             case .photo:
                 showsPhotoSourceChooser = true
+            case .camera:
+                showsCamera = true
+            case .sticker:
+                showsStickerPicker = true
             case .voice:
                 await voiceRecorder.start()
             case .video:
                 showsVideoLibrary = true
             case .link:
                 isBodyFocused = true
-            case .poll, .none:
+            case .event, .poll, .none:
                 break
             }
         }
@@ -1066,6 +1085,103 @@ struct RippleComposer: View {
         photos = []
         selectedMediaJobID = nil
         videoSelection = nil
+    }
+}
+
+private struct RippleStickerPicker: View {
+    let choose: (ApprovedSticker) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var packs: [ApprovedStickerPack] = []
+    @State private var selectedPackID: String?
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+    private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+
+    private var selectedPack: ApprovedStickerPack? {
+        packs.first(where: { $0.id == selectedPackID }) ?? packs.first
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView("Loading stickers…")
+                } else if let errorMessage {
+                    ContentUnavailableView(
+                        "Stickers unavailable",
+                        systemImage: "face.smiling",
+                        description: Text(errorMessage)
+                    )
+                } else if packs.isEmpty {
+                    ContentUnavailableView(
+                        "No sticker packs",
+                        systemImage: "face.smiling",
+                        description: Text("Approved sticker packs will appear here.")
+                    )
+                } else {
+                    VStack(spacing: 12) {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(packs) { pack in
+                                    Button(pack.name) { selectedPackID = pack.id }
+                                        .buttonStyle(.bordered)
+                                        .tint(selectedPack?.id == pack.id ? C.watch : C.textMuted)
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                        }
+
+                        ScrollView {
+                            LazyVGrid(
+                                columns: Array(repeating: GridItem(.flexible()), count: 4),
+                                spacing: 12
+                            ) {
+                                ForEach(selectedPack?.stickers ?? []) { sticker in
+                                    Button {
+                                        C.lightHaptic()
+                                        choose(sticker)
+                                    } label: {
+                                        CachedRemoteImage(
+                                            url: C.mediaURL(sticker.mediaURL),
+                                            targetSize: CGSize(width: 72, height: 72)
+                                        ) { image in
+                                            image.resizable().scaledToFit()
+                                        } placeholder: {
+                                            ProgressView().tint(C.watch)
+                                        }
+                                        .frame(height: 72)
+                                        .padding(6)
+                                        .background(C.elevated, in: RoundedRectangle(cornerRadius: 14))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel(sticker.label)
+                                }
+                            }
+                            .padding(16)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(C.bg)
+            .navigationTitle("Stickers")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+        .task {
+            do {
+                packs = try await api.approvedStickerPacks()
+                selectedPackID = packs.first?.id
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isLoading = false
+        }
     }
 }
 

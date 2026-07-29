@@ -687,6 +687,10 @@ public actor LegacySocialAPIAdapter {
         try await decode(PostableVibesResponse.self, path: "/api/fan-clubs/postable").vibes
     }
 
+    public func approvedStickerPacks() async throws -> [ApprovedStickerPack] {
+        try await decode(ApprovedStickerPacksResponse.self, path: "/api/stickers/packs").packs
+    }
+
     public func createRipple(
         inVibe slug: String,
         body: String?,
