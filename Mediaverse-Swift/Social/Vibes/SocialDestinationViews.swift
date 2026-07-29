@@ -40,6 +40,7 @@ struct VibeDetailView: View {
     @State private var relationshipNotice: String?
     @State private var errorMessage: String?
     @State private var activeSheet: VibeSheet?
+    @State private var showsWaveDirectory = false
     @StateObject private var autoplay = SocialFeedAutoplayController()
     @AppStorage("playerMuted") private var playerMuted = false
     @EnvironmentObject private var auth: AuthManager
@@ -65,7 +66,10 @@ struct VibeDetailView: View {
                             .padding(.horizontal, C.pagePad)
                     }
                     if !detail.club.isPersonal && !waves.isEmpty {
-                        waveTabs
+                        waveConversationHeader
+                            .padding(.horizontal, C.pagePad)
+                        waveContextCard
+                            .padding(.horizontal, C.pagePad)
                     }
                     if selectedWave?.type == .resources {
                         resourceFilters
@@ -232,6 +236,48 @@ struct VibeDetailView: View {
                 }
             }
         }
+        .sheet(isPresented: $showsWaveDirectory) {
+            NavigationStack {
+                List {
+                    Section("Conversation spaces") {
+                        waveDirectoryRow(
+                            title: "Vibe Home",
+                            detail: "Everything happening across \(detail?.club.name ?? "this Vibe")",
+                            slug: nil,
+                            systemImage: "house"
+                        )
+                        ForEach(waves) { wave in
+                            waveDirectoryRow(
+                                title: wave.name,
+                                detail: waveDirectoryDetail(wave),
+                                slug: wave.slug,
+                                systemImage: waveSystemImage(wave),
+                                count: wave._count?.posts ?? 0
+                            )
+                        }
+                    }
+                    Section("Vibe information") {
+                        Button {
+                            showsWaveDirectory = false
+                            activeSheet = .rules
+                        } label: {
+                            Label("Rules", systemImage: "list.bullet.clipboard")
+                        }
+                    }
+                }
+                .scrollContentBackground(.hidden)
+                .background(C.bg)
+                .navigationTitle("Waves")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showsWaveDirectory = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
         .task(id: slug) { await load() }
         .refreshable { await load() }
     }
@@ -367,30 +413,70 @@ struct VibeDetailView: View {
         }
     }
 
-    private var waveTabs: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                waveTab(title: "Home", slug: nil, systemImage: "house")
-                ForEach(waves) { wave in
-                    waveTab(title: wave.name, slug: wave.slug, systemImage: waveSystemImage(wave))
-                }
-                Button {
-                    activeSheet = .rules
-                } label: {
-                    Label("Rules", systemImage: "list.bullet.clipboard")
+    private var waveConversationHeader: some View {
+        Button {
+            C.lightHaptic()
+            showsWaveDirectory = true
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: selectedWave.map(waveSystemImage) ?? "house")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(C.watch)
+                    .frame(width: 34, height: 34)
+                    .background(C.watch.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(selectedWave?.name ?? "Vibe Home")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(C.text)
-                        .padding(.horizontal, 14)
-                        .frame(height: 38)
-                        .background(C.surface)
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(C.borderSubtle))
+                        .lineLimit(1)
+                    Text("Open Waves")
+                        .font(.caption)
+                        .foregroundStyle(C.textMuted)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("View Vibe Rules")
+                Spacer()
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(C.textMuted)
             }
-            .padding(.horizontal, C.pagePad)
+            .padding(12)
+            .background(C.surface)
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(C.borderSubtle))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open Waves. Current Wave: \(selectedWave?.name ?? "Vibe Home")")
+    }
+
+    private var waveContextCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("NOW VIEWING")
+                .font(.caption2.weight(.bold))
+                .tracking(1.4)
+                .foregroundStyle(C.watch)
+            Text(selectedWave?.name ?? "\(detail?.club.name ?? "Vibe") Home")
+                .font(.headline)
+                .foregroundStyle(C.text)
+            Text(selectedWave?.description
+                 ?? "Everything happening across \(detail?.club.name ?? "this Vibe").")
+                .font(.footnote)
+                .foregroundStyle(C.textMuted)
+                .lineLimit(3)
+            if let wave = selectedWave {
+                HStack(spacing: 12) {
+                    Label(waveTypeLabel(wave.type), systemImage: waveSystemImage(wave))
+                    Text(wave.visibility.capitalized)
+                    if wave.requiresPostApproval { Text("Approval required") }
+                }
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(C.textMuted)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(C.elevated)
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(C.borderSubtle))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
     private var resourceFilters: some View {
@@ -469,22 +555,68 @@ struct VibeDetailView: View {
         isSwitchingWave = false
     }
 
-    private func waveTab(title: String, slug: String?, systemImage: String) -> some View {
+    private func waveDirectoryRow(
+        title: String,
+        detail: String,
+        slug: String?,
+        systemImage: String,
+        count: Int = 0
+    ) -> some View {
         let selected = selectedWaveSlug == slug
         return Button {
+            showsWaveDirectory = false
             Task { await switchWave(to: slug) }
         } label: {
-            Label(title, systemImage: systemImage)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(selected ? C.bg : C.text)
-                .padding(.horizontal, 14)
-                .frame(height: 38)
-                .background(selected ? C.watch : C.surface)
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke(selected ? Color.clear : C.borderSubtle))
+            HStack(spacing: 12) {
+                Image(systemName: systemImage)
+                    .foregroundStyle(selected ? C.watch : C.textMuted)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(C.text)
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(C.textMuted)
+                        .lineLimit(1)
+                }
+                Spacer()
+                if count > 0 {
+                    Text(count.formatted())
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(C.textMuted)
+                }
+                if selected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(C.watch)
+                }
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(isSwitchingWave && selected)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func waveDirectoryDetail(_ wave: VibeWave) -> String {
+        if let description = wave.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !description.isEmpty {
+            return description
+        }
+        return "\(waveTypeLabel(wave.type)) conversation"
+    }
+
+    private func waveTypeLabel(_ type: VibeWaveType) -> String {
+        switch type {
+        case .announcements: "Announcements"
+        case .questions: "Questions"
+        case .events: "Events"
+        case .resources: "Resources"
+        case .media: "Media"
+        case .staff: "Staff"
+        case .general: "General"
+        case .custom: "Custom"
+        case .unknown(let value): value.isEmpty ? "Wave" : value.capitalized
+        }
     }
 
     @MainActor
