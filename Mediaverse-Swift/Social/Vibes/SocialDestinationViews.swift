@@ -3,23 +3,33 @@ import SwiftUI
 
 private struct WaveAttachmentTray: View {
     let wave: VibeWave?
+    let features: SocialFeatureConfiguration
     let choose: (RippleComposerTool) -> Void
 
     private var tools: [(RippleComposerTool, String, String)] {
+        guard let wave else { return [] }
         var result: [(RippleComposerTool, String, String)] = []
-        if wave?.allowPhotos != false {
+        if wave.allowPhotos {
             result.append((.photo, "Photos", "photo.on.rectangle.angled"))
         }
-        if wave?.allowPolls != false {
+        if wave.allowPolls {
             result.append((.poll, "Poll", "chart.bar.fill"))
         }
-        if wave?.allowVoiceMessages != false {
+        if wave.allowVoiceMessages,
+           SocialRealtimeRollout.voiceRipplesEnabled(
+               local: features,
+               server: wave.realtimeCapabilities
+           ) {
             result.append((.voice, "Voice", "waveform"))
         }
-        if wave?.allowVideoMessages != false {
+        if wave.allowVideoMessages,
+           SocialRealtimeRollout.videoRipplesEnabled(
+               local: features,
+               server: wave.realtimeCapabilities
+           ) {
             result.append((.video, "Video", "video.fill"))
         }
-        if wave?.allowLinks != false {
+        if wave.allowLinks {
             result.append((.link, "Link", "link"))
         }
         return result
@@ -91,7 +101,6 @@ struct VibeDetailView: View {
         case affiliations
         case moderation
         case invitations
-        case waves
         case rules
         case settings
         case attachmentTray
@@ -124,6 +133,8 @@ struct VibeDetailView: View {
     @State private var errorMessage: String?
     @State private var activeSheet: VibeSheet?
     @State private var selectedComposerTool: RippleComposerTool?
+    @State private var presentsWaveCreator = false
+    @State private var editingWave: VibeWave?
     @State private var showsWaveDirectory = false
     @State private var chatDraft = ""
     @State private var isSendingChatRipple = false
@@ -299,8 +310,29 @@ struct VibeDetailView: View {
         .background(C.bg.ignoresSafeArea())
         .navigationTitle(detail?.club.name ?? "Vibe")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(isCommunityConversation)
         .toolbar {
-            if hasVibeOptions {
+            if isCommunityConversation {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        C.lightHaptic()
+                        returnToWaveDirectory()
+                    } label: {
+                        Label("Waves", systemImage: "chevron.left")
+                    }
+                    .accessibilityLabel("Back to Waves")
+                }
+            }
+            if isCommunityConversation, let wave = selectedWave, wave.capabilities.canManage {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        editingWave = wave
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("\(wave.name) settings")
+                }
+            } else if !isCommunityConversation, hasVibeOptions {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         activeSheet = .options
@@ -339,10 +371,6 @@ struct VibeDetailView: View {
                         currentRole: detail.membership?.role
                     )
                 }
-            case .waves:
-                VibeWavesManagementView(vibeSlug: slug) {
-                    Task { await load() }
-                }
             case .rules:
                 VibeRulesView(vibeSlug: slug)
             case .settings:
@@ -359,9 +387,9 @@ struct VibeDetailView: View {
             case .attachmentTray:
                 WaveAttachmentTray(
                     wave: selectedWave,
+                    features: features,
                     choose: { tool in
-                        selectedComposerTool = tool
-                        activeSheet = .composer
+                        openFocusedComposer(tool)
                     }
                 )
                 .presentationDetents([.height(310)])
@@ -396,6 +424,18 @@ struct VibeDetailView: View {
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
                 }
+            }
+        }
+        .sheet(isPresented: $presentsWaveCreator) {
+            VibeWaveEditorView(vibeSlug: slug, wave: nil) {
+                presentsWaveCreator = false
+                await load()
+            }
+        }
+        .sheet(item: $editingWave) { wave in
+            VibeWaveEditorView(vibeSlug: slug, wave: wave) {
+                editingWave = nil
+                await load()
             }
         }
         .sheet(isPresented: $showsWaveDirectory) {
@@ -518,7 +558,7 @@ struct VibeDetailView: View {
                     .background(C.elevated, in: Circle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Add photos, poll, or attachment")
+            .accessibilityLabel("Add a photo, poll, voice message, video message, or link")
 
             TextField(
                 "Message \(selectedWave?.name ?? detail.club.name)",
@@ -868,10 +908,24 @@ struct VibeDetailView: View {
     private func mobileWaveDirectory(for detail: VibeDetailResponse) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("WAVES")
-                    .font(.caption2.weight(.bold))
-                    .tracking(1.5)
-                    .foregroundStyle(C.watch)
+                HStack {
+                    Text("WAVES")
+                        .font(.caption2.weight(.bold))
+                        .tracking(1.5)
+                        .foregroundStyle(C.watch)
+                    Spacer()
+                    if detail.capabilities.canManageClub {
+                        Button {
+                            presentsWaveCreator = true
+                        } label: {
+                            Label("New Wave", systemImage: "plus")
+                                .font(.caption.weight(.bold))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(C.watch)
+                        .accessibilityLabel("Create a Wave")
+                    }
+                }
                 Text("Choose a conversation")
                     .font(.title3.weight(.bold))
                     .foregroundStyle(C.text)
@@ -1622,7 +1676,7 @@ struct VibeDetailView: View {
 
     private func optionsSheetHeight(for capabilities: VibeCapabilities) -> CGFloat {
         var count = 0
-        if capabilities.canManageClub { count += 2 }
+        if capabilities.canManageClub { count += 1 }
         if capabilities.canInvite { count += 1 }
         if capabilities.canModerateContent || capabilities.canModerateMembers { count += 1 }
         if capabilities.canManageAffiliations { count += 1 }
@@ -1633,6 +1687,15 @@ struct VibeDetailView: View {
         activeSheet = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
             activeSheet = destination
+        }
+    }
+
+    private func openFocusedComposer(_ tool: RippleComposerTool) {
+        selectedComposerTool = tool
+        activeSheet = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
+            guard selectedComposerTool == tool, selectedWave != nil else { return }
+            activeSheet = .composer
         }
     }
 }
@@ -1740,7 +1803,6 @@ private struct VibeOptionsSheet: View {
 
             if capabilities.canManageClub {
                 option("Settings", detail: "Branding, privacy, posting, and membership", icon: "gearshape", destination: .settings)
-                option("Waves", detail: "Spaces, permissions, posting tools, and alerts", icon: "water.waves", destination: .waves)
             }
             if capabilities.canInvite {
                 option("Invitations", detail: "Create and manage invitation links", icon: "person.badge.plus", destination: .invitations)

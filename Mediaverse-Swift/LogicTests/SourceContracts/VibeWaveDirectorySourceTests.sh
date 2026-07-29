@@ -17,9 +17,9 @@ assert_contains() {
 
 failures=0
 
-assert_contains 'private var isCompactCommunityDirectory: Bool' "$view" \
-  "Compact community Vibes must have a directory-first state." || failures=$((failures + 1))
-assert_contains 'detail?.club.isPersonal == false' "$view" \
+assert_contains 'vibePresentation == .waveDirectory' "$view" \
+  "Community Vibes must have a directory-first state." || failures=$((failures + 1))
+assert_contains 'guard !isPersonal else { return .personalFeed }' "$repo_dir/Social/Contracts/SocialModels.swift" \
   "Personal Atmospheres must be excluded from the community directory flow." || failures=$((failures + 1))
 assert_contains 'horizontalSizeClass != .compact' "$view" \
   "The existing iPad Wave presentation must remain available." || failures=$((failures + 1))
@@ -33,13 +33,19 @@ assert_contains 'private func openDedicatedWave(_ waveSlug: String) async' "$vie
   "Wave selection must open a dedicated conversation state." || failures=$((failures + 1))
 assert_contains 'returnToWaveDirectory()' "$view" \
   "Dedicated Wave conversations must provide back navigation." || failures=$((failures + 1))
+assert_contains '.navigationBarBackButtonHidden(isCommunityConversation)' "$view" \
+  "Wave conversations must replace system back with Wave-local back." || failures=$((failures + 1))
+assert_contains 'presentsWaveCreator = true' "$view" \
+  "Managers must create Waves from the Wave directory." || failures=$((failures + 1))
+assert_contains 'editingWave = wave' "$view" \
+  "Managers must edit a Wave from its conversation." || failures=$((failures + 1))
 assert_contains 'composerDestination(for: detail)' "$view" \
   "Dedicated Wave composition must reuse the capability-aware adaptive composer." || failures=$((failures + 1))
 assert_contains 'selectedWave?.capabilities.canPost ?? detail.capabilities.canPost' "$view" \
   "Posting permissions must remain server capability driven." || failures=$((failures + 1))
 assert_contains 'initialWaveSlug' "$view" \
   "Canonical Wave deep links must continue selecting their destination." || failures=$((failures + 1))
-assert_contains 'presentation: detail.club.isPersonal ? .social : .waveConversation' "$view" \
+assert_contains 'presentation: isCommunityConversation ? .waveConversation : .social' "$view" \
   "Community Wave cards must retain the contextual conversation presentation." || failures=$((failures + 1))
 assert_contains 'ripple.conversationSummary?.unreadCount' "$card" \
   "Directory activity must share the normalized conversation contract used by cards." || failures=$((failures + 1))

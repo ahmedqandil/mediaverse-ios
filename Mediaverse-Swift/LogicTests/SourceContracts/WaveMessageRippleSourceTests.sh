@@ -41,10 +41,10 @@ require 'Text("Open discussion")' "$card" "Additional replies must expose the de
 require "RippleDiscussionView(" "$card" "Additional replies must open a native discussion screen."
 require ".vibe, .vibeWave:" "$tabs" "Vibe and Wave routes must hide global bottom chrome."
 
-if grep -Fq 'accessibilityLabel("Back to Waves")' "$vibe"; then
-  echo "FAIL: Wave conversations must not render a redundant back control." >&2
-  exit 1
-fi
+require '.navigationBarBackButtonHidden(isCommunityConversation)' "$vibe" \
+  "Wave-local back must replace rather than duplicate system navigation."
+require 'accessibilityLabel("Back to Waves")' "$vibe" \
+  "Wave conversations must return to the Wave directory."
 
 energy_line=$(grep -n 'title: "Add Energy"' "$card" | head -1 | cut -d: -f1)
 reply_line=$(grep -n 'title: waveReplyActionTitle' "$card" | head -1 | cut -d: -f1)

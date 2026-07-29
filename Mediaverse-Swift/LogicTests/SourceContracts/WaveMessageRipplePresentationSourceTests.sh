@@ -17,7 +17,7 @@ assert_contains() {
 
 assert_contains 'case waveConversation' "$card" \
   "Wave message styling must remain an explicit presentation, isolated from social/Atmosphere cards."
-assert_contains 'presentation: detail.club.isPersonal ? .social : .waveConversation' "$destination" \
+assert_contains 'presentation: isCommunityConversation ? .waveConversation : .social' "$destination" \
   "Community Waves must opt into message presentation without changing personal Atmospheres."
 assert_contains 'isWaveMessageGrouped(' "$destination" \
   "Wave feeds must calculate adjacent message groups."
