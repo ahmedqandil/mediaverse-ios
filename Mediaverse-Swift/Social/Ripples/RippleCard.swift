@@ -181,7 +181,11 @@ struct RippleCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !usesCompactWaveGrouping {
+            if isCompactWaveMessage, !usesCompactWaveGrouping {
+                compactWaveAuthorLine
+                    .padding(.horizontal, 10)
+                    .padding(.top, 4)
+            } else if !usesCompactWaveGrouping {
                 identityHeader
                     .padding(.horizontal, 12)
                     .padding(.top, presentation == .waveConversation ? 8 : 12)
@@ -260,10 +264,12 @@ struct RippleCard: View {
                     .padding(.top, 12)
             }
 
-            actionBar
-                .padding(.horizontal, 4)
-                .padding(.top, presentation == .waveConversation ? 2 : 5)
-                .padding(.bottom, 5)
+            if !isCompactWaveMessage || isLastInMessageGroup || showsComments {
+                actionBar
+                    .padding(.horizontal, 4)
+                    .padding(.top, presentation == .waveConversation ? 2 : 5)
+                    .padding(.bottom, 5)
+            }
 
             if showsComments {
                 Divider().background(C.borderSubtle)
@@ -284,14 +290,38 @@ struct RippleCard: View {
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
+        .padding(.leading, isCompactWaveMessage ? 50 : 0)
+        .padding(.trailing, isCompactWaveMessage ? 6 : 0)
+        .padding(.top, isCompactWaveMessage && usesCompactWaveGrouping ? 0 : 4)
+        .overlay(alignment: .topLeading) {
+            if isCompactWaveMessage, !usesCompactWaveGrouping {
+                authorTarget {
+                    SocialIdentityAvatar(
+                        image: ripple.author.image,
+                        name: ripple.author.name ?? ripple.author.handle,
+                        size: 38
+                    )
+                }
+                .padding(.leading, 8)
+                .padding(.top, 8)
+            } else if isCompactWaveMessage {
+                Circle()
+                    .fill(C.borderSubtle)
+                    .frame(width: 5, height: 5)
+                    .padding(.leading, 25)
+                    .padding(.top, 15)
+            }
+        }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             isCompactWaveMessage
-                ? C.surface.opacity(usesCompactWaveGrouping ? 0.48 : 0.72)
+                ? Color.clear
                 : C.surface.opacity(0.82)
         )
         .overlay {
-            if horizontalSizeClass == .compact {
+            if isCompactWaveMessage {
+                EmptyView()
+            } else if horizontalSizeClass == .compact {
                 VStack(spacing: 0) {
                     Rectangle().fill(C.borderSubtle).frame(height: 1)
                     Spacer()
@@ -304,7 +334,7 @@ struct RippleCard: View {
         }
         .clipShape(
             RoundedRectangle(
-                cornerRadius: horizontalSizeClass == .compact ? 0 : C.cardRadius,
+                cornerRadius: isCompactWaveMessage || horizontalSizeClass == .compact ? 0 : C.cardRadius,
                 style: .continuous
             )
         )
@@ -451,9 +481,15 @@ struct RippleCard: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(C.textMuted)
             }
-            .padding(11)
-            .background(C.elevated.opacity(0.58))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.vertical, isCompactWaveMessage ? 6 : 11)
+            .padding(.horizontal, isCompactWaveMessage ? 0 : 11)
+            .background(isCompactWaveMessage ? Color.clear : C.elevated.opacity(0.58))
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: isCompactWaveMessage ? 0 : 12,
+                    style: .continuous
+                )
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -741,6 +777,38 @@ struct RippleCard: View {
         }
     }
 
+    private var compactWaveAuthorLine: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            authorTarget {
+                Text(ripple.author.name ?? ripple.author.handle.map { "@\($0)" } ?? "Westreem user")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(C.text)
+                    .lineLimit(1)
+            }
+            if let handle = ripple.author.handle, ripple.author.name != nil {
+                Text("@\(handle)")
+                    .font(.caption)
+                    .foregroundStyle(C.textMuted)
+                    .lineLimit(1)
+            }
+            Text(relativeMessageTime)
+                .font(.caption2)
+                .foregroundStyle(C.textTertiary)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+        }
+    }
+
+    private var relativeMessageTime: String {
+        let value = ripple.publishedAt ?? ripple.createdAt
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let date = fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value) else {
+            return ""
+        }
+        return RelativeDateTimeFormatter().localizedString(for: date, relativeTo: Date())
+    }
+
     private var isOwner: Bool {
         auth.currentUser?.id == ripple.author.id
     }
@@ -818,7 +886,9 @@ struct RippleCard: View {
             }
         }
         .overlay(alignment: .top) {
-            Rectangle().fill(C.borderSubtle).frame(height: 1)
+            if !isCompactWaveMessage {
+                Rectangle().fill(C.borderSubtle).frame(height: 1)
+            }
         }
     }
 
@@ -920,7 +990,10 @@ struct RippleCard: View {
     }
 
     private func bodyFont(hasAttachments: Bool) -> Font {
-        hasAttachments ? .body : .system(size: 20, weight: .medium, design: .rounded)
+        if isCompactWaveMessage {
+            return .body
+        }
+        return hasAttachments ? .body : .system(size: 20, weight: .medium, design: .rounded)
     }
 
     @ViewBuilder

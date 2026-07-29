@@ -61,7 +61,7 @@ struct VibeDetailView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: 12) {
+            LazyVStack(spacing: isCompactCommunityConversation ? 3 : 12) {
                 if let detail {
                     if !isCompactCommunityConversation {
                         VibeHero(
@@ -99,7 +99,8 @@ struct VibeDetailView: View {
                     }
                     if !isCompactCommunityDirectory,
                        features.rippleComposerEnabled,
-                       canPost(in: detail) {
+                       canPost(in: detail),
+                       !isCompactCommunityConversation {
                         rippleComposerPrompt(for: detail)
                             .padding(.horizontal, C.pagePad)
                     }
@@ -174,6 +175,14 @@ struct VibeDetailView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.bottom, C.bottomMenuClearance)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let detail,
+               isCompactCommunityConversation,
+               features.rippleComposerEnabled,
+               canPost(in: detail) {
+                waveChatComposerEntry(for: detail)
+            }
         }
         .coordinateSpace(name: "homeFeedScroll")
         .onPreferenceChange(HomeVideoFramePreferenceKey.self) { frames in
@@ -389,6 +398,44 @@ struct VibeDetailView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(composerPrompt(for: detail))
+    }
+
+    private func waveChatComposerEntry(for detail: VibeDetailResponse) -> some View {
+        Button {
+            C.lightHaptic()
+            activeSheet = .composer
+        } label: {
+            HStack(spacing: 10) {
+                SocialIdentityAvatar(
+                    image: auth.currentUser?.image,
+                    name: auth.currentUser?.name,
+                    size: 34
+                )
+                Text(composerPrompt(for: detail))
+                    .font(.subheadline)
+                    .foregroundStyle(C.textMuted)
+                    .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .background(C.elevated)
+                    .clipShape(Capsule())
+                Image(systemName: "paperplane.fill")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(C.bg)
+                    .frame(width: 42, height: 42)
+                    .background(C.watch)
+                    .clipShape(Circle())
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial)
+            .overlay(alignment: .top) {
+                Rectangle().fill(C.borderSubtle).frame(height: 1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("wave.composer.dock")
+        .accessibilityLabel("Create a Ripple in \(selectedWave?.name ?? detail.club.name)")
     }
 
     private func load() async {
@@ -1403,6 +1450,7 @@ private struct VibeOptionsSheet: View {
         }
         .buttonStyle(.plain)
     }
+
 }
 
 struct RippleDetailView: View {

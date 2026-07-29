@@ -26,6 +26,12 @@ require "ripple.pinnedAt == nil" "$vibe" "Pinned Ripples must start their own gr
 require "previous.pinnedAt == nil" "$vibe" "Ripples must not group after pinned content."
 require "waveType == .general || waveType == .custom" "$vibe" "Specialized Wave content must never group."
 require ".frame(minHeight: 44)" "$card" "Wave message actions must retain a 44-point touch target."
+require "compactWaveAuthorLine" "$card" "Compact Waves must use message identity rather than the legacy card header."
+require ".padding(.leading, isCompactWaveMessage ? 50 : 0)" "$card" "Compact Waves must reserve a visible avatar gutter."
+require "isCompactWaveMessage, !usesCompactWaveGrouping" "$card" "Only group leaders may repeat the author avatar."
+require "? Color.clear" "$card" "Compact Wave messages must remove legacy card fill."
+require "waveChatComposerEntry" "$vibe" "Wave conversations must expose a persistent chat-style composer entry."
+require ".safeAreaInset(edge: .bottom" "$vibe" "The Wave composer must remain visible while reading."
 
 energy_line=$(grep -n 'title: "Add Energy"' "$card" | head -1 | cut -d: -f1)
 reply_line=$(grep -n 'title: waveReplyActionTitle' "$card" | head -1 | cut -d: -f1)
