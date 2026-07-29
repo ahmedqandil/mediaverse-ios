@@ -115,6 +115,8 @@ struct RippleCard: View {
     let actions: RippleCardActions
     let allowsEngagement: Bool
     let presentation: RippleCardPresentation
+    let isGroupedWithPrevious: Bool
+    let isLastInMessageGroup: Bool
     @Binding private var activePreviewVideoId: String?
     private let previewManager: FeedPreviewPlayerManager?
     private let isAutoplayBlocked: Bool
@@ -149,6 +151,8 @@ struct RippleCard: View {
         actions: RippleCardActions = .readOnly,
         allowsEngagement: Bool = false,
         presentation: RippleCardPresentation = .social,
+        isGroupedWithPrevious: Bool = false,
+        isLastInMessageGroup: Bool = true,
         activePreviewVideoId: Binding<String?> = .constant(nil),
         previewManager: FeedPreviewPlayerManager? = nil,
         isAutoplayBlocked: Bool = true,
@@ -160,6 +164,8 @@ struct RippleCard: View {
         self.actions = actions
         self.allowsEngagement = allowsEngagement
         self.presentation = presentation
+        self.isGroupedWithPrevious = presentation == .waveConversation && isGroupedWithPrevious
+        self.isLastInMessageGroup = isLastInMessageGroup
         _activePreviewVideoId = activePreviewVideoId
         self.previewManager = previewManager
         self.isAutoplayBlocked = isAutoplayBlocked
@@ -175,9 +181,11 @@ struct RippleCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            identityHeader
-                .padding(.horizontal, 12)
-                .padding(.top, 12)
+            if !usesCompactWaveGrouping {
+                identityHeader
+                    .padding(.horizontal, 12)
+                    .padding(.top, presentation == .waveConversation ? 8 : 12)
+            }
 
             if let body = (editedBody ?? ripple.body)?.trimmingCharacters(in: .whitespacesAndNewlines),
                !body.isEmpty {
@@ -190,7 +198,7 @@ struct RippleCard: View {
                     .lineLimit(isBodyExpanded ? nil : 4)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 12)
-                    .padding(.top, 10)
+                    .padding(.top, usesCompactWaveGrouping ? 4 : 10)
 
                 if body.count > 180 {
                     Button(isBodyExpanded ? "Show less" : "More") {
@@ -254,7 +262,8 @@ struct RippleCard: View {
 
             actionBar
                 .padding(.horizontal, 4)
-                .padding(.vertical, 5)
+                .padding(.top, presentation == .waveConversation ? 2 : 5)
+                .padding(.bottom, 5)
 
             if showsComments {
                 Divider().background(C.borderSubtle)
@@ -276,7 +285,11 @@ struct RippleCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(C.surface.opacity(0.82))
+        .background(
+            isCompactWaveMessage
+                ? C.surface.opacity(usesCompactWaveGrouping ? 0.48 : 0.72)
+                : C.surface.opacity(0.82)
+        )
         .overlay {
             if horizontalSizeClass == .compact {
                 VStack(spacing: 0) {
@@ -699,7 +712,7 @@ struct RippleCard: View {
 
             Spacer(minLength: 8)
 
-            if showsActionMenu {
+            if showsActionMenu && !isCompactWaveMessage {
                 Menu {
                     if let togglePin = actions.togglePin {
                         Button(
@@ -771,10 +784,11 @@ struct RippleCard: View {
                 title: "Add Energy",
                 systemImage: "bolt.fill",
                 count: engagement.energyCount,
-                handler: actions.addEnergy ?? (allowsEngagement ? { showsEnergy = true } : nil)
+                handler: actions.addEnergy ?? (allowsEngagement ? { showsEnergy = true } : nil),
+                showsLabel: showsMessageActionLabels
             )
             action(
-                title: presentation == .waveConversation ? "Reply" : "Comment",
+                title: waveReplyActionTitle,
                 systemImage: presentation == .waveConversation ? "arrowshape.turn.up.left.fill" : "bubble.left",
                 count: displayedCommentCount,
                 handler: actions.comment ?? (
@@ -782,20 +796,26 @@ struct RippleCard: View {
                         ? { withAnimation(.easeInOut(duration: 0.2)) { showsComments.toggle() } }
                         : nil
                 ),
-                isPrimary: presentation == .waveConversation
+                isPrimary: presentation == .waveConversation,
+                showsLabel: showsMessageActionLabels
             )
             action(
                 title: "Echo",
                 systemImage: "dot.radiowaves.left.and.right",
                 count: engagement.echoCount,
-                handler: actions.echo ?? (allowsEngagement ? { showsEcho = true } : nil)
+                handler: actions.echo ?? (allowsEngagement ? { showsEcho = true } : nil),
+                showsLabel: showsMessageActionLabels
             )
             action(
                 title: "Share",
                 systemImage: "square.and.arrow.up",
                 count: engagement.shareCount,
-                handler: actions.share ?? (allowsEngagement && shareURL != nil ? { showsShare = true } : nil)
+                handler: actions.share ?? (allowsEngagement && shareURL != nil ? { showsShare = true } : nil),
+                showsLabel: showsMessageActionLabels
             )
+            if isCompactWaveMessage {
+                waveMoreAction
+            }
         }
         .overlay(alignment: .top) {
             Rectangle().fill(C.borderSubtle).frame(height: 1)
@@ -807,25 +827,96 @@ struct RippleCard: View {
         systemImage: String,
         count: Int,
         handler: (() -> Void)?,
-        isPrimary: Bool = false
+        isPrimary: Bool = false,
+        showsLabel: Bool = true
     ) -> some View {
         Button(action: { handler?() }) {
             HStack(spacing: 4) {
                 Image(systemName: systemImage)
                     .font(.system(size: 12, weight: .semibold))
-                Text(count > 0 ? "\(title) · \(count)" : title)
-                    .font(.system(size: 10, weight: .semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.78)
+                if showsLabel {
+                    Text(count > 0 ? "\(title) · \(count)" : title)
+                        .font(.system(size: 10, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.68)
+                } else if count > 0 {
+                    Text("\(count)")
+                        .font(.system(size: 10, weight: .semibold))
+                        .lineLimit(1)
+                }
             }
             .foregroundStyle(handler == nil ? C.textTertiary : isPrimary ? C.watch : C.textMuted)
             .frame(maxWidth: .infinity)
-            .frame(height: 40)
+            .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(handler == nil)
         .accessibilityLabel(count > 0 ? "\(title), \(count)" : title)
+    }
+
+    private var showsMessageActionLabels: Bool {
+        !isCompactWaveMessage || isLastInMessageGroup || showsComments
+    }
+
+    private var isCompactWaveMessage: Bool {
+        presentation == .waveConversation && horizontalSizeClass == .compact
+    }
+
+    private var usesCompactWaveGrouping: Bool {
+        isCompactWaveMessage && isGroupedWithPrevious
+    }
+
+    private var waveReplyActionTitle: String {
+        guard presentation == .waveConversation else { return "Comment" }
+        return ripple.wave?.type == .questions ? "Answer" : "Reply"
+    }
+
+    @ViewBuilder
+    private var waveMoreAction: some View {
+        if showsActionMenu {
+            Menu {
+                if let togglePin = actions.togglePin {
+                    Button(
+                        actions.isPinned ? "Unpin from \(actions.pinTarget)" : "Pin to \(actions.pinTarget)",
+                        systemImage: actions.isPinned ? "pin.slash" : "pin",
+                        action: togglePin
+                    )
+                }
+                if let editAction {
+                    Button("Edit", systemImage: "pencil", action: editAction)
+                }
+                if let deleteAction {
+                    Button("Delete", systemImage: "trash", role: .destructive, action: deleteAction)
+                }
+                if let reportAction {
+                    Button("Report", systemImage: "flag", action: reportAction)
+                }
+            } label: {
+                waveMoreActionLabel
+            }
+        } else {
+            waveMoreActionLabel
+                .foregroundStyle(C.textTertiary)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var waveMoreActionLabel: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 12, weight: .semibold))
+            if showsMessageActionLabels {
+                Text("More")
+                    .font(.system(size: 10, weight: .semibold))
+                    .lineLimit(1)
+            }
+        }
+        .foregroundStyle(showsActionMenu ? C.textMuted : C.textTertiary)
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+        .accessibilityLabel("More")
     }
 
     private func bodyFont(hasAttachments: Bool) -> Font {

@@ -119,19 +119,27 @@ struct VibeDetailView: View {
                             .padding(.vertical, 28)
                     }
                     if !isCompactCommunityDirectory {
-                    ForEach(ripples) {
+                    ForEach(Array(ripples.enumerated()), id: \.element.id) { index, ripple in
                         RippleCard(
-                            ripple: $0,
+                            ripple: ripple,
                             actions: RippleCardActions(
                                 togglePin: detail.capabilities.canModerateContent
-                                    ? vibePinAction(for: $0)
+                                    ? vibePinAction(for: ripple)
                                     : nil,
-                                isPinned: $0.pinnedAt != nil,
+                                isPinned: ripple.pinnedAt != nil,
                                 pinTarget: "Vibe",
                                 canManageQuestionAnswers: detail.capabilities.canModerateContent
                             ),
                             allowsEngagement: features.rippleEngagementEnabled,
                             presentation: detail.club.isPersonal ? .social : .waveConversation,
+                            isGroupedWithPrevious: isWaveMessageGrouped(
+                                ripple,
+                                after: index > 0 ? ripples[index - 1] : nil
+                            ),
+                            isLastInMessageGroup: !isWaveMessageGrouped(
+                                index + 1 < ripples.count ? ripples[index + 1] : nil,
+                                after: ripple
+                            ),
                             activePreviewVideoId: $autoplay.activeVideoID,
                             previewManager: autoplay.previewManager,
                             isAutoplayBlocked: isAutoplayBlocked,
@@ -821,6 +829,33 @@ struct VibeDetailView: View {
             return "recently"
         }
         return RelativeDateTimeFormatter().localizedString(for: date, relativeTo: Date())
+    }
+
+    private func isWaveMessageGrouped(_ ripple: Ripple?, after previous: Ripple?) -> Bool {
+        guard let ripple, let previous,
+              ripple.author.id == previous.author.id,
+              ripple.wave?.id == previous.wave?.id,
+              ripple.pinnedAt == nil,
+              previous.pinnedAt == nil,
+              let waveType = ripple.wave?.type,
+              waveType == .general || waveType == .custom else {
+            return false
+        }
+        let currentValue = ripple.publishedAt ?? ripple.createdAt
+        let previousValue = previous.publishedAt ?? previous.createdAt
+        guard let currentDate = waveMessageDate(currentValue),
+              let previousDate = waveMessageDate(previousValue) else {
+            return false
+        }
+        let interval = currentDate.timeIntervalSince(previousDate)
+        return interval >= 0 && interval <= 10 * 60
+    }
+
+    private func waveMessageDate(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
     }
 
     private var waveConversationHeader: some View {

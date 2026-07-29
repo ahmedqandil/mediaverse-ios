@@ -40,8 +40,10 @@ assert_not_contains 'guard !(editedCommentsDisabled ?? ripple.commentsDisabled) 
   "Closed comments must disable replying, not access to historical discussion." || failures=$((failures + 1))
 assert_not_contains '.disabled(editedCommentsDisabled ?? ripple.commentsDisabled)' "$card" \
   "Closed comments must not disable the historical-discussion entry point." || failures=$((failures + 1))
-assert_contains 'title: presentation == .waveConversation ? "Reply" : "Comment"' "$card" \
-  "Wave cards must label the shared comment mutation Reply without changing social cards." || failures=$((failures + 1))
+assert_contains 'guard presentation == .waveConversation else { return "Comment" }' "$card" \
+  "Social cards must retain the Comment label." || failures=$((failures + 1))
+assert_contains 'return ripple.wave?.type == .questions ? "Answer" : "Reply"' "$card" \
+  "Wave cards must label the shared mutation Reply or Answer without changing its contract." || failures=$((failures + 1))
 assert_contains 'conversationSummary' "$models" \
   "Swift must decode the additive server-owned conversation summary with a legacy fallback." || failures=$((failures + 1))
 assert_contains 'ripple.conversationSummary' "$card" \
