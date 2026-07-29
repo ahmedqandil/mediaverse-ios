@@ -1,5 +1,66 @@
 import Foundation
 
+public enum SocialAuthority: String, Decodable, Equatable, Sendable {
+    case matrix = "MATRIX"
+    case westreem = "WESTREEM"
+}
+
+public enum SocialAuthorityDomain: String, Decodable, Equatable, Hashable, Sendable {
+    case realtimeDelivery = "REALTIME_DELIVERY"
+    case typing = "TYPING"
+    case readReceipts = "READ_RECEIPTS"
+    case presence = "PRESENCE"
+    case roomRelations = "ROOM_RELATIONS"
+    case rtcSignaling = "RTC_SIGNALING"
+    case vibeDirectory = "VIBE_DIRECTORY"
+    case waveConfiguration = "WAVE_CONFIGURATION"
+    case publicRipplePresentation = "PUBLIC_RIPPLE_PRESENTATION"
+    case events = "EVENTS"
+    case energy = "ENERGY"
+    case feeds = "FEEDS"
+    case curation = "CURATION"
+    case moderation = "MODERATION"
+    case audit = "AUDIT"
+    case analytics = "ANALYTICS"
+    case playback = "PLAYBACK"
+    case ads = "ADS"
+    case affiliations = "AFFILIATIONS"
+    case notifications = "NOTIFICATIONS"
+    case mediaDelivery = "MEDIA_DELIVERY"
+}
+
+/// Fail-closed authority boundary supplied by Westreem with Matrix-enabled
+/// responses. Realtime UI may use Matrix only when this declaration is valid.
+public struct SocialAuthorityContract: Decodable, Equatable, Sendable {
+    public let version: Int
+    public let liveTransport: SocialAuthority
+    public let canonicalProduct: SocialAuthority
+    public let matrixOwns: [SocialAuthorityDomain]
+    public let westreemOwns: [SocialAuthorityDomain]
+
+    public var permitsMatrixRealtime: Bool {
+        version == 1
+            && liveTransport == .matrix
+            && canonicalProduct == .westreem
+            && Set(matrixOwns) == Set([
+                .realtimeDelivery, .typing, .readReceipts,
+                .presence, .roomRelations, .rtcSignaling,
+            ])
+            && Set([
+                SocialAuthorityDomain.publicRipplePresentation,
+                .events, .energy, .feeds, .curation, .moderation, .audit,
+                .analytics, .playback, .ads, .affiliations, .notifications,
+                .mediaDelivery,
+            ]).isSubset(of: Set(westreemOwns))
+    }
+
+    public func authority(for domain: SocialAuthorityDomain) -> SocialAuthority? {
+        if matrixOwns.contains(domain) { return .matrix }
+        if westreemOwns.contains(domain) { return .westreem }
+        return nil
+    }
+}
+
 /// Server-owned rollout declaration for Matrix-backed social capabilities.
 /// Missing fields fail closed so older Westreem APIs retain current behavior.
 public struct SocialRealtimeCapabilities: Decodable, Equatable, Sendable {
@@ -572,9 +633,11 @@ public enum SocialRealtimeRollout {
     public static func waveRealtimeEnabled(
         local: SocialFeatureConfiguration,
         server: SocialRealtimeCapabilities?,
-        binding: MatrixWaveBinding?
+        binding: MatrixWaveBinding?,
+        authority: SocialAuthorityContract?
     ) -> Bool {
         matrixEnabled(local: local, server: server)
+            && authority?.permitsMatrixRealtime == true
             && local.wavePresenceEnabled
             && server?.typing == true
             && server?.readReceipts == true

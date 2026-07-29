@@ -630,6 +630,7 @@ public struct VibeWave: Decodable, Identifiable, Equatable, Sendable {
     public let directoryPreview: String?
     public let realtimeCapabilities: SocialRealtimeCapabilities?
     public let matrixBinding: MatrixWaveBinding?
+    public let authority: SocialAuthorityContract?
 
     private enum CodingKeys: String, CodingKey {
         case id, name, slug, description, type, visibility, postingPolicy, position
@@ -638,7 +639,7 @@ public struct VibeWave: Decodable, Identifiable, Equatable, Sendable {
         case allowLinks, allowEchoes, archivedAt
         case capabilities, _count, subscription
         case unreadCount, lastActivityAt, activeConversationCount, conversationCount, lastParticipant
-        case directorySummary, realtimeCapabilities, matrixBinding
+        case directorySummary, realtimeCapabilities, matrixBinding, authority
     }
 
     public init(from decoder: Decoder) throws {
@@ -712,6 +713,10 @@ public struct VibeWave: Decodable, Identifiable, Equatable, Sendable {
         matrixBinding = try values.decodeIfPresent(
             MatrixWaveBinding.self,
             forKey: .matrixBinding
+        )
+        authority = try values.decodeIfPresent(
+            SocialAuthorityContract.self,
+            forKey: .authority
         )
     }
 }

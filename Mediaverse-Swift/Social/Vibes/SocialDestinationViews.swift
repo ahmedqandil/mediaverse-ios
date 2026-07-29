@@ -684,7 +684,8 @@ struct VibeDetailView: View {
         return SocialRealtimeRollout.waveRealtimeEnabled(
             local: features,
             server: wave.realtimeCapabilities,
-            binding: wave.matrixBinding
+            binding: wave.matrixBinding,
+            authority: wave.authority
         )
     }
 

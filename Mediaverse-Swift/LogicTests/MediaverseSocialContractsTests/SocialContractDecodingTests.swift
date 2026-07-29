@@ -914,4 +914,46 @@ final class SocialContractDecodingTests: XCTestCase {
         )
         XCTAssertFalse(rejected.canPresentNatively)
     }
+
+    func testMatrixAuthorityContractKeepsProductStateInWestreem() throws {
+        let contract = try decoder.decode(
+            SocialAuthorityContract.self,
+            from: Data(
+                """
+                {
+                  "version":1,
+                  "liveTransport":"MATRIX",
+                  "canonicalProduct":"WESTREEM",
+                  "matrixOwns":["REALTIME_DELIVERY","TYPING","READ_RECEIPTS","PRESENCE","ROOM_RELATIONS","RTC_SIGNALING"],
+                  "westreemOwns":["VIBE_DIRECTORY","WAVE_CONFIGURATION","PUBLIC_RIPPLE_PRESENTATION","EVENTS","ENERGY","FEEDS","CURATION","MODERATION","AUDIT","ANALYTICS","PLAYBACK","ADS","AFFILIATIONS","NOTIFICATIONS","MEDIA_DELIVERY"]
+                }
+                """.utf8
+            )
+        )
+
+        XCTAssertTrue(contract.permitsMatrixRealtime)
+        XCTAssertEqual(contract.authority(for: .typing), .matrix)
+        XCTAssertEqual(contract.authority(for: .energy), .westreem)
+        XCTAssertEqual(contract.authority(for: .playback), .westreem)
+        XCTAssertEqual(contract.authority(for: .ads), .westreem)
+    }
+
+    func testMatrixAuthorityContractFailsClosedWhenMatrixClaimsPlayback() throws {
+        let contract = try decoder.decode(
+            SocialAuthorityContract.self,
+            from: Data(
+                """
+                {
+                  "version":1,
+                  "liveTransport":"MATRIX",
+                  "canonicalProduct":"WESTREEM",
+                  "matrixOwns":["REALTIME_DELIVERY","PLAYBACK"],
+                  "westreemOwns":["PUBLIC_RIPPLE_PRESENTATION","EVENTS","ENERGY","FEEDS","CURATION","MODERATION","AUDIT","ANALYTICS","PLAYBACK","ADS","AFFILIATIONS","NOTIFICATIONS","MEDIA_DELIVERY"]
+                }
+                """.utf8
+            )
+        )
+
+        XCTAssertFalse(contract.permitsMatrixRealtime)
+    }
 }
