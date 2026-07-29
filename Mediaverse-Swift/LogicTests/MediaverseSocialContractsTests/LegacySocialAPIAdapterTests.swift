@@ -74,6 +74,34 @@ final class LegacySocialAPIAdapterTests: XCTestCase {
         XCTAssertEqual(payload["allowPhotos"] as? Bool, false)
     }
 
+    func testWaveNotificationSettingsSendExplicitChannelInheritance() async throws {
+        let path = "/api/fan-clubs/cinema/waves/questions/notification-settings"
+        let transport = SocialTransportStub(responses: [
+            "PATCH \(path)": #"{"settings":{"notificationLevel":"HIGHLIGHTS","pushEnabled":null,"emailEnabled":false}}"#
+        ])
+        let adapter = LegacySocialAPIAdapter(transport: transport)
+
+        let settings = try await adapter.updateWaveNotificationSettings(
+            vibeSlug: "cinema",
+            waveSlug: "questions",
+            notificationLevel: "HIGHLIGHTS",
+            pushEnabled: nil,
+            emailEnabled: false
+        )
+
+        XCTAssertEqual(settings.notificationLevel, "HIGHLIGHTS")
+        XCTAssertNil(settings.pushEnabled)
+        XCTAssertEqual(settings.emailEnabled, false)
+        let writes = await transport.postPaths
+        XCTAssertEqual(writes, ["PATCH \(path)"])
+        let bodies = await transport.postBodies
+        let body = try XCTUnwrap(bodies.last)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(payload["notificationLevel"] as? String, "HIGHLIGHTS")
+        XCTAssertTrue(payload["pushEnabled"] is NSNull)
+        XCTAssertEqual(payload["emailEnabled"] as? Bool, false)
+    }
+
     func testRulesQuestionsAndResourcesUseCanonicalSpecializationEndpoints() async throws {
         let rulesPath = "/api/fan-clubs/cinema/rules"
         let bookmarkPath = "/api/fan-club-posts/resource-1/bookmark"

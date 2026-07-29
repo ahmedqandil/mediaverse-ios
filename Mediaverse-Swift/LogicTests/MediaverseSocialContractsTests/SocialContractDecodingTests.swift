@@ -114,6 +114,57 @@ final class SocialContractDecodingTests: XCTestCase {
         XCTAssertFalse(SpecializedWaveUIRules.canPublishResource(category: "Guides", hasAttachment: false))
     }
 
+    func testWaveManagementPolicyMirrorsServerSpecializationInvariants() {
+        func settings(_ type: VibeWaveType) -> VibeWaveSettings {
+            VibeWaveSettings(
+                name: "Wave",
+                slug: "wave",
+                description: nil,
+                type: type,
+                visibility: "PUBLIC",
+                postingPolicy: "EVERYONE",
+                position: -5,
+                commentsEnabled: false,
+                requiresPostApproval: true,
+                allowPolls: true,
+                allowPhotos: true,
+                allowLinks: false,
+                allowEchoes: true
+            )
+        }
+
+        let announcements = VibeWaveManagementPolicy.normalized(settings(.announcements))
+        XCTAssertEqual(announcements.postingPolicy, "ADMINS")
+        XCTAssertFalse(announcements.requiresPostApproval)
+        XCTAssertFalse(announcements.allowPolls)
+        XCTAssertEqual(announcements.position, 0)
+
+        let staff = VibeWaveManagementPolicy.normalized(settings(.staff))
+        XCTAssertEqual(staff.visibility, "STAFF")
+        XCTAssertEqual(staff.postingPolicy, "MODERATORS")
+
+        XCTAssertTrue(VibeWaveManagementPolicy.normalized(settings(.questions)).commentsEnabled)
+        XCTAssertTrue(VibeWaveManagementPolicy.normalized(settings(.resources)).allowLinks)
+    }
+
+    func testWaveLifecyclePolicyProtectsSystemAndDefaultAndRestoresArchived() {
+        XCTAssertTrue(VibeWaveManagementPolicy.canArchive(
+            isSystem: false, isDefault: false, isArchived: false, serverAllowsArchive: true
+        ))
+        XCTAssertFalse(VibeWaveManagementPolicy.canArchive(
+            isSystem: true, isDefault: false, isArchived: false, serverAllowsArchive: true
+        ))
+        XCTAssertFalse(VibeWaveManagementPolicy.canArchive(
+            isSystem: false, isDefault: true, isArchived: false, serverAllowsArchive: true
+        ))
+        XCTAssertTrue(VibeWaveManagementPolicy.canRestore(
+            isSystem: false, isDefault: false, isArchived: true, serverAllowsManagement: true
+        ))
+        XCTAssertFalse(VibeWaveManagementPolicy.canRestore(
+            isSystem: false, isDefault: false, isArchived: true, serverAllowsManagement: false
+        ))
+    }
+
     func testWaveNotificationSettingsDefaultToInheritedDelivery() throws {
         let subscription = try decoder.decode(
             VibeWaveSubscription.self,
@@ -121,8 +172,10 @@ final class SocialContractDecodingTests: XCTestCase {
         )
 
         XCTAssertEqual(subscription.notificationLevel, "INHERIT")
-        XCTAssertTrue(subscription.pushEnabled)
-        XCTAssertFalse(subscription.emailEnabled)
+        XCTAssertNil(subscription.pushEnabled)
+        XCTAssertNil(subscription.emailEnabled)
+        XCTAssertTrue(subscription.effectivePushEnabled(inheriting: true))
+        XCTAssertFalse(subscription.effectiveEmailEnabled(inheriting: false))
         XCTAssertEqual(
             subscription.effectiveNotificationLevel(inheriting: "MENTIONS"),
             "MENTIONS"
@@ -132,13 +185,24 @@ final class SocialContractDecodingTests: XCTestCase {
     func testWaveNotificationOverrideWinsOverInheritedVibeLevel() throws {
         let subscription = try decoder.decode(
             VibeWaveSubscription.self,
-            from: Data(#"{"notificationLevel":"MUTED","pushEnabled":false,"emailEnabled":false}"#.utf8)
+            from: Data(#"{"notificationLevel":"OFF","pushEnabled":false,"emailEnabled":true}"#.utf8)
         )
 
         XCTAssertEqual(
             subscription.effectiveNotificationLevel(inheriting: "ALL"),
-            "MUTED"
+            "OFF"
         )
+        XCTAssertFalse(subscription.effectivePushEnabled(inheriting: true))
+        XCTAssertTrue(subscription.effectiveEmailEnabled(inheriting: false))
+    }
+
+    func testWaveDeliveryOverridePreservesTriStateContract() {
+        XCTAssertEqual(WaveDeliveryOverride(nil), .inherit)
+        XCTAssertEqual(WaveDeliveryOverride(true), .enabled)
+        XCTAssertEqual(WaveDeliveryOverride(false), .disabled)
+        XCTAssertNil(WaveDeliveryOverride.inherit.apiValue)
+        XCTAssertEqual(WaveDeliveryOverride.enabled.apiValue, true)
+        XCTAssertEqual(WaveDeliveryOverride.disabled.apiValue, false)
     }
 
     func testVibeDetailDefaultsMissingCapabilitiesToDenied() throws {

@@ -213,8 +213,8 @@ public actor LegacySocialAPIAdapter {
         vibeSlug: String,
         waveSlug: String,
         notificationLevel: String,
-        pushEnabled: Bool,
-        emailEnabled: Bool
+        pushEnabled: Bool?,
+        emailEnabled: Bool?
     ) async throws -> VibeWaveSubscription {
         let path = "/api/fan-clubs/\(try segment(vibeSlug))/waves/\(try segment(waveSlug))/notification-settings"
         let data = try await transport.socialPatchData(
@@ -1087,8 +1087,27 @@ private struct AcceptedAnswerRequest: Encodable {
 
 private struct WaveNotificationSettingsRequest: Encodable {
     let notificationLevel: String
-    let pushEnabled: Bool
-    let emailEnabled: Bool
+    let pushEnabled: Bool?
+    let emailEnabled: Bool?
+
+    private enum CodingKeys: String, CodingKey {
+        case notificationLevel, pushEnabled, emailEnabled
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(notificationLevel, forKey: .notificationLevel)
+        if let pushEnabled {
+            try values.encode(pushEnabled, forKey: .pushEnabled)
+        } else {
+            try values.encodeNil(forKey: .pushEnabled)
+        }
+        if let emailEnabled {
+            try values.encode(emailEnabled, forKey: .emailEnabled)
+        } else {
+            try values.encodeNil(forKey: .emailEnabled)
+        }
+    }
 }
 
 private struct ResolveAttachmentRequest: Encodable {

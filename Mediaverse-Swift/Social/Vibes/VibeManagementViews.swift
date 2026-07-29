@@ -474,6 +474,9 @@ struct VibeWavesManagementView: View {
                                         Text("\(wave.managementTypeLabel) · \(wave._count?.posts ?? 0) Ripples · \(wave._count?.events ?? 0) Events")
                                             .font(.caption)
                                             .foregroundStyle(C.textMuted)
+                                        Text("\(wave.managementVisibilityLabel) · \(wave.managementPostingLabel)")
+                                            .font(.caption2)
+                                            .foregroundStyle(C.textTertiary)
                                     }
                                     Spacer()
                                     Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(C.textTertiary)
@@ -481,6 +484,8 @@ struct VibeWavesManagementView: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .disabled(!wave.capabilities.canManage)
+                            .opacity(wave.capabilities.canManage ? 1 : 0.65)
                         }
                     }
                     .scrollContentBackground(.hidden)
@@ -563,8 +568,8 @@ private struct VibeWaveEditorView: View {
     @State private var allowLinks: Bool
     @State private var allowEchoes: Bool
     @State private var notificationLevel: String
-    @State private var pushEnabled: Bool
-    @State private var emailEnabled: Bool
+    @State private var pushDelivery: WaveDeliveryOverride
+    @State private var emailDelivery: WaveDeliveryOverride
     @State private var isSaving = false
     @State private var confirmsArchive = false
     @State private var errorMessage: String?
@@ -588,8 +593,8 @@ private struct VibeWaveEditorView: View {
         _allowLinks = State(initialValue: wave?.allowLinks ?? true)
         _allowEchoes = State(initialValue: wave?.allowEchoes ?? true)
         _notificationLevel = State(initialValue: wave?.subscription?.notificationLevel ?? "INHERIT")
-        _pushEnabled = State(initialValue: wave?.subscription?.pushEnabled ?? true)
-        _emailEnabled = State(initialValue: wave?.subscription?.emailEnabled ?? false)
+        _pushDelivery = State(initialValue: WaveDeliveryOverride(wave?.subscription?.pushEnabled))
+        _emailDelivery = State(initialValue: WaveDeliveryOverride(wave?.subscription?.emailEnabled))
     }
 
     private var canSave: Bool {
@@ -619,6 +624,7 @@ private struct VibeWaveEditorView: View {
                         ForEach(VibeWaveType.managementCases, id: \.self) { Text($0.managementLabel).tag($0) }
                     }
                     .disabled(wave != nil)
+                    .onChange(of: type) { _, _ in applyTypeInvariantsToEditor() }
                     .westreemField()
                     Stepper("Position \(position)", value: $position, in: 0...999)
                 }
@@ -628,6 +634,7 @@ private struct VibeWaveEditorView: View {
                         Text("Members").tag("MEMBERS")
                         Text("Staff").tag("STAFF")
                     }
+                    .disabled(type == .staff)
                     .westreemField()
                     Picker("Who can post", selection: $postingPolicy) {
                         Text("Everyone").tag("EVERYONE")
@@ -635,15 +642,25 @@ private struct VibeWaveEditorView: View {
                         Text("Moderators").tag("MODERATORS")
                         Text("Administrators").tag("ADMINS")
                     }
+                    .disabled(type == .announcements || type == .events || type == .staff)
                     .westreemField()
                     Toggle("Require post approval", isOn: $requiresPostApproval)
+                        .disabled(type == .announcements || type == .events)
                     Toggle("Comments", isOn: $commentsEnabled)
+                        .disabled(type == .questions)
                 }
                 WestreemFormPanel("Ripple tools") {
                     Toggle("Polls", isOn: $allowPolls)
+                        .disabled(type == .announcements || type == .events)
                     Toggle("Photos", isOn: $allowPhotos)
                     Toggle("Links", isOn: $allowLinks)
+                        .disabled(type == .resources)
                     Toggle("Echoes", isOn: $allowEchoes)
+                    if let invariantSummary = type.managementInvariantSummary {
+                        Text(invariantSummary)
+                            .font(.caption)
+                            .foregroundStyle(C.textMuted)
+                    }
                 }
                 if wave != nil {
                     WestreemFormPanel(
@@ -655,20 +672,42 @@ private struct VibeWaveEditorView: View {
                         Picker("Notify me", selection: $notificationLevel) {
                             Text("Use Vibe setting").tag("INHERIT")
                             Text("All activity").tag("ALL")
+                            Text("Highlights").tag("HIGHLIGHTS")
                             Text("Mentions only").tag("MENTIONS")
-                            Text("Muted").tag("MUTED")
+                            Text("Off").tag("OFF")
                         }
                         .westreemField()
-                        Toggle("Push notifications", isOn: $pushEnabled)
-                        Toggle("Email notifications", isOn: $emailEnabled)
-                        if notificationLevel == "MUTED" {
-                            Text("Delivery channels are retained for when you unmute this Wave.")
+                        Picker("Push notifications", selection: $pushDelivery) {
+                            Text("Use Vibe setting").tag(WaveDeliveryOverride.inherit)
+                            Text("On").tag(WaveDeliveryOverride.enabled)
+                            Text("Off").tag(WaveDeliveryOverride.disabled)
+                        }
+                        .westreemField()
+                        Picker("Email notifications", selection: $emailDelivery) {
+                            Text("Use Vibe setting").tag(WaveDeliveryOverride.inherit)
+                            Text("On").tag(WaveDeliveryOverride.enabled)
+                            Text("Off").tag(WaveDeliveryOverride.disabled)
+                        }
+                        .westreemField()
+                        if notificationLevel == "OFF" {
+                            Text("Delivery channel choices are retained for when you turn Wave notifications back on.")
                                 .font(.caption)
                                 .foregroundStyle(C.textMuted)
                         }
                     }
                 }
-                if let wave, wave.capabilities.canArchive, !wave.isSystem, !wave.isDefault {
+                if let wave,
+                   VibeWaveManagementPolicy.canArchive(
+                       isSystem: wave.isSystem,
+                       isDefault: wave.isDefault,
+                       isArchived: wave.archivedAt != nil,
+                       serverAllowsArchive: wave.capabilities.canArchive
+                   ) || VibeWaveManagementPolicy.canRestore(
+                       isSystem: wave.isSystem,
+                       isDefault: wave.isDefault,
+                       isArchived: wave.archivedAt != nil,
+                       serverAllowsManagement: wave.capabilities.canManage
+                   ) {
                     WestreemFormPanel("Lifecycle") {
                         Button(wave.archivedAt == nil ? "Archive Wave" : "Restore Wave", role: wave.archivedAt == nil ? .destructive : nil) {
                             if wave.archivedAt == nil { confirmsArchive = true }
@@ -709,7 +748,7 @@ private struct VibeWaveEditorView: View {
     @MainActor private func save() async {
         isSaving = true
         defer { isSaving = false }
-        let settings = VibeWaveSettings(
+        let settings = VibeWaveManagementPolicy.normalized(VibeWaveSettings(
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             slug: slug,
             description: description.nilIfBlank,
@@ -723,7 +762,7 @@ private struct VibeWaveEditorView: View {
             allowPhotos: allowPhotos,
             allowLinks: allowLinks,
             allowEchoes: allowEchoes
-        )
+        ))
         do {
             if let wave {
                 try await api.updateVibeWave(vibeSlug: vibeSlug, waveSlug: wave.slug, settings: settings)
@@ -731,8 +770,8 @@ private struct VibeWaveEditorView: View {
                     vibeSlug: vibeSlug,
                     waveSlug: slug,
                     notificationLevel: notificationLevel,
-                    pushEnabled: pushEnabled,
-                    emailEnabled: emailEnabled
+                    pushEnabled: pushDelivery.apiValue,
+                    emailEnabled: emailDelivery.apiValue
                 )
             } else {
                 try await api.createVibeWave(vibeSlug: vibeSlug, settings: settings)
@@ -741,6 +780,24 @@ private struct VibeWaveEditorView: View {
             dismiss()
         } catch {
             errorMessage = socialErrorMessage(error)
+        }
+    }
+
+    private func applyTypeInvariantsToEditor() {
+        switch type {
+        case .announcements, .events:
+            postingPolicy = "ADMINS"
+            requiresPostApproval = false
+            allowPolls = false
+        case .staff:
+            visibility = "STAFF"
+            postingPolicy = "MODERATORS"
+        case .questions:
+            commentsEnabled = true
+        case .resources:
+            allowLinks = true
+        case .general, .media, .custom, .unknown:
+            break
         }
     }
 
@@ -785,10 +842,40 @@ private extension VibeWaveType {
         case .unknown(let value): value.capitalized
         }
     }
+
+    var managementInvariantSummary: String? {
+        switch self {
+        case .announcements: "Announcements are administrator-only and do not support polls or approval queues."
+        case .events: "Event creation is administrator-only and does not support polls or approval queues."
+        case .staff: "Staff Waves are visible to staff and accept posts from moderators."
+        case .questions: "Questions always keep comments enabled so answers can be submitted."
+        case .resources: "Resources always keep links enabled."
+        case .general, .media, .custom, .unknown: nil
+        }
+    }
 }
 
 private extension VibeWave {
     var managementTypeLabel: String { type.managementLabel }
+
+    var managementVisibilityLabel: String {
+        switch visibility {
+        case "PUBLIC": "Public"
+        case "MEMBERS": "Members"
+        case "STAFF": "Staff"
+        default: "Restricted"
+        }
+    }
+
+    var managementPostingLabel: String {
+        switch postingPolicy {
+        case "EVERYONE": "Everyone can post"
+        case "MEMBERS": "Members can post"
+        case "MODERATORS": "Moderators can post"
+        case "ADMINS": "Administrators can post"
+        default: "Posting restricted"
+        }
+    }
 
     var managementIcon: String {
         switch type {

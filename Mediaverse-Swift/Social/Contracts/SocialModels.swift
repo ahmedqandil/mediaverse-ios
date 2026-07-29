@@ -661,20 +661,115 @@ public struct VibeWaveSettings: Encodable, Sendable {
     public let allowPhotos: Bool
     public let allowLinks: Bool
     public let allowEchoes: Bool
+
+    public init(
+        name: String,
+        slug: String,
+        description: String?,
+        type: VibeWaveType,
+        visibility: String,
+        postingPolicy: String,
+        position: Int,
+        commentsEnabled: Bool,
+        requiresPostApproval: Bool,
+        allowPolls: Bool,
+        allowPhotos: Bool,
+        allowLinks: Bool,
+        allowEchoes: Bool
+    ) {
+        self.name = name
+        self.slug = slug
+        self.description = description
+        self.type = type
+        self.visibility = visibility
+        self.postingPolicy = postingPolicy
+        self.position = position
+        self.commentsEnabled = commentsEnabled
+        self.requiresPostApproval = requiresPostApproval
+        self.allowPolls = allowPolls
+        self.allowPhotos = allowPhotos
+        self.allowLinks = allowLinks
+        self.allowEchoes = allowEchoes
+    }
+}
+
+/// Mirrors the server's Wave invariants so management UI never promises a
+/// setting that the API will silently normalize.
+public enum VibeWaveManagementPolicy {
+    public static func normalized(_ settings: VibeWaveSettings) -> VibeWaveSettings {
+        var visibility = settings.visibility
+        var postingPolicy = settings.postingPolicy
+        var commentsEnabled = settings.commentsEnabled
+        var requiresPostApproval = settings.requiresPostApproval
+        var allowPolls = settings.allowPolls
+        var allowLinks = settings.allowLinks
+
+        switch settings.type {
+        case .announcements, .events:
+            postingPolicy = "ADMINS"
+            requiresPostApproval = false
+            allowPolls = false
+        case .staff:
+            visibility = "STAFF"
+            postingPolicy = "MODERATORS"
+        case .questions:
+            commentsEnabled = true
+        case .resources:
+            allowLinks = true
+        case .general, .media, .custom, .unknown:
+            break
+        }
+
+        return VibeWaveSettings(
+            name: settings.name,
+            slug: settings.slug,
+            description: settings.description,
+            type: settings.type,
+            visibility: visibility,
+            postingPolicy: postingPolicy,
+            position: max(0, settings.position),
+            commentsEnabled: commentsEnabled,
+            requiresPostApproval: requiresPostApproval,
+            allowPolls: allowPolls,
+            allowPhotos: settings.allowPhotos,
+            allowLinks: allowLinks,
+            allowEchoes: settings.allowEchoes
+        )
+    }
+
+    public static func canArchive(
+        isSystem: Bool,
+        isDefault: Bool,
+        isArchived: Bool,
+        serverAllowsArchive: Bool
+    ) -> Bool {
+        serverAllowsArchive && !isSystem && !isDefault && !isArchived
+    }
+
+    public static func canRestore(
+        isSystem: Bool,
+        isDefault: Bool,
+        isArchived: Bool,
+        serverAllowsManagement: Bool
+    ) -> Bool {
+        serverAllowsManagement && !isSystem && !isDefault && isArchived
+    }
 }
 
 public struct VibeWaveSubscription: Codable, Equatable, Sendable {
     public let notificationLevel: String
-    public let pushEnabled: Bool
-    public let emailEnabled: Bool
+    /// `nil` means the Wave inherits the delivery channel from its Vibe.
+    public let pushEnabled: Bool?
+    /// `nil` means the Wave inherits the delivery channel from its Vibe.
+    public let emailEnabled: Bool?
     public let lastReadAt: String?
     public let inherited: Bool?
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         notificationLevel = try values.decodeIfPresent(String.self, forKey: .notificationLevel) ?? "INHERIT"
-        pushEnabled = try values.decodeIfPresent(Bool.self, forKey: .pushEnabled) ?? true
-        emailEnabled = try values.decodeIfPresent(Bool.self, forKey: .emailEnabled) ?? false
+        pushEnabled = try values.decodeIfPresent(Bool.self, forKey: .pushEnabled)
+        emailEnabled = try values.decodeIfPresent(Bool.self, forKey: .emailEnabled)
         lastReadAt = try values.decodeIfPresent(String.self, forKey: .lastReadAt)
         inherited = try values.decodeIfPresent(Bool.self, forKey: .inherited)
     }
@@ -682,6 +777,36 @@ public struct VibeWaveSubscription: Codable, Equatable, Sendable {
     /// Resolves the Wave override without guessing a server-side Vibe value.
     public func effectiveNotificationLevel(inheriting parentLevel: String) -> String {
         notificationLevel == "INHERIT" ? parentLevel : notificationLevel
+    }
+
+    public func effectivePushEnabled(inheriting parentValue: Bool) -> Bool {
+        pushEnabled ?? parentValue
+    }
+
+    public func effectiveEmailEnabled(inheriting parentValue: Bool) -> Bool {
+        emailEnabled ?? parentValue
+    }
+}
+
+/// A three-state editor value for a Wave delivery channel.
+/// The API represents `.inherit` as JSON `null`.
+public enum WaveDeliveryOverride: String, CaseIterable, Identifiable, Sendable {
+    case inherit
+    case enabled
+    case disabled
+
+    public var id: String { rawValue }
+
+    public init(_ value: Bool?) {
+        self = value.map { $0 ? .enabled : .disabled } ?? .inherit
+    }
+
+    public var apiValue: Bool? {
+        switch self {
+        case .inherit: nil
+        case .enabled: true
+        case .disabled: false
+        }
     }
 }
 
