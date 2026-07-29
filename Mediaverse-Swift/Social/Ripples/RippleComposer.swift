@@ -441,27 +441,14 @@ struct RippleComposer: View {
         return hasContent
     }
 
-    private var featureConfiguration: SocialFeatureConfiguration {
-        .runtime()
-    }
-
-    private var destinationRealtimeCapabilities: SocialRealtimeCapabilities? {
-        guard case .wave(_, _, let wave) = destination else { return nil }
-        return wave.realtimeCapabilities
-    }
-
     private var voiceRipplesEnabled: Bool {
-        SocialRealtimeRollout.voiceRipplesEnabled(
-            local: featureConfiguration,
-            server: destinationRealtimeCapabilities
-        )
+        guard case .wave(_, _, let wave) = destination else { return true }
+        return wave.allowVoiceMessages
     }
 
     private var videoRipplesEnabled: Bool {
-        SocialRealtimeRollout.videoRipplesEnabled(
-            local: featureConfiguration,
-            server: destinationRealtimeCapabilities
-        )
+        guard case .wave(_, _, let wave) = destination else { return true }
+        return wave.allowVideoMessages
     }
 
     private var mediaJob: RippleMediaUploadJob? {

@@ -5,10 +5,10 @@ composer="Social/Ripples/RippleComposer.swift"
 upload="Social/Ripples/RippleMediaUploadCoordinator.swift"
 playback="Social/Ripples/RippleCard.swift"
 
-grep -q "SocialRealtimeRollout.voiceRipplesEnabled" "$composer" \
-  || { echo "FAIL: Voice Ripple composer must require the shared rollout gate."; exit 1; }
-grep -q "SocialRealtimeRollout.videoRipplesEnabled" "$composer" \
-  || { echo "FAIL: Video Ripple composer must require the shared rollout gate."; exit 1; }
+grep -q "wave.allowVoiceMessages" "$composer" \
+  || { echo "FAIL: Voice Ripple composer must honor the Wave setting."; exit 1; }
+grep -q "wave.allowVideoMessages" "$composer" \
+  || { echo "FAIL: Video Ripple composer must honor the Wave setting."; exit 1; }
 grep -q "matching: .videos" "$composer" \
   || { echo "FAIL: Video Ripple selection must use the native video picker."; exit 1; }
 grep -q "RippleVoiceRecorder" "$composer" \

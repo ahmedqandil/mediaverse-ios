@@ -26,22 +26,10 @@ private struct WaveAttachmentTray: View {
         if wave?.allowPolls ?? true {
             result.append((.poll, "Poll", "chart.bar.fill"))
         }
-        if wave?.allowVoiceMessages ?? true,
-           wave == nil
-                ? features.voiceRipplesEnabled
-                : SocialRealtimeRollout.voiceRipplesEnabled(
-                    local: features,
-                    server: wave?.realtimeCapabilities
-                ) {
+        if wave?.allowVoiceMessages ?? true {
             result.append((.voice, "Voice", "waveform"))
         }
-        if wave?.allowVideoMessages ?? true,
-           wave == nil
-                ? features.videoRipplesEnabled
-                : SocialRealtimeRollout.videoRipplesEnabled(
-                    local: features,
-                    server: wave?.realtimeCapabilities
-                ) {
+        if wave?.allowVideoMessages ?? true {
             result.append((.video, "Video", "video.fill"))
         }
         if wave?.allowLinks ?? true {
@@ -49,9 +37,7 @@ private struct WaveAttachmentTray: View {
                 result.append((.link, "Westreem / Link", "link"))
             }
         }
-        if wave == nil || wave?.realtimeCapabilities?.stickers == true {
-            result.append((.sticker, "Sticker", "face.smiling"))
-        }
+        result.append((.sticker, "Sticker", "face.smiling"))
         if canCreateEvent {
             result.append((.event, "Event", "calendar.badge.plus"))
         }
@@ -682,29 +668,17 @@ struct VibeDetailView: View {
         tools.append((.photo, "Photos", "photo.on.rectangle.angled", photosEnabled))
         tools.append((.camera, "Camera", "camera.fill", photosEnabled))
         tools.append((.poll, "Poll", "chart.bar.fill", wave?.allowPolls ?? true))
-        let voiceEnabled = wave == nil
-            ? features.voiceRipplesEnabled
-            : SocialRealtimeRollout.voiceRipplesEnabled(
-                local: features,
-                server: wave?.realtimeCapabilities
-            )
         tools.append((
             .voice,
             "Voice message",
             "waveform",
-            (wave?.allowVoiceMessages ?? true) && voiceEnabled
+            wave?.allowVoiceMessages ?? true
         ))
-        let videoEnabled = wave == nil
-            ? features.videoRipplesEnabled
-            : SocialRealtimeRollout.videoRipplesEnabled(
-                local: features,
-                server: wave?.realtimeCapabilities
-            )
         tools.append((
             .video,
             "Video message",
             "video.fill",
-            (wave?.allowVideoMessages ?? true) && videoEnabled
+            wave?.allowVideoMessages ?? true
         ))
         if wave?.type != .resources {
             tools.append((
@@ -718,7 +692,7 @@ struct VibeDetailView: View {
             .sticker,
             "Sticker",
             "face.smiling",
-            wave == nil || wave?.realtimeCapabilities?.stickers == true
+            true
         ))
         tools.append((
             .event,

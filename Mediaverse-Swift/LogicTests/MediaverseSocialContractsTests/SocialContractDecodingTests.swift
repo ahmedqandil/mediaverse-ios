@@ -380,7 +380,7 @@ final class SocialContractDecodingTests: XCTestCase {
         let announcements = VibeWaveManagementPolicy.normalized(settings(.announcements))
         XCTAssertEqual(announcements.postingPolicy, "ADMINS")
         XCTAssertFalse(announcements.requiresPostApproval)
-        XCTAssertFalse(announcements.allowPolls)
+        XCTAssertTrue(announcements.allowPolls)
         XCTAssertEqual(announcements.position, 0)
 
         let staff = VibeWaveManagementPolicy.normalized(settings(.staff))

@@ -448,6 +448,8 @@ struct VibeWaveEditorView: View {
     @State private var requiresPostApproval: Bool
     @State private var allowPolls: Bool
     @State private var allowPhotos: Bool
+    @State private var allowVoiceMessages: Bool
+    @State private var allowVideoMessages: Bool
     @State private var allowLinks: Bool
     @State private var allowEchoes: Bool
     @State private var notificationLevel: String
@@ -473,6 +475,8 @@ struct VibeWaveEditorView: View {
         _requiresPostApproval = State(initialValue: wave?.requiresPostApproval ?? false)
         _allowPolls = State(initialValue: wave?.allowPolls ?? true)
         _allowPhotos = State(initialValue: wave?.allowPhotos ?? true)
+        _allowVoiceMessages = State(initialValue: wave?.allowVoiceMessages ?? true)
+        _allowVideoMessages = State(initialValue: wave?.allowVideoMessages ?? true)
         _allowLinks = State(initialValue: wave?.allowLinks ?? true)
         _allowEchoes = State(initialValue: wave?.allowEchoes ?? true)
         _notificationLevel = State(initialValue: wave?.subscription?.notificationLevel ?? "INHERIT")
@@ -534,8 +538,9 @@ struct VibeWaveEditorView: View {
                 }
                 WestreemFormPanel("Ripple tools") {
                     Toggle("Polls", isOn: $allowPolls)
-                        .disabled(type == .announcements || type == .events)
                     Toggle("Photos", isOn: $allowPhotos)
+                    Toggle("Voice messages", isOn: $allowVoiceMessages)
+                    Toggle("Video messages", isOn: $allowVideoMessages)
                     Toggle("Links", isOn: $allowLinks)
                         .disabled(type == .resources)
                     Toggle("Echoes", isOn: $allowEchoes)
@@ -643,6 +648,8 @@ struct VibeWaveEditorView: View {
             requiresPostApproval: requiresPostApproval,
             allowPolls: allowPolls,
             allowPhotos: allowPhotos,
+            allowVoiceMessages: allowVoiceMessages,
+            allowVideoMessages: allowVideoMessages,
             allowLinks: allowLinks,
             allowEchoes: allowEchoes
         ))
@@ -671,7 +678,6 @@ struct VibeWaveEditorView: View {
         case .announcements, .events:
             postingPolicy = "ADMINS"
             requiresPostApproval = false
-            allowPolls = false
         case .staff:
             visibility = "STAFF"
             postingPolicy = "MODERATORS"

@@ -771,6 +771,8 @@ public struct VibeWaveSettings: Encodable, Sendable {
     public let requiresPostApproval: Bool
     public let allowPolls: Bool
     public let allowPhotos: Bool
+    public let allowVoiceMessages: Bool
+    public let allowVideoMessages: Bool
     public let allowLinks: Bool
     public let allowEchoes: Bool
 
@@ -786,6 +788,8 @@ public struct VibeWaveSettings: Encodable, Sendable {
         requiresPostApproval: Bool,
         allowPolls: Bool,
         allowPhotos: Bool,
+        allowVoiceMessages: Bool = true,
+        allowVideoMessages: Bool = true,
         allowLinks: Bool,
         allowEchoes: Bool
     ) {
@@ -800,6 +804,8 @@ public struct VibeWaveSettings: Encodable, Sendable {
         self.requiresPostApproval = requiresPostApproval
         self.allowPolls = allowPolls
         self.allowPhotos = allowPhotos
+        self.allowVoiceMessages = allowVoiceMessages
+        self.allowVideoMessages = allowVideoMessages
         self.allowLinks = allowLinks
         self.allowEchoes = allowEchoes
     }
@@ -813,14 +819,12 @@ public enum VibeWaveManagementPolicy {
         var postingPolicy = settings.postingPolicy
         var commentsEnabled = settings.commentsEnabled
         var requiresPostApproval = settings.requiresPostApproval
-        var allowPolls = settings.allowPolls
         var allowLinks = settings.allowLinks
 
         switch settings.type {
         case .announcements, .events:
             postingPolicy = "ADMINS"
             requiresPostApproval = false
-            allowPolls = false
         case .staff:
             visibility = "STAFF"
             postingPolicy = "MODERATORS"
@@ -842,8 +846,10 @@ public enum VibeWaveManagementPolicy {
             position: max(0, settings.position),
             commentsEnabled: commentsEnabled,
             requiresPostApproval: requiresPostApproval,
-            allowPolls: allowPolls,
+            allowPolls: settings.allowPolls,
             allowPhotos: settings.allowPhotos,
+            allowVoiceMessages: settings.allowVoiceMessages,
+            allowVideoMessages: settings.allowVideoMessages,
             allowLinks: allowLinks,
             allowEchoes: settings.allowEchoes
         )
