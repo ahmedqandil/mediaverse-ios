@@ -8,6 +8,12 @@ struct VibeDetailView: View {
         var resourceCategories: [String] = []
     }
 
+    private struct WaveDirectoryPreview {
+        let text: String?
+        let lastActivityAt: String?
+        let unreadCount: Int
+    }
+
     fileprivate enum VibeSheet: String, Identifiable {
         case options
         case affiliations
@@ -29,6 +35,10 @@ struct VibeDetailView: View {
     @State private var nextCursor: String?
     @State private var waves: [VibeWave] = []
     @State private var selectedWaveSlug: String?
+    @State private var showsCommunityHomeConversation = false
+    @State private var waveDirectoryPreviews: [String: WaveDirectoryPreview] = [:]
+    @State private var waveSearchQuery = ""
+    @AppStorage("recentVibeWaveSlugs") private var recentWaveSlugsStorage = ""
     @State private var resourceCategories: [String] = []
     @State private var selectedResourceCategory: String?
     @State private var bookmarkedResourcesOnly = false
@@ -53,11 +63,13 @@ struct VibeDetailView: View {
         ScrollView {
             LazyVStack(spacing: 12) {
                 if let detail {
-                    VibeHero(
-                        detail: detail,
-                        isBusy: isMutatingRelationship,
-                        relationshipAction: relationshipAction
-                    )
+                    if !isCompactCommunityConversation {
+                        VibeHero(
+                            detail: detail,
+                            isBusy: isMutatingRelationship,
+                            relationshipAction: relationshipAction
+                        )
+                    }
                     if let relationshipNotice {
                         Text(relationshipNotice)
                             .font(.footnote.weight(.semibold))
@@ -65,20 +77,35 @@ struct VibeDetailView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, C.pagePad)
                     }
-                    if !detail.club.isPersonal && !waves.isEmpty {
+                    if isCompactCommunityDirectory {
+                        mobileWaveDirectory(for: detail)
+                            .padding(.horizontal, C.pagePad)
+                    }
+                    if !isCompactCommunityDirectory,
+                       !detail.club.isPersonal,
+                       !waves.isEmpty,
+                       horizontalSizeClass != .compact {
                         waveConversationHeader
                             .padding(.horizontal, C.pagePad)
                         waveContextCard
                             .padding(.horizontal, C.pagePad)
                     }
-                    if selectedWave?.type == .resources {
+                    if isCompactCommunityConversation {
+                        mobileWaveConversationHeader(for: detail)
+                            .padding(.horizontal, C.pagePad)
+                    }
+                    if !isCompactCommunityDirectory, selectedWave?.type == .resources {
                         resourceFilters
                     }
-                    if features.rippleComposerEnabled && canPost(in: detail) {
+                    if !isCompactCommunityDirectory,
+                       features.rippleComposerEnabled,
+                       canPost(in: detail) {
                         rippleComposerPrompt(for: detail)
                             .padding(.horizontal, C.pagePad)
                     }
-                    if !detail.club.isPersonal && showsEventsSection {
+                    if !isCompactCommunityDirectory,
+                       !detail.club.isPersonal,
+                       showsEventsSection {
                         VibeEventVibeSection(
                             vibeSlug: detail.club.slug,
                             canManage: selectedWave?.capabilities.canCreateEvent
@@ -86,11 +113,12 @@ struct VibeDetailView: View {
                             waveID: selectedWave?.type == .events ? selectedWave?.id : nil
                         )
                     }
-                    if isSwitchingWave {
+                    if !isCompactCommunityDirectory, isSwitchingWave {
                         ProgressView()
                             .tint(C.watch)
                             .padding(.vertical, 28)
                     }
+                    if !isCompactCommunityDirectory {
                     ForEach(ripples) {
                         RippleCard(
                             ripple: $0,
@@ -119,7 +147,8 @@ struct VibeDetailView: View {
                         )
                         .padding(.horizontal, horizontalSizeClass == .compact ? 0 : C.pagePad)
                     }
-                    if nextCursor != nil {
+                    }
+                    if !isCompactCommunityDirectory, nextCursor != nil {
                         ProgressView()
                             .tint(C.watch)
                             .task { await loadMore() }
@@ -150,6 +179,16 @@ struct VibeDetailView: View {
         .navigationTitle(detail?.club.name ?? "Vibe")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if isCompactCommunityConversation {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        returnToWaveDirectory()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                    }
+                    .accessibilityLabel("Back to Waves")
+                }
+            }
             if hasVibeOptions {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -357,6 +396,7 @@ struct VibeDetailView: View {
             selectedWaveSlug = waves.contains(where: { $0.slug == initialWaveSlug })
                 ? initialWaveSlug
                 : nil
+            showsCommunityHomeConversation = false
             ripples = page.posts
             nextCursor = page.nextCursor
             resourceCategories = page.resourceCategories
@@ -368,6 +408,7 @@ struct VibeDetailView: View {
             if selectedWaveSlug != nil {
                 await switchWave(to: selectedWaveSlug)
             }
+            Task { await loadWaveDirectoryPreviews(for: waves) }
             switch initialManagementTab?.lowercased() {
             case "affiliations":
                 if detail.capabilities.canManageAffiliations { activeSheet = .affiliations }
@@ -384,6 +425,8 @@ struct VibeDetailView: View {
             detail = nil
             waves = []
             selectedWaveSlug = nil
+            showsCommunityHomeConversation = false
+            waveDirectoryPreviews = [:]
             waveFeeds = [:]
             ripples = []
             nextCursor = nil
@@ -412,6 +455,372 @@ struct VibeDetailView: View {
         } catch {
             errorMessage = socialErrorMessage(error)
         }
+    }
+
+    private var isCompactCommunityDirectory: Bool {
+        horizontalSizeClass == .compact
+            && detail?.club.isPersonal == false
+            && selectedWaveSlug == nil
+            && !showsCommunityHomeConversation
+    }
+
+    private var isCompactCommunityConversation: Bool {
+        horizontalSizeClass == .compact
+            && detail?.club.isPersonal == false
+            && (selectedWaveSlug != nil || showsCommunityHomeConversation)
+    }
+
+    private func mobileWaveDirectory(for detail: VibeDetailResponse) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("WAVES")
+                    .font(.caption2.weight(.bold))
+                    .tracking(1.5)
+                    .foregroundStyle(C.watch)
+                Text("Choose a conversation")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(C.text)
+                Text("See what is active, catch up on unread replies, or browse everything happening in \(detail.club.name).")
+                    .font(.footnote)
+                    .foregroundStyle(C.textMuted)
+            }
+
+            TextField("Search Waves", text: $waveSearchQuery)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .padding(.horizontal, 13)
+                .frame(height: 42)
+                .background(C.elevated)
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(C.borderSubtle))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+
+            if waveSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if !recentWaves.isEmpty {
+                    Section("Recently visited") {
+                        ForEach(recentWaves) { wave in
+                            mobileWaveRow(for: wave)
+                        }
+                    }
+                }
+
+                if !unreadWaves.isEmpty {
+                    Section("Unread") {
+                        ForEach(unreadWaves) { wave in
+                            mobileWaveRow(for: wave)
+                        }
+                    }
+                }
+            }
+
+            Section("All Waves") {
+                if filteredDirectoryWaves.count == waves.count {
+                    mobileWaveDirectoryRow(
+                        title: "Vibe Home",
+                        description: "Everything happening across \(detail.club.name)",
+                        systemImage: "house.fill",
+                        count: detail.club.postCount,
+                        preview: homeDirectoryPreview
+                    ) {
+                        showsCommunityHomeConversation = true
+                        Task { await switchWave(to: nil) }
+                    }
+                }
+
+                ForEach(filteredDirectoryWaves) { wave in
+                    mobileWaveRow(for: wave)
+                }
+            }
+
+            if filteredDirectoryWaves.isEmpty {
+                Text("No Waves match your search.")
+                    .font(.footnote)
+                    .foregroundStyle(C.textMuted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+            }
+
+            Button {
+                activeSheet = .rules
+            } label: {
+                Label("Vibe rules", systemImage: "list.bullet.clipboard")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(C.textMuted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(C.elevated.opacity(0.65))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.top, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(detail.club.name) Wave directory")
+    }
+
+    private func mobileWaveRow(for wave: VibeWave) -> some View {
+        mobileWaveDirectoryRow(
+            title: wave.name,
+            description: waveDirectoryRichDetail(wave),
+            systemImage: waveSystemImage(wave),
+            count: wave.activeConversationCount > 0
+                ? wave.activeConversationCount
+                : wave._count?.posts ?? 0,
+            preview: directoryPreview(for: wave),
+            specializedLabel: waveTypeLabel(wave.type)
+        ) {
+            rememberVisitedWave(wave.slug)
+            Task { await openDedicatedWave(wave.slug) }
+        }
+    }
+
+    private var filteredDirectoryWaves: [VibeWave] {
+        let query = waveSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return waves }
+        return waves.filter {
+            $0.name.localizedCaseInsensitiveContains(query)
+                || ($0.description?.localizedCaseInsensitiveContains(query) ?? false)
+                || waveTypeLabel($0.type).localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private var recentWaves: [VibeWave] {
+        recentWaveSlugs.compactMap { slug in waves.first { $0.slug == slug } }
+    }
+
+    private var unreadWaves: [VibeWave] {
+        waves.filter { directoryPreview(for: $0)?.unreadCount ?? 0 > 0 }
+    }
+
+    private var recentWaveSlugs: [String] {
+        let vibePrefix = "\(slug)::"
+        return recentWaveSlugsStorage
+            .split(separator: "|")
+            .map(String.init)
+            .filter { $0.hasPrefix(vibePrefix) }
+            .map { String($0.dropFirst(vibePrefix.count)) }
+    }
+
+    private func rememberVisitedWave(_ waveSlug: String) {
+        let scopedSlug = "\(slug)::\(waveSlug)"
+        let stored = recentWaveSlugsStorage.split(separator: "|").map(String.init)
+        let otherVibes = stored.filter { !$0.hasPrefix("\(slug)::") }
+        let currentVibe = ([scopedSlug] + recentWaveSlugs
+            .filter { $0 != waveSlug }
+            .map { "\(slug)::\($0)" })
+            .prefix(5)
+        recentWaveSlugsStorage = (Array(currentVibe) + otherVibes)
+            .joined(separator: "|")
+    }
+
+    private func directoryPreview(for wave: VibeWave) -> WaveDirectoryPreview? {
+        let loaded = waveDirectoryPreviews[wave.slug]
+        let safeParticipant = wave.lastParticipant?.name
+            ?? wave.lastParticipant?.handle.map { "@\($0)" }
+        return WaveDirectoryPreview(
+            text: wave.directoryPreview
+                ?? safeParticipant.map { "\($0) was active" }
+                ?? loaded?.text,
+            lastActivityAt: wave.lastActivityAt ?? loaded?.lastActivityAt,
+            unreadCount: max(wave.unreadCount, loaded?.unreadCount ?? 0)
+        )
+    }
+
+    private func waveDirectoryRichDetail(_ wave: VibeWave) -> String {
+        var context = [wave.visibility.capitalized]
+        if wave.requiresPostApproval {
+            context.append("Approval required")
+        }
+        let description = waveDirectoryDetail(wave)
+        if context.isEmpty { return description }
+        return "\(description) · \(context.joined(separator: " · "))"
+    }
+
+    private func mobileWaveDirectoryRow(
+        title: String,
+        description: String,
+        systemImage: String,
+        count: Int,
+        preview: WaveDirectoryPreview?,
+        specializedLabel: String? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(C.watch)
+                    .frame(width: 38, height: 38)
+                    .background(C.watch.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 11))
+
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 7) {
+                        Text(title)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(C.text)
+                            .lineLimit(1)
+                        if let specializedLabel, specializedLabel != "General", specializedLabel != "Custom" {
+                            Text(specializedLabel)
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(C.watch)
+                                .padding(.horizontal, 6)
+                                .frame(height: 18)
+                                .background(C.watch.opacity(0.1))
+                                .clipShape(Capsule())
+                        }
+                    }
+                    Text(description)
+                        .font(.caption)
+                        .foregroundStyle(C.textMuted)
+                        .lineLimit(2)
+                    if let text = preview?.text, !text.isEmpty {
+                        Text(text)
+                            .font(.caption)
+                            .foregroundStyle(C.text.opacity(0.76))
+                            .lineLimit(1)
+                    }
+                    HStack(spacing: 7) {
+                        if count > 0 {
+                            Text("\(count.formatted()) \(count == 1 ? "Ripple" : "Ripples")")
+                        }
+                        if let lastActivityAt = preview?.lastActivityAt {
+                            Text("Active \(relativeWaveActivity(lastActivityAt))")
+                        }
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(C.textMuted)
+                }
+
+                Spacer(minLength: 4)
+                if let unread = preview?.unreadCount, unread > 0 {
+                    Text(unread > 99 ? "99+" : "\(unread)")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(C.bg)
+                        .padding(.horizontal, 7)
+                        .frame(minWidth: 24, minHeight: 24)
+                        .background(C.watch)
+                        .clipShape(Capsule())
+                        .accessibilityLabel("\(unread) unread replies")
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(C.textTertiary)
+                        .padding(.top, 10)
+                }
+            }
+            .padding(14)
+            .background(C.surface)
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(C.borderSubtle))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title), \(count) Ripples\(preview.map { ", \($0.unreadCount) unread" } ?? "")")
+    }
+
+    private func mobileWaveConversationHeader(for detail: VibeDetailResponse) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 10) {
+                Image(systemName: selectedWave.map(waveSystemImage) ?? "house.fill")
+                    .foregroundStyle(C.watch)
+                Text(selectedWave?.name ?? "Vibe Home")
+                    .font(.headline)
+                    .foregroundStyle(C.text)
+                Spacer()
+                if let wave = selectedWave {
+                    Text(waveTypeLabel(wave.type))
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(C.watch)
+                }
+            }
+            Text(selectedWave?.description
+                 ?? "Everything happening across \(detail.club.name).")
+                .font(.footnote)
+                .foregroundStyle(C.textMuted)
+                .lineLimit(3)
+            if let preview = selectedWaveSlug.flatMap({ waveDirectoryPreviews[$0] }),
+               preview.unreadCount > 0 {
+                Label("\(preview.unreadCount) unread replies", systemImage: "circle.fill")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(C.watch)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(C.elevated)
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(C.borderSubtle))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var homeDirectoryPreview: WaveDirectoryPreview? {
+        let first = waveFeeds[feedKey(nil)]?.ripples.first
+        return preview(from: first)
+    }
+
+    private func preview(from ripple: Ripple?) -> WaveDirectoryPreview? {
+        guard let ripple else { return nil }
+        return WaveDirectoryPreview(
+            text: ripple.conversationSummary?.latestReplies.last?.content
+                ?? ripple.body,
+            lastActivityAt: ripple.conversationSummary?.lastActivityAt
+                ?? ripple.publishedAt
+                ?? ripple.createdAt,
+            unreadCount: ripple.conversationSummary?.unreadCount ?? 0
+        )
+    }
+
+    @MainActor
+    private func loadWaveDirectoryPreviews(for availableWaves: [VibeWave]) async {
+        for wave in availableWaves {
+            if wave.directoryPreview != nil || wave.lastActivityAt != nil
+                || wave.unreadCount > 0 || wave.activeConversationCount > 0 {
+                continue
+            }
+            guard waveDirectoryPreviews[wave.slug] == nil else { continue }
+            do {
+                let page = try await api.vibeRipples(slug: slug, wave: wave.slug)
+                guard waves.contains(where: { $0.slug == wave.slug }) else { return }
+                waveDirectoryPreviews[wave.slug] = preview(from: page.posts.first)
+                if waveFeeds[feedKey(wave.slug)] == nil {
+                    waveFeeds[feedKey(wave.slug)] = CachedWaveFeed(
+                        ripples: page.posts,
+                        nextCursor: page.nextCursor,
+                        resourceCategories: page.resourceCategories
+                    )
+                }
+            } catch {
+                // Directory metadata is additive; a failed preview must not hide an authorized Wave.
+            }
+        }
+    }
+
+    @MainActor
+    private func openDedicatedWave(_ waveSlug: String) async {
+        showsCommunityHomeConversation = false
+        await switchWave(to: waveSlug)
+    }
+
+    @MainActor
+    private func returnToWaveDirectory() {
+        cacheCurrentFeed()
+        selectedWaveSlug = nil
+        showsCommunityHomeConversation = false
+        selectedResourceCategory = nil
+        bookmarkedResourcesOnly = false
+        if let cached = waveFeeds[feedKey(nil)] {
+            ripples = cached.ripples
+            nextCursor = cached.nextCursor
+            resourceCategories = cached.resourceCategories
+        }
+    }
+
+    private func relativeWaveActivity(_ value: String) -> String {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let date = fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value) else {
+            return "recently"
+        }
+        return RelativeDateTimeFormatter().localizedString(for: date, relativeTo: Date())
     }
 
     private var waveConversationHeader: some View {

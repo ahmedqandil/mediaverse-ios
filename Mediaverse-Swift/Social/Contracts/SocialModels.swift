@@ -554,6 +554,29 @@ public struct VibeWaveCounts: Decodable, Equatable, Sendable {
     }
 }
 
+public struct VibeWaveDirectorySummary: Decodable, Equatable, Sendable {
+    public let latestRippleId: String?
+    public let preview: String?
+    public let participant: SocialIdentity?
+    public let lastActivityAt: String?
+    public let unreadCount: Int
+    public let rippleCount: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case latestRippleId, preview, participant, lastActivityAt, unreadCount, rippleCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        latestRippleId = try values.decodeIfPresent(String.self, forKey: .latestRippleId)
+        preview = try values.decodeIfPresent(String.self, forKey: .preview)
+        participant = try values.decodeIfPresent(SocialIdentity.self, forKey: .participant)
+        lastActivityAt = try values.decodeIfPresent(String.self, forKey: .lastActivityAt)
+        unreadCount = max(0, try values.decodeIfPresent(Int.self, forKey: .unreadCount) ?? 0)
+        rippleCount = max(0, try values.decodeIfPresent(Int.self, forKey: .rippleCount) ?? 0)
+    }
+}
+
 public struct VibeWave: Decodable, Identifiable, Equatable, Sendable {
     public let id: String
     public let name: String
@@ -575,12 +598,19 @@ public struct VibeWave: Decodable, Identifiable, Equatable, Sendable {
     public let capabilities: VibeWaveCapabilities
     public let _count: VibeWaveCounts?
     public let subscription: VibeWaveSubscription?
+    public let unreadCount: Int
+    public let lastActivityAt: String?
+    public let activeConversationCount: Int
+    public let lastParticipant: SocialIdentity?
+    public let directoryPreview: String?
 
     private enum CodingKeys: String, CodingKey {
         case id, name, slug, description, type, visibility, postingPolicy, position
         case isSystem, isDefault, commentsEnabled, requiresPostApproval
         case allowPolls, allowPhotos, allowLinks, allowEchoes, archivedAt
         case capabilities, _count, subscription
+        case unreadCount, lastActivityAt, activeConversationCount, conversationCount, lastParticipant
+        case directorySummary
     }
 
     public init(from decoder: Decoder) throws {
@@ -606,6 +636,39 @@ public struct VibeWave: Decodable, Identifiable, Equatable, Sendable {
             ?? VibeWaveCapabilities.denied
         _count = try values.decodeIfPresent(VibeWaveCounts.self, forKey: ._count)
         subscription = try values.decodeIfPresent(VibeWaveSubscription.self, forKey: .subscription)
+        let directorySummary = try values.decodeIfPresent(
+            VibeWaveDirectorySummary.self,
+            forKey: .directorySummary
+        )
+        let flatUnreadCount = try values.decodeIfPresent(Int.self, forKey: .unreadCount)
+        let flatLastActivityAt = try values.decodeIfPresent(String.self, forKey: .lastActivityAt)
+        let flatActiveConversationCount = try values.decodeIfPresent(
+            Int.self,
+            forKey: .activeConversationCount
+        )
+        let flatConversationCount = try values.decodeIfPresent(Int.self, forKey: .conversationCount)
+        let flatLastParticipant = try values.decodeIfPresent(
+            SocialIdentity.self,
+            forKey: .lastParticipant
+        )
+        unreadCount = max(
+            0,
+            directorySummary?.unreadCount
+                ?? flatUnreadCount
+                ?? 0
+        )
+        lastActivityAt = directorySummary?.lastActivityAt
+            ?? flatLastActivityAt
+        activeConversationCount = max(
+            0,
+            directorySummary?.rippleCount
+                ?? flatActiveConversationCount
+                ?? flatConversationCount
+                ?? 0
+        )
+        lastParticipant = directorySummary?.participant
+            ?? flatLastParticipant
+        directoryPreview = directorySummary?.preview
     }
 }
 
