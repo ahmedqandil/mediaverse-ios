@@ -787,4 +787,87 @@ final class SocialContractDecodingTests: XCTestCase {
         XCTAssertEqual(video?["mediaId"], "m-video")
         XCTAssertNil(video?["imageUrl"])
     }
+
+    func testInteractivePollAndLeaderboardDecodeWithoutLeakingHiddenResults() throws {
+        let poll = try decoder.decode(
+            RipplePoll.self,
+            from: Data(
+                """
+                {"id":"p1","question":"Who wins?","mode":"PREDICTION","anonymous":true,
+                 "startsAt":"2026-07-29T10:00:00Z","closesAt":"2026-07-29T11:00:00Z",
+                 "revealAt":"2026-07-29T12:00:00Z","points":20,
+                 "leaderboardEnabled":true,"leaderboardVisibility":"AFTER_REVEAL",
+                 "options":[{"id":"a","label":"A"}],"votes":[]}
+                """.utf8
+            )
+        )
+        XCTAssertEqual(poll.mode, "PREDICTION")
+        XCTAssertTrue(poll.anonymous)
+        XCTAssertEqual(poll.points, 20)
+        XCTAssertTrue(poll.leaderboardEnabled)
+
+        let hidden = try decoder.decode(
+            InteractivePollLeaderboardResponse.self,
+            from: Data(
+                """
+                {"serverTime":"2026-07-29T11:00:00Z","mode":"TRIVIA","anonymous":false,
+                 "reveal":false,"correctOptionId":null,
+                 "options":[{"id":"a","label":"A","voteCount":null}],
+                 "viewerVotes":[],"leaderboard":null}
+                """.utf8
+            )
+        )
+        XCTAssertFalse(hidden.reveal)
+        XCTAssertNil(hidden.correctOptionId)
+        XCTAssertNil(hidden.options[0].voteCount)
+        XCTAssertNil(hidden.leaderboard)
+    }
+
+    func testCollectionCollaborationAndWaveSummaryContractsDecode() throws {
+        let collaboration = try decoder.decode(
+            CollectionContributionsResponse.self,
+            from: Data(
+                """
+                {"capabilities":{"canSuggest":true,"canReview":false},"contributions":[{
+                  "id":"c1","targetType":"VIDEO","targetId":"v1","status":"PENDING",
+                  "comments":[],"votes":{"score":2,"count":2,"viewerValue":1}
+                }]}
+                """.utf8
+            )
+        )
+        XCTAssertTrue(collaboration.capabilities.canSuggest)
+        XCTAssertFalse(collaboration.capabilities.canReview)
+        XCTAssertEqual(collaboration.contributions[0].votes.viewerValue, 1)
+
+        let summaries = try decoder.decode(
+            WaveConversationSummariesResponse.self,
+            from: Data(
+                """
+                {"summaries":[{"id":"s1","content":"A verified summary.","citations":[{
+                  "id":"r1","preview":"Source Ripple","author":"Member",
+                  "href":"/vibes/demo/waves/general?ripple=r1"
+                }]}]}
+                """.utf8
+            )
+        )
+        XCTAssertEqual(summaries.summaries[0].citations.count, 1)
+    }
+
+    func testWidgetRegistryResponseRequiresExactIOSApproval() throws {
+        let approved = try decoder.decode(
+            ApprovedWidgetResponse.self,
+            from: Data(
+                """
+                {"allowed":true,"widget":{"key":"event-agenda","name":"Agenda","version":1,
+                  "platform":"IOS","cspDirectives":{"connect-src":["self"]},"tokenScopes":[]}}
+                """.utf8
+            )
+        )
+        XCTAssertTrue(approved.canPresentNatively)
+        let rejected = try decoder.decode(
+            ApprovedWidgetResponse.self,
+            from: Data(#"{"allowed":false,"reason":"not-approved"}"#.utf8)
+        )
+        XCTAssertFalse(rejected.canPresentNatively)
+    }
 }

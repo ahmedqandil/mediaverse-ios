@@ -89,4 +89,44 @@ final class EventContractDecodingTests: XCTestCase {
         XCTAssertFalse(pending.isMatrixReady)
         XCTAssertFalse(pending.presenceEnabled)
     }
+
+    func testEventLiveControllerPreservesWestreemPlayerAuthority() throws {
+        let response = try decoder.decode(
+            EventLiveControllerResponse.self,
+            from: Data(
+                """
+                {"controller":{
+                  "watchParty":{"playbackEpoch":"epoch-1","sequence":"9","playbackState":"PLAYING",
+                    "positionMs":4200,"serverTimestamp":"2026-07-29T10:00:00Z"},
+                  "participant":{"inAdBreak":true,"needsRejoin":false},
+                  "liveRoom":{"provider":"LIVEKIT","configured":true,"signallingStatus":"READY",
+                    "stageLocked":false,"emergencyEnded":false},
+                  "capabilities":{"canControlPlayback":true,"canModerateStage":false,"canRequestSpeaker":true},
+                  "playerAuthority":{"delivery":"WESTREEM","entitlement":"WESTREEM","ads":"PER_CLIENT",
+                    "analytics":"WESTREEM","matrixRole":"SYNC_AND_SIGNALLING_ONLY"}
+                }}
+                """.utf8
+            )
+        )
+        XCTAssertEqual(response.controller.watchReadiness, .ready)
+        XCTAssertTrue(response.controller.playerAuthority.westreemOwnsPlayback)
+        XCTAssertEqual(response.controller.liveRoom?.readiness, .ready)
+        XCTAssertTrue(response.controller.participant?.inAdBreak == true)
+    }
+
+    func testEventLiveControllerFailsClosedWhenAuthorityDoesNotMatch() throws {
+        let response = try decoder.decode(
+            EventLiveControllerResponse.self,
+            from: Data(
+                """
+                {"controller":{"watchParty":null,"participant":null,"liveRoom":null,
+                  "speakerRequest":null,"capabilities":{},
+                  "playerAuthority":{"delivery":"MATRIX","entitlement":"WESTREEM","ads":"PER_CLIENT",
+                    "analytics":"WESTREEM","matrixRole":"SYNC_AND_SIGNALLING_ONLY"}}}
+                """.utf8
+            )
+        )
+        XCTAssertEqual(response.controller.watchReadiness, .unavailable)
+        XCTAssertFalse(response.controller.capabilities.canControlPlayback)
+    }
 }

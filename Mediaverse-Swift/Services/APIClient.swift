@@ -2002,6 +2002,46 @@ actor APIClient: LegacySocialTransport {
         try await get("/api/vibe-events/\(C.pathSegment(slug))")
     }
 
+    func fetchVibeEventLiveController(slug: String) async throws -> EventLiveController {
+        let response: EventLiveControllerResponse = try await get(
+            "/api/vibe-events/\(C.pathSegment(slug))/live/state"
+        )
+        return response.controller
+    }
+
+    func sendVibeEventWatchCommand(
+        slug: String,
+        request: EventWatchCommandRequest
+    ) async throws -> EventWatchPartyState {
+        let response: EventWatchCommandResponse = try await post(
+            "/api/vibe-events/\(C.pathSegment(slug))/live/watch-command",
+            body: request
+        )
+        return response.state
+    }
+
+    func syncVibeEventPlayer(
+        slug: String,
+        action: EventClientSyncAction,
+        positionMs: Int
+    ) async throws -> EventClientSyncResponse {
+        try await post(
+            "/api/vibe-events/\(C.pathSegment(slug))/live/client-sync",
+            body: EventClientSyncRequest(action: action, positionMs: max(0, positionMs))
+        )
+    }
+
+    func updateVibeEventStage(
+        slug: String,
+        action: EventStageAction,
+        requestID: String? = nil
+    ) async throws -> EventStageResponse {
+        try await post(
+            "/api/vibe-events/\(C.pathSegment(slug))/live/stage",
+            body: EventStageRequest(action: action, requestId: requestID)
+        )
+    }
+
     func fetchVibeEventTemplates() async throws -> [VibeEventTemplateModel] {
         let response: VibeEventTemplatesResponse = try await get("/api/vibe-events/templates")
         return response.templates

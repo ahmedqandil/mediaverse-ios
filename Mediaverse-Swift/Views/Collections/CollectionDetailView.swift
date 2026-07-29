@@ -10,6 +10,10 @@ struct CollectionDetailView: View {
     @State private var togglingFollow = false
     @State private var showCommentsSheet = false
     @State private var showEchoSheet = false
+    @State private var collaboration: CollectionContributionsResponse?
+    @State private var collaborationBusy = false
+    @State private var suggestionTargetID = ""
+    @State private var suggestionNote = ""
     @EnvironmentObject private var auth: AuthManager
 
     private var isShows: Bool { collection?.type == "shows" }
@@ -89,6 +93,12 @@ struct CollectionDetailView: View {
                     .padding(.top, 24)
                 }
 
+                if auth.isAuthenticated, let collaboration {
+                    collaborationSection(collaboration)
+                        .padding(.horizontal, C.pagePad)
+                        .padding(.top, 24)
+                }
+
                 if col.items.isEmpty {
                     emptyState(col)
                         .padding(.horizontal, C.pagePad)
@@ -146,6 +156,75 @@ struct CollectionDetailView: View {
                 Color.clear.frame(height: C.bottomMenuClearance)
             }
         }
+    }
+
+    private func collaborationSection(_ response: CollectionContributionsResponse) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Collaborate", systemImage: "person.2.badge.plus")
+                    .font(.headline).foregroundStyle(C.text)
+                Spacer()
+                if collaborationBusy { ProgressView().tint(C.watch) }
+            }
+            if response.capabilities.canSuggest {
+                TextField(isShows ? "Show ID" : "Video ID", text: $suggestionTargetID)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .padding(10)
+                    .background(C.elevated, in: RoundedRectangle(cornerRadius: 10))
+                TextField("Why should this be added? (optional)", text: $suggestionNote, axis: .vertical)
+                    .lineLimit(2...4)
+                    .padding(10)
+                    .background(C.elevated, in: RoundedRectangle(cornerRadius: 10))
+                Button("Suggest item") { Task { await suggestItem() } }
+                    .buttonStyle(.borderedProminent)
+                    .tint(C.watch)
+                    .disabled(collaborationBusy || suggestionTargetID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            if response.contributions.isEmpty {
+                Text("No suggestions yet. Approved suggestions become canonical Collection items.")
+                    .font(.caption).foregroundStyle(C.textMuted)
+            } else {
+                ForEach(response.contributions) { item in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("\(item.targetType.capitalized) suggestion")
+                                .font(.subheadline.bold()).foregroundStyle(C.text)
+                            Spacer()
+                            Text(item.status.capitalized)
+                                .font(.caption2.bold())
+                                .foregroundStyle(item.status == "APPROVED" ? .green : C.textMuted)
+                        }
+                        Text(item.note?.isEmpty == false ? item.note! : item.targetId)
+                            .font(.caption).foregroundStyle(C.textMuted)
+                        HStack(spacing: 14) {
+                            Button {
+                                Task { await updateContribution(item, action: "VOTE", value: item.votes.viewerValue == 1 ? 0 : 1) }
+                            } label: {
+                                Label("\(item.votes.score)", systemImage: item.votes.viewerValue == 1 ? "hand.thumbsup.fill" : "hand.thumbsup")
+                            }
+                            if !item.comments.isEmpty {
+                                Label("\(item.comments.count)", systemImage: "bubble.left")
+                            }
+                            Spacer()
+                            if response.capabilities.canReview, item.status == "PENDING" {
+                                Button("Reject", role: .destructive) {
+                                    Task { await updateContribution(item, action: "REJECT") }
+                                }
+                                Button("Approve") {
+                                    Task { await updateContribution(item, action: "APPROVE") }
+                                }
+                            }
+                        }
+                        .font(.caption)
+                    }
+                    .padding(12)
+                    .background(C.elevated, in: RoundedRectangle(cornerRadius: 12))
+                }
+            }
+        }
+        .padding(16)
+        .background(C.surface, in: RoundedRectangle(cornerRadius: 16))
     }
 
     private func header(_ col: CollectionDetail) -> some View {
@@ -279,10 +358,60 @@ struct CollectionDetailView: View {
             let detail = try await APIClient.shared.fetchCollectionDetail(id: collectionId)
             collection = detail
             following = detail.isFollowing
+            if auth.isAuthenticated {
+                collaboration = try? await LegacySocialAPIAdapter(
+                    transport: APIClient.shared
+                ).collectionContributions(collectionId)
+            }
         } catch {
             self.error = true
         }
         loading = false
+    }
+
+    @MainActor private func suggestItem() async {
+        let targetID = suggestionTargetID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !targetID.isEmpty, collaboration?.capabilities.canSuggest == true else { return }
+        collaborationBusy = true
+        defer { collaborationBusy = false }
+        do {
+            let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+            _ = try await api.suggestCollectionItem(
+                collectionId: collectionId,
+                targetType: isShows ? "SHOW" : "VIDEO",
+                targetId: targetID,
+                note: suggestionNote.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+            suggestionTargetID = ""
+            suggestionNote = ""
+            collaboration = try await api.collectionContributions(collectionId)
+        } catch {
+            // Server authorization and validation are authoritative. The
+            // canonical Collection remains untouched on failure.
+        }
+    }
+
+    @MainActor private func updateContribution(
+        _ contribution: CollectionContribution,
+        action: String,
+        value: Int? = nil
+    ) async {
+        collaborationBusy = true
+        defer { collaborationBusy = false }
+        do {
+            let api = LegacySocialAPIAdapter(transport: APIClient.shared)
+            try await api.updateCollectionContribution(
+                collectionId: collectionId,
+                contributionId: contribution.id,
+                action: action,
+                value: value
+            )
+            collaboration = try await api.collectionContributions(collectionId)
+            if action == "APPROVE" { await load() }
+        } catch {
+            // Closed or concurrently reviewed suggestions are refreshed on
+            // the next load; the client never inserts canonical items itself.
+        }
     }
 
     private func toggleFollow() async {

@@ -2414,6 +2414,8 @@ private struct RipplePollCard: View {
     let isSaving: Bool
     let onVote: ([String]) -> Void
     @State private var selections: Set<String>
+    @State private var leaderboard: InteractivePollLeaderboardResponse?
+    @State private var showsLeaderboard = false
 
     init(
         poll: RipplePoll,
@@ -2462,6 +2464,14 @@ private struct RipplePollCard: View {
                 )
                 .font(.system(size: 11))
                 .foregroundStyle(C.textMuted)
+                if poll.mode != "STANDARD" || poll.anonymous {
+                    Text([
+                        poll.mode.replacingOccurrences(of: "_", with: " ").capitalized,
+                        poll.anonymous ? "Anonymous" : nil
+                    ].compactMap { $0 }.joined(separator: " · "))
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(C.watch)
+                }
             }
             .frame(maxWidth: .infinity)
             .padding(.bottom, 12)
@@ -2486,6 +2496,17 @@ private struct RipplePollCard: View {
             .font(.system(size: 10))
             .foregroundStyle(C.textMuted)
             .padding(.top, 9)
+            if poll.leaderboardEnabled {
+                Button {
+                    showsLeaderboard = true
+                } label: {
+                    Label("Leaderboard", systemImage: "trophy")
+                        .font(.caption.bold())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(C.watch)
+                .padding(.top, 8)
+            }
         }
         .padding(12)
         .background(.black.opacity(0.65))
@@ -2496,6 +2517,43 @@ private struct RipplePollCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onChange(of: poll.votes.map(\.optionId)) { _, optionIDs in
             selections = Set(optionIDs)
+        }
+        .task(id: poll.id) {
+            guard poll.leaderboardEnabled else { return }
+            leaderboard = try? await LegacySocialAPIAdapter(
+                transport: APIClient.shared
+            ).pollLeaderboard(poll.id)
+        }
+        .sheet(isPresented: $showsLeaderboard) {
+            NavigationStack {
+                List {
+                    if let result = leaderboard {
+                        if result.anonymous {
+                            Text("This poll is anonymous. Rankings are hidden.")
+                        } else if let entries = result.leaderboard {
+                            ForEach(entries) { entry in
+                                HStack {
+                                    Text("#\(entry.rank)").font(.headline)
+                                    Text(entry.user.name ?? entry.user.handle ?? "Westreem member")
+                                    Spacer()
+                                    Text("\(entry.score) pts").foregroundStyle(C.textMuted)
+                                }
+                            }
+                        } else {
+                            Text(result.reveal ? "No ranked answers yet." : "Rankings will appear after the reveal.")
+                        }
+                    } else {
+                        ContentUnavailableView(
+                            "Leaderboard unavailable",
+                            systemImage: "trophy",
+                            description: Text("Results are hidden until the server releases them.")
+                        )
+                    }
+                }
+                .navigationTitle("Poll results")
+                .navigationBarTitleDisplayMode(.inline)
+            }
+            .presentationDetents([.medium, .large])
         }
     }
 
@@ -2529,6 +2587,11 @@ private struct RipplePollCard: View {
                     Text(option.label)
                         .lineLimit(1)
                     Spacer(minLength: 8)
+                    if leaderboard?.reveal == true,
+                       leaderboard?.correctOptionId == option.id {
+                        Image(systemName: "checkmark.seal.fill")
+                            .foregroundStyle(.green)
+                    }
                     if showResults {
                         Text("\(Int((fraction * 100).rounded()))%")
                             .font(.system(size: 11, weight: .semibold))

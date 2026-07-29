@@ -582,3 +582,167 @@ public enum SocialRealtimeRollout {
             && binding?.isUsable == true
     }
 }
+
+// MARK: - Phase 2 server-authoritative collaboration
+
+public struct CollectionContributionUser: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let name: String?
+    public let handle: String?
+    public let image: String?
+}
+
+public struct CollectionContributionComment: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let body: String
+    public let createdAt: String?
+    public let user: CollectionContributionUser?
+}
+
+public struct CollectionContributionVotes: Decodable, Sendable {
+    public let score: Int
+    public let count: Int
+    public let viewerValue: Int
+}
+
+public struct CollectionContribution: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let targetType: String
+    public let targetId: String
+    public let proposedPosition: Int?
+    public let note: String?
+    public let status: String
+    public let reviewNote: String?
+    public let createdAt: String?
+    public let reviewedAt: String?
+    public let proposedBy: CollectionContributionUser?
+    public let comments: [CollectionContributionComment]
+    public let votes: CollectionContributionVotes
+
+    private enum CodingKeys: String, CodingKey {
+        case id, targetType, targetId, proposedPosition, note, status, reviewNote
+        case createdAt, reviewedAt, proposedBy, comments, votes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        targetType = try values.decode(String.self, forKey: .targetType)
+        targetId = try values.decode(String.self, forKey: .targetId)
+        proposedPosition = try values.decodeIfPresent(Int.self, forKey: .proposedPosition)
+        note = try values.decodeIfPresent(String.self, forKey: .note)
+        status = try values.decodeIfPresent(String.self, forKey: .status) ?? "PENDING"
+        reviewNote = try values.decodeIfPresent(String.self, forKey: .reviewNote)
+        createdAt = try values.decodeIfPresent(String.self, forKey: .createdAt)
+        reviewedAt = try values.decodeIfPresent(String.self, forKey: .reviewedAt)
+        proposedBy = try values.decodeIfPresent(CollectionContributionUser.self, forKey: .proposedBy)
+        comments = try values.decodeIfPresent([CollectionContributionComment].self, forKey: .comments) ?? []
+        votes = try values.decodeIfPresent(CollectionContributionVotes.self, forKey: .votes)
+            ?? .init(score: 0, count: 0, viewerValue: 0)
+    }
+}
+
+public struct CollectionContributionCapabilities: Decodable, Sendable {
+    public let canSuggest: Bool
+    public let canReview: Bool
+}
+
+public struct CollectionContributionsResponse: Decodable, Sendable {
+    public let capabilities: CollectionContributionCapabilities
+    public let contributions: [CollectionContribution]
+}
+
+public struct CollectionContributionResponse: Decodable, Sendable {
+    public let contribution: CollectionContribution
+}
+
+public struct PollLeaderboardUser: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let name: String?
+    public let handle: String?
+    public let image: String?
+}
+
+public struct PollLeaderboardEntry: Decodable, Identifiable, Sendable {
+    public var id: String { user.id }
+    public let rank: Int
+    public let user: PollLeaderboardUser
+    public let score: Int
+}
+
+public struct InteractivePollViewerVote: Decodable, Sendable {
+    public let optionId: String
+    public let score: Int
+    public let isCorrect: Bool?
+    public let answeredAt: String?
+}
+
+public struct InteractivePollOptionResult: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let label: String
+    public let voteCount: Int?
+}
+
+public struct InteractivePollLeaderboardResponse: Decodable, Sendable {
+    public let serverTime: String
+    public let mode: String
+    public let anonymous: Bool
+    public let reveal: Bool
+    public let correctOptionId: String?
+    public let options: [InteractivePollOptionResult]
+    public let viewerVotes: [InteractivePollViewerVote]
+    public let leaderboard: [PollLeaderboardEntry]?
+}
+
+public struct ApprovedWidgetResolution: Decodable, Sendable {
+    public let key: String
+    public let name: String
+    public let version: Int
+    public let platform: String
+    public let tokenScopes: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case key, name, version, platform, tokenScopes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        key = try values.decode(String.self, forKey: .key)
+        name = try values.decode(String.self, forKey: .name)
+        version = try values.decode(Int.self, forKey: .version)
+        platform = try values.decode(String.self, forKey: .platform)
+        tokenScopes = try values.decodeIfPresent([String].self, forKey: .tokenScopes) ?? []
+    }
+}
+
+public struct ApprovedWidgetResponse: Decodable, Sendable {
+    public let allowed: Bool
+    public let reason: String?
+    public let widget: ApprovedWidgetResolution?
+
+    /// Native presentation is permitted only for an explicit iOS registry match.
+    public var canPresentNatively: Bool {
+        allowed && widget?.platform == "IOS" && widget?.key.isEmpty == false
+    }
+}
+
+public struct WaveSummaryCitation: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let preview: String
+    public let author: String
+    public let href: String
+}
+
+public struct WaveConversationSummary: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let content: String
+    public let sourceStartedAt: String?
+    public let sourceEndedAt: String?
+    public let generatedAt: String?
+    public let publishedAt: String?
+    public let citations: [WaveSummaryCitation]
+}
+
+public struct WaveConversationSummariesResponse: Decodable, Sendable {
+    public let summaries: [WaveConversationSummary]
+}

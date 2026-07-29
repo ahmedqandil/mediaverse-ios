@@ -924,6 +924,97 @@ public actor LegacySocialAPIAdapter {
         )
     }
 
+    public func pollLeaderboard(_ pollId: String) async throws -> InteractivePollLeaderboardResponse {
+        try await decode(
+            InteractivePollLeaderboardResponse.self,
+            path: "/api/fan-club-polls/\(try segment(pollId))/leaderboard"
+        )
+    }
+
+    public func collectionContributions(_ collectionId: String) async throws -> CollectionContributionsResponse {
+        try await decode(
+            CollectionContributionsResponse.self,
+            path: "/api/collections/\(try segment(collectionId))/contributions"
+        )
+    }
+
+    public func suggestCollectionItem(
+        collectionId: String,
+        targetType: String,
+        targetId: String,
+        proposedPosition: Int? = nil,
+        note: String? = nil
+    ) async throws -> CollectionContributionResponse {
+        struct Body: Encodable {
+            let targetType: String
+            let targetId: String
+            let proposedPosition: Int?
+            let note: String?
+        }
+        return try await post(
+            CollectionContributionResponse.self,
+            path: "/api/collections/\(try segment(collectionId))/contributions",
+            body: JSONEncoder().encode(Body(
+                targetType: targetType.uppercased(),
+                targetId: targetId,
+                proposedPosition: proposedPosition,
+                note: note
+            ))
+        )
+    }
+
+    public func updateCollectionContribution(
+        collectionId: String,
+        contributionId: String,
+        action: String,
+        body text: String? = nil,
+        value: Int? = nil
+    ) async throws {
+        struct Body: Encodable { let action: String; let body: String?; let value: Int? }
+        let path = "/api/collections/\(try segment(collectionId))/contributions/\(try segment(contributionId))"
+        let payload = try JSONEncoder().encode(Body(action: action.uppercased(), body: text, value: value))
+        if action.uppercased() == "APPROVE" || action.uppercased() == "REJECT" {
+            _ = try await transport.socialPatchData(path: path, body: payload)
+        } else {
+            _ = try await transport.socialPostData(path: path, body: payload)
+        }
+    }
+
+    public func resolveApprovedWidget(
+        key: String,
+        version: Int,
+        sourceURL: String? = nil
+    ) async throws -> ApprovedWidgetResponse {
+        struct Body: Encodable {
+            let key: String
+            let version: Int
+            let platform: String
+            let sourceUrl: String?
+        }
+        let response: ApprovedWidgetResponse = try await post(
+            ApprovedWidgetResponse.self,
+            path: "/api/matrix/widgets/resolve",
+            body: JSONEncoder().encode(Body(
+                key: key,
+                version: version,
+                platform: "IOS",
+                sourceUrl: sourceURL
+            ))
+        )
+        guard response.canPresentNatively else { return response }
+        return response
+    }
+
+    public func waveSummaries(
+        vibeSlug: String,
+        waveSlug: String
+    ) async throws -> WaveConversationSummariesResponse {
+        try await decode(
+            WaveConversationSummariesResponse.self,
+            path: "/api/fan-clubs/\(try segment(vibeSlug))/waves/\(try segment(waveSlug))/summaries"
+        )
+    }
+
     public func recordShare(
         ofRipple postId: String,
         channel: RippleShareChannel

@@ -403,6 +403,10 @@ struct VibeEventDetailView: View {
     @State private var immediateRSVPCounts: VibeEventRSVPCounts?
     @State private var reminders = [VibeEventReminder]()
     @State private var reminderBusy = false
+    @State private var liveController: EventLiveController?
+    @State private var liveControllerBusy = false
+    @State private var liveControllerMessage: String?
+    private let socialFeatures = SocialFeatureConfiguration.runtime()
 
     var body: some View {
         ScrollView {
@@ -475,6 +479,11 @@ struct VibeEventDetailView: View {
                     Text(event.club.name).font(.headline).foregroundStyle(C.text)
                 }
                 infoCard(event)
+                if event.realtimeExperience?.isMatrixReady == true,
+                   socialFeatures.matrixRealtimeEnabled,
+                   socialFeatures.liveEventRoomsEnabled || socialFeatures.watchPartiesEnabled {
+                    liveExperienceCard(event)
+                }
                 Text(event.summary)
                     .font(.title3.weight(.medium))
                     .foregroundStyle(C.text)
@@ -672,6 +681,119 @@ struct VibeEventDetailView: View {
         .background(C.surface, in: RoundedRectangle(cornerRadius: 16))
     }
 
+    @ViewBuilder
+    private func liveExperienceCard(_ event: VibeEventDetailModel) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Live experience", systemImage: "dot.radiowaves.left.and.right")
+                    .font(.headline)
+                    .foregroundStyle(C.text)
+                Spacer()
+                if liveControllerBusy { ProgressView().tint(C.watch) }
+            }
+
+            if let controller = liveController {
+                if socialFeatures.watchPartiesEnabled,
+                   event.realtimeExperience?.watchPartyEnabled == true {
+                    liveReadinessRow(
+                        title: "Watch party",
+                        readiness: controller.watchReadiness,
+                        detail: controller.playerAuthority.westreemOwnsPlayback
+                            ? "Westreem controls playback, ads, entitlements, and analytics."
+                            : "Playback authority is unavailable."
+                    )
+                    if controller.capabilities.canControlPlayback,
+                       controller.watchReadiness == .ready,
+                       let watch = controller.watchParty {
+                        HStack {
+                            Button(watch.playbackState == "PLAYING" ? "Pause together" : "Play together") {
+                                Task {
+                                    await watchCommand(
+                                        watch.playbackState == "PLAYING" ? .pause : .play,
+                                        state: watch
+                                    )
+                                }
+                            }
+                            Button("Resync") {
+                                Task { await resyncPlayer(controller.participant?.lastPositionMs ?? watch.positionMs) }
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(C.watch)
+                    }
+                }
+
+                if socialFeatures.liveEventRoomsEnabled,
+                   event.realtimeExperience?.voiceLoungeEnabled == true,
+                   let room = controller.liveRoom {
+                    liveReadinessRow(
+                        title: room.stageLocked ? "Live stage · locked" : "Live stage",
+                        readiness: room.readiness,
+                        detail: room.readiness == .ready
+                            ? "Voice and video signalling is ready."
+                            : "Stage controls remain unavailable until RTC is ready."
+                    )
+                    if room.readiness == .ready {
+                        if controller.capabilities.canRequestSpeaker {
+                            Button(controller.speakerRequest == nil ? "Request to speak" : "Cancel speaker request") {
+                                Task {
+                                    await stageAction(
+                                        controller.speakerRequest == nil ? .requestSpeaker : .cancelSpeaker,
+                                        requestID: controller.speakerRequest?.id
+                                    )
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(C.watch)
+                        }
+                        if controller.capabilities.canModerateStage {
+                            Menu("Stage controls") {
+                                Button(room.stageLocked ? "Unlock stage" : "Lock stage") {
+                                    Task { await stageAction(room.stageLocked ? .unlockStage : .lockStage) }
+                                }
+                                Button("End stage", role: .destructive) {
+                                    Task { await stageAction(.emergencyEnd) }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                liveReadinessRow(
+                    title: "Realtime",
+                    readiness: .unavailable,
+                    detail: liveControllerMessage ?? "Live services are not available."
+                )
+                Button("Retry") { Task { await loadLiveController() } }
+                    .buttonStyle(.bordered)
+                    .tint(C.watch)
+            }
+            if let liveControllerMessage, liveController != nil {
+                Text(liveControllerMessage).font(.caption).foregroundStyle(C.textMuted)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(C.surface, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func liveReadinessRow(
+        title: String,
+        readiness: EventLiveReadiness,
+        detail: String
+    ) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(readiness == .ready ? Color.green : readiness == .degraded ? Color.orange : C.textMuted)
+                .frame(width: 8, height: 8)
+                .padding(.top, 5)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.bold()).foregroundStyle(C.text)
+                Text(detail).font(.caption).foregroundStyle(C.textMuted)
+            }
+        }
+    }
+
     private func goingButton(_ selectedStatus: String?) -> some View {
         Button(selectedStatus == "WAITLISTED" ? "Waitlisted ✓" : selectedStatus == "GOING" ? "Going ✓" : "Going") {
             Task { await rsvp("GOING") }
@@ -694,9 +816,92 @@ struct VibeEventDetailView: View {
             immediateRSVPCounts = nil
             reminders = (try? await APIClient.shared.fetchVibeEventReminders(slug: slug)) ?? []
             errorMessage = nil
+            await loadLiveController()
         }
         catch { if response == nil { errorMessage = error.localizedDescription } }
         loading = false
+    }
+
+    @MainActor private func loadLiveController() async {
+        guard let realtime = response?.event.realtimeExperience,
+              realtime.isMatrixReady,
+              socialFeatures.matrixRealtimeEnabled,
+              socialFeatures.liveEventRoomsEnabled || socialFeatures.watchPartiesEnabled else {
+            liveController = nil
+            return
+        }
+        liveControllerBusy = true
+        defer { liveControllerBusy = false }
+        do {
+            let controller = try await APIClient.shared.fetchVibeEventLiveController(slug: slug)
+            guard controller.playerAuthority.westreemOwnsPlayback else {
+                liveController = nil
+                liveControllerMessage = "Playback authority could not be verified."
+                return
+            }
+            liveController = controller
+            liveControllerMessage = nil
+        } catch {
+            liveController = nil
+            liveControllerMessage = "Live services are currently unavailable."
+        }
+    }
+
+    @MainActor private func watchCommand(
+        _ action: EventWatchCommandAction,
+        state: EventWatchPartyState
+    ) async {
+        guard liveController?.capabilities.canControlPlayback == true else { return }
+        liveControllerBusy = true
+        defer { liveControllerBusy = false }
+        do {
+            let next = (Int(state.sequence) ?? 0) + 1
+            _ = try await APIClient.shared.sendVibeEventWatchCommand(
+                slug: slug,
+                request: .init(
+                    action: action,
+                    sequence: max(1, next),
+                    positionMs: max(0, state.positionMs),
+                    playbackEpoch: state.playbackEpoch
+                )
+            )
+            await loadLiveController()
+        } catch {
+            liveControllerMessage = "The watch-party command was not accepted."
+        }
+    }
+
+    @MainActor private func resyncPlayer(_ positionMs: Int) async {
+        liveControllerBusy = true
+        defer { liveControllerBusy = false }
+        do {
+            _ = try await APIClient.shared.syncVibeEventPlayer(
+                slug: slug,
+                action: .rejoin,
+                positionMs: positionMs
+            )
+            await loadLiveController()
+        } catch {
+            liveControllerMessage = "Playback could not be resynchronized."
+        }
+    }
+
+    @MainActor private func stageAction(
+        _ action: EventStageAction,
+        requestID: String? = nil
+    ) async {
+        liveControllerBusy = true
+        defer { liveControllerBusy = false }
+        do {
+            _ = try await APIClient.shared.updateVibeEventStage(
+                slug: slug,
+                action: action,
+                requestID: requestID
+            )
+            await loadLiveController()
+        } catch {
+            liveControllerMessage = "The live stage is not ready for that action."
+        }
     }
 
     @MainActor private func rsvp(_ status: String) async {

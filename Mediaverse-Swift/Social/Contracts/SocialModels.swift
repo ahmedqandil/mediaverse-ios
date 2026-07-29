@@ -1346,6 +1346,14 @@ public struct RipplePoll: Decodable, Sendable {
     public let resultsVisibility: String
     public let closesAt: String?
     public let closedAt: String?
+    public let mode: String
+    public let anonymous: Bool
+    public let startsAt: String?
+    public let revealAt: String?
+    public let correctOptionId: String?
+    public let points: Int
+    public let leaderboardEnabled: Bool
+    public let leaderboardVisibility: String
     public let options: [RipplePollOption]
     public let votes: [RipplePollVote]
     public let totalVoters: Int
@@ -1353,6 +1361,8 @@ public struct RipplePoll: Decodable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, question, allowsMultiple, maxSelections, allowsVoteChanges
         case resultsVisibility, closesAt, closedAt, options, votes, totalVoters
+        case mode, anonymous, startsAt, revealAt, correctOptionId, points
+        case leaderboardEnabled, leaderboardVisibility
     }
 
     public init(from decoder: Decoder) throws {
@@ -1365,6 +1375,14 @@ public struct RipplePoll: Decodable, Sendable {
         resultsVisibility = try values.decodeIfPresent(String.self, forKey: .resultsVisibility) ?? "AFTER_VOTE"
         closesAt = try values.decodeIfPresent(String.self, forKey: .closesAt)
         closedAt = try values.decodeIfPresent(String.self, forKey: .closedAt)
+        mode = try values.decodeIfPresent(String.self, forKey: .mode) ?? "STANDARD"
+        anonymous = try values.decodeIfPresent(Bool.self, forKey: .anonymous) ?? false
+        startsAt = try values.decodeIfPresent(String.self, forKey: .startsAt)
+        revealAt = try values.decodeIfPresent(String.self, forKey: .revealAt)
+        correctOptionId = try values.decodeIfPresent(String.self, forKey: .correctOptionId)
+        points = max(0, try values.decodeIfPresent(Int.self, forKey: .points) ?? 0)
+        leaderboardEnabled = try values.decodeIfPresent(Bool.self, forKey: .leaderboardEnabled) ?? false
+        leaderboardVisibility = try values.decodeIfPresent(String.self, forKey: .leaderboardVisibility) ?? "AFTER_REVEAL"
         options = try values.decodeIfPresent([RipplePollOption].self, forKey: .options) ?? []
         votes = try values.decodeIfPresent([RipplePollVote].self, forKey: .votes) ?? []
         totalVoters = try values.decodeIfPresent(Int.self, forKey: .totalVoters)
@@ -1393,6 +1411,21 @@ public struct RipplePollOption: Decodable, Identifiable, Sendable {
 
 public struct RipplePollVote: Decodable, Sendable {
     public let optionId: String
+    public let score: Int?
+    public let isCorrect: Bool?
+    public let answeredAt: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case optionId, score, isCorrect, answeredAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        optionId = try values.decode(String.self, forKey: .optionId)
+        score = try values.decodeIfPresent(Int.self, forKey: .score)
+        isCorrect = try values.decodeIfPresent(Bool.self, forKey: .isCorrect)
+        answeredAt = try values.decodeIfPresent(String.self, forKey: .answeredAt)
+    }
 }
 
 public struct RipplePageResponse: Decodable, Sendable {
@@ -1549,6 +1582,15 @@ public struct RipplePollDraft: Encodable, Equatable, Sendable {
     public let maxSelections: Int
     public let allowsVoteChanges: Bool
     public let resultsVisibility: String
+    public let mode: String
+    public let anonymous: Bool
+    public let startsAt: String?
+    public let closesAt: String?
+    public let correctOptionId: String?
+    public let revealAt: String?
+    public let points: Int
+    public let leaderboardEnabled: Bool
+    public let leaderboardVisibility: String
 
     public init(
         question: String,
@@ -1556,7 +1598,16 @@ public struct RipplePollDraft: Encodable, Equatable, Sendable {
         allowsMultiple: Bool = false,
         maxSelections: Int = 1,
         allowsVoteChanges: Bool = true,
-        resultsVisibility: String = "AFTER_VOTE"
+        resultsVisibility: String = "AFTER_VOTE",
+        mode: String = "STANDARD",
+        anonymous: Bool = false,
+        startsAt: String? = nil,
+        closesAt: String? = nil,
+        correctOptionId: String? = nil,
+        revealAt: String? = nil,
+        points: Int = 0,
+        leaderboardEnabled: Bool = false,
+        leaderboardVisibility: String = "AFTER_REVEAL"
     ) {
         self.question = question
         self.options = options
@@ -1564,6 +1615,15 @@ public struct RipplePollDraft: Encodable, Equatable, Sendable {
         self.maxSelections = maxSelections
         self.allowsVoteChanges = allowsVoteChanges
         self.resultsVisibility = resultsVisibility
+        self.mode = mode
+        self.anonymous = anonymous
+        self.startsAt = startsAt
+        self.closesAt = closesAt
+        self.correctOptionId = correctOptionId
+        self.revealAt = revealAt
+        self.points = max(0, points)
+        self.leaderboardEnabled = leaderboardEnabled
+        self.leaderboardVisibility = leaderboardVisibility
     }
 }
 

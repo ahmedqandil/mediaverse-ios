@@ -38,6 +38,182 @@ struct VibeEventRealtimeExperience: Codable, Hashable, Sendable {
     }
 }
 
+enum EventLiveReadiness: String, Codable, Sendable {
+    case unavailable = "UNAVAILABLE"
+    case provisioning = "PROVISIONING"
+    case ready = "READY"
+    case degraded = "DEGRADED"
+    case ended = "ENDED"
+}
+
+struct EventWatchPartyState: Decodable, Equatable, Sendable {
+    let playbackEpoch: String
+    let sequence: String
+    let playbackState: String
+    let positionMs: Int
+    let serverTimestamp: String
+    let emergencyEndedAt: String?
+}
+
+struct EventWatchParticipantState: Decodable, Equatable, Sendable {
+    let playbackEpoch: String
+    let lastSequence: String?
+    let inAdBreak: Bool
+    let needsRejoin: Bool
+    let lastPositionMs: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case playbackEpoch, lastSequence, inAdBreak, needsRejoin, lastPositionMs
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        playbackEpoch = try values.decodeIfPresent(String.self, forKey: .playbackEpoch) ?? ""
+        lastSequence = try values.decodeIfPresent(String.self, forKey: .lastSequence)
+        inAdBreak = try values.decodeIfPresent(Bool.self, forKey: .inAdBreak) ?? false
+        needsRejoin = try values.decodeIfPresent(Bool.self, forKey: .needsRejoin) ?? false
+        lastPositionMs = max(0, try values.decodeIfPresent(Int.self, forKey: .lastPositionMs) ?? 0)
+    }
+}
+
+struct EventLiveRoomState: Decodable, Equatable, Sendable {
+    let provider: String?
+    let configured: Bool
+    let signallingStatus: String
+    let stageLocked: Bool
+    let emergencyEnded: Bool
+
+    var readiness: EventLiveReadiness {
+        guard configured, provider?.isEmpty == false else { return .unavailable }
+        if emergencyEnded || signallingStatus == "ENDED" { return .ended }
+        if signallingStatus == "READY" { return .ready }
+        if signallingStatus == "FAILED" || signallingStatus == "DEGRADED" { return .degraded }
+        return .provisioning
+    }
+}
+
+struct EventSpeakerRequestState: Decodable, Identifiable, Equatable, Sendable {
+    let id: String
+    let status: String
+}
+
+struct EventLiveCapabilities: Decodable, Equatable, Sendable {
+    let canControlPlayback: Bool
+    let canModerateStage: Bool
+    let canRequestSpeaker: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case canControlPlayback, canModerateStage, canRequestSpeaker
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        canControlPlayback = try values.decodeIfPresent(Bool.self, forKey: .canControlPlayback) ?? false
+        canModerateStage = try values.decodeIfPresent(Bool.self, forKey: .canModerateStage) ?? false
+        canRequestSpeaker = try values.decodeIfPresent(Bool.self, forKey: .canRequestSpeaker) ?? false
+    }
+}
+
+struct EventPlayerAuthority: Decodable, Equatable, Sendable {
+    let delivery: String
+    let entitlement: String
+    let ads: String
+    let analytics: String
+    let matrixRole: String
+
+    var westreemOwnsPlayback: Bool {
+        delivery == "WESTREEM"
+            && entitlement == "WESTREEM"
+            && ads == "PER_CLIENT"
+            && analytics == "WESTREEM"
+            && matrixRole == "SYNC_AND_SIGNALLING_ONLY"
+    }
+}
+
+struct EventLiveController: Decodable, Equatable, Sendable {
+    let watchParty: EventWatchPartyState?
+    let participant: EventWatchParticipantState?
+    let liveRoom: EventLiveRoomState?
+    let speakerRequest: EventSpeakerRequestState?
+    let capabilities: EventLiveCapabilities
+    let playerAuthority: EventPlayerAuthority
+
+    var watchReadiness: EventLiveReadiness {
+        guard playerAuthority.westreemOwnsPlayback else { return .unavailable }
+        if watchParty?.emergencyEndedAt != nil { return .ended }
+        return watchParty == nil ? .provisioning : .ready
+    }
+}
+
+struct EventLiveControllerResponse: Decodable, Equatable, Sendable {
+    let controller: EventLiveController
+}
+
+enum EventWatchCommandAction: String, Encodable, Sendable {
+    case play = "PLAY"
+    case pause = "PAUSE"
+    case seek = "SEEK"
+    case newEpoch = "NEW_EPOCH"
+    case emergencyEnd = "EMERGENCY_END"
+}
+
+struct EventWatchCommandRequest: Encodable, Sendable {
+    let action: EventWatchCommandAction
+    let sequence: Int
+    let positionMs: Int
+    let playbackEpoch: String
+}
+
+struct EventWatchCommandResponse: Decodable, Sendable {
+    let state: EventWatchPartyState
+}
+
+enum EventClientSyncAction: String, Encodable, Sendable {
+    case adStarted = "AD_STARTED"
+    case adEnded = "AD_ENDED"
+    case rejoin = "REJOIN"
+}
+
+struct EventClientSyncRequest: Encodable, Sendable {
+    let action: EventClientSyncAction
+    let positionMs: Int
+}
+
+struct EventWatchReconciliation: Decodable, Equatable, Sendable {
+    let playbackEpoch: String
+    let sequence: String
+    let playbackState: String
+    let positionMs: Int
+    let serverTimestamp: String
+    let instruction: String
+}
+
+struct EventClientSyncResponse: Decodable, Sendable {
+    let participant: EventWatchParticipantState
+    let reconciliation: EventWatchReconciliation?
+}
+
+enum EventStageAction: String, Encodable, Sendable {
+    case requestSpeaker = "REQUEST_SPEAKER"
+    case cancelSpeaker = "CANCEL_SPEAKER"
+    case approveSpeaker = "APPROVE_SPEAKER"
+    case denySpeaker = "DENY_SPEAKER"
+    case lockStage = "LOCK_STAGE"
+    case unlockStage = "UNLOCK_STAGE"
+    case emergencyEnd = "EMERGENCY_END"
+}
+
+struct EventStageRequest: Encodable, Sendable {
+    let action: EventStageAction
+    let requestId: String?
+}
+
+struct EventStageResponse: Decodable, Sendable {
+    let speakerRequest: EventSpeakerRequestState?
+    let liveRoom: EventLiveRoomState?
+    let cancelled: Bool?
+}
+
 struct VibeEventIdentity: Codable, Hashable, Sendable {
     let id: String?
     let slug: String?

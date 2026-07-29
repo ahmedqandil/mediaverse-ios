@@ -56,6 +56,7 @@ struct VibeDetailView: View {
     @State private var pendingChatRipples: [PendingWaveRipple] = []
     @State private var matrixConnectionState: MatrixSyncConnectionState = .disabled
     @State private var matrixActivity = MatrixWaveActivity()
+    @State private var waveSummaries: [WaveConversationSummary] = []
     @StateObject private var autoplay = SocialFeedAutoplayController()
     @AppStorage("playerMuted") private var playerMuted = false
     @EnvironmentObject private var auth: AuthManager
@@ -103,6 +104,10 @@ struct VibeDetailView: View {
                             waveRealtimeStatus
                                 .padding(.horizontal, C.pagePad)
                         }
+                    }
+                    if !waveSummaries.isEmpty {
+                        waveSummaryCard
+                            .padding(.horizontal, C.pagePad)
                     }
                     if !isCompactCommunityDirectory, selectedWave?.type == .resources {
                         resourceFilters
@@ -543,6 +548,40 @@ struct VibeDetailView: View {
     private var matrixTaskIdentity: String {
         guard matrixRealtimeEnabled, let wave = selectedWave else { return "legacy" }
         return "\(wave.id):\(wave.matrixBinding?.roomId ?? "")"
+    }
+
+    private var waveSummaryCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Conversation summary", systemImage: "text.quote")
+                .font(.subheadline.bold())
+                .foregroundStyle(C.text)
+            ForEach(waveSummaries.prefix(1)) { summary in
+                Text(summary.content)
+                    .font(.footnote)
+                    .foregroundStyle(C.textMuted)
+                if !summary.citations.isEmpty {
+                    Text("\(summary.citations.count) verified Ripple citation\(summary.citations.count == 1 ? "" : "s")")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(C.watch)
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(C.elevated, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(C.borderSubtle))
+    }
+
+    @MainActor
+    private func loadWaveSummaries(_ waveSlug: String?) async {
+        waveSummaries = []
+        guard let waveSlug, matrixRealtimeEnabled else { return }
+        // The server returns an empty list when Phase 2, platform visibility,
+        // citation safety, or access checks fail. Never synthesize a digest.
+        waveSummaries = (try? await api.waveSummaries(
+            vibeSlug: slug,
+            waveSlug: waveSlug
+        ).summaries) ?? []
     }
 
     @MainActor
@@ -1323,6 +1362,7 @@ struct VibeDetailView: View {
         bookmarkedResourcesOnly = false
         resourceCategories = []
         selectedWaveSlug = waveSlug
+        await loadWaveSummaries(waveSlug)
         feedRequestID = UUID()
         let requestID = feedRequestID
         if let cached = waveFeeds[feedKey(waveSlug)] {
