@@ -578,6 +578,10 @@ final class SocialContractDecodingTests: XCTestCase {
         XCTAssertTrue(configuration.hasAnyEnabledFeature)
         XCTAssertTrue(configuration.atmosphereEnabled)
         XCTAssertTrue(configuration.rippleComposerEnabled)
+        XCTAssertFalse(configuration.matrixRealtimeEnabled)
+        XCTAssertFalse(configuration.voiceRipplesEnabled)
+        XCTAssertFalse(configuration.videoRipplesEnabled)
+        XCTAssertFalse(configuration.liveEventRoomsEnabled)
         XCTAssertFalse(SocialFeatureConfiguration.disabled.hasAnyEnabledFeature)
     }
 
@@ -592,6 +596,115 @@ final class SocialContractDecodingTests: XCTestCase {
         XCTAssertTrue(configuration.atmosphereEnabled)
         XCTAssertTrue(configuration.discoverEnabled)
         XCTAssertFalse(configuration.rippleEngagementEnabled)
+        XCTAssertFalse(configuration.matrixRealtimeEnabled)
         suite.removePersistentDomain(forName: "SocialContractDecodingTests")
+    }
+
+    func testMatrixRolloutRequiresBothLocalAndServerGates() throws {
+        let server = try decoder.decode(
+            SocialRealtimeCapabilities.self,
+            from: Data(
+                """
+                {"transport":"MATRIX","schemaVersion":1,"voiceRipples":true,
+                 "videoRipples":true,"presence":true}
+                """.utf8
+            )
+        )
+
+        XCTAssertTrue(server.usesMatrix)
+        XCTAssertFalse(
+            SocialRealtimeRollout.voiceRipplesEnabled(
+                local: SocialFeatureConfiguration(),
+                server: server
+            )
+        )
+
+        let local = SocialFeatureConfiguration(
+            matrixRealtimeEnabled: true,
+            voiceRipplesEnabled: true,
+            videoRipplesEnabled: false
+        )
+        XCTAssertTrue(SocialRealtimeRollout.voiceRipplesEnabled(local: local, server: server))
+        XCTAssertFalse(SocialRealtimeRollout.videoRipplesEnabled(local: local, server: server))
+    }
+
+    func testRealtimeCapabilitiesFailClosedForLegacyWave() throws {
+        let response = try decoder.decode(
+            VibeWavesResponse.self,
+            from: Data(
+                """
+                {"waves":[
+                  {"id":"legacy","name":"Legacy","slug":"legacy"},
+                  {"id":"matrix","name":"Live","slug":"live","realtimeCapabilities":{
+                    "transport":"MATRIX","schemaVersion":2,"presence":true,
+                    "typing":true,"readReceipts":true,"offlineSend":true,
+                    "threadSubscriptions":true,"directMessages":true,
+                    "stickers":true,"voiceRipples":true,"videoRipples":true,
+                    "liveEventRooms":true,"watchParties":true,"voiceLounges":true
+                  }}
+                ]}
+                """.utf8
+            )
+        )
+
+        XCTAssertNil(response.waves[0].realtimeCapabilities)
+        let capabilities = try XCTUnwrap(response.waves[1].realtimeCapabilities)
+        XCTAssertTrue(capabilities.usesMatrix)
+        XCTAssertTrue(capabilities.voiceRipples)
+        XCTAssertTrue(capabilities.watchParties)
+
+        let legacy = try decoder.decode(
+            SocialRealtimeCapabilities.self,
+            from: Data("{}".utf8)
+        )
+        XCTAssertFalse(legacy.usesMatrix)
+        XCTAssertFalse(legacy.presence)
+        XCTAssertFalse(legacy.videoRipples)
+    }
+
+    func testVoiceAndVideoRippleAttachmentsDecodeProcessingSafely() throws {
+        let response = try decoder.decode(
+            RipplePageResponse.self,
+            from: Data(
+                """
+                {"posts":[{"id":"r1","createdAt":"2026-07-29T10:00:00Z","author":{"id":"u1"},
+                  "attachments":[
+                    {"id":"a1","type":"VOICE","conversationalMedia":{
+                      "id":"media-voice","kind":"VOICE","status":"READY",
+                      "playbackUrl":"https://media.example/voice.m4a",
+                      "durationMilliseconds":42000,"waveform":[-1,12,9999]
+                    }},
+                    {"id":"a2","type":"VIDEO_MESSAGE","conversationalMedia":{
+                      "id":"media-video","kind":"VIDEO","status":"PROCESSING"
+                    }}
+                  ]
+                }]}
+                """.utf8
+            )
+        )
+
+        XCTAssertEqual(response.posts[0].attachments[0].type, .voice)
+        let voice = try XCTUnwrap(response.posts[0].attachments[0].conversationalMedia)
+        XCTAssertTrue(voice.isPlayable)
+        XCTAssertEqual(voice.waveform, [0, 12, 1024])
+        XCTAssertEqual(response.posts[0].attachments[1].type, .videoMessage)
+        let video = try XCTUnwrap(response.posts[0].attachments[1].conversationalMedia)
+        XCTAssertFalse(video.isPlayable)
+        XCTAssertEqual(video.durationMilliseconds, 0)
+    }
+
+    func testConversationalMediaCreateAttachmentsEncodeStableIDsOnly() throws {
+        let voice = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(RippleCreateAttachment.voice(mediaId: "m-voice"))
+        ) as? [String: String]
+        let video = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(RippleCreateAttachment.videoMessage(mediaId: "m-video"))
+        ) as? [String: String]
+
+        XCTAssertEqual(voice?["type"], "VOICE")
+        XCTAssertEqual(voice?["mediaId"], "m-voice")
+        XCTAssertEqual(video?["type"], "VIDEO_MESSAGE")
+        XCTAssertEqual(video?["mediaId"], "m-video")
+        XCTAssertNil(video?["imageUrl"])
     }
 }

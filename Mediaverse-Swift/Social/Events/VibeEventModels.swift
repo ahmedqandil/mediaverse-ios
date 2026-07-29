@@ -1,5 +1,43 @@
 import Foundation
 
+/// Additive bridge between the canonical Westreem Event and its optional
+/// Matrix-backed live conversation. Absent data preserves the existing Event
+/// experience and never provisions or joins a room from the client.
+struct VibeEventRealtimeExperience: Codable, Hashable, Sendable {
+    let transport: String
+    let schemaVersion: Int
+    let roomMode: String?
+    let liveMode: String?
+    let provisioningStatus: String?
+    let conversationEnabled: Bool
+    let presenceEnabled: Bool
+    let voiceLoungeEnabled: Bool
+    let watchPartyEnabled: Bool
+    let opensAt: String?
+    let closesAt: String?
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        transport = try c.decodeIfPresent(String.self, forKey: .transport) ?? "LEGACY"
+        schemaVersion = max(0, try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 0)
+        roomMode = try c.decodeIfPresent(String.self, forKey: .roomMode)
+        liveMode = try c.decodeIfPresent(String.self, forKey: .liveMode)
+        provisioningStatus = try c.decodeIfPresent(String.self, forKey: .provisioningStatus)
+        conversationEnabled = try c.decodeIfPresent(Bool.self, forKey: .conversationEnabled) ?? false
+        presenceEnabled = try c.decodeIfPresent(Bool.self, forKey: .presenceEnabled) ?? false
+        voiceLoungeEnabled = try c.decodeIfPresent(Bool.self, forKey: .voiceLoungeEnabled) ?? false
+        watchPartyEnabled = try c.decodeIfPresent(Bool.self, forKey: .watchPartyEnabled) ?? false
+        opensAt = try c.decodeIfPresent(String.self, forKey: .opensAt)
+        closesAt = try c.decodeIfPresent(String.self, forKey: .closesAt)
+    }
+
+    var isMatrixReady: Bool {
+        transport.caseInsensitiveCompare("MATRIX") == .orderedSame
+            && schemaVersion > 0
+            && provisioningStatus == "READY"
+    }
+}
+
 struct VibeEventIdentity: Codable, Hashable, Sendable {
     let id: String?
     let slug: String?
@@ -39,6 +77,7 @@ struct VibeEventCardModel: Codable, Identifiable, Hashable, Sendable {
     let viewerRsvpStatus: String?
     let capacity: Int?
     let replayUrl: String?
+    let realtimeExperience: VibeEventRealtimeExperience?
     let club: VibeEventIdentity
     let wave: VibeEventWaveIdentity?
     let affiliatedShow: VibeEventAffiliation?
@@ -63,6 +102,10 @@ struct VibeEventCardModel: Codable, Identifiable, Hashable, Sendable {
         viewerRsvpStatus = try c.decodeIfPresent(String.self, forKey: .viewerRsvpStatus)
         capacity = try c.decodeIfPresent(Int.self, forKey: .capacity)
         replayUrl = try c.decodeIfPresent(String.self, forKey: .replayUrl)
+        realtimeExperience = try c.decodeIfPresent(
+            VibeEventRealtimeExperience.self,
+            forKey: .realtimeExperience
+        )
         club = try c.decode(VibeEventIdentity.self, forKey: .club)
         wave = try c.decodeIfPresent(VibeEventWaveIdentity.self, forKey: .wave)
         affiliatedShow = try c.decodeIfPresent(VibeEventAffiliation.self, forKey: .affiliatedShow)
@@ -115,6 +158,7 @@ struct VibeEventDetailModel: Codable, Identifiable, Sendable {
     let affiliatedChannel: VibeEventAffiliation?
     let rsvps: [VibeEventRSVP]
     let associatedPost: VibeEventRippleSummary?
+    let realtimeExperience: VibeEventRealtimeExperience?
 }
 
 struct VibeEventAgendaItem: Codable, Identifiable, Hashable, Sendable {

@@ -55,4 +55,38 @@ final class EventContractDecodingTests: XCTestCase {
         XCTAssertEqual(reminder.leadMinutes, 15)
         XCTAssertEqual(reminder.channel, "push")
     }
+
+    func testEventRealtimeExperienceIsAdditiveAndFailsClosed() throws {
+        let response = try decoder.decode(
+            VibeEventListResponse.self,
+            from: Data(
+                """
+                {"events":[
+                  {"id":"legacy","slug":"legacy","title":"Legacy","startsAt":"2026-08-01T10:00:00Z",
+                   "club":{"name":"Vibe"}},
+                  {"id":"live","slug":"live","title":"Live","startsAt":"2026-08-02T10:00:00Z",
+                   "club":{"name":"Vibe"},"realtimeExperience":{
+                     "transport":"MATRIX","schemaVersion":1,"roomMode":"DEDICATED_RSVP",
+                     "liveMode":"WATCH_PARTY","provisioningStatus":"READY",
+                     "conversationEnabled":true,"presenceEnabled":true,
+                     "voiceLoungeEnabled":true,"watchPartyEnabled":true
+                   }}
+                ]}
+                """.utf8
+            )
+        )
+
+        XCTAssertNil(response.events[0].realtimeExperience)
+        let realtime = try XCTUnwrap(response.events[1].realtimeExperience)
+        XCTAssertTrue(realtime.isMatrixReady)
+        XCTAssertTrue(realtime.conversationEnabled)
+        XCTAssertTrue(realtime.watchPartyEnabled)
+
+        let pending = try decoder.decode(
+            VibeEventRealtimeExperience.self,
+            from: Data(#"{"transport":"MATRIX","schemaVersion":1}"#.utf8)
+        )
+        XCTAssertFalse(pending.isMatrixReady)
+        XCTAssertFalse(pending.presenceEnabled)
+    }
 }

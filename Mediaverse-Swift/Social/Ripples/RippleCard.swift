@@ -1380,6 +1380,11 @@ private struct RippleAttachmentsView: View {
     @ViewBuilder
     private func attachmentView(_ attachment: RippleAttachment) -> some View {
         switch attachment.type {
+        case .voice, .videoMessage:
+            if let media = attachment.conversationalMedia {
+                RippleConversationalMediaStatusView(media: media)
+                    .padding(.horizontal, 14)
+            }
         case .link:
             RippleLinkAttachment(attachment: attachment)
                 .padding(.horizontal, 14)
@@ -1417,6 +1422,72 @@ private struct RippleAttachmentsView: View {
             }
         case .photo, .unknown:
             EmptyView()
+        }
+    }
+}
+
+/// Safe first renderer for server-declared conversational media. Playback is
+/// opened only for a READY item with a stable delivery URL; recording and
+/// inline playback remain gated until the native media pipeline is enabled.
+private struct RippleConversationalMediaStatusView: View {
+    let media: ConversationalMedia
+
+    var body: some View {
+        Group {
+            if media.isPlayable, let value = media.playbackURL, let url = URL(string: value) {
+                Link(destination: url) { content(showPlay: true) }
+            } else {
+                content(showPlay: false)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func content(showPlay: Bool) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: media.kind == .voice ? "waveform" : "video.fill")
+                .font(.title3)
+                .foregroundStyle(C.watch)
+                .frame(width: 38, height: 38)
+                .background(C.watch.opacity(0.12), in: Circle())
+            VStack(alignment: .leading, spacing: 3) {
+                Text(media.kind == .voice ? "Voice Ripple" : "Video Ripple")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(C.text)
+                Text(statusText)
+                    .font(.caption)
+                    .foregroundStyle(C.textMuted)
+            }
+            Spacer()
+            if showPlay {
+                Image(systemName: "play.fill")
+                    .foregroundStyle(C.watch)
+                    .accessibilityHidden(true)
+            } else if media.status == .processing || media.status == .uploading {
+                ProgressView().tint(C.watch)
+            }
+        }
+        .padding(12)
+        .background(C.surface, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(C.borderSubtle))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(media.kind == .voice ? "Voice" : "Video") Ripple, \(statusText)"
+        )
+    }
+
+    private var statusText: String {
+        if media.isPlayable {
+            let seconds = media.durationMilliseconds / 1_000
+            return seconds > 0 ? "\(seconds / 60):\(String(format: "%02d", seconds % 60))" : "Ready"
+        }
+        switch media.status {
+        case .preparing: return "Preparing…"
+        case .uploading: return "Uploading…"
+        case .processing: return "Processing…"
+        case .failed: return "Could not process media"
+        case .unavailable: return "Media unavailable"
+        case .ready: return "Playback unavailable"
         }
     }
 }

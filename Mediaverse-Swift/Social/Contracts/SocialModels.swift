@@ -603,6 +603,7 @@ public struct VibeWave: Decodable, Identifiable, Equatable, Sendable {
     public let activeConversationCount: Int
     public let lastParticipant: SocialIdentity?
     public let directoryPreview: String?
+    public let realtimeCapabilities: SocialRealtimeCapabilities?
 
     private enum CodingKeys: String, CodingKey {
         case id, name, slug, description, type, visibility, postingPolicy, position
@@ -610,7 +611,7 @@ public struct VibeWave: Decodable, Identifiable, Equatable, Sendable {
         case allowPolls, allowPhotos, allowLinks, allowEchoes, archivedAt
         case capabilities, _count, subscription
         case unreadCount, lastActivityAt, activeConversationCount, conversationCount, lastParticipant
-        case directorySummary
+        case directorySummary, realtimeCapabilities
     }
 
     public init(from decoder: Decoder) throws {
@@ -669,6 +670,10 @@ public struct VibeWave: Decodable, Identifiable, Equatable, Sendable {
         lastParticipant = directorySummary?.participant
             ?? flatLastParticipant
         directoryPreview = directorySummary?.preview
+        realtimeCapabilities = try values.decodeIfPresent(
+            SocialRealtimeCapabilities.self,
+            forKey: .realtimeCapabilities
+        )
     }
 }
 
@@ -1123,6 +1128,8 @@ public struct RipplePinMutation: Decodable, Sendable {
 
 public enum RippleAttachmentKind: String, Decodable, Sendable {
     case photo = "PHOTO"
+    case voice = "VOICE"
+    case videoMessage = "VIDEO_MESSAGE"
     case link = "LINK"
     case westreemVideo = "WESTREEM_VIDEO"
     case westreemCollection = "WESTREEM_COLLECTION"
@@ -1157,13 +1164,14 @@ public struct RippleAttachment: Decodable, Identifiable, Sendable {
     public let userPost: RippleClippingAttachment?
     public let fanClubPost: EmbeddedRipple?
     public let vibeEvent: RippleEventAttachment?
+    public let conversationalMedia: ConversationalMedia?
 
     enum CodingKeys: String, CodingKey {
         case id, type, position, imageURL = "imageUrl", externalURL = "externalUrl"
         case linkTitle, linkDescription, linkImageURL = "linkImageUrl"
         case linkFaviconURL = "linkFaviconUrl", linkDomain
         case likeCount, commentCount, shareCount, likes
-        case video, collection, userPost, fanClubPost, vibeEvent
+        case video, collection, userPost, fanClubPost, vibeEvent, conversationalMedia
     }
 
     public init(from decoder: Decoder) throws {
@@ -1187,6 +1195,10 @@ public struct RippleAttachment: Decodable, Identifiable, Sendable {
         userPost = try values.decodeIfPresent(RippleClippingAttachment.self, forKey: .userPost)
         fanClubPost = try values.decodeIfPresent(EmbeddedRipple.self, forKey: .fanClubPost)
         vibeEvent = try values.decodeIfPresent(RippleEventAttachment.self, forKey: .vibeEvent)
+        conversationalMedia = try values.decodeIfPresent(
+            ConversationalMedia.self,
+            forKey: .conversationalMedia
+        )
     }
 }
 
@@ -1481,6 +1493,8 @@ public struct VibeJoinResponse: Decodable, Sendable {
 
 public enum RippleCreateAttachment: Encodable, Equatable, Sendable {
     case photo(imageURL: String)
+    case voice(mediaId: String)
+    case videoMessage(mediaId: String)
     case link(externalURL: String)
     case video(id: String)
     case collection(id: String)
@@ -1489,7 +1503,7 @@ public enum RippleCreateAttachment: Encodable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case type, imageURL = "imageUrl", externalURL = "externalUrl"
-        case videoId, collectionId, userPostId, fanClubPostId
+        case videoId, collectionId, userPostId, fanClubPostId, mediaId
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1498,6 +1512,12 @@ public enum RippleCreateAttachment: Encodable, Equatable, Sendable {
         case .photo(let imageURL):
             try values.encode("PHOTO", forKey: .type)
             try values.encode(imageURL, forKey: .imageURL)
+        case .voice(let mediaId):
+            try values.encode("VOICE", forKey: .type)
+            try values.encode(mediaId, forKey: .mediaId)
+        case .videoMessage(let mediaId):
+            try values.encode("VIDEO_MESSAGE", forKey: .type)
+            try values.encode(mediaId, forKey: .mediaId)
         case .link(let externalURL):
             try values.encode("LINK", forKey: .type)
             try values.encode(externalURL, forKey: .externalURL)

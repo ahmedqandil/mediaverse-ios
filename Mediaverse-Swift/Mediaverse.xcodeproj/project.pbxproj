@@ -74,6 +74,7 @@
 		843AC7153012120A004FB5C3 /* HandoffResolverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 843AC7143012120A004FB5C3 /* HandoffResolverView.swift */; };
 		A4C0C001301A000100000001 /* SocialModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C011301A000100000001 /* SocialModels.swift */; };
 		A4C0C002301A000100000001 /* SocialFeatureConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C012301A000100000001 /* SocialFeatureConfiguration.swift */; };
+		B5D1C001301A000100000001 /* SocialRealtimeContracts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5D1C011301A000100000001 /* SocialRealtimeContracts.swift */; };
 		A4C0C003301A000100000001 /* LegacySocialAPIAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C013301A000100000001 /* LegacySocialAPIAdapter.swift */; };
 		A4C0C004301A000100000001 /* AtmosphereViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C014301A000100000001 /* AtmosphereViewModel.swift */; };
 		A4C0C005301A000100000001 /* AtmosphereView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C015301A000100000001 /* AtmosphereView.swift */; };
@@ -208,6 +209,7 @@
 		843AC7143012120A004FB5C3 /* HandoffResolverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandoffResolverView.swift; sourceTree = "<group>"; };
 		A4C0C011301A000100000001 /* SocialModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocialModels.swift; sourceTree = "<group>"; };
 		A4C0C012301A000100000001 /* SocialFeatureConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocialFeatureConfiguration.swift; sourceTree = "<group>"; };
+		B5D1C011301A000100000001 /* SocialRealtimeContracts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocialRealtimeContracts.swift; sourceTree = "<group>"; };
 		A4C0C013301A000100000001 /* LegacySocialAPIAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacySocialAPIAdapter.swift; sourceTree = "<group>"; };
 		A4C0C014301A000100000001 /* AtmosphereViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtmosphereViewModel.swift; sourceTree = "<group>"; };
 		A4C0C015301A000100000001 /* AtmosphereView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtmosphereView.swift; sourceTree = "<group>"; };
@@ -554,6 +556,7 @@
 			children = (
 				A4C0C011301A000100000001 /* SocialModels.swift */,
 				A4C0C012301A000100000001 /* SocialFeatureConfiguration.swift */,
+				B5D1C011301A000100000001 /* SocialRealtimeContracts.swift */,
 				A4C0C013301A000100000001 /* LegacySocialAPIAdapter.swift */,
 			);
 			name = "Social Contracts";
@@ -841,6 +844,7 @@
 				84366B0A3006CC08009977FA /* PushNotificationManager.swift in Sources */,
 				A4C0C001301A000100000001 /* SocialModels.swift in Sources */,
 				A4C0C002301A000100000001 /* SocialFeatureConfiguration.swift in Sources */,
+				B5D1C001301A000100000001 /* SocialRealtimeContracts.swift in Sources */,
 				A4C0C003301A000100000001 /* LegacySocialAPIAdapter.swift in Sources */,
 				A4C0C004301A000100000001 /* AtmosphereViewModel.swift in Sources */,
 				A4C0C005301A000100000001 /* AtmosphereView.swift in Sources */,
