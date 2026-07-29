@@ -897,6 +897,7 @@ struct RippleComposer: View {
             selectedMediaJobID = try mediaUploads.enqueue(
                 sourceURL: sourceURL,
                 vibeSlug: tryVoiceDestinationSlug(),
+                waveId: mediaDestinationWaveId,
                 kind: .voice,
                 mimeType: "audio/mp4",
                 durationMilliseconds: Int(voiceRecorder.elapsedSeconds * 1_000)
@@ -929,6 +930,7 @@ struct RippleComposer: View {
             selectedMediaJobID = try mediaUploads.enqueue(
                 sourceURL: sourceURL,
                 vibeSlug: tryVoiceDestinationSlug(),
+                waveId: mediaDestinationWaveId,
                 kind: .video,
                 mimeType: "video/quicktime",
                 durationMilliseconds: milliseconds
@@ -945,6 +947,11 @@ struct RippleComposer: View {
             throw LegacySocialAPIError.invalidPath
         }
         return vibeSlug
+    }
+
+    private var mediaDestinationWaveId: String? {
+        guard case .wave(_, _, let wave) = destination else { return nil }
+        return wave.id
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {

@@ -825,7 +825,7 @@ final class SocialContractDecodingTests: XCTestCase {
             with: JSONEncoder().encode(RippleCreateAttachment.videoMessage(mediaId: "m-video"))
         ) as? [String: String]
 
-        XCTAssertEqual(voice?["type"], "VOICE")
+        XCTAssertEqual(voice?["type"], "VOICE_MESSAGE")
         XCTAssertEqual(voice?["mediaId"], "m-voice")
         XCTAssertEqual(video?["type"], "VIDEO_MESSAGE")
         XCTAssertEqual(video?["mediaId"], "m-video")

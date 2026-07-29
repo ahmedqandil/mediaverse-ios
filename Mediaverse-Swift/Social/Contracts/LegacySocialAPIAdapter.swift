@@ -766,6 +766,7 @@ public actor LegacySocialAPIAdapter {
 
     public func prepareConversationalMediaUpload(
         toVibe slug: String,
+        waveId: String? = nil,
         kind: ConversationalMediaKind,
         mimeType: String,
         size: Int,
@@ -779,7 +780,8 @@ public actor LegacySocialAPIAdapter {
                     kind: kind,
                     mimeType: mimeType,
                     size: size,
-                    durationMilliseconds: durationMilliseconds
+                    durationMilliseconds: durationMilliseconds,
+                    waveId: waveId
                 )
             )
         )
@@ -1263,6 +1265,7 @@ private struct ConversationalMediaUploadRequest: Encodable {
     let mimeType: String
     let size: Int
     let durationMilliseconds: Int?
+    let waveId: String?
 }
 
 private struct ConversationalMediaUploadCompleteRequest: Encodable {

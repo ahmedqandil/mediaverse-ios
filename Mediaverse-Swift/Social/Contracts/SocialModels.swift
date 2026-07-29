@@ -1585,7 +1585,7 @@ public enum RippleCreateAttachment: Encodable, Equatable, Sendable {
             try values.encode("PHOTO", forKey: .type)
             try values.encode(imageURL, forKey: .imageURL)
         case .voice(let mediaId):
-            try values.encode("VOICE", forKey: .type)
+            try values.encode("VOICE_MESSAGE", forKey: .type)
             try values.encode(mediaId, forKey: .mediaId)
         case .videoMessage(let mediaId):
             try values.encode("VIDEO_MESSAGE", forKey: .type)

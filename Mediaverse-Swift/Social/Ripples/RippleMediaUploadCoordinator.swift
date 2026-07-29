@@ -12,6 +12,7 @@ enum RippleMediaUploadState: String, Codable, Sendable {
 struct RippleMediaUploadJob: Codable, Identifiable, Equatable, Sendable {
     let id: UUID
     let vibeSlug: String
+    let waveId: String?
     let kind: ConversationalMediaKind
     let localFilePath: String
     let mimeType: String
@@ -168,6 +169,7 @@ final class RippleMediaUploadCoordinator: ObservableObject {
     func enqueue(
         sourceURL: URL,
         vibeSlug: String,
+        waveId: String?,
         kind: ConversationalMediaKind,
         mimeType: String,
         durationMilliseconds: Int?
@@ -178,6 +180,7 @@ final class RippleMediaUploadCoordinator: ObservableObject {
             RippleMediaUploadJob(
                 id: id,
                 vibeSlug: vibeSlug,
+                waveId: waveId,
                 kind: kind,
                 localFilePath: fileURL.path,
                 mimeType: mimeType,
@@ -233,6 +236,7 @@ final class RippleMediaUploadCoordinator: ObservableObject {
             let size = (attributes[.size] as? NSNumber)?.intValue ?? 0
             let preparation = try await api.prepareConversationalMediaUpload(
                 toVibe: job.vibeSlug,
+                waveId: job.waveId,
                 kind: job.kind,
                 mimeType: job.mimeType,
                 size: size,
