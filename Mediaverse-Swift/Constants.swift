@@ -59,6 +59,23 @@ enum C {
         return productionAdHosts.contains(host)
     }
 
+    static func isTrustedRtcURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(),
+              let host = url.host?.lowercased() else {
+            return false
+        }
+        #if DEBUG
+        if ["http", "ws"].contains(scheme),
+           ["localhost", "127.0.0.1", "::1"].contains(host) {
+            return true
+        }
+        #endif
+        guard ["https", "wss"].contains(scheme) else { return false }
+        return productionBackendHosts.contains(host)
+            || host.hasSuffix(".westreem.com")
+            || host.hasSuffix(".fly.dev")
+    }
+
     static func isTrustedBrowserURL(_ url: URL) -> Bool {
         isTrustedBackendURL(url)
     }
@@ -700,6 +717,7 @@ extension Notification.Name {
     static let routedShortsVisibilityChanged = Notification.Name("routedShortsVisibilityChanged")
     static let mainTabScrollToTopRequested = Notification.Name("mainTabScrollToTopRequested")
     static let notificationCountsDidChange = Notification.Name("notificationCountsDidChange")
+    static let matrixRoomRouteRequested = Notification.Name("matrixRoomRouteRequested")
     static let sessionExpired = Notification.Name("sessionExpired")
     static let horizontalCarouselInteractionChanged = Notification.Name("horizontalCarouselInteractionChanged")
 }

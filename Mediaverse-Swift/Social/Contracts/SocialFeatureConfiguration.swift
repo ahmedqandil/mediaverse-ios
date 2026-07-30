@@ -15,6 +15,14 @@ public struct SocialFeatureConfiguration: Equatable, Sendable {
     /// are enabled for the production client now that the rollout endpoints
     /// are live; an explicitly stored false remains the device kill switch.
     public var matrixRealtimeEnabled: Bool
+    /// Matrix-native Vibes is the production community client. Missing local
+    /// storage enables the client; an explicitly stored false remains the
+    /// emergency device kill switch. Matrix session startup still requires
+    /// the server's ownership-v2 capability response.
+    public var matrixNativeVibesEnabled: Bool
+    /// Personal Atmo v2 remains a Westreem API cutover and is independent
+    /// from community Vibes/Matrix. Missing storage must remain disabled.
+    public var personalAtmoV2Enabled: Bool
     public var wavePresenceEnabled: Bool
     public var directMessagesEnabled: Bool
     public var voiceRipplesEnabled: Bool
@@ -30,6 +38,8 @@ public struct SocialFeatureConfiguration: Equatable, Sendable {
         rippleComposerEnabled: Bool = true,
         flashesEnergyEnabled: Bool = true,
         matrixRealtimeEnabled: Bool = false,
+        matrixNativeVibesEnabled: Bool = false,
+        personalAtmoV2Enabled: Bool = false,
         wavePresenceEnabled: Bool = false,
         directMessagesEnabled: Bool = false,
         voiceRipplesEnabled: Bool = false,
@@ -44,6 +54,8 @@ public struct SocialFeatureConfiguration: Equatable, Sendable {
         self.rippleComposerEnabled = rippleComposerEnabled
         self.flashesEnergyEnabled = flashesEnergyEnabled
         self.matrixRealtimeEnabled = matrixRealtimeEnabled
+        self.matrixNativeVibesEnabled = matrixNativeVibesEnabled
+        self.personalAtmoV2Enabled = personalAtmoV2Enabled
         self.wavePresenceEnabled = wavePresenceEnabled
         self.directMessagesEnabled = directMessagesEnabled
         self.voiceRipplesEnabled = voiceRipplesEnabled
@@ -60,6 +72,8 @@ public struct SocialFeatureConfiguration: Equatable, Sendable {
         rippleComposerEnabled: false,
         flashesEnergyEnabled: false,
         matrixRealtimeEnabled: false,
+        matrixNativeVibesEnabled: false,
+        personalAtmoV2Enabled: false,
         wavePresenceEnabled: false,
         directMessagesEnabled: false,
         voiceRipplesEnabled: false,
@@ -78,6 +92,14 @@ public struct SocialFeatureConfiguration: Equatable, Sendable {
             rippleComposerEnabled: value(for: "social.ripple-composer.enabled", in: userDefaults),
             flashesEnergyEnabled: value(for: "social.flashes-energy.enabled", in: userDefaults),
             matrixRealtimeEnabled: optInValue(for: "social.matrix-realtime.enabled", in: userDefaults),
+            matrixNativeVibesEnabled: optInValue(
+                for: "social.matrix-native-vibes-v2.enabled",
+                in: userDefaults
+            ),
+            personalAtmoV2Enabled: strictOptInValue(
+                for: "social.personal-atmo-v2.enabled",
+                in: userDefaults
+            ),
             wavePresenceEnabled: optInValue(for: "social.wave-presence.enabled", in: userDefaults),
             directMessagesEnabled: optInValue(for: "social.direct-messages.enabled", in: userDefaults),
             voiceRipplesEnabled: optInValue(for: "social.voice-ripples.enabled", in: userDefaults),
@@ -105,11 +127,18 @@ public struct SocialFeatureConfiguration: Equatable, Sendable {
         rippleComposerEnabled ||
         flashesEnergyEnabled ||
         matrixRealtimeEnabled ||
+        matrixNativeVibesEnabled ||
+        personalAtmoV2Enabled ||
         wavePresenceEnabled ||
         directMessagesEnabled ||
         voiceRipplesEnabled ||
         videoRipplesEnabled ||
         liveEventRoomsEnabled ||
         watchPartiesEnabled
+    }
+
+    private static func strictOptInValue(for key: String, in userDefaults: UserDefaults) -> Bool {
+        guard userDefaults.object(forKey: key) != nil else { return false }
+        return userDefaults.bool(forKey: key)
     }
 }

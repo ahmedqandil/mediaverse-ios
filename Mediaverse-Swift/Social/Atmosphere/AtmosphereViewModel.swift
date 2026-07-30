@@ -26,7 +26,10 @@ final class AtmosphereViewModel: ObservableObject {
     }
 
     @Published var selectedTab: Tab = .atmosphere
-    @Published private(set) var atmosphereItems: [AtmosphereFeedItem] = []
+    @Published private(set) var atmosphereItems: [AtmosphereV2FeedItem] = []
+    @Published private(set) var atmosphereNextCursor: String?
+    @Published private(set) var isLoadingMoreAtmosphere = false
+    @Published private(set) var atmospherePaginationError: String?
     @Published private(set) var discoveredRipples: [Ripple] = []
     @Published private(set) var discoverMode: SocialDiscoverMode = .forYou
     @Published private(set) var emptyDiscoverModes = Set<SocialDiscoverMode>()
@@ -35,15 +38,23 @@ final class AtmosphereViewModel: ObservableObject {
     @Published private(set) var curationListings: [AssembledListing] = []
 
     private let api: LegacySocialAPIAdapter
+    private let atmosphereRepository: WestreemAtmosphereV2Repository
     private var hasLoadedCuration = false
     private var hasCheckedAffiliatedAvailability = false
+    private var atmosphereGeneration = 0
 
     init(
         selectedTab: Tab = .atmosphere,
-        api: LegacySocialAPIAdapter = LegacySocialAPIAdapter(transport: APIClient.shared)
+        api: LegacySocialAPIAdapter = LegacySocialAPIAdapter(transport: APIClient.shared),
+        atmosphereRepository: WestreemAtmosphereV2Repository =
+            WestreemAtmosphereV2Repository(
+                transport: APIClient.shared,
+                rollout: AtmoV2Rollout(localEnabled: true)
+            )
     ) {
         self.selectedTab = selectedTab
         self.api = api
+        self.atmosphereRepository = atmosphereRepository
     }
 
     func select(_ tab: Tab) {
@@ -74,10 +85,6 @@ final class AtmosphereViewModel: ObservableObject {
         SocialDiscoverMode.allCases.filter { mode in
             mode == .forYou || !emptyDiscoverModes.contains(mode)
         }
-    }
-
-    func prepend(_ ripple: Ripple) {
-        atmosphereItems.insert(.ripple(ripple), at: 0)
     }
 
     var atmosphereFeedListing: AssembledListing? {
@@ -114,6 +121,37 @@ final class AtmosphereViewModel: ObservableObject {
         return max(1, atmosphereFeedListing?.feedConfig?.mobileEvery ?? 5)
     }
 
+    func loadMoreAtmosphere() async {
+        guard
+            let cursor = atmosphereNextCursor,
+            !isLoadingMoreAtmosphere,
+            stateByTab[.atmosphere] == .loaded
+        else { return }
+        let generation = atmosphereGeneration
+        isLoadingMoreAtmosphere = true
+        atmospherePaginationError = nil
+        defer { isLoadingMoreAtmosphere = false }
+        do {
+            let page = try await atmosphereRepository.page(cursor: cursor)
+            guard
+                generation == atmosphereGeneration,
+                atmosphereNextCursor == cursor
+            else { return }
+            let existing = Set(atmosphereItems.map(\.id))
+            atmosphereItems.append(
+                contentsOf: page.items.filter { !existing.contains($0.id) }
+            )
+            atmosphereNextCursor = page.nextCursor
+        } catch is CancellationError {
+            return
+        } catch {
+            // Never reactivate the subscriptions/Fan Club feed. A pagination
+            // failure preserves only the already-authorized v2 page.
+            atmospherePaginationError =
+                "More of The Atmosphere could not be loaded."
+        }
+    }
+
     private func loadCurationIfNeeded() async {
         guard !hasLoadedCuration else { return }
         hasLoadedCuration = true
@@ -134,10 +172,18 @@ final class AtmosphereViewModel: ObservableObject {
 
     private func load(_ tab: Tab) async {
         stateByTab[tab] = .loading
+        var requestedAtmosphereGeneration: Int?
         do {
             switch tab {
             case .atmosphere:
-                atmosphereItems = try await api.atmosphere().items
+                atmosphereGeneration &+= 1
+                let generation = atmosphereGeneration
+                requestedAtmosphereGeneration = generation
+                let page = try await atmosphereRepository.page()
+                guard generation == atmosphereGeneration else { return }
+                atmosphereItems = page.items
+                atmosphereNextCursor = page.nextCursor
+                atmospherePaginationError = nil
             case .discover:
                 let requestedMode = discoverMode
                 let response = try await api.discover(mode: requestedMode)
@@ -165,8 +211,23 @@ final class AtmosphereViewModel: ObservableObject {
             print("[social-ui] \(tab.rawValue) decoded=\(count)")
             #endif
         } catch is CancellationError {
+            if tab == .atmosphere,
+               requestedAtmosphereGeneration != atmosphereGeneration {
+                return
+            }
             stateByTab[tab] = .idle
         } catch {
+            if tab == .atmosphere {
+                guard requestedAtmosphereGeneration == atmosphereGeneration else {
+                    return
+                }
+                atmosphereGeneration &+= 1
+                // The root feed fails closed. Stale legacy or v2 data must not
+                // survive a rejected authority, platform gate, or refresh.
+                atmosphereItems = []
+                atmosphereNextCursor = nil
+                atmospherePaginationError = nil
+            }
             stateByTab[tab] = .failed(Self.message(for: error))
             #if DEBUG
             print("[social-ui] \(tab.rawValue) failed=\(String(describing: error))")

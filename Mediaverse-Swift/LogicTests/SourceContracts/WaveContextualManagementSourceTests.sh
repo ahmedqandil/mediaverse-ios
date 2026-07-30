@@ -1,24 +1,37 @@
 #!/bin/sh
 set -eu
 
-repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-view="$repo_dir/Social/Vibes/SocialDestinationViews.swift"
-management="$repo_dir/Social/Vibes/VibeManagementViews.swift"
+root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
+view="$root/Social/Vibes/MatrixNativeVibesViews.swift"
+repository="$root/Social/Vibes/MatrixVibesRepositoryFoundation.swift"
+legacy_management="$root/Social/Vibes/VibeManagementViews.swift"
 
 require() {
-  grep -Fq -- "$1" "$2" || { echo "FAIL: $3"; exit 1; }
-}
-reject() {
-  if grep -Fq -- "$1" "$2"; then echo "FAIL: $3"; exit 1; fi
+  grep -Fq -- "$1" "$2" || { echo "FAIL: $3" >&2; exit 1; }
 }
 
-require 'returnToWaveDirectory()' "$view" "Wave-local back must return to the directory."
-require '.navigationBarBackButtonHidden(isCommunityConversation)' "$view" "Wave-local back must replace system back."
-require 'detail.capabilities.canManageClub' "$view" "Wave creation must use server-owned capability."
-require 'Label("New Wave", systemImage: "plus")' "$view" "Wave creation must live in the directory."
-require 'wave.capabilities.canManage' "$view" "Wave settings must use Wave capability."
-require 'editingWave = wave' "$view" "Settings must open from the selected Wave."
-reject 'option("Waves"' "$view" "Vibe options must not expose legacy Wave management."
-reject 'struct VibeWavesManagementView' "$management" "Standalone Wave management must remain retired."
+require 'permissions.mayCreateWave' "$view" \
+  "Wave creation must use Matrix power-level permission."
+require 'Label("Create Wave", systemImage: "plus.bubble")' "$view" \
+  "Wave creation must live in the Vibe directory."
+require 'MatrixNativeRoomCreatorView(mode: .wave(parentSpaceID: space.id))' "$view" \
+  "Wave creation must preserve Matrix parent identity."
+require 'Image(systemName: "gearshape")' "$view" \
+  "Wave settings must live inside the selected Wave."
+require 'MatrixNativeWaveRulesView(room: room)' "$view" \
+  "Wave settings must operate on the selected Matrix room."
+require 'powerLevels.canOwnUserSendState' "$repository" \
+  "Wave settings must be authorized by Matrix power levels."
+require 'sendStateEventRaw(' "$repository" \
+  "Structured rules must be stored as canonical Matrix room state."
 
-echo "Swift contextual Wave management source contracts passed."
+if grep -Fq 'struct VibeWavesManagementView' "$legacy_management"; then
+  echo "FAIL: Standalone legacy Wave management must remain retired." >&2
+  exit 1
+fi
+if grep -Eq 'LegacySocialAPIAdapter|/api/fan-clubs' "$view"; then
+  echo "FAIL: Matrix Wave management crossed the retired social authority." >&2
+  exit 1
+fi
+
+echo "Matrix-native contextual Wave management source contracts passed."

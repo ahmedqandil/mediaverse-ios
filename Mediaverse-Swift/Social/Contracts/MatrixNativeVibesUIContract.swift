@@ -1,0 +1,1257 @@
+import Foundation
+
+/// Machine-checkable acceptance boundary for the first production-native
+/// Matrix Vibes UI cutover. The user's strongest-model prompt remains the
+/// normative source; this slice claims only the capabilities represented here.
+public enum MatrixNativeVibesUISurface: String, CaseIterable, Sendable {
+    case joinedSpaces
+    case spaceInvitations
+    case publicSpaceDirectory
+    case publicSpaceSearch
+    case publicSpacePagination
+    case publicSpaceJoin
+    case createSpace
+    case createRoomInSpace
+    case matrixUserInvitations
+    case powerLevelPermissionGates
+    case structuredWaveRules
+    case typedWestreemEventReferences
+    case nestedSpaceNavigation
+    case waveDirectory
+    case roomTimeline
+    case textComposer
+    case nativeAttachmentComposer
+    case polls
+    case stickers
+    case multiplePhotos
+    case files
+    case voiceCapture
+    case voicePlayback
+    case videoCapture
+    case videoPlayback
+    case mediaViewer
+    case attachmentValidationAndLimits
+    case encryptedMediaFailClosed
+    case sdkLocalSendState
+    case sdkRetry
+    case readReceipts
+    case outgoingTypingNotice
+    case incomingTypingAndStatus
+    case matrixMessageEcho
+    case matrixMessageShare
+    case safeLinkPreviews
+    case loadingState
+    case errorState
+    case offlineState
+    case legacyRouteFailClosed
+    case accessibilityLabels
+}
+
+public struct MatrixNativeWaveRule: Codable, Equatable, Identifiable, Sendable {
+    public let id: String
+    public let text: String
+    public let locale: String?
+    public let order: Int
+
+    public init(id: String, text: String, locale: String? = nil, order: Int) {
+        self.id = id
+        self.text = text
+        self.locale = locale
+        self.order = order
+    }
+}
+
+public struct MatrixNativeWaveRulesState: Codable, Equatable, Sendable {
+    public let schemaVersion: Int
+    public let revision: Int
+    public let rules: [MatrixNativeWaveRule]
+    public let updatedAt: String
+    public let updatedByWestreemUserID: String
+
+    public init(
+        schemaVersion: Int = 1,
+        revision: Int,
+        rules: [MatrixNativeWaveRule],
+        updatedAt: String,
+        updatedByWestreemUserID: String
+    ) {
+        self.schemaVersion = schemaVersion
+        self.revision = revision
+        self.rules = rules
+        self.updatedAt = updatedAt
+        self.updatedByWestreemUserID = updatedByWestreemUserID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case revision
+        case rules
+        case updatedAt = "updated_at"
+        case updatedByWestreemUserID = "updated_by_westreem_user_id"
+    }
+}
+
+public enum MatrixNativeWaveRulesValidationError: Error, Equatable, Sendable {
+    case invalidSchema
+    case invalidRevision
+    case tooManyRules
+    case invalidRuleID
+    case duplicateRuleID
+    case invalidRuleText
+    case invalidRuleOrder
+    case duplicateRuleOrder
+    case invalidLocale
+    case invalidUpdatedAt
+    case invalidUpdater
+}
+
+public enum MatrixNativeWaveRulesReadError: Error, Equatable, Sendable {
+    /// The newest canonical state event exists but does not satisfy the
+    /// versioned Westreem schema. Never fall back to an older valid revision.
+    case invalidCanonicalState
+    /// MatrixRustSDK has not exposed the room's complete state/history yet, so
+    /// the client cannot safely claim that no rules exist.
+    case incompleteHistory
+    /// Another moderator published a newer revision after this editor loaded.
+    case staleRevision
+}
+
+public enum MatrixNativeWaveRulesContract {
+    public static let eventType = "com.westreem.room.rules.v1"
+    public static let maximumRules = 50
+    public static let maximumRuleTextLength = 1_000
+
+    public static func validate(
+        _ state: MatrixNativeWaveRulesState
+    ) throws -> MatrixNativeWaveRulesState {
+        guard state.schemaVersion == 1 else {
+            throw MatrixNativeWaveRulesValidationError.invalidSchema
+        }
+        guard state.revision >= 1 else {
+            throw MatrixNativeWaveRulesValidationError.invalidRevision
+        }
+        guard state.rules.count <= maximumRules else {
+            throw MatrixNativeWaveRulesValidationError.tooManyRules
+        }
+        guard
+            !state.updatedByWestreemUserID.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty,
+            state.updatedByWestreemUserID.count <= 192
+        else {
+            throw MatrixNativeWaveRulesValidationError.invalidUpdater
+        }
+        guard ISO8601DateFormatter().date(from: state.updatedAt) != nil else {
+            throw MatrixNativeWaveRulesValidationError.invalidUpdatedAt
+        }
+
+        var ids = Set<String>()
+        var orders = Set<Int>()
+        for rule in state.rules {
+            guard
+                !rule.id.isEmpty,
+                rule.id.count <= 64,
+                rule.id.unicodeScalars.allSatisfy({
+                    CharacterSet(
+                        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~-"
+                    ).contains($0)
+                })
+            else {
+                throw MatrixNativeWaveRulesValidationError.invalidRuleID
+            }
+            guard ids.insert(rule.id).inserted else {
+                throw MatrixNativeWaveRulesValidationError.duplicateRuleID
+            }
+            let text = rule.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty, rule.text.count <= maximumRuleTextLength else {
+                throw MatrixNativeWaveRulesValidationError.invalidRuleText
+            }
+            guard rule.order >= 0 else {
+                throw MatrixNativeWaveRulesValidationError.invalidRuleOrder
+            }
+            guard orders.insert(rule.order).inserted else {
+                throw MatrixNativeWaveRulesValidationError.duplicateRuleOrder
+            }
+            if let locale = rule.locale {
+                guard
+                    locale.count <= 35,
+                    locale.range(
+                        of: #"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$"#,
+                        options: .regularExpression
+                    ) != nil
+                else {
+                    throw MatrixNativeWaveRulesValidationError.invalidLocale
+                }
+            }
+        }
+        return state
+    }
+
+    public static func decode(contentJSON: String) throws
+        -> MatrixNativeWaveRulesState {
+        let data = Data(contentJSON.utf8)
+        let state = try JSONDecoder().decode(
+            MatrixNativeWaveRulesState.self,
+            from: data
+        )
+        return try validate(state)
+    }
+
+    public static func encode(
+        _ state: MatrixNativeWaveRulesState
+    ) throws -> String {
+        let validated = try validate(state)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(validated)
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw MatrixNativeWaveRulesValidationError.invalidSchema
+        }
+        return json
+    }
+}
+
+public struct MatrixNativeWestreemProvenanceHopV1:
+    Codable,
+    Equatable,
+    Sendable
+{
+    public let roomID: String
+    public let eventID: String
+    public let senderMatrixUserID: String
+
+    public init(
+        roomID: String,
+        eventID: String,
+        senderMatrixUserID: String
+    ) {
+        self.roomID = roomID
+        self.eventID = eventID
+        self.senderMatrixUserID = senderMatrixUserID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case roomID = "room_id"
+        case eventID = "event_id"
+        case senderMatrixUserID = "sender_matrix_user_id"
+    }
+}
+
+public struct MatrixNativeWestreemProvenanceV1: Codable, Equatable, Sendable {
+    public let sourceProduct: String
+    public let actorWestreemUserID: String
+    public let operatorWestreemUserID: String?
+    public let sourceRoomID: String?
+    public let sourceEventID: String?
+    public let sourceSenderMatrixUserID: String?
+    public let hopTrace: [MatrixNativeWestreemProvenanceHopV1]?
+
+    public init(
+        sourceProduct: String,
+        actorWestreemUserID: String,
+        operatorWestreemUserID: String? = nil,
+        sourceRoomID: String? = nil,
+        sourceEventID: String? = nil,
+        sourceSenderMatrixUserID: String? = nil,
+        hopTrace: [MatrixNativeWestreemProvenanceHopV1]? = nil
+    ) {
+        self.sourceProduct = sourceProduct
+        self.actorWestreemUserID = actorWestreemUserID
+        self.operatorWestreemUserID = operatorWestreemUserID
+        self.sourceRoomID = sourceRoomID
+        self.sourceEventID = sourceEventID
+        self.sourceSenderMatrixUserID = sourceSenderMatrixUserID
+        self.hopTrace = hopTrace
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case sourceProduct = "source_product"
+        case actorWestreemUserID = "actor_westreem_user_id"
+        case operatorWestreemUserID = "operator_westreem_user_id"
+        case sourceRoomID = "source_room_id"
+        case sourceEventID = "source_event_id"
+        case sourceSenderMatrixUserID = "source_sender_matrix_user_id"
+        case hopTrace = "hop_trace"
+    }
+}
+
+public struct MatrixNativeWestreemReferenceV1: Codable, Equatable, Sendable {
+    public let schemaVersion: Int
+    public let entityType: String
+    public let entityID: String
+    public let canonicalURL: String
+    public let title: String
+    public let summary: String?
+    public let thumbnail: String?
+    public let durationMilliseconds: Int?
+    public let provenance: MatrixNativeWestreemProvenanceV1
+    public let idempotencyKey: String
+
+    public init(
+        schemaVersion: Int = 1,
+        entityType: String,
+        entityID: String,
+        canonicalURL: String,
+        title: String,
+        summary: String? = nil,
+        thumbnail: String? = nil,
+        durationMilliseconds: Int? = nil,
+        provenance: MatrixNativeWestreemProvenanceV1,
+        idempotencyKey: String
+    ) {
+        self.schemaVersion = schemaVersion
+        self.entityType = entityType
+        self.entityID = entityID
+        self.canonicalURL = canonicalURL
+        self.title = title
+        self.summary = summary
+        self.thumbnail = thumbnail
+        self.durationMilliseconds = durationMilliseconds
+        self.provenance = provenance
+        self.idempotencyKey = idempotencyKey
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case entityType = "entity_type"
+        case entityID = "entity_id"
+        case canonicalURL = "canonical_url"
+        case title
+        case summary
+        case thumbnail
+        case durationMilliseconds = "duration_ms"
+        case provenance
+        case idempotencyKey = "idempotency_key"
+    }
+}
+
+public enum MatrixNativeWestreemShareEntityType: String, CaseIterable, Codable, Sendable {
+    case video
+    case short
+    case clipping
+    case collection
+    case show
+    case channel
+    case event
+    case user
+    case atmoPost = "atmo_post"
+    case matrixEvent = "matrix_event"
+}
+
+public struct MatrixNativeWestreemReferenceEnvelope: Decodable, Equatable, Sendable {
+    public let authority: String
+    public let eventType: String
+    public let content: MatrixNativeWestreemReferenceV1
+
+    enum CodingKeys: String, CodingKey {
+        case authority
+        case eventType
+        case content
+    }
+
+    public init(
+        authority: String,
+        eventType: String,
+        content: MatrixNativeWestreemReferenceV1
+    ) throws {
+        guard authority == "MATRIX" else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        self.authority = authority
+        self.eventType = eventType
+        self.content = try MatrixNativeWestreemReferenceContract.validate(
+            eventType: eventType,
+            value: content
+        )
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            authority: values.decode(String.self, forKey: .authority),
+            eventType: values.decode(String.self, forKey: .eventType),
+            content: values.decode(
+                MatrixNativeWestreemReferenceV1.self,
+                forKey: .content
+            )
+        )
+    }
+}
+
+public enum MatrixNativeWestreemReferenceContract {
+    public static let shareEventType = "com.westreem.share.v1"
+    public static let eventReferenceType = "com.westreem.event_ref.v1"
+    public static let allowedEntityTypes = Set(
+        MatrixNativeWestreemShareEntityType.allCases.map(\.rawValue)
+    )
+
+    public static func decode(
+        eventType: String,
+        contentJSON: String
+    ) throws -> MatrixNativeWestreemReferenceV1 {
+        let value = try JSONDecoder().decode(
+            MatrixNativeWestreemReferenceV1.self,
+            from: Data(contentJSON.utf8)
+        )
+        return try validate(eventType: eventType, value: value)
+    }
+
+    public static func validate(
+        eventType: String,
+        value: MatrixNativeWestreemReferenceV1
+    ) throws -> MatrixNativeWestreemReferenceV1 {
+        guard value.schemaVersion == 1,
+              allowedEntityTypes.contains(value.entityType),
+              (eventType == eventReferenceType
+                  ? value.entityType == "event"
+                  : eventType == shareEventType && value.entityType != "event"),
+              !value.entityID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              value.entityID.count <= 512,
+              !value.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              value.title.count <= 500,
+              safeWestreemURL(value.canonicalURL) != nil,
+              !value.idempotencyKey.isEmpty,
+              value.idempotencyKey.count <= 255,
+              value.idempotencyKey.range(
+                  of: #"^[A-Za-z0-9._:~-]+$"#,
+                  options: .regularExpression
+              ) != nil,
+              ["westreem", "vibes"].contains(value.provenance.sourceProduct),
+              !value.provenance.actorWestreemUserID.isEmpty,
+              value.provenance.actorWestreemUserID.count <= 192
+        else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        if let summary = value.summary {
+            guard
+                !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                summary.count <= 10_000
+            else {
+                throw CocoaError(.coderInvalidValue)
+            }
+        }
+        if let thumbnail = value.thumbnail {
+            guard safeThumbnail(thumbnail) else {
+                throw CocoaError(.coderInvalidValue)
+            }
+        }
+        if let duration = value.durationMilliseconds {
+            guard duration >= 0 else { throw CocoaError(.coderInvalidValue) }
+        }
+        if let operatorID = value.provenance.operatorWestreemUserID {
+            guard
+                !operatorID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                operatorID.count <= 192
+            else {
+                throw CocoaError(.coderInvalidValue)
+            }
+        }
+        if value.entityType == "matrix_event" {
+            guard
+                let sourceRoomID = value.provenance.sourceRoomID,
+                sourceRoomID.first == "!",
+                sourceRoomID.count <= 512,
+                let sourceEventID = value.provenance.sourceEventID,
+                sourceEventID.first == "$",
+                sourceEventID.count <= 512,
+                value.provenance.sourceProduct == "vibes",
+                let senderID = value.provenance.sourceSenderMatrixUserID,
+                senderID.first == "@",
+                senderID.count <= 512,
+                let trace = value.provenance.hopTrace,
+                (1...8).contains(trace.count),
+                trace.last?.roomID == sourceRoomID,
+                trace.last?.eventID == sourceEventID,
+                trace.last?.senderMatrixUserID == senderID
+            else {
+                throw CocoaError(.coderInvalidValue)
+            }
+            var seen = Set<String>()
+            for hop in trace {
+                guard hop.roomID.first == "!",
+                      hop.roomID.count <= 512,
+                      hop.eventID.first == "$",
+                      hop.eventID.count <= 512,
+                      hop.senderMatrixUserID.first == "@",
+                      hop.senderMatrixUserID.count <= 512,
+                      seen.insert("\(hop.roomID)\n\(hop.eventID)").inserted
+                else {
+                    throw CocoaError(.coderInvalidValue)
+                }
+            }
+        } else {
+            if let senderID = value.provenance.sourceSenderMatrixUserID {
+                guard senderID.first == "@", senderID.count <= 512 else {
+                    throw CocoaError(.coderInvalidValue)
+                }
+            }
+            if let trace = value.provenance.hopTrace {
+                guard (1...8).contains(trace.count) else {
+                    throw CocoaError(.coderInvalidValue)
+                }
+                var seen = Set<String>()
+                for hop in trace {
+                    guard hop.roomID.first == "!",
+                          hop.roomID.count <= 512,
+                          hop.eventID.first == "$",
+                          hop.eventID.count <= 512,
+                          hop.senderMatrixUserID.first == "@",
+                          hop.senderMatrixUserID.count <= 512,
+                          seen.insert("\(hop.roomID)\n\(hop.eventID)").inserted
+                    else {
+                        throw CocoaError(.coderInvalidValue)
+                    }
+                }
+            }
+        }
+        return value
+    }
+
+    public static func encode(
+        eventType: String,
+        value: MatrixNativeWestreemReferenceV1
+    ) throws -> String {
+        let validated = try validate(eventType: eventType, value: value)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(validated)
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        return json
+    }
+
+    public static func safeWestreemURL(_ rawValue: String) -> URL? {
+        guard
+            let components = URLComponents(string: rawValue),
+            components.scheme?.lowercased() == "https",
+            components.user == nil,
+            components.password == nil,
+            components.fragment == nil,
+            let host = components.host?.lowercased(),
+            host == "westreem.com" || host.hasSuffix(".westreem.com")
+        else {
+            return nil
+        }
+        return components.url
+    }
+
+    private static func safeThumbnail(_ rawValue: String) -> Bool {
+        if safeWestreemURL(rawValue) != nil {
+            return true
+        }
+        guard
+            let components = URLComponents(string: rawValue),
+            components.scheme?.lowercased() == "mxc",
+            components.user == nil,
+            components.password == nil,
+            components.query == nil,
+            components.fragment == nil,
+            components.host?.isEmpty == false,
+            !components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).isEmpty
+        else {
+            return false
+        }
+        return true
+    }
+}
+
+public struct MatrixNativeLinkPreviewMetadata: Codable, Equatable, Sendable {
+    public let title: String?
+    public let description: String?
+    public let imageURL: String?
+    public let faviconURL: String?
+    public let domain: String
+    public let finalURL: String
+
+    public init(
+        title: String?,
+        description: String?,
+        imageURL: String?,
+        faviconURL: String?,
+        domain: String,
+        finalURL: String
+    ) throws {
+        guard let safeURL = MatrixNativeLinkPreviewContract.safePublicHTTPURL(finalURL),
+              !domain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              domain.count <= 255,
+              title?.count ?? 0 <= 500,
+              description?.count ?? 0 <= 2_000
+        else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        self.title = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.description = description?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.imageURL = imageURL
+        self.faviconURL = faviconURL
+        self.domain = domain.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.finalURL = safeURL.absoluteString
+    }
+}
+
+public enum MatrixNativeLinkPreviewContract {
+    public static let endpoint = "/api/matrix/link-preview"
+    public static let imageProxyPath = "/api/link-preview/image"
+    public static let maximumURLLength = 2_048
+
+    public static func firstPublicHTTPURL(in body: String) -> String? {
+        for token in body.split(whereSeparator: \.isWhitespace).prefix(100) {
+            let candidate = String(token).trimmingCharacters(
+                in: CharacterSet(charactersIn: ".,;:!?)]}>\"'")
+            )
+            if let url = safePublicHTTPURL(candidate) {
+                return url.absoluteString
+            }
+        }
+        return nil
+    }
+
+    public static func safePublicHTTPURL(_ rawValue: String) -> URL? {
+        guard rawValue.count <= maximumURLLength,
+              let components = URLComponents(string: rawValue),
+              ["http", "https"].contains(components.scheme?.lowercased() ?? ""),
+              components.user == nil,
+              components.password == nil,
+              components.fragment == nil,
+              let host = components.host?.lowercased(),
+              !host.isEmpty,
+              host != "localhost",
+              !host.hasSuffix(".local"),
+              !host.hasSuffix(".internal"),
+              !isPrivateLiteralHost(host)
+        else {
+            return nil
+        }
+        return components.url
+    }
+
+    private static func isPrivateLiteralHost(_ host: String) -> Bool {
+        if host == "::1" || host == "0.0.0.0" || host == "127.0.0.1" {
+            return true
+        }
+        let parts = host.split(separator: ".").compactMap { Int($0) }
+        guard parts.count == 4, parts.allSatisfy({ 0...255 ~= $0 }) else {
+            return false
+        }
+        return parts[0] == 10
+            || parts[0] == 127
+            || (parts[0] == 169 && parts[1] == 254)
+            || (parts[0] == 172 && 16...31 ~= parts[1])
+            || (parts[0] == 192 && parts[1] == 168)
+    }
+}
+
+public enum MatrixNativeMatrixEchoContract {
+    public static let maximumDestinations = 20
+
+    public static func stableTransactionID(
+        requestID: String,
+        destinationRoomID: String
+    ) -> String {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in destinationRoomID.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        let cleanRequest = requestID
+            .lowercased()
+            .filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
+        return "westreem-ios-echo-\(String(cleanRequest.prefix(80)))-\(String(hash, radix: 16))"
+    }
+
+    public static func boundedDestinationRoomIDs(
+        _ values: [String]
+    ) -> [String] {
+        var seen = Set<String>()
+        return values.compactMap { rawValue in
+            let roomID = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard roomID.first == "!",
+                  roomID.count <= 512,
+                  seen.insert(roomID).inserted
+            else {
+                return nil
+            }
+            return roomID
+        }
+        .prefix(maximumDestinations)
+        .map(\.self)
+    }
+
+    public static func reference(
+        sourceRoomID: String,
+        sourceEventID: String,
+        sourceSenderMatrixUserID: String,
+        sourceSenderName: String,
+        sourceBody: String,
+        actorWestreemUserID: String,
+        existingReference: MatrixNativeWestreemReferenceV1? = nil,
+        idempotencyKey: String
+    ) throws -> MatrixNativeWestreemReferenceV1 {
+        let sender = sourceSenderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = sourceBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard sourceRoomID.first == "!",
+              sourceEventID.first == "$",
+              sourceSenderMatrixUserID.first == "@",
+              !sender.isEmpty,
+              !actorWestreemUserID.isEmpty,
+              !body.isEmpty
+        else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        let inheritedTrace: [MatrixNativeWestreemProvenanceHopV1]
+        if let existingReference,
+           existingReference.entityType
+            == MatrixNativeWestreemShareEntityType.matrixEvent.rawValue {
+            let validated = try MatrixNativeWestreemReferenceContract.validate(
+                eventType: MatrixNativeWestreemReferenceContract.shareEventType,
+                value: existingReference
+            )
+            inheritedTrace = validated.provenance.hopTrace ?? []
+        } else {
+            inheritedTrace = []
+        }
+        let immediateHop = MatrixNativeWestreemProvenanceHopV1(
+            roomID: sourceRoomID,
+            eventID: sourceEventID,
+            senderMatrixUserID: sourceSenderMatrixUserID
+        )
+        let trace = inheritedTrace + [immediateHop]
+        guard trace.count <= 8,
+              Set(trace.map { "\($0.roomID)\n\($0.eventID)" }).count
+                == trace.count
+        else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        var components = URLComponents(
+            string: "https://www.westreem.com"
+        )
+        components?.path = "/vibes/rooms/\(sourceRoomID)"
+        components?.queryItems = [
+            URLQueryItem(name: "event", value: sourceEventID)
+        ]
+        guard let canonicalURL = components?.url?.absoluteString else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        return try MatrixNativeWestreemReferenceContract.validate(
+            eventType: MatrixNativeWestreemReferenceContract.shareEventType,
+            value: MatrixNativeWestreemReferenceV1(
+                entityType: MatrixNativeWestreemShareEntityType.matrixEvent.rawValue,
+                entityID: sourceEventID,
+                canonicalURL: canonicalURL,
+                title: String("\(sender): \(body)".prefix(500)),
+                summary: String(body.prefix(10_000)),
+                provenance: MatrixNativeWestreemProvenanceV1(
+                    sourceProduct: "vibes",
+                    actorWestreemUserID: actorWestreemUserID,
+                    sourceRoomID: sourceRoomID,
+                    sourceEventID: sourceEventID,
+                    sourceSenderMatrixUserID: sourceSenderMatrixUserID,
+                    hopTrace: trace
+                ),
+                idempotencyKey: idempotencyKey
+            )
+        )
+    }
+
+    public static func canEcho(
+        existingReference: MatrixNativeWestreemReferenceV1?,
+        to destinationRoomID: String
+    ) -> Bool {
+        guard destinationRoomID.first == "!" else { return false }
+        guard let existingReference,
+              existingReference.entityType
+                == MatrixNativeWestreemShareEntityType.matrixEvent.rawValue
+        else {
+            return true
+        }
+        guard let validated = try? MatrixNativeWestreemReferenceContract
+            .validate(
+                eventType: MatrixNativeWestreemReferenceContract.shareEventType,
+                value: existingReference
+            ),
+            (validated.provenance.hopTrace?.count ?? 0) < 8
+        else {
+            return false
+        }
+        return validated.provenance.hopTrace?.contains {
+            $0.roomID == destinationRoomID
+        } != true
+    }
+}
+
+public enum MatrixNativeVibeVisibility: String, CaseIterable, Sendable {
+    case publicVibe
+    case privateVibe
+}
+
+public struct MatrixNativeRoomCreationDraft: Equatable, Sendable {
+    public let name: String
+    public let topic: String
+    public let visibility: MatrixNativeVibeVisibility
+    public let inviteUserIDs: [String]
+    public let isEncrypted: Bool
+
+    public init(
+        name: String,
+        topic: String,
+        visibility: MatrixNativeVibeVisibility,
+        inviteUserIDs: [String],
+        isEncrypted: Bool = false
+    ) {
+        self.name = name
+        self.topic = topic
+        self.visibility = visibility
+        self.inviteUserIDs = inviteUserIDs
+        self.isEncrypted = isEncrypted
+    }
+}
+
+public struct MatrixNativeValidatedRoomCreation: Equatable, Sendable {
+    public let name: String
+    public let topic: String?
+    public let visibility: MatrixNativeVibeVisibility
+    public let inviteUserIDs: [String]
+    public let isEncrypted: Bool
+}
+
+public enum MatrixNativeCreationValidationError: Error, Equatable, Sendable {
+    case invalidName
+    case topicTooLong
+    case tooManyInvitations
+    case invalidMatrixUserID(String)
+}
+
+public enum MatrixNativeCreationContract {
+    public static let maximumNameLength = 255
+    public static let maximumTopicLength = 4_000
+    public static let maximumInitialInvitations = 100
+
+    public static func validate(
+        _ draft: MatrixNativeRoomCreationDraft
+    ) throws -> MatrixNativeValidatedRoomCreation {
+        let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= maximumNameLength else {
+            throw MatrixNativeCreationValidationError.invalidName
+        }
+
+        let topic = draft.topic.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard topic.count <= maximumTopicLength else {
+            throw MatrixNativeCreationValidationError.topicTooLong
+        }
+
+        var inviteUserIDs: [String] = []
+        var seen = Set<String>()
+        for rawValue in draft.inviteUserIDs {
+            let userID = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard isStructurallyValidMatrixUserID(userID) else {
+                throw MatrixNativeCreationValidationError.invalidMatrixUserID(userID)
+            }
+            if seen.insert(userID).inserted {
+                inviteUserIDs.append(userID)
+            }
+        }
+        guard inviteUserIDs.count <= maximumInitialInvitations else {
+            throw MatrixNativeCreationValidationError.tooManyInvitations
+        }
+
+        return MatrixNativeValidatedRoomCreation(
+            name: name,
+            topic: topic.isEmpty ? nil : topic,
+            visibility: draft.visibility,
+            inviteUserIDs: inviteUserIDs,
+            isEncrypted: draft.isEncrypted && draft.visibility == .privateVibe
+        )
+    }
+
+    public static func parseInviteUserIDs(_ value: String) -> [String] {
+        value
+            .split(whereSeparator: { $0 == "," || $0 == "\n" })
+            .map(String.init)
+    }
+
+    public static func isStructurallyValidMatrixUserID(_ value: String) -> Bool {
+        guard value.first == "@", value.utf8.count <= 255 else { return false }
+        let body = value.dropFirst()
+        guard let separator = body.firstIndex(of: ":") else { return false }
+        let localpart = body[..<separator]
+        let serverName = body[body.index(after: separator)...]
+        return !localpart.isEmpty
+            && !serverName.isEmpty
+            && !value.contains(where: \.isWhitespace)
+    }
+}
+
+public struct MatrixNativeSpacePermissionSnapshot: Equatable, Sendable {
+    public let isJoined: Bool
+    public let isSpace: Bool
+    public let maySendSpaceChild: Bool
+    public let mayInvite: Bool
+
+    public init(
+        isJoined: Bool,
+        isSpace: Bool,
+        maySendSpaceChild: Bool,
+        mayInvite: Bool
+    ) {
+        self.isJoined = isJoined
+        self.isSpace = isSpace
+        self.maySendSpaceChild = maySendSpaceChild
+        self.mayInvite = mayInvite
+    }
+
+    public static let unavailable = Self(
+        isJoined: false,
+        isSpace: false,
+        maySendSpaceChild: false,
+        mayInvite: false
+    )
+
+    public var mayCreateWave: Bool {
+        isJoined && isSpace && maySendSpaceChild
+    }
+
+    public var mayInviteMembers: Bool {
+        isJoined && mayInvite
+    }
+
+    public var mayOpenVibeManagement: Bool {
+        isJoined && isSpace
+    }
+}
+
+/// Customer-facing Vibe invitations search WeStreem accounts, while the
+/// selected account's immutable bound identity remains an internal transport
+/// detail used by the room SDK.
+public enum WestreemVibeInviteSearchContract {
+    public static let minimumQueryLength = 2
+    public static let maximumQueryLength = 64
+    public static let maximumResults = 10
+    public static let maximumSelection = 100
+
+    public static func normalizedQuery(_ value: String) -> String? {
+        let query = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard
+            query.count >= minimumQueryLength,
+            query.count <= maximumQueryLength
+        else {
+            return nil
+        }
+        return query
+    }
+
+    public static func uniqueSelection(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.compactMap { value in
+            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalized.isEmpty, seen.insert(normalized).inserted else {
+                return nil
+            }
+            return normalized
+        }
+    }
+
+    public static func canSubmit(_ values: [String]) -> Bool {
+        let selection = uniqueSelection(values)
+        return !selection.isEmpty && selection.count <= maximumSelection
+    }
+}
+
+public enum WestreemVibeContactDiscoveryContract {
+    public static let maximumHashesPerKind = 500
+
+    public static func normalizedEmail(_ value: String) -> String? {
+        let email = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard
+            !email.isEmpty,
+            email.utf8.count <= 320,
+            email.contains("@")
+        else {
+            return nil
+        }
+        return email
+    }
+
+    public static func normalizedPhone(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasLeadingPlus = trimmed.first == "+"
+        let digits = trimmed.filter(\.isNumber)
+        guard (7...15).contains(digits.count) else { return nil }
+        return (hasLeadingPlus ? "+" : "") + digits
+    }
+
+    public static func boundedHashes(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        let hashes: [String] = values.compactMap { value in
+            let hash = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            guard
+                hash.count == 64,
+                hash.allSatisfy({ $0.isHexDigit }),
+                seen.insert(hash).inserted
+            else {
+                return nil
+            }
+            return hash
+        }
+        return Array(hashes.prefix(maximumHashesPerKind))
+    }
+}
+
+public enum MatrixNativeMemberPresentationContract {
+    public static let fallbackDisplayName = "WeStreem member"
+
+    private static func safeLabel(
+        _ candidate: String?,
+        fallback: String,
+        forbiddenIdentifier: String? = nil
+    ) -> String {
+        guard let value = candidate?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !value.isEmpty,
+            value != forbiddenIdentifier,
+            let firstCharacter = value.first,
+            !["@","!","#"].contains(String(firstCharacter))
+        else {
+            return fallback
+        }
+        return value
+    }
+
+    public static func displayName(
+        _ displayName: String?,
+        matrixUserID: String
+    ) -> String {
+        safeLabel(
+            displayName,
+            fallback: fallbackDisplayName,
+            forbiddenIdentifier: matrixUserID
+        )
+    }
+
+    public static func roomName(
+        _ displayName: String?,
+        fallback: String
+    ) -> String {
+        safeLabel(displayName, fallback: fallback)
+    }
+}
+
+public enum MatrixNativeVibesUIContract {
+    public static let authority = SocialAuthority.matrix
+    public static let normativeSource = MatrixNativeGoverningContract.normativeSource
+    public static let required = Set(MatrixNativeVibesUISurface.allCases)
+
+    /// Implemented with executable package/source contracts. Physical
+    /// cross-device recovery remains a release verification step, not a reason
+    /// to describe these capabilities as deferred.
+    public static let implementedAndContractQAVerified: Set<MatrixNativeCapability> = [
+        .directMessages,
+        .endToEndEncryption,
+        .crossSigning,
+        .keyBackup,
+        .keyRecovery,
+        .deviceVerification,
+    ]
+
+    /// Implemented code whose production/device behavior still requires the
+    /// signed physical-device and cross-client release gate.
+    public static let runtimeVerificationPending: Set<MatrixNativeCapability> = [
+        .directMessages,
+        .endToEndEncryption,
+        .crossSigning,
+        .keyBackup,
+        .keyRecovery,
+        .deviceVerification,
+        .matrixRTC,
+    ]
+
+    /// RTC currently covers unencrypted Wave Lounges only. Encrypted-room and
+    /// direct-call MatrixRTC stays fail-closed until media E2EE is implemented
+    /// and verified across web and a physical iPhone.
+    public static let supportsUnencryptedWaveMatrixRTC = true
+    public static let supportsEncryptedOrDirectMatrixRTC = false
+}
+
+/// Pure, executable safety rules shared by the native UI and contract tests.
+/// Media whose bounded duration cannot be proven must never be sent.
+public enum MatrixNativeMediaDurationKind: Sendable {
+    case audio
+    case voice
+    case video
+}
+
+public enum MatrixNativeMediaSafetyContract {
+    public static let maximumVoiceDuration: TimeInterval = 10 * 60
+    public static let maximumVideoDuration: TimeInterval = 10 * 60
+
+    public static func acceptsDuration(
+        _ duration: TimeInterval?,
+        for kind: MatrixNativeMediaDurationKind
+    ) -> Bool {
+        switch kind {
+        case .audio:
+            guard let duration else { return true }
+            return duration.isFinite && duration > 0
+        case .voice:
+            guard let duration else { return false }
+            return duration.isFinite
+                && duration > 0
+                && duration <= maximumVoiceDuration
+        case .video:
+            guard let duration else { return false }
+            return duration.isFinite
+                && duration > 0
+                && duration <= maximumVideoDuration
+        }
+    }
+}
+
+public enum MatrixNativePollVisibilityContract {
+    /// Disclosed polls may show live results. Undisclosed polls reveal no
+    /// counts or bars until they have ended.
+    public static func showsResults(isDisclosed: Bool, hasEnded: Bool) -> Bool {
+        isDisclosed || hasEnded
+    }
+}
+
+public struct MatrixNativeApprovedStickerAsset: Decodable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let key: String
+    public let label: String
+    public let mimeType: String
+    public let bytes: Int
+    public let width: Int?
+    public let height: Int?
+    public let assetURL: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, key, label, mimeType, bytes, width, height
+        case assetURL = "assetUrl"
+    }
+}
+
+public struct MatrixNativeApprovedStickerPack: Decodable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let slug: String
+    public let name: String
+    public let version: Int
+    public let assets: [MatrixNativeApprovedStickerAsset]
+}
+
+public struct MatrixNativeApprovedStickerPacksResponse: Decodable, Equatable, Sendable {
+    public let packs: [MatrixNativeApprovedStickerPack]
+}
+
+public enum MatrixNativeApprovedStickerContract {
+    public static let listingPath = "/api/matrix/stickers"
+    public static let maximumBytes = 5 * 1_024 * 1_024
+    public static let allowedMIMETypes = Set(["image/png", "image/webp", "image/gif"])
+
+    public static func assetPath(id: String) -> String? {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 255 else { return nil }
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "&=+#")
+        guard let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: allowed) else {
+            return nil
+        }
+        return "\(listingPath)?asset=\(encoded)"
+    }
+
+    public static func accepts(_ asset: MatrixNativeApprovedStickerAsset) -> Bool {
+        guard
+            !asset.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            !asset.key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            !asset.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            allowedMIMETypes.contains(asset.mimeType.lowercased()),
+            (1...maximumBytes).contains(asset.bytes),
+            let expectedAssetPath = assetPath(id: asset.id),
+            asset.assetURL == expectedAssetPath
+        else {
+            return false
+        }
+        if let width = asset.width, width <= 0 { return false }
+        if let height = asset.height, height <= 0 { return false }
+        return true
+    }
+
+    /// The server verifies the governed asset digest before returning bytes.
+    /// Native still fails closed on type confusion before the bytes can be
+    /// decoded, previewed, or uploaded to Matrix.
+    public static func accepts(_ data: Data, mimeType: String) -> Bool {
+        guard (1...maximumBytes).contains(data.count) else { return false }
+        switch mimeType.lowercased() {
+        case "image/png":
+            return data.starts(with: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        case "image/gif":
+            return data.starts(with: Array("GIF87a".utf8))
+                || data.starts(with: Array("GIF89a".utf8))
+        case "image/webp":
+            guard data.count >= 12 else { return false }
+            return data.prefix(4) == Data("RIFF".utf8)
+                && data.dropFirst(8).prefix(4) == Data("WEBP".utf8)
+        default:
+            return false
+        }
+    }
+
+    public static func filename(for asset: MatrixNativeApprovedStickerAsset) -> String {
+        let normalizedKey = asset.key
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(
+                of: #"[^A-Za-z0-9._-]+"#,
+                with: "-",
+                options: .regularExpression
+            )
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-."))
+        let stem = normalizedKey.isEmpty ? "westreem-sticker" : String(normalizedKey.prefix(120))
+        let suffix: String
+        switch asset.mimeType.lowercased() {
+        case "image/gif": suffix = "gif"
+        case "image/webp": suffix = "webp"
+        default: suffix = "png"
+        }
+        return "\(stem).\(suffix)"
+    }
+}
+
+public enum MatrixNativeDeliveryKind: Sendable {
+    case text
+    case attachment
+    case poll
+    case sticker
+}
+
+public enum MatrixNativeDurableDeliveryOwner: Equatable, Sendable {
+    case liveSDKSendHandle
+    case matrixSDKQueue
+    case oneShotFailClosed
+}
+
+public enum MatrixNativeRetryContract {
+    /// Rich sends are never recreated from a Westreem-owned payload. Standard
+    /// attachments and polls rely on MatrixRustSDK's persistent send queue.
+    /// Raw sticker events are one-shot until the SDK exposes a queued raw-event
+    /// handle; a failed sticker is deliberately not advertised as retryable.
+    public static func owner(
+        for kind: MatrixNativeDeliveryKind,
+        hasLiveSendHandle: Bool
+    ) -> MatrixNativeDurableDeliveryOwner {
+        switch kind {
+        case .text where hasLiveSendHandle:
+            .liveSDKSendHandle
+        case .text, .attachment, .poll:
+            .matrixSDKQueue
+        case .sticker:
+            .oneShotFailClosed
+        }
+    }
+
+    public static func permitsManualRetry(
+        for kind: MatrixNativeDeliveryKind,
+        hasLiveSendHandle: Bool
+    ) -> Bool {
+        kind == .text && hasLiveSendHandle
+    }
+}

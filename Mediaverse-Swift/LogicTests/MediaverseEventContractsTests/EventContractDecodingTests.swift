@@ -77,6 +77,7 @@ final class EventContractDecodingTests: XCTestCase {
         )
 
         XCTAssertNil(response.events[0].realtimeExperience)
+        XCTAssertEqual(response.events[0].club?.name, "Vibe")
         let realtime = try XCTUnwrap(response.events[1].realtimeExperience)
         XCTAssertTrue(realtime.isMatrixReady)
         XCTAssertTrue(realtime.conversationEnabled)
@@ -128,5 +129,75 @@ final class EventContractDecodingTests: XCTestCase {
         )
         XCTAssertEqual(response.controller.watchReadiness, .unavailable)
         XCTAssertFalse(response.controller.capabilities.canControlPlayback)
+    }
+
+    func testMatrixOwnedEventDecodesWithoutLegacyClubOrWave() throws {
+        let response = try decoder.decode(
+            VibeEventListResponse.self,
+            from: Data(
+                """
+                {"events":[{
+                  "id":"event-1","slug":"matrix-event","title":"Matrix Event",
+                  "startsAt":"2026-08-02T10:00:00Z",
+                  "matrixReference":{
+                    "matrixSpaceId":"!space:vibes.westreem.com",
+                    "matrixRoomId":"!wave:vibes.westreem.com",
+                    "matrixEventId":"$event",
+                    "publicationStatus":"PUBLISHED"
+                  }
+                }]}
+                """.utf8
+            )
+        )
+
+        let event = try XCTUnwrap(response.events.first)
+        XCTAssertNil(event.club)
+        XCTAssertNil(event.wave)
+        XCTAssertEqual(event.matrixReference?.matrixSpaceId, "!space:vibes.westreem.com")
+        XCTAssertEqual(event.matrixReference?.matrixRoomId, "!wave:vibes.westreem.com")
+        XCTAssertEqual(event.matrixReference?.matrixEventId, "$event")
+        XCTAssertEqual(event.matrixReference?.publicationStatus, "PUBLISHED")
+    }
+
+    func testCreateEventRequestEncodesMatrixOriginWithoutLegacyAuthorityKeys() throws {
+        let request = CreateVibeEventRequest(
+            templateId: "template-1",
+            matrixSpaceId: "!space:vibes.westreem.com",
+            matrixRoomId: "!wave:vibes.westreem.com",
+            clientRequestId: "ios-event-request-1",
+            title: "Matrix Event",
+            summary: "A Matrix-owned Event",
+            description: nil,
+            coverUrl: "https://media.westreem.com/events/cover.webp",
+            coverFocus: "50% 50% scale",
+            startsAt: "2026-08-02T10:00:00Z",
+            endsAt: "2026-08-02T11:00:00Z",
+            timeZone: "Asia/Amman",
+            onlineUrl: "https://www.westreem.com/events/matrix-event",
+            accessInstructions: nil,
+            joinOpensAt: nil,
+            joinClosesAt: nil,
+            visibility: "PUBLIC",
+            capacity: 100,
+            rsvpDeadline: nil,
+            topics: ["Matrix"],
+            agenda: [
+                VibeEventAgendaInput(id: "agenda-1", title: "Welcome", detail: nil)
+            ],
+            affiliatedShowId: nil,
+            affiliatedChannelId: "channel-1",
+            replayUrl: nil,
+            status: "SCHEDULED"
+        )
+
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(request))
+                as? [String: Any]
+        )
+        XCTAssertEqual(object["matrixSpaceId"] as? String, "!space:vibes.westreem.com")
+        XCTAssertEqual(object["matrixRoomId"] as? String, "!wave:vibes.westreem.com")
+        XCTAssertEqual(object["clientRequestId"] as? String, "ios-event-request-1")
+        XCTAssertNil(object["clubId"])
+        XCTAssertNil(object["waveId"])
     }
 }

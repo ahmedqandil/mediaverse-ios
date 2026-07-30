@@ -78,10 +78,12 @@ final class ShareViewController: UIViewController {
     }
 
     private static func preparedImageData(_ source: UIImage) -> Data? {
-        let maxBytes = 3_750_000
-        var maxPixel: CGFloat = 2048
-        var quality: CGFloat = 0.84
-        for _ in 0..<6 {
+        // The scoped Matrix gateway accepts one bounded image at a time. Keep
+        // the JSON/base64 envelope below its existing request limit.
+        let maxBytes = 700_000
+        var maxPixel: CGFloat = 1600
+        var quality: CGFloat = 0.80
+        for _ in 0..<8 {
             let largest = max(source.size.width, source.size.height)
             let scale = largest > maxPixel ? maxPixel / largest : 1
             let size = CGSize(
@@ -137,14 +139,17 @@ private struct ExtensionEchoView: View {
     let onClose: () -> Void
 
     @State private var state = EchoState.loading
-    @State private var destinations: [ShareVibe] = []
+    @State private var destinations: [ShareWave] = []
     @State private var selected = Set<String>()
     @State private var query = ""
     @State private var quote = ""
     @State private var quoteMode = false
     @State private var preview: SharePreview?
-    @State private var attachment: [String: AnySendable]?
     @State private var publishing = false
+    @State private var destinationError: String?
+    @State private var publishError: String?
+    @State private var searchTask: Task<Void, Never>?
+    @State private var operationID = UUID().uuidString.lowercased()
     @FocusState private var focusedField: Field?
 
     private let green = Color(red: 0, green: 0.90, blue: 0.46)
@@ -207,6 +212,7 @@ private struct ExtensionEchoView: View {
             .tint(green)
         }
         .task { await prepare() }
+        .onDisappear { searchTask?.cancel() }
     }
 
     private var previewCard: some View {
@@ -307,20 +313,13 @@ private struct ExtensionEchoView: View {
 
     private var destinationPicker: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if let personal = destinations.first(where: \.isPersonal) {
-                destinationRow(
-                    personal,
-                    subtitle: isPhotoRipple ? "Post this Ripple to My Atmo" : "Echo directly to My Atmo"
-                )
-            }
-
-            Text("Find a Vibe")
+            Text("Find a Wave")
                 .font(.caption.bold())
                 .foregroundStyle(.white.opacity(0.58))
             TextField(
                 "",
                 text: $query,
-                prompt: Text("Search by Vibe name").foregroundStyle(.white.opacity(0.42))
+                prompt: Text("Search your joined Waves").foregroundStyle(.white.opacity(0.42))
             )
                 .foregroundStyle(.white)
                 .tint(green)
@@ -335,19 +334,38 @@ private struct ExtensionEchoView: View {
                         .stroke(focusedField == .vibeSearch ? green.opacity(0.7) : .white.opacity(0.10))
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 10))
+                .onChange(of: query) { _, value in
+                    scheduleDestinationSearch(value)
+                }
 
             if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("Vibes appear after you start typing.")
+                Text("Waves appear after you start typing. Private and encrypted rooms remain protected.")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.48))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-            } else if matchingVibes.isEmpty {
+            } else if let destinationError {
+                VStack(spacing: 8) {
+                    Text(destinationError)
+                        .font(.caption)
+                        .multilineTextAlignment(.center)
+                    Button("Retry") {
+                        scheduleDestinationSearch(query, immediate: true)
+                    }
+                    .font(.caption.bold())
+                    .foregroundStyle(green)
+                }
+                .foregroundStyle(.white.opacity(0.58))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 18)
+                .background(surface.opacity(0.7))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            } else if destinations.isEmpty {
                 VStack(spacing: 6) {
                     Image(systemName: "magnifyingglass")
-                    Text("No matching Vibes")
+                    Text("No eligible Waves")
                         .font(.subheadline.weight(.semibold))
-                    Text("Try a Vibe name or handle.")
+                    Text("Try another name. You must be joined and allowed to post.")
                         .font(.caption)
                 }
                 .foregroundStyle(.white.opacity(0.52))
@@ -356,8 +374,8 @@ private struct ExtensionEchoView: View {
                 .background(surface.opacity(0.7))
                 .clipShape(RoundedRectangle(cornerRadius: 10))
             } else {
-                ForEach(matchingVibes) { vibe in
-                    destinationRow(vibe, subtitle: nil)
+                ForEach(destinations) { wave in
+                    destinationRow(wave)
                 }
             }
 
@@ -369,32 +387,28 @@ private struct ExtensionEchoView: View {
         }
     }
 
-    private func destinationRow(_ vibe: ShareVibe, subtitle: String?) -> some View {
+    private func destinationRow(_ wave: ShareWave) -> some View {
         Button {
-            if selected.contains(vibe.slug) { selected.remove(vibe.slug) }
-            else { selected.insert(vibe.slug) }
+            if selected.contains(wave.roomId) { selected.remove(wave.roomId) }
+            else { selected.insert(wave.roomId) }
         } label: {
             HStack(spacing: 10) {
-                AsyncImage(url: vibe.avatarUrl.flatMap(URL.init(string:))) { image in
-                    image.resizable().scaledToFill()
-                } placeholder: {
-                    Circle().fill(elevated)
-                        .overlay(Image(systemName: vibe.isPersonal ? "person.fill" : "person.3.fill"))
-                }
+                Circle().fill(elevated)
+                    .overlay(Image(systemName: "wave.3.right").foregroundStyle(green))
                 .frame(width: 38, height: 38)
                 .clipShape(Circle())
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(vibe.isPersonal ? "My Atmo" : vibe.name)
+                    Text(wave.name)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
-                    if let subtitle {
-                        Text(subtitle).font(.caption).foregroundStyle(.white.opacity(0.48))
-                    }
+                    Text(wave.visibility == "PRIVATE" ? "Private Wave" : "Public Wave")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.48))
                 }
                 Spacer()
-                Image(systemName: selected.contains(vibe.slug) ? "checkmark.square.fill" : "square")
-                    .foregroundStyle(selected.contains(vibe.slug) ? green : .white.opacity(0.46))
+                Image(systemName: selected.contains(wave.roomId) ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(selected.contains(wave.roomId) ? green : .white.opacity(0.46))
             }
             .padding(10)
             .background(surface)
@@ -484,23 +498,31 @@ private struct ExtensionEchoView: View {
     }
 
     private var publishButton: some View {
-        Button {
-            Task { await publish() }
-        } label: {
-            Label(
-                publishButtonTitle,
-                systemImage: isPhotoRipple ? "wave.3.right" : "dot.radiowaves.left.and.right"
-            )
-            .font(.subheadline.bold())
-            .foregroundStyle(.black)
-            .frame(maxWidth: .infinity)
-            .frame(height: 48)
-            .background(green)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+        VStack(spacing: 9) {
+            if let publishError {
+                Text(publishError)
+                    .font(.caption)
+                    .foregroundStyle(.red.opacity(0.9))
+                    .multilineTextAlignment(.center)
+            }
+            Button {
+                Task { await publish() }
+            } label: {
+                Label(
+                    publishButtonTitle,
+                    systemImage: isPhotoRipple ? "wave.3.right" : "dot.radiowaves.left.and.right"
+                )
+                .font(.subheadline.bold())
+                .foregroundStyle(.black)
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
+                .background(green)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .buttonStyle(.plain)
+            .disabled(selected.isEmpty || publishing)
+            .opacity(selected.isEmpty ? 0.5 : 1)
         }
-        .buttonStyle(.plain)
-        .disabled(selected.isEmpty || publishing)
-        .opacity(selected.isEmpty ? 0.5 : 1)
     }
 
     private var publishButtonTitle: String {
@@ -511,14 +533,6 @@ private struct ExtensionEchoView: View {
             return selected.count > 1 ? "Publish to \(selected.count)" : "Publish Ripple"
         }
         return selected.count > 1 ? "Echo to \(selected.count)" : "Echo"
-    }
-
-    private var matchingVibes: [ShareVibe] {
-        let value = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !value.isEmpty else { return [] }
-        return destinations.filter {
-            !$0.isPersonal && "\($0.name) \($0.slug)".lowercased().contains(value)
-        }
     }
 
     private func message(icon: String, title: String, detail: String) -> some View {
@@ -544,66 +558,119 @@ private struct ExtensionEchoView: View {
             state = .signedOut
             return
         }
-        do {
-            let vibeData = try await ShareAPI.get("/api/fan-clubs/postable")
-            destinations = try JSONDecoder().decode(ShareVibesEnvelope.self, from: vibeData).vibes
-            if let sharedURL {
-                let resolvedData = try await ShareAPI.post(
-                    "/api/fan-clubs/resolve-attachment",
-                    body: ["url": sharedURL.absoluteString]
-                )
-                let object = try JSONSerialization.jsonObject(with: resolvedData) as? [String: Any]
-                guard let rawAttachment = object?["attachment"] as? [String: Any] else {
-                    throw ShareAPIError.invalidResponse
-                }
-                attachment = rawAttachment.mapValues(AnySendable.init)
-                if let rawPreview = object?["preview"] as? [String: Any],
-                   let data = try? JSONSerialization.data(withJSONObject: rawPreview) {
-                    preview = try? JSONDecoder().decode(SharePreview.self, from: data)
-                }
-            }
-            if let personal = destinations.first(where: \.isPersonal) {
-                selected.insert(personal.slug)
-            }
-            state = .ready
-        } catch {
-            state = .failed(error.localizedDescription)
+        if let sharedURL {
+            preview = SharePreview(
+                kind: ShareWestreemEntity(url: sharedURL)?.entityType.uppercased() ?? "LINK",
+                title: sharedURL.host ?? "Shared link",
+                subtitle: sharedURL.path,
+                thumbnailUrl: nil,
+                domain: sharedURL.host
+            )
         }
+        state = .ready
     }
 
     @MainActor
     private func publish() async {
         guard !selected.isEmpty, !publishing else { return }
         publishing = true
+        publishError = nil
+        defer { publishing = false }
         do {
-            var attachments = [[String: Any]]()
-            if !sharedImages.isEmpty, let uploadSlug = selected.sorted().first {
-                for photo in sharedImages {
-                    let imageURL = try await ShareAPI.uploadPhoto(photo, vibeSlug: uploadSlug)
-                    attachments.append(["type": "PHOTO", "imageUrl": imageURL])
+            let rooms = selected.sorted()
+            let body = String(quote.trimmingCharacters(in: .whitespacesAndNewlines).prefix(2_000))
+            if !sharedImages.isEmpty {
+                for (imageIndex, photo) in sharedImages.enumerated() {
+                    var mediaMxc: String?
+                    for (roomIndex, roomId) in rooms.enumerated() {
+                        let requestID = "\(operationID)-image-\(imageIndex)-room-\(roomIndex)"
+                        let response: ShareSendResponse
+                        if let mediaMxc {
+                            response = try await ShareAPI.send(
+                                roomId: roomId,
+                                clientRequestId: requestID,
+                                payload: [
+                                    "kind": "IMAGE_REFERENCE",
+                                    "mediaMxc": mediaMxc,
+                                    "mimeType": "image/jpeg",
+                                    "filename": "shared-\(imageIndex + 1).jpg",
+                                    "quote": imageIndex == 0 ? body : ""
+                                ]
+                            )
+                        } else {
+                            response = try await ShareAPI.send(
+                                roomId: roomId,
+                                clientRequestId: requestID,
+                                payload: [
+                                    "kind": "IMAGE",
+                                    "mediaBase64": photo.base64EncodedString(),
+                                    "mimeType": "image/jpeg",
+                                    "filename": "shared-\(imageIndex + 1).jpg",
+                                    "quote": imageIndex == 0 ? body : ""
+                                ]
+                            )
+                        }
+                        mediaMxc = response.mediaMxc ?? mediaMxc
+                    }
                 }
-            } else if let attachment {
-                attachments.append(attachment.mapValues(\.value))
-            }
-            guard !attachments.isEmpty else { throw ShareAPIError.invalidResponse }
-            let body = quote.trimmingCharacters(in: .whitespacesAndNewlines)
-            for slug in selected.sorted() {
-                var payload: [String: Any] = [
-                    "attachments": attachments,
-                    "isSpoiler": false,
-                    "commentsDisabled": false
-                ]
-                if (isPhotoRipple || quoteMode), !body.isEmpty { payload["body"] = body }
-                _ = try await ShareAPI.post(
-                    "/api/fan-clubs/\(slug.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? slug)/posts",
-                    body: payload
-                )
+            } else if let sharedURL {
+                let entity = ShareWestreemEntity(url: sharedURL)
+                for (roomIndex, roomId) in rooms.enumerated() {
+                    let requestID = "\(operationID)-link-room-\(roomIndex)"
+                    var payload: [String: Any]
+                    if let entity {
+                        payload = [
+                            "kind": "WESTREEM_ENTITY",
+                            "entityType": entity.entityType,
+                            "entityId": entity.entityId
+                        ]
+                    } else {
+                        payload = [
+                            "kind": "LINK",
+                            "url": sharedURL.absoluteString,
+                            "quote": quoteMode ? body : ""
+                        ]
+                    }
+                    _ = try await ShareAPI.send(
+                        roomId: roomId,
+                        clientRequestId: requestID,
+                        payload: payload
+                    )
+                }
+            } else {
+                throw ShareAPIError.invalidResponse
             }
             onClose()
         } catch {
-            state = .failed(error.localizedDescription)
+            publishError = error.localizedDescription
         }
-        publishing = false
+    }
+
+    private func scheduleDestinationSearch(_ value: String, immediate: Bool = false) {
+        searchTask?.cancel()
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            destinations = []
+            destinationError = nil
+            return
+        }
+        searchTask = Task {
+            if !immediate {
+                try? await Task.sleep(for: .milliseconds(300))
+            }
+            guard !Task.isCancelled else { return }
+            do {
+                let rooms = try await ShareAPI.searchWaves(normalized)
+                guard !Task.isCancelled else { return }
+                destinations = rooms
+                destinationError = nil
+                selected = selected.intersection(Set(rooms.map(\.roomId)))
+            } catch {
+                guard !Task.isCancelled else { return }
+                destinations = []
+                destinationError = error.localizedDescription
+            }
+        }
     }
 }
 
@@ -619,13 +686,19 @@ private enum EchoState: Equatable {
     case failed(String)
 }
 
-private struct ShareVibesEnvelope: Decodable { let vibes: [ShareVibe] }
-private struct ShareVibe: Decodable, Identifiable {
-    let slug: String
+private struct ShareWavesEnvelope: Decodable { let rooms: [ShareWave] }
+private struct ShareWave: Decodable, Identifiable {
+    let roomId: String
+    let spaceId: String?
     let name: String
-    let avatarUrl: String?
-    let isPersonal: Bool
-    var id: String { slug }
+    let topic: String?
+    let visibility: String
+    var id: String { roomId }
+}
+private struct ShareSendResponse: Decodable {
+    let roomId: String
+    let eventId: String
+    let mediaMxc: String?
 }
 private struct SharePreview: Decodable {
     let kind: String?
@@ -634,9 +707,61 @@ private struct SharePreview: Decodable {
     let thumbnailUrl: String?
     let domain: String?
 }
-private struct AnySendable: @unchecked Sendable {
-    let value: Any
-    init(_ value: Any) { self.value = value }
+
+private struct ShareWestreemEntity {
+    let entityType: String
+    let entityId: String
+
+    init?(url: URL) {
+        guard
+            url.scheme?.lowercased() == "https",
+            let host = url.host?.lowercased(),
+            host == "westreem.com" || host.hasSuffix(".westreem.com"),
+            url.user == nil,
+            url.password == nil,
+            url.fragment == nil
+        else { return nil }
+
+        let supported = Set([
+            "video", "short", "clipping", "collection", "show",
+            "channel", "event", "user", "atmo_post"
+        ])
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let values = (components?.queryItems ?? []).reduce(
+            into: [String: String]()
+        ) { result, item in
+            if result[item.name] == nil, let value = item.value {
+                result[item.name] = value
+            }
+        }
+        if let type = values["entityType"],
+           supported.contains(type),
+           let id = values["entityId"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !id.isEmpty,
+           id.count <= 191 {
+            entityType = type
+            entityId = id
+            return
+        }
+
+        let path = url.path.split(separator: "/").map(String.init)
+        guard path.count >= 2, !path[1].isEmpty, path[1].count <= 191 else {
+            return nil
+        }
+        switch path[0].lowercased() {
+        case "watch":
+            entityType = "video"
+        case "shorts":
+            entityType = "short"
+        case "collections":
+            entityType = "collection"
+        case "shows":
+            entityType = "show"
+        default:
+            return nil
+        }
+        entityId = path[1]
+    }
 }
 
 private enum ShareAPI {
@@ -660,58 +785,42 @@ private enum ShareAPI {
         return String(data: data, encoding: .utf8)
     }
 
-    static func get(_ path: String) async throws -> Data {
-        try await request(path, method: "GET", body: nil)
-    }
-
     static func post(_ path: String, body: [String: Any]) async throws -> Data {
         try await request(path, method: "POST", body: try JSONSerialization.data(withJSONObject: body))
     }
 
-    static func uploadPhoto(_ data: Data, vibeSlug: String) async throws -> String {
-        let slug = vibeSlug.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? vibeSlug
-        let preparation = try await post(
-            "/api/fan-clubs/\(slug)/images/upload-url?purpose=post",
-            body: ["mimeType": "image/jpeg", "size": data.count]
+    static func searchWaves(_ query: String) async throws -> [ShareWave] {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("api/matrix/native-share/destinations"),
+            resolvingAgainstBaseURL: false
         )
-        guard let object = try JSONSerialization.jsonObject(with: preparation) as? [String: Any],
-              let uploadValue = object["uploadUrl"] as? String,
-              let uploadURL = URL(string: uploadValue) else {
-            throw ShareAPIError.invalidResponse
-        }
-        let uploaded = try await upload(data, to: uploadURL)
-        let uploadedObject = (try? JSONSerialization.jsonObject(with: uploaded)) as? [String: Any]
-        if let value = uploadedObject?["mediaUrl"] as? String, !value.isEmpty { return value }
-        if let value = object["mediaUrl"] as? String, !value.isEmpty { return value }
-        if let value = object["deliveryUrl"] as? String, !value.isEmpty { return value }
-        throw ShareAPIError.invalidResponse
+        components?.queryItems = [URLQueryItem(name: "q", value: query)]
+        guard let url = components?.url else { throw ShareAPIError.invalidResponse }
+        let data = try await request(url, method: "GET", body: nil)
+        return try JSONDecoder().decode(ShareWavesEnvelope.self, from: data).rooms
     }
 
-    private static func upload(_ data: Data, to url: URL) async throws -> Data {
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.httpBody = data
-        request.timeoutInterval = 120
-        request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
-        request.setValue(String(data.count), forHTTPHeaderField: "Content-Length")
-        if url.host == baseURL.host, let token = sessionToken {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            request.setValue(
-                "next-auth.session-token=\(token); __Secure-next-auth.session-token=\(token); authjs.session-token=\(token); __Secure-authjs.session-token=\(token)",
-                forHTTPHeaderField: "Cookie"
-            )
-        }
-        let (responseData, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw ShareAPIError.invalidResponse }
-        guard (200..<300).contains(http.statusCode) else {
-            throw ShareAPIError.server("The photo could not reach storage.")
-        }
-        return responseData
+    static func send(
+        roomId: String,
+        clientRequestId: String,
+        payload: [String: Any]
+    ) async throws -> ShareSendResponse {
+        var body = payload
+        body["roomId"] = roomId
+        body["clientRequestId"] = clientRequestId
+        let data = try await post("/api/matrix/native-share/send", body: body)
+        return try JSONDecoder().decode(ShareSendResponse.self, from: data)
     }
 
     private static func request(_ path: String, method: String, body: Data?) async throws -> Data {
-        guard let token = sessionToken,
-              let url = endpointURL(path) else {
+        guard let url = endpointURL(path) else {
+            throw ShareAPIError.invalidResponse
+        }
+        return try await request(url, method: method, body: body)
+    }
+
+    private static func request(_ url: URL, method: String, body: Data?) async throws -> Data {
+        guard let token = sessionToken else {
             throw ShareAPIError.signedOut
         }
         var request = URLRequest(url: url)
@@ -721,10 +830,6 @@ private enum ShareAPI {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("ios", forHTTPHeaderField: "X-Westreem-Platform")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue(
-            "next-auth.session-token=\(token); __Secure-next-auth.session-token=\(token); authjs.session-token=\(token); __Secure-authjs.session-token=\(token)",
-            forHTTPHeaderField: "Cookie"
-        )
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ShareAPIError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {

@@ -497,7 +497,7 @@ struct PlatformSections: Decodable {
     static let `default` = PlatformSections(stories: .default, browse: .default)
 
     enum CodingKeys: String, CodingKey {
-        case stories, browse, shows, videos, movies, microdramas, channels, following, people, vibes, collections, events
+        case stories, browse, atmosphere, shows, videos, movies, microdramas, channels, following, people, vibes, collections, events
     }
 
     init(stories: PlatformStorySection, browse: PlatformBrowseSection) {
@@ -544,7 +544,7 @@ struct PlatformBrowseSection: Decodable {
     static let `default` = PlatformBrowseSection(sections: PlatformBrowseItem.defaults)
 
     private enum CodingKeys: String, CodingKey {
-        case sections, items, order, shows, videos, movies, microdramas, channels, following, collections, events
+        case sections, items, order, atmosphere, shows, videos, movies, microdramas, channels, following, collections, events
     }
 
     init(sections: [PlatformBrowseItem]) {
@@ -611,6 +611,7 @@ struct PlatformBrowseItem: Decodable, Identifiable, Hashable {
     let creation: Bool
 
     static let defaults: [PlatformBrowseItem] = [
+        PlatformBrowseItem(id: "atmosphere", label: "The Atmosphere", enabled: true),
         PlatformBrowseItem(id: "shorts", label: "Shorts", enabled: true),
         PlatformBrowseItem(id: "shows", label: "Shows", enabled: true),
         PlatformBrowseItem(id: "videos", label: "Videos", enabled: true),
@@ -721,6 +722,8 @@ struct PlatformBrowseItem: Decodable, Identifiable, Hashable {
             return "following"
         case "person", "users":
             return "people"
+        case "atmo", "personal-atmo", "the-atmosphere":
+            return "atmosphere"
         case "vibe", "clubs", "communities":
             return "vibes"
         case "collection", "library":

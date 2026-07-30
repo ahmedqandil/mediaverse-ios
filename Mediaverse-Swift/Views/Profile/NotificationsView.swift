@@ -30,9 +30,8 @@ private struct NotificationPreferencesView: View {
                                     (.notifyComments, "Comments on my content", "When someone comments on your videos or Ripples"),
                                     (.notifyLikes, "Energy and comment likes", "When someone adds Energy or likes your comment"),
                                     (.notifyReplies, "Replies to my comments", "When someone replies to a comment you left"),
-                                    (.notifyNewContent, "New content from follows", "Uploads and Ripples from people, Shows, Channels, and Vibes you follow"),
-                                    (.notifyMentions, "Mentions", "When someone mentions you in a Ripple or comment"),
-                                    (.notifyVibeActivity, "Vibe activity", "Invitations, moderation updates, and when a moderator pins your Ripple")
+                                    (.notifyNewContent, "New content from follows", "WeStreem uploads and public Personal Atmo posts from people, Shows, and Channels you follow"),
+                                    (.notifyMentions, "Mentions", "When someone mentions you in a Personal Atmo post or comment")
                                 ],
                                 preferences: preferences
                             )
@@ -41,11 +40,11 @@ private struct NotificationPreferencesView: View {
                                 fields: [
                                     (.emailNewContent, "New content digest", "A summary of new content from your follows"),
                                     (.emailComments, "Comments and replies", "Email when someone engages with your content"),
-                                    (.emailMarketing, "Westreem updates", "Product news and announcements")
+                                    (.emailMarketing, "WeStreem updates", "Product news and announcements")
                                 ],
                                 preferences: preferences
                             )
-                            notificationInheritanceGuide(vibeActivityEnabled: preferences.notifyVibeActivity)
+                            notificationAuthorityGuide
                             if let errorMessage {
                                 Text(errorMessage)
                                     .font(.footnote)
@@ -72,30 +71,22 @@ private struct NotificationPreferencesView: View {
         }
     }
 
-    private func notificationInheritanceGuide(vibeActivityEnabled: Bool) -> some View {
+    private var notificationAuthorityGuide: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("VIBE, WAVE & EVENT DELIVERY")
+            Text("VIBES NOTIFICATIONS")
                 .font(.caption2.weight(.bold))
                 .foregroundStyle(C.textMuted)
             VStack(alignment: .leading, spacing: 14) {
                 inheritanceRow(
                     icon: "person.3",
                     title: "Vibes",
-                    detail: vibeActivityEnabled
-                        ? "Vibe activity is enabled by your global setting above."
-                        : "Vibe activity is muted by your global setting above."
+                    detail: "Vibe and Wave alerts are controlled by each Vibe’s notification settings."
                 )
                 Divider().overlay(C.borderSubtle)
                 inheritanceRow(
                     icon: "water.waves",
-                    title: "Waves",
-                    detail: "Each Wave uses its Vibe setting by default. A Wave’s settings can override it with All activity, Mentions only, or Muted."
-                )
-                Divider().overlay(C.borderSubtle)
-                inheritanceRow(
-                    icon: "calendar",
-                    title: "Events",
-                    detail: "Events inherit Vibe activity. Scheduled Event pages also support explicit 15-minute, 1-hour, and 1-day push reminders."
+                    title: "Separate authority",
+                    detail: "WeStreem keeps Vibe message alerts and read state synchronized across your devices."
                 )
             }
             .padding(14)
@@ -249,8 +240,6 @@ struct NotificationsView: View {
 
                 if isLoading {
                     ProgressView().tint(C.watch)
-                } else if notifs.isEmpty {
-                    emptyState
                 } else {
                     notifList
                 }
@@ -303,21 +292,52 @@ struct NotificationsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 inboxHeader
+                MatrixNativeNotificationInboxSection()
 
-                LazyVStack(spacing: 10) {
-                    ForEach(notifs) { notif in
-                        Button {
-                            Task { await open(notif) }
-                        } label: {
-                            NotifRow(notif: notif)
+                if notifs.isEmpty {
+                    westreemEmptyState
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("WESTREEM")
+                            .font(.caption2.bold())
+                            .foregroundStyle(C.textMuted)
+
+                        LazyVStack(spacing: 10) {
+                            ForEach(notifs) { notif in
+                                Button {
+                                    Task { await open(notif) }
+                                } label: {
+                                    NotifRow(notif: notif)
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }
             .padding(.horizontal, C.pagePad)
             .padding(.vertical, 14)
         }
+    }
+
+    private var westreemEmptyState: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.title2)
+                .foregroundStyle(C.watch)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("No WeStreem updates")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(C.text)
+                Text("Personal Atmo and product notifications will appear here.")
+                    .font(.caption)
+                    .foregroundStyle(C.textMuted)
+            }
+            Spacer()
+        }
+        .padding(14)
+        .background(C.surface, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(C.borderSubtle))
     }
 
     private var inboxHeader: some View {
@@ -335,7 +355,7 @@ struct NotificationsView: View {
                 Text(hasUnreadNotifications ? "\(unreadCount) unread" : "All caught up")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(C.text)
-                Text("Updates from the channels, shows, and activity you follow.")
+                Text("Updates from Personal Atmo, WeStreem products, and Vibes.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(C.textMuted)
                     .lineLimit(2)
@@ -362,7 +382,7 @@ struct NotificationsView: View {
             Text("No notifications yet")
                 .font(.headline)
                 .foregroundStyle(C.text)
-            Text("Follow channels and shows to get notified about new content.")
+            Text("Follow people, channels, shows, and Vibes to get updates.")
                 .font(.subheadline)
                 .foregroundStyle(C.textMuted)
                 .multilineTextAlignment(.center)
@@ -648,24 +668,29 @@ private struct NotifRow: View {
         switch type.lowercased() {
         case "new_comment", "comment_reply", "comment_removed",
              "post_comment", "post_comment_reply", "comment",
-             "ripple_comment", "ripple_reply":
+             "ripple_comment", "ripple_reply", "atmo_comment", "atmo_reply":
             return "bubble.left.fill"
-        case "comment_like", "post_comment_liked", "post_liked", "story_like", "like":
+        case "comment_like", "post_comment_liked", "post_liked", "story_like",
+             "atmo_comment_like", "like":
             return "heart.fill"
-        case "ripple_energy", "ripple_photo_energy", "flash_energy":
+        case "ripple_energy", "ripple_photo_energy", "flash_energy", "atmo_energy":
             return "bolt.fill"
-        case "ripple_echo":
+        case "ripple_echo", "atmo_echo":
             return "wave.3.right"
-        case "mention", "story_mention", "ripple_mention":
+        case "mention", "story_mention", "ripple_mention", "atmo_mention":
             return "at"
-        case "new_follower", "following", "follow", "vibe_follow":
+        case "new_follower", "following", "follow", "vibe_follow", "atmo_follow":
             return "person.badge.plus"
         case "new_episode", "new_video", "vibe_new_ripple":
             return "play.rectangle.fill"
         case "vibe_join_request", "vibe_join_decision", "vibe_invite":
             return "person.2.fill"
-        case "vibe_moderation":
+        case "vibe_moderation", "atmo_moderation", "atmo_report_resolved":
             return "shield.fill"
+        case "matrix_vibe_activity":
+            return "bubble.left.and.bubble.right.fill"
+        case "matrix_encrypted_activity":
+            return "lock.fill"
         case "ripple_pinned", "ripple_unpinned":
             return "pin.fill"
         case "vibe_affiliation_request", "vibe_affiliation_approved",
@@ -693,22 +718,27 @@ private struct NotifRow: View {
 
     private func typeLabel(_ type: String) -> String {
         switch type.lowercased() {
-        case "new_comment", "post_comment", "ripple_comment": return "Comment"
-        case "comment_reply", "post_comment_reply", "ripple_reply": return "Reply"
-        case "comment_like", "post_comment_liked":     return "Like"
+        case "new_comment", "post_comment", "ripple_comment", "atmo_comment": return "Comment"
+        case "comment_reply", "post_comment_reply", "ripple_reply", "atmo_reply": return "Reply"
+        case "comment_like", "post_comment_liked", "atmo_comment_like": return "Comment Like"
         case "post_liked":                             return "Post Like"
         case "story_like":                             return "Flash Like"
         case "ripple_energy":                          return "Ripple Energy"
         case "ripple_photo_energy":                    return "Photo Energy"
         case "flash_energy":                           return "Flash Energy"
-        case "ripple_echo":                            return "Echo"
-        case "mention", "story_mention", "ripple_mention": return "Mention"
+        case "atmo_energy":                            return "Personal Atmo Energy"
+        case "ripple_echo", "atmo_echo":               return "Echo"
+        case "mention", "story_mention", "ripple_mention", "atmo_mention": return "Mention"
         case "comment_removed":                        return "Moderation"
-        case "new_follower", "following", "vibe_follow": return "Follower"
+        case "new_follower", "following", "vibe_follow", "atmo_follow": return "Follower"
         case "vibe_join_request":                      return "Join Request"
         case "vibe_join_decision":                     return "Membership"
         case "vibe_invite":                            return "Vibe Invite"
         case "vibe_moderation":                        return "Vibe Moderation"
+        case "atmo_moderation":                        return "Personal Atmo Moderation"
+        case "atmo_report_resolved":                   return "Report Update"
+        case "matrix_vibe_activity":                   return "Vibes"
+        case "matrix_encrypted_activity":              return "Encrypted Vibes"
         case "ripple_pinned":                          return "Pinned Ripple"
         case "ripple_unpinned":                        return "Unpinned Ripple"
         case "vibe_new_ripple":                        return "New Ripple"

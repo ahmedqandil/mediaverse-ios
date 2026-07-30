@@ -8,7 +8,8 @@ let package = Package(
     products: [
         .library(name: "MediaverseRouting", targets: ["MediaverseRouting"]),
         .library(name: "MediaverseSocialContracts", targets: ["MediaverseSocialContracts"]),
-        .library(name: "MediaverseEventContracts", targets: ["MediaverseEventContracts"])
+        .library(name: "MediaverseEventContracts", targets: ["MediaverseEventContracts"]),
+        .library(name: "MediaversePlatformContracts", targets: ["MediaversePlatformContracts"])
     ],
     targets: [
         .target(
@@ -23,8 +24,24 @@ let package = Package(
         .target(
             name: "MediaverseEventContracts",
             path: "Social/Events",
-            exclude: ["VibeEventsViews.swift", "EventLiveRoomView.swift"],
+            exclude: [
+                "VibeEventsViews.swift",
+                "EventLiveRoomView.swift",
+                "AffiliationReviewView.swift"
+            ],
             sources: ["VibeEventModels.swift"]
+        ),
+        .target(
+            name: "MediaversePlatformContracts",
+            path: "Models",
+            exclude: [
+                "Models.swift",
+                "StoriesModels.swift",
+                "StoryEffectCatalog.swift",
+                "StoryProjectModel.swift",
+                "StoryViewers.swift"
+            ],
+            sources: ["PlatformConfig.swift"]
         ),
         .testTarget(
             name: "MediaverseRoutingTests",
@@ -41,6 +58,11 @@ let package = Package(
             dependencies: ["MediaverseEventContracts"],
             path: "LogicTests/MediaverseEventContractsTests",
             resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
+            name: "MediaversePlatformContractsTests",
+            dependencies: ["MediaversePlatformContracts"],
+            path: "LogicTests/MediaversePlatformContractsTests"
         )
     ]
 )

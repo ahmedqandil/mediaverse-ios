@@ -100,3 +100,50 @@ xcodebuild -project Mediaverse-Swift/Mediaverse.xcodeproj \
 - [ ] Signed-in simulator smoke test against a reachable environment.
 - [ ] Archive/signing validation with the production Apple team.
 - [ ] Push branch and open/merge the release change through the project’s normal review process.
+
+## Matrix-native Vibe directory and creation boundary
+
+The Matrix-native Vibes path is implemented only through the official
+`MatrixRustSDK` Swift binding pinned in the tracked Xcode project to
+`matrix-rust-components-swift` 26.7.28
+(`af0cbc94741f39cc3e175e0449bbfae10f9436b0`). It does not use the legacy
+social adapter or a handwritten Matrix Client-Server transport.
+
+The pinned binding exposes the required operations:
+
+- `Client.roomDirectorySearch()` with `search`, `nextPage`, `loadedPages`, and
+  `isAtLastPage`;
+- `Client.getRoomPreviewFromRoomId`, `joinRoomByIdOrAlias`, and `createRoom`;
+- `CreateRoomParameters.isSpace`;
+- `Room.sendStateEventRaw` for `m.space.child` and `m.space.parent`;
+- `Room.inviteUserById`; and
+- `RoomPowerLevels.canOwnUserSendState` / `canOwnUserInvite`.
+
+One binding limitation requires an explicit safe path: `RoomDescription`
+returned by the directory has no `roomType`, so a directory row alone cannot
+prove that a result is a Space. Native discovery previews every result through
+`getRoomPreviewFromRoomId` and includes it only when
+`RoomPreviewInfo.roomType == .space`. A preview failure is omitted. This adds
+official-SDK requests per directory page but needs no additional service,
+dependency, or paid infrastructure.
+
+Wave creation checks joined Space membership and the SDK-reported
+`m.space.child` power level before creating a room. It writes both Space graph
+edges. If the child-side edge fails, it removes the parent-side edge and leaves
+the new room rather than presenting a partially linked Wave. Invitation
+controls are hidden unless the SDK power levels allow invitations, and the
+provider repeats the permission check before every invitation batch.
+
+## Encrypted Matrix media boundary
+
+Standard photos, galleries, files, audio, voice messages, and video messages
+continue to use the pinned `MatrixRustSDK` timeline attachment APIs. Those APIs
+inspect the room encryption state and create encrypted media descriptors when
+the Wave is encrypted; Westreem does not receive or persist room media keys.
+
+The pinned Swift binding does not expose an equivalent encrypted
+`m.sticker` upload/send operation. Stickers therefore remain fail-closed in an
+encrypted Wave with `encryptedMediaUnavailable`. The app does not downgrade the
+room, upload a plaintext sticker, or introduce a handwritten encryption path.
+Approved Backstage sticker packs remain available in unencrypted Waves through
+the standard `m.sticker` event.

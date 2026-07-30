@@ -17,6 +17,17 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		C7A0C030301A000100000001 /* Embed Matrix Framework */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				C7A0C006301A000100000001 /* MatrixRustSDK in Embed Matrix Framework */,
+			);
+			name = "Embed Matrix Framework";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		E50000000000000000000034 /* Embed App Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -35,6 +46,7 @@
 		E50000000000000000000002 /* MainInterface.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = E50000000000000000000013 /* MainInterface.storyboard */; };
 		E50000000000000000000003 /* WestreemShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = E50000000000000000000014 /* WestreemShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		E50000000000000000000004 /* IncomingShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50000000000000000000015 /* IncomingShareSheet.swift */; };
+		E7100031301A000100000001 /* AffiliationReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7100032301A000100000001 /* AffiliationReviewView.swift */; };
 		0330DE777F7802F12B216F12 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1079593180F3AC1E7E78616 /* LoginView.swift */; };
 		0465594F090062B86606BD71 /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 244896868E339180BDFCBB1F /* ProfileView.swift */; };
 		074934FE7811BA935B449923 /* EpisodeWatchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A90D9B1C22E7B0B62BDCD3C6 /* EpisodeWatchView.swift */; };
@@ -75,6 +87,29 @@
 		A4C0C001301A000100000001 /* SocialModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C011301A000100000001 /* SocialModels.swift */; };
 		A4C0C002301A000100000001 /* SocialFeatureConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C012301A000100000001 /* SocialFeatureConfiguration.swift */; };
 		B5D1C001301A000100000001 /* SocialRealtimeContracts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5D1C011301A000100000001 /* SocialRealtimeContracts.swift */; };
+		C6A0C001301A000100000001 /* SocialOwnershipV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6A0C011301A000100000001 /* SocialOwnershipV2.swift */; };
+		C6A0C002301A000100000001 /* SocialRepositoryBoundaries.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6A0C012301A000100000001 /* SocialRepositoryBoundaries.swift */; };
+		C7A0C001301A000100000001 /* MatrixSessionFoundation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A0C011301A000100000001 /* MatrixSessionFoundation.swift */; };
+		C7A0C002301A000100000001 /* MatrixSessionKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A0C012301A000100000001 /* MatrixSessionKeychain.swift */; };
+		C7A0C003301A000100000001 /* MatrixSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A0C013301A000100000001 /* MatrixSessionCoordinator.swift */; };
+		C7A0C004301A000100000001 /* MatrixVibesRepositoryFoundation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A0C014301A000100000001 /* MatrixVibesRepositoryFoundation.swift */; };
+		C7A0C005301A000100000001 /* MatrixRustSDK in Frameworks */ = {isa = PBXBuildFile; productRef = C7A0C021301A000100000001 /* MatrixRustSDK */; };
+		C7A0C006301A000100000001 /* MatrixRustSDK in Embed Matrix Framework */ = {isa = PBXBuildFile; productRef = C7A0C021301A000100000001 /* MatrixRustSDK */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		C7A0C007301A000100000001 /* MatrixCapabilityPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A0C015301A000100000001 /* MatrixCapabilityPlan.swift */; };
+		C7A0C008301A000100000001 /* MatrixNativeVibesViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A0C016301A000100000001 /* MatrixNativeVibesViews.swift */; };
+		C7A0C009301A000100000001 /* MatrixNativeVibesUIContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A0C017301A000100000001 /* MatrixNativeVibesUIContract.swift */; };
+		CCA0C001301A000100000001 /* MatrixNativeWaveActionsContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCA0C011301A000100000001 /* MatrixNativeWaveActionsContract.swift */; };
+		C7A0C00A301A000100000001 /* MatrixNativeMediaFoundation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A0C018301A000100000001 /* MatrixNativeMediaFoundation.swift */; };
+		C7A0C00B301A000100000001 /* MatrixNativeMediaViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A0C019301A000100000001 /* MatrixNativeMediaViews.swift */; };
+		C8A0C001301A000100000001 /* AtmoV2Contracts.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8A0C011301A000100000001 /* AtmoV2Contracts.swift */; };
+		C9A0C001301A000100000001 /* UnifiedNotificationContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9A0C011301A000100000001 /* UnifiedNotificationContract.swift */; };
+		CAA0C001301A000100000001 /* MatrixNativeDirectNotificationFoundation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAA0C011301A000100000001 /* MatrixNativeDirectNotificationFoundation.swift */; };
+		CAA0C002301A000100000001 /* MatrixNativeDirectNotificationViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAA0C012301A000100000001 /* MatrixNativeDirectNotificationViews.swift */; };
+		CBA0C001301A000100000001 /* MatrixNativeRtcContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBA0C011301A000100000001 /* MatrixNativeRtcContract.swift */; };
+		CBA0C002301A000100000001 /* MatrixNativeRtcRoomView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBA0C012301A000100000001 /* MatrixNativeRtcRoomView.swift */; };
+		CDA0C001301A000100000001 /* MatrixCryptoSecurityContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA0C011301A000100000001 /* MatrixCryptoSecurityContract.swift */; };
+		CDA0C002301A000100000001 /* MatrixNativeCryptoFoundation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA0C012301A000100000001 /* MatrixNativeCryptoFoundation.swift */; };
+		CDA0C003301A000100000001 /* MatrixNativeCryptoSecurityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA0C013301A000100000001 /* MatrixNativeCryptoSecurityView.swift */; };
 		B5D1C002301A000100000001 /* RippleMediaUploadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5D1C012301A000100000001 /* RippleMediaUploadCoordinator.swift */; };
 		B5D1C003301A000100000001 /* RippleVoiceRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5D1C013301A000100000001 /* RippleVoiceRecorder.swift */; };
 		A4C0C003301A000100000001 /* LegacySocialAPIAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C013301A000100000001 /* LegacySocialAPIAdapter.swift */; };
@@ -83,6 +118,7 @@
 		A4C0C006301A000100000001 /* RippleCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C016301A000100000001 /* RippleCard.swift */; };
 		A4C0C007301A000100000001 /* RippleEngagementController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C017301A000100000001 /* RippleEngagementController.swift */; };
 		A4C0C008301A000100000001 /* SocialDestinationViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C018301A000100000001 /* SocialDestinationViews.swift */; };
+		A4C0C0A8301A000100000001 /* AtmoProfileViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C0B8301A000100000001 /* AtmoProfileViews.swift */; };
 		A4C0C009301A000100000001 /* EchoVibeSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C019301A000100000001 /* EchoVibeSheet.swift */; };
 		A4C0C00A301A000100000001 /* RippleComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C01A301A000100000001 /* RippleComposer.swift */; };
 		A4C0C00B301A000100000001 /* VibeAffiliationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C01B301A000100000001 /* VibeAffiliationsView.swift */; };
@@ -170,6 +206,7 @@
 		E50000000000000000000016 /* WestreemShareExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WestreemShareExtension.entitlements; sourceTree = "<group>"; };
 		E50000000000000000000014 /* WestreemShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WestreemShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		E50000000000000000000015 /* IncomingShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomingShareSheet.swift; sourceTree = "<group>"; };
+		E7100032301A000100000001 /* AffiliationReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AffiliationReviewView.swift; sourceTree = "<group>"; };
 		00284911F531EED24A1B0F42 /* AppRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRoute.swift; sourceTree = "<group>"; };
 		048C927F22ABD7E30850299B /* MicrodramasBrowseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MicrodramasBrowseView.swift; sourceTree = "<group>"; };
 		04C90508DEF2416C969716EC /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
@@ -214,6 +251,27 @@
 		A4C0C011301A000100000001 /* SocialModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocialModels.swift; sourceTree = "<group>"; };
 		A4C0C012301A000100000001 /* SocialFeatureConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocialFeatureConfiguration.swift; sourceTree = "<group>"; };
 		B5D1C011301A000100000001 /* SocialRealtimeContracts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocialRealtimeContracts.swift; sourceTree = "<group>"; };
+		C6A0C011301A000100000001 /* SocialOwnershipV2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocialOwnershipV2.swift; sourceTree = "<group>"; };
+		C6A0C012301A000100000001 /* SocialRepositoryBoundaries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocialRepositoryBoundaries.swift; sourceTree = "<group>"; };
+		C7A0C011301A000100000001 /* MatrixSessionFoundation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixSessionFoundation.swift; sourceTree = "<group>"; };
+		C7A0C012301A000100000001 /* MatrixSessionKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixSessionKeychain.swift; sourceTree = "<group>"; };
+		C7A0C013301A000100000001 /* MatrixSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixSessionCoordinator.swift; sourceTree = "<group>"; };
+		C7A0C014301A000100000001 /* MatrixVibesRepositoryFoundation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixVibesRepositoryFoundation.swift; sourceTree = "<group>"; };
+		C7A0C015301A000100000001 /* MatrixCapabilityPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixCapabilityPlan.swift; sourceTree = "<group>"; };
+		C7A0C016301A000100000001 /* MatrixNativeVibesViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeVibesViews.swift; sourceTree = "<group>"; };
+		C7A0C017301A000100000001 /* MatrixNativeVibesUIContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeVibesUIContract.swift; sourceTree = "<group>"; };
+		CCA0C011301A000100000001 /* MatrixNativeWaveActionsContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeWaveActionsContract.swift; sourceTree = "<group>"; };
+		C7A0C018301A000100000001 /* MatrixNativeMediaFoundation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeMediaFoundation.swift; sourceTree = "<group>"; };
+		C7A0C019301A000100000001 /* MatrixNativeMediaViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeMediaViews.swift; sourceTree = "<group>"; };
+		C8A0C011301A000100000001 /* AtmoV2Contracts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtmoV2Contracts.swift; sourceTree = "<group>"; };
+		C9A0C011301A000100000001 /* UnifiedNotificationContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnifiedNotificationContract.swift; sourceTree = "<group>"; };
+		CAA0C011301A000100000001 /* MatrixNativeDirectNotificationFoundation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeDirectNotificationFoundation.swift; sourceTree = "<group>"; };
+		CAA0C012301A000100000001 /* MatrixNativeDirectNotificationViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeDirectNotificationViews.swift; sourceTree = "<group>"; };
+		CBA0C011301A000100000001 /* MatrixNativeRtcContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeRtcContract.swift; sourceTree = "<group>"; };
+		CBA0C012301A000100000001 /* MatrixNativeRtcRoomView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeRtcRoomView.swift; sourceTree = "<group>"; };
+		CDA0C011301A000100000001 /* MatrixCryptoSecurityContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixCryptoSecurityContract.swift; sourceTree = "<group>"; };
+		CDA0C012301A000100000001 /* MatrixNativeCryptoFoundation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeCryptoFoundation.swift; sourceTree = "<group>"; };
+		CDA0C013301A000100000001 /* MatrixNativeCryptoSecurityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeCryptoSecurityView.swift; sourceTree = "<group>"; };
 		B5D1C012301A000100000001 /* RippleMediaUploadCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleMediaUploadCoordinator.swift; sourceTree = "<group>"; };
 		B5D1C013301A000100000001 /* RippleVoiceRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleVoiceRecorder.swift; sourceTree = "<group>"; };
 		A4C0C013301A000100000001 /* LegacySocialAPIAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacySocialAPIAdapter.swift; sourceTree = "<group>"; };
@@ -222,6 +280,7 @@
 		A4C0C016301A000100000001 /* RippleCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleCard.swift; sourceTree = "<group>"; };
 		A4C0C017301A000100000001 /* RippleEngagementController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleEngagementController.swift; sourceTree = "<group>"; };
 		A4C0C018301A000100000001 /* SocialDestinationViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocialDestinationViews.swift; sourceTree = "<group>"; };
+		A4C0C0B8301A000100000001 /* AtmoProfileViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtmoProfileViews.swift; sourceTree = "<group>"; };
 		A4C0C01B301A000100000001 /* VibeAffiliationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeAffiliationsView.swift; sourceTree = "<group>"; };
 		A4C0C01C301A000100000001 /* VibeInvitationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeInvitationsView.swift; sourceTree = "<group>"; };
 		A4C0C01D301A000100000001 /* VibeManagementViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeManagementViews.swift; sourceTree = "<group>"; };
@@ -311,6 +370,7 @@
 			files = (
 				846789102FFD119E00DED05E /* MetalPetal in Frameworks */,
 				E7200001301A000100000001 /* LiveKit in Frameworks */,
+				C7A0C005301A000100000001 /* MatrixRustSDK in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -409,6 +469,9 @@
 				B3B27CAE95FB8513E66F2D64 /* APIClient.swift */,
 				7BE266C709CC31195D060B1D /* AuthManager.swift */,
 				A1C3E5F7B2D04891C5A76E23 /* SessionStorage.swift */,
+				C7A0C012301A000100000001 /* MatrixSessionKeychain.swift */,
+				C7A0C013301A000100000001 /* MatrixSessionCoordinator.swift */,
+				CDA0C012301A000100000001 /* MatrixNativeCryptoFoundation.swift */,
 				84FC77FD2FFAB0B100681F7A /* MiniPlayerManager.swift */,
 				846788EB2FFC2BD700DED05E /* StoriesAPIClient.swift */,
 				846788EF2FFC2C0200DED05E /* StoriesRepository.swift */,
@@ -565,6 +628,16 @@
 				A4C0C011301A000100000001 /* SocialModels.swift */,
 				A4C0C012301A000100000001 /* SocialFeatureConfiguration.swift */,
 				B5D1C011301A000100000001 /* SocialRealtimeContracts.swift */,
+				C6A0C011301A000100000001 /* SocialOwnershipV2.swift */,
+				C6A0C012301A000100000001 /* SocialRepositoryBoundaries.swift */,
+				C7A0C011301A000100000001 /* MatrixSessionFoundation.swift */,
+				C7A0C015301A000100000001 /* MatrixCapabilityPlan.swift */,
+				C7A0C017301A000100000001 /* MatrixNativeVibesUIContract.swift */,
+				CCA0C011301A000100000001 /* MatrixNativeWaveActionsContract.swift */,
+				CBA0C011301A000100000001 /* MatrixNativeRtcContract.swift */,
+				CDA0C011301A000100000001 /* MatrixCryptoSecurityContract.swift */,
+				C8A0C011301A000100000001 /* AtmoV2Contracts.swift */,
+				C9A0C011301A000100000001 /* UnifiedNotificationContract.swift */,
 				A4C0C013301A000100000001 /* LegacySocialAPIAdapter.swift */,
 			);
 			name = "Social Contracts";
@@ -576,6 +649,7 @@
 			children = (
 				A4C0C014301A000100000001 /* AtmosphereViewModel.swift */,
 				A4C0C015301A000100000001 /* AtmosphereView.swift */,
+				A4C0C0B8301A000100000001 /* AtmoProfileViews.swift */,
 			);
 			name = "Social Atmosphere";
 			path = Social/Atmosphere;
@@ -614,6 +688,14 @@
 				A4C0C01B301A000100000001 /* VibeAffiliationsView.swift */,
 				A4C0C01C301A000100000001 /* VibeInvitationsView.swift */,
 				A4C0C01D301A000100000001 /* VibeManagementViews.swift */,
+				C7A0C014301A000100000001 /* MatrixVibesRepositoryFoundation.swift */,
+				C7A0C016301A000100000001 /* MatrixNativeVibesViews.swift */,
+				C7A0C018301A000100000001 /* MatrixNativeMediaFoundation.swift */,
+				C7A0C019301A000100000001 /* MatrixNativeMediaViews.swift */,
+				CAA0C011301A000100000001 /* MatrixNativeDirectNotificationFoundation.swift */,
+				CAA0C012301A000100000001 /* MatrixNativeDirectNotificationViews.swift */,
+				CBA0C012301A000100000001 /* MatrixNativeRtcRoomView.swift */,
+				CDA0C013301A000100000001 /* MatrixNativeCryptoSecurityView.swift */,
 			);
 			name = "Social Vibes";
 			path = Social/Vibes;
@@ -625,6 +707,7 @@
 				E7100011301A000100000001 /* VibeEventModels.swift */,
 				E7100012301A000100000001 /* VibeEventsViews.swift */,
 				E7200005301A000100000001 /* EventLiveRoomView.swift */,
+				E7100032301A000100000001 /* AffiliationReviewView.swift */,
 			);
 			name = "Social Events";
 			path = Social/Events;
@@ -735,6 +818,7 @@
 			buildPhases = (
 				E2ACE6D20D33089F5A902453 /* Sources */,
 				8275042644AAC1068F42F1DF /* Frameworks */,
+				C7A0C030301A000100000001 /* Embed Matrix Framework */,
 				553F0AC685CB7977524595B8 /* Resources */,
 				E50000000000000000000034 /* Embed App Extensions */,
 			);
@@ -744,6 +828,11 @@
 				E50000000000000000000062 /* PBXTargetDependency */,
 			);
 			name = Mediaverse;
+			packageProductDependencies = (
+				8467890F2FFD119E00DED05E /* MetalPetal */,
+				E7200002301A000100000001 /* LiveKit */,
+				C7A0C021301A000100000001 /* MatrixRustSDK */,
+			);
 			productName = Mediaverse;
 			productReference = 8279F99B5DC950C1401F5EFD /* Mediaverse.app */;
 			productType = "com.apple.product-type.application";
@@ -792,6 +881,7 @@
 			packageReferences = (
 				8467890E2FFD119E00DED05E /* XCRemoteSwiftPackageReference "MetalPetal" */,
 				E7200003301A000100000001 /* XCRemoteSwiftPackageReference "client-sdk-swift" */,
+				C7A0C020301A000100000001 /* XCRemoteSwiftPackageReference "matrix-rust-components-swift" */,
 			);
 			productRefGroup = 0B8536557FEB21A0EFA66E4F /* Products */;
 			projectDirPath = "";
@@ -857,17 +947,40 @@
 				A4C0C001301A000100000001 /* SocialModels.swift in Sources */,
 				A4C0C002301A000100000001 /* SocialFeatureConfiguration.swift in Sources */,
 				B5D1C001301A000100000001 /* SocialRealtimeContracts.swift in Sources */,
+				C6A0C001301A000100000001 /* SocialOwnershipV2.swift in Sources */,
+				C6A0C002301A000100000001 /* SocialRepositoryBoundaries.swift in Sources */,
+				C7A0C001301A000100000001 /* MatrixSessionFoundation.swift in Sources */,
+				C7A0C002301A000100000001 /* MatrixSessionKeychain.swift in Sources */,
+				C7A0C003301A000100000001 /* MatrixSessionCoordinator.swift in Sources */,
+				C7A0C004301A000100000001 /* MatrixVibesRepositoryFoundation.swift in Sources */,
+				C7A0C007301A000100000001 /* MatrixCapabilityPlan.swift in Sources */,
+				C7A0C008301A000100000001 /* MatrixNativeVibesViews.swift in Sources */,
+				C7A0C009301A000100000001 /* MatrixNativeVibesUIContract.swift in Sources */,
+				CCA0C001301A000100000001 /* MatrixNativeWaveActionsContract.swift in Sources */,
+				C7A0C00A301A000100000001 /* MatrixNativeMediaFoundation.swift in Sources */,
+				C7A0C00B301A000100000001 /* MatrixNativeMediaViews.swift in Sources */,
+				C8A0C001301A000100000001 /* AtmoV2Contracts.swift in Sources */,
+				C9A0C001301A000100000001 /* UnifiedNotificationContract.swift in Sources */,
+				CAA0C001301A000100000001 /* MatrixNativeDirectNotificationFoundation.swift in Sources */,
+				CAA0C002301A000100000001 /* MatrixNativeDirectNotificationViews.swift in Sources */,
+				CBA0C001301A000100000001 /* MatrixNativeRtcContract.swift in Sources */,
+				CBA0C002301A000100000001 /* MatrixNativeRtcRoomView.swift in Sources */,
+				CDA0C001301A000100000001 /* MatrixCryptoSecurityContract.swift in Sources */,
+				CDA0C002301A000100000001 /* MatrixNativeCryptoFoundation.swift in Sources */,
+				CDA0C003301A000100000001 /* MatrixNativeCryptoSecurityView.swift in Sources */,
 				A4C0C003301A000100000001 /* LegacySocialAPIAdapter.swift in Sources */,
 				A4C0C004301A000100000001 /* AtmosphereViewModel.swift in Sources */,
 				A4C0C005301A000100000001 /* AtmosphereView.swift in Sources */,
 				A4C0C006301A000100000001 /* RippleCard.swift in Sources */,
 				A4C0C007301A000100000001 /* RippleEngagementController.swift in Sources */,
 				A4C0C008301A000100000001 /* SocialDestinationViews.swift in Sources */,
+				A4C0C0A8301A000100000001 /* AtmoProfileViews.swift in Sources */,
 				A4C0C009301A000100000001 /* EchoVibeSheet.swift in Sources */,
 				A4C0C00A301A000100000001 /* RippleComposer.swift in Sources */,
 				B5D1C002301A000100000001 /* RippleMediaUploadCoordinator.swift in Sources */,
 				B5D1C003301A000100000001 /* RippleVoiceRecorder.swift in Sources */,
 				E50000000000000000000004 /* IncomingShareSheet.swift in Sources */,
+				E7100031301A000100000001 /* AffiliationReviewView.swift in Sources */,
 				A4C0C00B301A000100000001 /* VibeAffiliationsView.swift in Sources */,
 				A4C0C00C301A000100000001 /* VibeInvitationsView.swift in Sources */,
 				A4C0C00D301A000100000001 /* VibeManagementViews.swift in Sources */,
@@ -1285,6 +1398,14 @@
 				minimumVersion = 2.0.0;
 			};
 		};
+		C7A0C020301A000100000001 /* XCRemoteSwiftPackageReference "matrix-rust-components-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/element-hq/matrix-rust-components-swift";
+			requirement = {
+				kind = exactVersion;
+				version = 26.07.28;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1297,6 +1418,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E7200003301A000100000001 /* XCRemoteSwiftPackageReference "client-sdk-swift" */;
 			productName = LiveKit;
+		};
+		C7A0C021301A000100000001 /* MatrixRustSDK */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C7A0C020301A000100000001 /* XCRemoteSwiftPackageReference "matrix-rust-components-swift" */;
+			productName = MatrixRustSDK;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

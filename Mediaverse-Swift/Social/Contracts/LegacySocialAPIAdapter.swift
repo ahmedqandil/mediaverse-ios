@@ -39,6 +39,70 @@ public enum LegacySocialAPIError: Error, Equatable {
     case invalidEnergy
     case invalidPollSelection
     case invalidPhoto
+    case matrixNativeCommunityWriteRetired
+}
+
+/// Fail-closed boundary for the Matrix-native Vibes cutover.
+///
+/// Legacy reads remain available for bounded migration comparison, but once
+/// the native ownership flag is active no community mutation may be sent to
+/// the retired Fan Club/Vibe API. Personal Atmo and unrelated Westreem
+/// product writes remain outside this boundary.
+public enum LegacyCommunityWriteBoundary {
+    public static let matrixNativeCutoverKey = "social.matrix-native-vibes-v2.enabled"
+
+    public static func isRetiredCommunityPath(_ path: String) -> Bool {
+        let normalized = path.lowercased()
+        return normalized.hasPrefix("/api/fan-club")
+            || normalized.hasPrefix("/api/fan-clubs")
+            || normalized.hasPrefix("/api/me/personal-vibe")
+            || normalized.hasPrefix("/api/backstage/affiliations")
+    }
+
+    public static func requireLegacyWriteAllowed(
+        path: String,
+        matrixNativeCutoverEnabled: Bool
+    ) throws {
+        guard !(matrixNativeCutoverEnabled && isRetiredCommunityPath(path)) else {
+            throw LegacySocialAPIError.matrixNativeCommunityWriteRetired
+        }
+    }
+}
+
+private struct LegacyCommunityWriteGuardTransport: LegacySocialTransport {
+    let base: any LegacySocialTransport
+    let matrixNativeCutoverEnabled: @Sendable () -> Bool
+
+    func socialData(path: String) async throws -> Data {
+        try await base.socialData(path: path)
+    }
+
+    func socialPostData(path: String, body: Data) async throws -> Data {
+        try requireWrite(path: path)
+        return try await base.socialPostData(path: path, body: body)
+    }
+
+    func socialPatchData(path: String, body: Data) async throws -> Data {
+        try requireWrite(path: path)
+        return try await base.socialPatchData(path: path, body: body)
+    }
+
+    func socialDeleteData(path: String) async throws -> Data {
+        try requireWrite(path: path)
+        return try await base.socialDeleteData(path: path)
+    }
+
+    func socialUploadData(path: String, body: Data, contentType: String) async throws -> Data {
+        try requireWrite(path: path)
+        return try await base.socialUploadData(path: path, body: body, contentType: contentType)
+    }
+
+    private func requireWrite(path: String) throws {
+        try LegacyCommunityWriteBoundary.requireLegacyWriteAllowed(
+            path: path,
+            matrixNativeCutoverEnabled: matrixNativeCutoverEnabled()
+        )
+    }
 }
 
 /// Adapter for the currently deployed, intentionally frozen social endpoints.
@@ -49,8 +113,19 @@ public actor LegacySocialAPIAdapter {
     private let transport: any LegacySocialTransport
     private let decoder: JSONDecoder
 
-    public init(transport: any LegacySocialTransport, decoder: JSONDecoder = JSONDecoder()) {
-        self.transport = transport
+    public init(
+        transport: any LegacySocialTransport,
+        decoder: JSONDecoder = JSONDecoder(),
+        matrixNativeCutoverEnabled: @escaping @Sendable () -> Bool = {
+            UserDefaults.standard.bool(
+                forKey: LegacyCommunityWriteBoundary.matrixNativeCutoverKey
+            )
+        }
+    ) {
+        self.transport = LegacyCommunityWriteGuardTransport(
+            base: transport,
+            matrixNativeCutoverEnabled: matrixNativeCutoverEnabled
+        )
         self.decoder = decoder
     }
 

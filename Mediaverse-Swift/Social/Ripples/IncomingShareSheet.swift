@@ -1,14 +1,14 @@
 import SwiftUI
 
-/// Resolves content received from the iOS share sheet, then hands it to the
-/// same native Echo experience used everywhere else in WeStreem.
+/// Hands content received from iOS to the same Matrix-native Echo experience
+/// used by Westreem product surfaces. External arbitrary links are not turned
+/// into Vibe events; only immutable, typed Westreem entities are eligible.
 struct IncomingShareSheet: View {
     let share: IncomingShare
     let onClose: () -> Void
 
     @State private var content: EchoContent?
     @State private var errorMessage: String?
-    private let api = LegacySocialAPIAdapter(transport: APIClient.shared)
 
     var body: some View {
         Group {
@@ -19,33 +19,23 @@ struct IncomingShareSheet: View {
             } else {
                 NavigationStack {
                     VStack(spacing: 18) {
-                        if let errorMessage {
-                            Image(systemName: "link.badge.plus")
-                                .font(.system(size: 34, weight: .semibold))
-                                .foregroundStyle(C.watch)
-                            Text("This link could not be prepared")
-                                .font(.headline)
-                            Text(errorMessage)
-                                .font(.footnote)
-                                .foregroundStyle(C.textMuted)
-                                .multilineTextAlignment(.center)
-                            Button("Try Again") {
-                                Task { await resolve() }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(C.watch)
-                        } else {
-                            ProgressView()
-                                .tint(C.watch)
-                            Text("Preparing Echo…")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(C.textMuted)
-                        }
+                        Image(systemName: "link.badge.plus")
+                            .font(.system(size: 34, weight: .semibold))
+                            .foregroundStyle(C.watch)
+                        Text("This link cannot be Echoed")
+                            .font(.headline)
+                        Text(
+                            errorMessage
+                                ?? "Open the item in WeStreem and choose Echo to Vibes so its identity can be verified."
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(C.textMuted)
+                        .multilineTextAlignment(.center)
                     }
                     .padding(28)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(C.bg)
-                    .navigationTitle("Echo")
+                    .navigationTitle("Echo to Vibes")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
@@ -55,30 +45,18 @@ struct IncomingShareSheet: View {
                 }
             }
         }
-        .task { await resolve() }
+        .task { resolve() }
     }
 
     @MainActor
-    private func resolve() async {
+    private func resolve() {
         guard content == nil else { return }
-        errorMessage = nil
         do {
-            let result = try await api.resolveAttachment(url: share.url.absoluteString)
-            let preview = result.preview
-            guard let attachment = result.attachment.createAttachment else {
-                throw IncomingShareError.unsupportedAttachment
-            }
-            content = EchoContent(
-                attachment: attachment,
-                eyebrow: preview?.kind?.uppercased() ?? "LINK",
-                title: preview?.title ?? share.url.host ?? "Shared link",
-                subtitle: preview?.subtitle ?? preview?.domain,
-                imageURL: preview?.thumbnailURL ?? preview?.faviconURL,
-                avatarURL: preview?.faviconURL,
-                description: preview?.subtitle,
-                sourceName: preview?.domain ?? share.url.host,
-                isPortrait: preview?.kind?.lowercased() == "short"
+            content = try EchoContent.typedWestreemShare(
+                url: share.url,
+                fallbackTitle: share.text
             )
+            errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -86,9 +64,105 @@ struct IncomingShareSheet: View {
 }
 
 private enum IncomingShareError: LocalizedError {
-    case unsupportedAttachment
+    case untrustedURL
+    case missingImmutableIdentity
+    case unsupportedEntity
 
     var errorDescription: String? {
-        "This type of link is not available for Echo yet."
+        switch self {
+        case .untrustedURL:
+            "Only secure westreem.com links can be sent into Vibes."
+        case .missingImmutableIdentity:
+            "This link does not contain the verified WeStreem identity required for safe Vibe sharing."
+        case .unsupportedEntity:
+            "This WeStreem item is not one of the content types supported by Vibes."
+        }
+    }
+}
+
+private extension EchoContent {
+    static func typedWestreemShare(
+        url: URL,
+        fallbackTitle: String?
+    ) throws -> EchoContent {
+        guard
+            url.scheme?.lowercased() == "https",
+            let host = url.host?.lowercased(),
+            host == "westreem.com" || host.hasSuffix(".westreem.com"),
+            url.user == nil,
+            url.password == nil,
+            url.fragment == nil
+        else {
+            throw IncomingShareError.untrustedURL
+        }
+
+        let components = URLComponents(
+            url: url,
+            resolvingAgainstBaseURL: false
+        )
+        let query = (components?.queryItems ?? []).reduce(
+            into: [String: String]()
+        ) { values, item in
+            if values[item.name] == nil, let value = item.value {
+                values[item.name] = value
+            }
+        }
+        let path = url.path
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+        let explicitType = query["entityType"].flatMap(
+            MatrixNativeWestreemShareEntityType.init(rawValue:)
+        )
+        let explicitID = query["entityId"]?.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+
+        let resolved: (MatrixNativeWestreemShareEntityType, String)
+        if let explicitType, let explicitID, !explicitID.isEmpty {
+            guard explicitType != .matrixEvent else {
+                throw IncomingShareError.unsupportedEntity
+            }
+            resolved = (explicitType, explicitID)
+        } else {
+            guard path.count >= 2 else {
+                throw IncomingShareError.missingImmutableIdentity
+            }
+            switch path[0].lowercased() {
+            case "watch":
+                resolved = (.video, path[1])
+            case "shorts":
+                resolved = (.short, path[1])
+            case "collections":
+                resolved = (.collection, path[1])
+            case "shows":
+                resolved = (.show, path[1])
+            default:
+                throw IncomingShareError.missingImmutableIdentity
+            }
+        }
+
+        let title = fallbackTitle?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayTitle: String
+        if let title, !title.isEmpty {
+            displayTitle = String(title.prefix(500))
+        } else {
+            displayTitle = "WeStreem \(resolved.0.rawValue.replacingOccurrences(of: "_", with: " "))"
+        }
+        return EchoContent(
+            entityType: resolved.0,
+            entityID: String(resolved.1.prefix(512)),
+            eyebrow: resolved.0.rawValue.replacingOccurrences(
+                of: "_",
+                with: " "
+            ).uppercased(),
+            title: displayTitle,
+            subtitle: "WeStreem",
+            imageURL: nil,
+            avatarURL: nil,
+            description: nil,
+            sourceName: host,
+            isPortrait: resolved.0 == .short
+        )
     }
 }

@@ -390,6 +390,9 @@ final class AuthManager: ObservableObject {
         authGeneration = UUID()
         refreshTask?.cancel()
         refreshTask = nil
+        // Remove both the Westreem APNs record and the canonical Matrix HTTP
+        // pusher while both authenticated sessions are still available.
+        await PushNotificationManager.shared.unregisterForSignOut()
         try? await APIClient.shared.signOut()
         await APIClient.shared.clearSessionToken()
         await CacheMaintenanceService.shared.clearUserScopedCaches()

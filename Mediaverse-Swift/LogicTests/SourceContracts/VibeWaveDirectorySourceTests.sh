@@ -1,58 +1,42 @@
 #!/bin/sh
 set -eu
 
-repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-view="$repo_dir/Social/Vibes/SocialDestinationViews.swift"
-card="$repo_dir/Social/Ripples/RippleCard.swift"
+root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
+view="$root/Social/Vibes/MatrixNativeVibesViews.swift"
+repository="$root/Social/Vibes/MatrixVibesRepositoryFoundation.swift"
+tabs="$root/Views/MainTabView.swift"
+atmo="$root/Social/Atmosphere/AtmoProfileViews.swift"
 
-assert_contains() {
-  needle=$1
-  file=$2
-  message=$3
-  if ! grep -Fq -- "$needle" "$file"; then
-    echo "FAIL: $message"
-    return 1
-  fi
+require() {
+  grep -Fq -- "$1" "$2" || { echo "FAIL: $3" >&2; exit 1; }
 }
 
-failures=0
+require 'struct MatrixNativeVibesRootView: View' "$view" \
+  "Vibes must enter through the Matrix-native directory."
+require 'MatrixNativeVibeView(space: space)' "$view" \
+  "A Matrix Space must be the canonical Vibe destination."
+require 'rooms = try await matrixSession.waves(spaceID: space.id).rooms' "$view" \
+  "Wave membership and hierarchy must be loaded from Matrix."
+require 'MatrixNativeWaveRoomView(room: room)' "$view" \
+  "A Wave must open as a dedicated Matrix room."
+require 'MatrixNativeRichComposer(' "$view" \
+  "Dedicated Waves must use the Matrix-native composer."
+require 'MatrixNativeMessageRow(' "$view" \
+  "Dedicated Waves must render Matrix timeline events."
+require 'permissions = try await matrixSession.spacePermissions(spaceID: space.id)' "$view" \
+  "Vibe management must use Matrix power levels."
+require 'if permissions.mayOpenVibeManagement' "$view" \
+  "Every joined Vibe member must be able to reach member-level Vibe actions."
+require 'func childRooms(spaceID: String)' "$repository" \
+  "Wave directories must come from the Matrix SDK repository."
+require 'matrixNativeVibesEnabled' "$tabs" \
+  "The app must retain a controlled Matrix-native rollout boundary."
+require 'struct AtmoProfileView: View' "$atmo" \
+  "Personal Atmo must remain an independent Westreem-owned surface."
 
-assert_contains 'vibePresentation == .waveDirectory' "$view" \
-  "Community Vibes must have a directory-first state." || failures=$((failures + 1))
-assert_contains 'guard !isPersonal else { return .personalFeed }' "$repo_dir/Social/Contracts/SocialModels.swift" \
-  "Personal Atmospheres must be excluded from the community directory flow." || failures=$((failures + 1))
-assert_contains 'horizontalSizeClass != .compact' "$view" \
-  "The existing iPad Wave presentation must remain available." || failures=$((failures + 1))
-assert_contains 'mobileWaveDirectoryRow(' "$view" \
-  "Vibe Home and Waves must reuse the information-rich directory row." || failures=$((failures + 1))
-assert_contains 'waveDirectoryPreviews[wave.slug]' "$view" \
-  "Wave rows must display additive activity and unread preview data." || failures=$((failures + 1))
-assert_contains 'specializedLabel: waveTypeLabel(wave.type)' "$view" \
-  "Specialized Wave behavior must be visible in the directory." || failures=$((failures + 1))
-assert_contains 'private func openDedicatedWave(_ waveSlug: String) async' "$view" \
-  "Wave selection must open a dedicated conversation state." || failures=$((failures + 1))
-assert_contains 'returnToWaveDirectory()' "$view" \
-  "Dedicated Wave conversations must provide back navigation." || failures=$((failures + 1))
-assert_contains '.navigationBarBackButtonHidden(isCommunityConversation)' "$view" \
-  "Wave conversations must replace system back with Wave-local back." || failures=$((failures + 1))
-assert_contains 'presentsWaveCreator = true' "$view" \
-  "Managers must create Waves from the Wave directory." || failures=$((failures + 1))
-assert_contains 'editingWave = wave' "$view" \
-  "Managers must edit a Wave from its conversation." || failures=$((failures + 1))
-assert_contains 'composerDestination(for: detail)' "$view" \
-  "Dedicated Wave composition must reuse the capability-aware adaptive composer." || failures=$((failures + 1))
-assert_contains 'selectedWave?.capabilities.canPost ?? detail.capabilities.canPost' "$view" \
-  "Posting permissions must remain server capability driven." || failures=$((failures + 1))
-assert_contains 'initialWaveSlug' "$view" \
-  "Canonical Wave deep links must continue selecting their destination." || failures=$((failures + 1))
-assert_contains 'presentation: isCommunityConversation ? .waveConversation : .social' "$view" \
-  "Community Wave cards must retain the contextual conversation presentation." || failures=$((failures + 1))
-assert_contains 'ripple.conversationSummary?.unreadCount' "$card" \
-  "Directory activity must share the normalized conversation contract used by cards." || failures=$((failures + 1))
-
-if [ "$failures" -ne 0 ]; then
-  echo "$failures native Vibe Wave-directory source contract(s) failed."
+if grep -Eq 'LegacySocialAPIAdapter|RippleCard[(]|/api/fan-clubs|/api/fan-club-posts' "$view"; then
+  echo "FAIL: Matrix-native Vibes must not render or mutate legacy social Ripples." >&2
   exit 1
 fi
 
-echo "Native Vibe Wave-directory source contracts passed."
+echo "Matrix-native Vibe and Wave directory source contracts passed."

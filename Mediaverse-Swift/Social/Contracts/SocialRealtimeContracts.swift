@@ -1,5 +1,21 @@
 import Foundation
 
+enum MatrixNativeAvatarContract {
+    static let maximumBytes = 5 * 1_024 * 1_024
+
+    static func accepts(_ data: Data) -> Bool {
+        guard !data.isEmpty, data.count <= maximumBytes else { return false }
+        let bytes = [UInt8](data.prefix(12))
+        let isJPEG = bytes.starts(with: [0xFF, 0xD8, 0xFF])
+        let isPNG = bytes.starts(with: [0x89, 0x50, 0x4E, 0x47])
+        let isGIF = bytes.starts(with: Array("GIF8".utf8))
+        let isWebP = bytes.count >= 12
+            && Array(bytes[0..<4]) == Array("RIFF".utf8)
+            && Array(bytes[8..<12]) == Array("WEBP".utf8)
+        return isJPEG || isPNG || isGIF || isWebP
+    }
+}
+
 public enum SocialAuthority: String, Decodable, Equatable, Sendable {
     case matrix = "MATRIX"
     case westreem = "WESTREEM"
@@ -235,7 +251,7 @@ public struct MatrixClientSession: Decodable, Equatable, Sendable {
             throw DecodingError.dataCorruptedError(
                 forKey: .accessToken,
                 in: values,
-                debugDescription: "Invalid Matrix client session"
+                debugDescription: "Invalid WeStreem Vibes client session"
             )
         }
         expiresAt = expiry
@@ -443,8 +459,12 @@ public enum MatrixClientError: Error, Equatable, Sendable {
     case unavailable
 }
 
-/// Small native transport boundary that can later be backed by Matrix Rust SDK
-/// without changing any SwiftUI model. Credentials live only inside this actor.
+/// Retained only for the pre-v2 migration comparison path.
+///
+/// Matrix-native Vibes must use `MatrixRustSDKVibesProvider`. This legacy
+/// protocol client fails closed as soon as the native ownership cutover is
+/// enabled so it can never become a second Matrix authority.
+@available(*, deprecated, message: "Use MatrixRustSDKVibesProvider for Matrix-native Vibes")
 public actor MatrixWaveClient {
     private struct TypingRequest: Encodable {
         let typing: Bool
@@ -467,6 +487,9 @@ public actor MatrixWaveClient {
     }
 
     public func connect(deviceName: String = "Westreem iOS") async throws {
+        guard !SocialFeatureConfiguration.runtime().matrixNativeVibesEnabled else {
+            throw MatrixClientError.disabled
+        }
         let body = try JSONEncoder().encode(["deviceName": String(deviceName.prefix(120))])
         let data = try await sessionBroker.socialPostData(path: "/api/matrix/session", body: body)
         let envelope = try decoder.decode(MatrixClientSessionEnvelope.self, from: data)

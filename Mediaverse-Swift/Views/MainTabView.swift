@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
-/// Root page container: Home · Videos · Shorts · Discover · My Vibes
+/// Root page container: Home · Videos · Shorts · Discover · Vibes
 /// All watch/channel/show/microdrama screens are PUSHED on the relevant NavigationStack.
 /// On iOS 26 the tab bar adopts Liquid Glass automatically — UITabBar.appearance()
 /// is skipped on that OS to avoid fighting the compositor.
@@ -39,6 +39,10 @@ struct MainTabView: View {
     @State private var contextToastUserID: String?
     @State private var contextToastDismissTask: Task<Void, Never>?
     private let socialFeatures = SocialFeatureConfiguration.runtime()
+
+    private var vibesTabTitle: String {
+        socialFeatures.matrixNativeVibesEnabled ? "Vibes" : "My Vibes"
+    }
 
     enum AppTab: Int, Hashable {
         case home = 0
@@ -95,101 +99,126 @@ struct MainTabView: View {
     }
 
     var body: some View {
+        inputObservationRoot
+    }
+
+    private var baseLifecycleRoot: some View {
         layeredRootWithProfile
-        .simultaneousGesture(mainScrollActivityGesture)
-        .animation(.spring(response: 0.26, dampingFraction: 0.88), value: isUploadSheetPresented)
-        .animation(.spring(response: 0.24, dampingFraction: 0.86), value: isBottomTabBarCompressed)
-        .animation(.spring(response: 0.28, dampingFraction: 0.88), value: activeContextToast?.id)
-        .onAppear {
-            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
-            applyNavigationBarAppearance()
-            applyTabBarAppearance()
-            consumePendingPushNotificationAction()
-        }
-        .task {
-            scheduleDeferredStartupWork()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .storyPublishNotificationTapped)) { _ in
-            selectedTab = .home
-            lastContentTab = .home
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .pushRouteRequested)) { notification in
-            guard let route = notification.object as? AppRoute else { return }
-            _ = PushNotificationManager.shared.consumePendingRoute()
-            openPushRoute(route)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .appContextDidChange)) { notification in
-            shortsPlaybackManager.resetForIdentityChange()
-            miniPlayer.close()
-            homePath = []
-            videosPath = []
-            explorePath = []
-            shortsPath = []
-            myVibesPath = []
-            dismissContextToast()
-            selectedTab = .home
-            lastContentTab = .home
-            if let context = notification.object as? ActiveContext {
-                routeAfterContextSwitch(context)
+            .simultaneousGesture(mainScrollActivityGesture)
+            .animation(.spring(response: 0.26, dampingFraction: 0.88), value: isUploadSheetPresented)
+            .animation(.spring(response: 0.24, dampingFraction: 0.86), value: isBottomTabBarCompressed)
+            .animation(.spring(response: 0.28, dampingFraction: 0.88), value: activeContextToast?.id)
+            .onAppear {
+                UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+                applyNavigationBarAppearance()
+                applyTabBarAppearance()
+                consumePendingPushNotificationAction()
             }
-            scheduleDeferredContextRefresh(isAuthenticated: auth.isAuthenticated)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .uploadRequested)) { _ in
-            openUploadOptions()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .profileTabRequested)) { _ in
-            isProfilePresented = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .exploreSectionRequested)) { _ in
-            explorePath = []
-            selectedTab = .explore
-            lastContentTab = .explore
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .shortsTabRequested)) { _ in
-            shortsPath = []
-            selectedTab = .shorts
-            lastContentTab = .shorts
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .mentionNavigationRequested)) { notification in
-            guard let route = notification.object as? AppRoute else { return }
-            pushMentionRoute(route)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .commentsOverlayVisibilityChanged)) { notification in
-            isCommentsOverlayPresented = (notification.object as? Bool) == true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .routedShortsVisibilityChanged)) { notification in
-            isRoutedShortsPresented = (notification.object as? Bool) == true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .shortsAdPlaybackVisibilityChanged), perform: handleShortsAdPlaybackVisibilityChanged)
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-            isKeyboardVisible = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            isKeyboardVisible = false
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            guard UIDevice.current.orientation.isLandscape,
-                  let item = miniPlayer.item,
-                  item.isAd else { return }
-            expandMiniPlayer(item.route)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            Task { await PushNotificationManager.shared.retryRegistrationIfAuthorized() }
-        }
-        .onChange(of: miniPlayer.expansionAttachToken) { _, _ in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
-                finishExpansionOverlayIfNeeded(force: true)
+            .task {
+                scheduleDeferredStartupWork()
             }
-        }
-        .onChange(of: miniPlayer.replaceAndExpandToken) { _, _ in
-            guard let item = miniPlayer.item else { return }
-            expandMiniPlayer(item.route)
-        }
-        .onChange(of: selectedTab, handleSelectedTabChange)
-        .onChange(of: isMuted) { _, muted in
-            shortsPlaybackManager.setMuted(muted)
-        }
-        .onChange(of: auth.currentUser?.id, handleAuthenticationChange)
+    }
+
+    private var navigationNotificationRoot: some View {
+        baseLifecycleRoot
+            .onReceive(NotificationCenter.default.publisher(for: .storyPublishNotificationTapped)) { _ in
+                selectedTab = .home
+                lastContentTab = .home
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .pushRouteRequested)) { notification in
+                guard let route = notification.object as? AppRoute else { return }
+                _ = PushNotificationManager.shared.consumePendingRoute()
+                openPushRoute(route)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .matrixRoomRouteRequested)) { _ in
+                myVibesPath = []
+                selectedTab = .myVibes
+                lastContentTab = .myVibes
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .appContextDidChange)) { notification in
+                shortsPlaybackManager.resetForIdentityChange()
+                miniPlayer.close()
+                homePath = []
+                videosPath = []
+                explorePath = []
+                shortsPath = []
+                myVibesPath = []
+                dismissContextToast()
+                selectedTab = .home
+                lastContentTab = .home
+                if let context = notification.object as? ActiveContext {
+                    routeAfterContextSwitch(context)
+                }
+                scheduleDeferredContextRefresh(isAuthenticated: auth.isAuthenticated)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .uploadRequested)) { _ in
+                openUploadOptions()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .profileTabRequested)) { _ in
+                isProfilePresented = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .exploreSectionRequested)) { _ in
+                explorePath = []
+                selectedTab = .explore
+                lastContentTab = .explore
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .shortsTabRequested)) { _ in
+                shortsPath = []
+                selectedTab = .shorts
+                lastContentTab = .shorts
+            }
+    }
+
+    private var systemNotificationRoot: some View {
+        navigationNotificationRoot
+            .onReceive(NotificationCenter.default.publisher(for: .mentionNavigationRequested)) { notification in
+                guard let route = notification.object as? AppRoute else { return }
+                pushMentionRoute(route)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .commentsOverlayVisibilityChanged)) { notification in
+                isCommentsOverlayPresented = (notification.object as? Bool) == true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .routedShortsVisibilityChanged)) { notification in
+                isRoutedShortsPresented = (notification.object as? Bool) == true
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: .shortsAdPlaybackVisibilityChanged),
+                perform: handleShortsAdPlaybackVisibilityChanged
+            )
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                isKeyboardVisible = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                isKeyboardVisible = false
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+                guard UIDevice.current.orientation.isLandscape,
+                      let item = miniPlayer.item,
+                      item.isAd else { return }
+                expandMiniPlayer(item.route)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                Task { await PushNotificationManager.shared.retryRegistrationIfAuthorized() }
+            }
+    }
+
+    private var inputObservationRoot: some View {
+        systemNotificationRoot
+            .onChange(of: miniPlayer.expansionAttachToken) { _, _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
+                    finishExpansionOverlayIfNeeded(force: true)
+                }
+            }
+            .onChange(of: miniPlayer.replaceAndExpandToken) { _, _ in
+                guard let item = miniPlayer.item else { return }
+                expandMiniPlayer(item.route)
+            }
+            .onChange(of: selectedTab, handleSelectedTabChange)
+            .onChange(of: isMuted) { _, muted in
+                shortsPlaybackManager.setMuted(muted)
+            }
+            .onChange(of: auth.currentUser?.id, handleAuthenticationChange)
+            .onChange(of: platformConfig.isLoaded, handlePlatformConfigurationLoad)
     }
 
     private var layeredRootWithProfile: some View {
@@ -342,7 +371,9 @@ struct MainTabView: View {
         TabView(selection: $selectedTab) {
             NavigationStack(path: $homePath) {
                 Group {
-                    if socialFeatures.atmosphereEnabled {
+                    if !platformConfig.isEnabled("atmosphere", aspect: .page) {
+                        PlatformSectionUnavailableView(item: platformConfig.browseItem(id: "atmosphere"))
+                    } else if socialFeatures.atmosphereEnabled {
                         AtmosphereView()
                     } else {
                         HomeView(headerStyle: .home)
@@ -413,14 +444,22 @@ struct MainTabView: View {
             .tag(AppTab.explore)
 
             NavigationStack(path: $myVibesPath) {
-                AtmosphereView(initialTab: .myVibes, visibleTabs: [.myVibes])
+                Group {
+                    if !platformConfig.isEnabled("vibes", aspect: .page) {
+                        PlatformSectionUnavailableView(item: platformConfig.browseItem(id: "vibes"))
+                    } else if socialFeatures.matrixNativeVibesEnabled {
+                        MatrixNativeVibesRootView()
+                    } else {
+                        AtmosphereView(initialTab: .myVibes, visibleTabs: [.myVibes])
+                    }
+                }
                     .navigationDestination(for: AppRoute.self) { route in
                         routeDestination(route)
                     }
             }
             .ignoresSafeArea(edges: .bottom)
             .toolbar(.hidden, for: .tabBar)
-            .tabItem { appTabLabel("My Vibes", icon: "users", fallback: "person.3") }
+            .tabItem { appTabLabel(vibesTabTitle, icon: "users", fallback: "person.3") }
             .tag(AppTab.myVibes)
         }
         .tint(C.watch)
@@ -619,12 +658,14 @@ struct MainTabView: View {
                 Spacer(minLength: 0)
 
                 HStack(spacing: 0) {
-                    bottomTabButton(
-                        .home,
-                        title: "Home",
-                        icon: "home",
-                        fallback: "house"
-                    )
+                    if platformConfig.isEnabled("atmosphere", aspect: .nav) {
+                        bottomTabButton(
+                            .home,
+                            title: "Home",
+                            icon: "home",
+                            fallback: "house"
+                        )
+                    }
                     if platformConfig.isEnabled("videos", aspect: .nav) {
                         bottomTabButton(.videos, title: "Videos", icon: "play", fallback: "play.rectangle")
                     }
@@ -632,7 +673,9 @@ struct MainTabView: View {
                         bottomTabButton(.shorts, title: "Shorts", icon: "short", fallback: "bolt")
                     }
                     bottomTabButton(.explore, title: "Discover", icon: "explore", fallback: "safari")
-                    bottomTabButton(.myVibes, title: "My Vibes", icon: "users", fallback: "person.3")
+                    if platformConfig.isEnabled("vibes", aspect: .nav) {
+                        bottomTabButton(.myVibes, title: vibesTabTitle, icon: "users", fallback: "person.3")
+                    }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -743,6 +786,46 @@ struct MainTabView: View {
                 object: scrollTarget(for: tab)
             )
         }
+    }
+
+    private func normalizeSelectedTabForPlatform() {
+        let available: [AppTab] = [
+            platformConfig.isEnabled("atmosphere", aspect: .nav)
+                && platformConfig.isEnabled("atmosphere", aspect: .page) ? .home : nil,
+            platformConfig.isEnabled("videos", aspect: .nav)
+                && platformConfig.isEnabled("videos", aspect: .page) ? .videos : nil,
+            platformConfig.isEnabled("shorts", aspect: .nav)
+                && platformConfig.isEnabled("shorts", aspect: .page) ? .shorts : nil,
+            .explore,
+            platformConfig.isEnabled("vibes", aspect: .nav)
+                && platformConfig.isEnabled("vibes", aspect: .page) ? .myVibes : nil,
+        ].compactMap { $0 }
+
+        let selectedAvailable: Bool
+        switch selectedTab {
+        case .home:
+            selectedAvailable = platformConfig.isEnabled("atmosphere", aspect: .nav)
+                && platformConfig.isEnabled("atmosphere", aspect: .page)
+        case .videos:
+            selectedAvailable = platformConfig.isEnabled("videos", aspect: .nav)
+                && platformConfig.isEnabled("videos", aspect: .page)
+        case .shorts:
+            selectedAvailable = platformConfig.isEnabled("shorts", aspect: .nav)
+                && platformConfig.isEnabled("shorts", aspect: .page)
+        case .explore:
+            selectedAvailable = true
+        case .myVibes:
+            selectedAvailable = platformConfig.isEnabled("vibes", aspect: .nav)
+                && platformConfig.isEnabled("vibes", aspect: .page)
+        }
+        guard !selectedAvailable, let fallback = available.first else { return }
+        selectedTab = fallback
+        lastContentTab = fallback
+    }
+
+    private func handlePlatformConfigurationLoad(_ oldValue: Bool, _ loaded: Bool) {
+        guard loaded else { return }
+        normalizeSelectedTabForPlatform()
     }
 
     private func resetNavigationPath(for tab: AppTab) {
@@ -1036,19 +1119,39 @@ struct MainTabView: View {
         case .collection(let id):
             CollectionDetailView(collectionId: id)
         case .vibe(let slug):
-            VibeDetailView(slug: slug)
+            if socialFeatures.matrixNativeVibesEnabled {
+                MatrixNativeLegacyRouteUnavailableView(title: "Legacy Vibe link unavailable")
+            } else {
+                VibeDetailView(slug: slug)
+            }
         case .vibeWave(let vibeSlug, let waveSlug):
-            VibeDetailView(slug: vibeSlug, initialWaveSlug: waveSlug)
+            if socialFeatures.matrixNativeVibesEnabled {
+                MatrixNativeLegacyRouteUnavailableView(title: "Legacy Wave link unavailable")
+            } else {
+                VibeDetailView(slug: vibeSlug, initialWaveSlug: waveSlug)
+            }
         case .vibeManagement(let slug, let tab):
-            VibeDetailView(slug: slug, initialManagementTab: tab)
+            if socialFeatures.matrixNativeVibesEnabled {
+                MatrixNativeLegacyRouteUnavailableView(title: "Legacy Vibe settings retired")
+            } else {
+                VibeDetailView(slug: slug, initialManagementTab: tab)
+            }
         case .vibeInvite(let token):
-            VibeInviteAcceptView(token: token)
+            if socialFeatures.matrixNativeVibesEnabled {
+                MatrixNativeLegacyRouteUnavailableView(title: "Legacy invitation retired")
+            } else {
+                VibeInviteAcceptView(token: token)
+            }
         case .event(let slug):
             VibeEventDetailView(slug: slug)
         case .eventInvite(let token):
             VibeEventInviteView(token: token)
         case .ripple(let postId):
-            RippleDetailView(postId: postId)
+            if socialFeatures.matrixNativeVibesEnabled {
+                MatrixNativeLegacyRouteUnavailableView(title: "Legacy Ripple link unavailable")
+            } else {
+                RippleDetailView(postId: postId)
+            }
         case .flash(let storyId):
             FlashDeepLinkView(storyId: storyId)
         case .atmo(let handle):

@@ -1,5 +1,5 @@
 {
-  "originHash" : "ea66cc038d8a662a1c36f1b382c30f1b1fcbb7ed0a03a2deee0f6b4d50404f0d",
+  "originHash" : "778d7567e52677ecd16c015616f2c754bd41a596449c297e0e4d8523e773a606",
   "pins" : [
     {
       "identity" : "client-sdk-swift",
@@ -17,6 +17,15 @@
       "state" : {
         "revision" : "7c161254ce7cd55debc48023f69a917076b12a26",
         "version" : "0.0.6"
+      }
+    },
+    {
+      "identity" : "matrix-rust-components-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/element-hq/matrix-rust-components-swift",
+      "state" : {
+        "revision" : "af0cbc94741f39cc3e175e0449bbfae10f9436b0",
+        "version" : "26.7.28"
       }
     },
     {

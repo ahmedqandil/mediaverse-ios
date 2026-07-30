@@ -1,65 +1,42 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-card="$root/Social/Ripples/RippleCard.swift"
-destination="$root/Social/Vibes/SocialDestinationViews.swift"
+root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
+view="$root/Social/Vibes/MatrixNativeVibesViews.swift"
+atmo_card="$root/Social/Ripples/RippleCard.swift"
 
-assert_contains() {
-  local needle="$1"
-  local file="$2"
-  local message="$3"
-  if ! grep -Fq "$needle" "$file"; then
-    echo "FAIL: $message" >&2
-    exit 1
-  fi
+require() {
+  grep -Fq -- "$1" "$2" || { echo "FAIL: $3" >&2; exit 1; }
 }
 
-assert_contains 'case waveConversation' "$card" \
-  "Wave message styling must remain an explicit presentation, isolated from social/Atmosphere cards."
-assert_contains 'presentation: isCommunityConversation ? .waveConversation : .social' "$destination" \
-  "Community Waves must opt into message presentation without changing personal Atmospheres."
-assert_contains 'isWaveMessageGrouped(' "$destination" \
-  "Wave feeds must calculate adjacent message groups."
-assert_contains 'ripple.author.id == previous.author.id' "$destination" \
-  "Only consecutive Ripples from the same author may group."
-assert_contains 'interval <= 10 * 60' "$destination" \
-  "Grouping must enforce the approved ten-minute identity/time boundary."
-assert_contains 'ripple.pinnedAt == nil' "$destination" \
-  "Pinned Ripples must always establish their own identity."
-assert_contains '.general' "$destination" \
-  "Grouping must be limited to General or Custom Waves."
-assert_contains '.custom' "$destination" \
-  "Grouping must be limited to General or Custom Waves."
-assert_contains 'isGroupedWithPrevious' "$card" \
-  "Grouped rows must suppress repeated identity chrome."
-assert_contains 'isLastInMessageGroup' "$card" \
-  "The last item in a group must retain labeled contextual actions."
-assert_contains 'title: "Add Energy"' "$card" \
-  "Add Energy must lead the canonical Wave action order."
-assert_contains 'title: waveReplyActionTitle' "$card" \
-  "Reply/Answer must follow Add Energy."
-assert_contains 'title: "Echo"' "$card" \
-  "Echo must follow Reply/Answer."
-assert_contains 'title: "Share"' "$card" \
-  "Share must follow Echo."
-assert_contains 'waveMoreAction' "$card" \
-  "More must remain the trailing ownership/moderation/report action."
-assert_contains 'return ripple.wave?.type == .questions ? "Answer" : "Reply"' "$card" \
-  "Question Waves must call the reply action Answer."
-assert_contains 'if count > 0' "$card" \
-  "Zero engagement counts must be omitted."
-assert_contains 'Button("Edit"' "$card" \
-  "Owners/moderators must retain Edit in More."
-assert_contains 'Button("Delete"' "$card" \
-  "Owners/moderators must retain Delete in More."
-assert_contains 'Button("Report"' "$card" \
-  "Non-owners must retain Report in More."
-assert_contains '.frame(minHeight: 44)' "$card" \
-  "Every message action must meet the 44-point touch-target minimum."
-assert_contains 'canReplyToConversation' "$card" \
-  "Message styling must preserve capability and comments policy."
-assert_contains 'LegacySocialAPIAdapter' "$card" \
-  "Message styling must reuse existing mutations rather than add presentation-specific APIs."
+require 'private struct MatrixNativeMessageRow: View' "$view" \
+  "Wave messages must use the Matrix-native message presentation."
+require 'item.replyPreviews.prefix(' "$view" \
+  "A Wave message must preview a bounded number of replies."
+require 'MatrixNativeWaveActionPolicy.replyPreviewLimit' "$view" \
+  "Reply previews must use the shared Matrix-native policy."
+require '"Open discussion"' "$view" \
+  "Additional replies must open a dedicated discussion."
+require 'MatrixNativeThreadView(room: room, root: threadRoot)' "$view" \
+  "Discussions must use canonical Matrix threads."
+require 'label: item.reactionCount > 0' "$view" \
+  "Energy must lead the Matrix message action row."
+require 'label: "Reply"' "$view" \
+  "Reply must follow Energy."
+require 'Label("More", systemImage: "ellipsis")' "$view" \
+  "Ownership and moderation actions must remain in More."
+require 'Label("Edit", systemImage: "pencil")' "$view" \
+  "Authorized authors must retain Matrix edits."
+require 'Label("Report", systemImage: "exclamationmark.bubble")' "$view" \
+  "Eligible messages must retain Matrix reporting."
+require 'Label("Delete", systemImage: "trash")' "$view" \
+  "Authorized users must retain Matrix redaction."
+require 'presentation: RippleCardPresentation = .social' "$atmo_card" \
+  "Westreem Atmo cards must remain independent from Matrix messages."
 
-echo "Wave message-style Ripple source contracts passed."
+if grep -Eq 'RippleCard[(]|LegacySocialAPIAdapter|/api/fan-clubs' "$view"; then
+  echo "FAIL: Matrix message presentation reused the retired social authority." >&2
+  exit 1
+fi
+
+echo "Matrix-native Wave message presentation source contracts passed."

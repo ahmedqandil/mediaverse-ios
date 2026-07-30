@@ -61,11 +61,13 @@
 		</dict>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>WeStreem uses the camera so you can record videos and stories to upload.</string>
+	<string>WeStreem uses the camera when you choose to record a Vibe video message or join a video lounge, and for other camera uploads.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>WeStreem uses contacts only when you choose to find people you know or share a Vibe invitation. Contact details are matched privately and are not added automatically.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>WeStreem uses Face ID to unlock your saved session on this device.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>WeStreem uses the microphone to include audio when recording upload videos and stories.</string>
+	<string>WeStreem uses the microphone when you choose to record a Vibe voice or video message, or join a voice or video lounge.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>WeStreem saves exported videos and stories to your photo library when you choose to save them.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

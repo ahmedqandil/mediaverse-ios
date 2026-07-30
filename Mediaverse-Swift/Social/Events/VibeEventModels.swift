@@ -95,6 +95,7 @@ struct EventLiveRoomState: Decodable, Equatable, Sendable {
 struct EventSpeakerRequestState: Decodable, Identifiable, Equatable, Sendable {
     let id: String
     let status: String
+    let matrixRequestEventId: String?
 }
 
 struct EventLiveCapabilities: Decodable, Equatable, Sendable {
@@ -137,6 +138,10 @@ struct EventLiveController: Decodable, Equatable, Sendable {
     let speakerRequest: EventSpeakerRequestState?
     let capabilities: EventLiveCapabilities
     let playerAuthority: EventPlayerAuthority
+    let stageAuthority: String?
+    let watchPartyAuthority: String?
+    let matrixRoomId: String?
+    let westreemEventId: String?
 
     var watchReadiness: EventLiveReadiness {
         guard playerAuthority.westreemOwnsPlayback else { return .unavailable }
@@ -163,7 +168,7 @@ struct EventLiveConnectionResponse: Decodable, Equatable, Sendable {
     let connection: EventLiveConnection
 }
 
-enum EventWatchCommandAction: String, Encodable, Sendable {
+enum EventWatchCommandAction: String, Encodable, Sendable, Equatable {
     case play = "PLAY"
     case pause = "PAUSE"
     case seek = "SEEK"
@@ -172,14 +177,51 @@ enum EventWatchCommandAction: String, Encodable, Sendable {
 }
 
 struct EventWatchCommandRequest: Encodable, Sendable {
-    let action: EventWatchCommandAction
-    let sequence: Int
-    let positionMs: Int
-    let playbackEpoch: String
+    let action: EventWatchCommandAction?
+    let sequence: Int?
+    let positionMs: Int?
+    let playbackEpoch: String?
+    let matrixEventId: String?
+
+    init(
+        action: EventWatchCommandAction? = nil,
+        sequence: Int? = nil,
+        positionMs: Int? = nil,
+        playbackEpoch: String? = nil,
+        matrixEventId: String? = nil
+    ) {
+        self.action = action
+        self.sequence = sequence
+        self.positionMs = positionMs
+        self.playbackEpoch = playbackEpoch
+        self.matrixEventId = matrixEventId
+    }
 }
 
 struct EventWatchCommandResponse: Decodable, Sendable {
     let state: EventWatchPartyState
+}
+
+struct EventMatrixWatchPartyContent: Encodable, Sendable {
+    let schemaVersion = 1
+    let westreemEventId: String
+    let action: EventWatchCommandAction
+    let clientRequestId: String
+    let playbackEpoch: String
+    let sequence: Int
+    let positionMs: Int
+    let ads = "PER_CLIENT_NOT_SYNCHRONIZED"
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case westreemEventId = "westreem_event_id"
+        case action
+        case clientRequestId = "client_request_id"
+        case playbackEpoch = "playback_epoch"
+        case sequence
+        case positionMs = "position_ms"
+        case ads
+    }
 }
 
 enum EventClientSyncAction: String, Encodable, Sendable {
@@ -215,11 +257,54 @@ enum EventStageAction: String, Encodable, Sendable {
     case lockStage = "LOCK_STAGE"
     case unlockStage = "UNLOCK_STAGE"
     case emergencyEnd = "EMERGENCY_END"
+
+    var matrixEventType: String {
+        switch self {
+        case .requestSpeaker, .cancelSpeaker, .approveSpeaker, .denySpeaker:
+            "com.westreem.live.speaker.v1"
+        case .lockStage, .unlockStage, .emergencyEnd:
+            "com.westreem.live.stage.v1"
+        }
+    }
+
+    var requiresSpeakerRequestEvent: Bool {
+        switch self {
+        case .cancelSpeaker, .approveSpeaker, .denySpeaker: true
+        default: false
+        }
+    }
 }
 
 struct EventStageRequest: Encodable, Sendable {
     let action: EventStageAction
     let requestId: String?
+    let matrixEventId: String?
+
+    init(
+        action: EventStageAction,
+        requestId: String? = nil,
+        matrixEventId: String? = nil
+    ) {
+        self.action = action
+        self.requestId = requestId
+        self.matrixEventId = matrixEventId
+    }
+}
+
+struct EventMatrixLiveStageContent: Encodable, Sendable {
+    let schemaVersion = 1
+    let westreemEventId: String
+    let action: EventStageAction
+    let clientRequestId: String
+    let requestEventId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case westreemEventId = "westreem_event_id"
+        case action
+        case clientRequestId = "client_request_id"
+        case requestEventId = "request_event_id"
+    }
 }
 
 struct EventStageResponse: Decodable, Sendable {
@@ -249,6 +334,27 @@ struct VibeEventWaveIdentity: Codable, Hashable, Sendable {
     let type: String
 }
 
+struct VibeEventMatrixReference: Codable, Hashable, Sendable {
+    let matrixSpaceId: String
+    let matrixRoomId: String
+    let matrixEventId: String?
+    let publicationStatus: String
+}
+
+struct VibeEventOriginAffiliation: Decodable, Identifiable, Hashable, Sendable {
+    let id: String
+    let status: String
+    let show: VibeEventAffiliation?
+    let channel: VibeEventAffiliation?
+
+    var entity: VibeEventAffiliation? { show ?? channel }
+    var isShow: Bool { show != nil }
+}
+
+struct VibeEventOriginResponse: Decodable, Sendable {
+    let affiliations: [VibeEventOriginAffiliation]
+}
+
 struct VibeEventCardModel: Codable, Identifiable, Hashable, Sendable {
     let id: String
     let slug: String
@@ -268,8 +374,9 @@ struct VibeEventCardModel: Codable, Identifiable, Hashable, Sendable {
     let capacity: Int?
     let replayUrl: String?
     let realtimeExperience: VibeEventRealtimeExperience?
-    let club: VibeEventIdentity
+    let club: VibeEventIdentity?
     let wave: VibeEventWaveIdentity?
+    let matrixReference: VibeEventMatrixReference?
     let affiliatedShow: VibeEventAffiliation?
     let affiliatedChannel: VibeEventAffiliation?
 
@@ -296,8 +403,12 @@ struct VibeEventCardModel: Codable, Identifiable, Hashable, Sendable {
             VibeEventRealtimeExperience.self,
             forKey: .realtimeExperience
         )
-        club = try c.decode(VibeEventIdentity.self, forKey: .club)
+        club = try c.decodeIfPresent(VibeEventIdentity.self, forKey: .club)
         wave = try c.decodeIfPresent(VibeEventWaveIdentity.self, forKey: .wave)
+        matrixReference = try c.decodeIfPresent(
+            VibeEventMatrixReference.self,
+            forKey: .matrixReference
+        )
         affiliatedShow = try c.decodeIfPresent(VibeEventAffiliation.self, forKey: .affiliatedShow)
         affiliatedChannel = try c.decodeIfPresent(VibeEventAffiliation.self, forKey: .affiliatedChannel)
     }
@@ -341,8 +452,9 @@ struct VibeEventDetailModel: Codable, Identifiable, Sendable {
     let interestedCount: Int
     let waitlistCount: Int
     let capacity: Int?
-    let club: VibeEventIdentity
+    let club: VibeEventIdentity?
     let wave: VibeEventWaveIdentity?
+    let matrixReference: VibeEventMatrixReference?
     let hosts: [VibeEventHostModel]
     let affiliatedShow: VibeEventAffiliation?
     let affiliatedChannel: VibeEventAffiliation?
@@ -487,8 +599,9 @@ struct VibeEventTemplatesResponse: Codable, Sendable { let templates: [VibeEvent
 
 struct CreateVibeEventRequest: Encodable, Sendable {
     let templateId: String?
-    let clubId: String
-    let waveId: String?
+    let matrixSpaceId: String
+    let matrixRoomId: String
+    let clientRequestId: String
     let title: String
     let summary: String
     let description: String?
@@ -567,7 +680,15 @@ struct VibeEventInviteEvent: Decodable, Sendable {
     let summary: String
     let coverUrl: String?
     let startsAt: String
-    let club: VibeEventIdentity
+    let club: VibeEventIdentity?
+    let matrixReference: VibeEventMatrixReference?
+}
+
+struct VibeEventUploadTicket: Decodable, Sendable {
+    let uploadUrl: String
+    let objectKey: String
+    let deliveryUrl: String
+    let maxBytes: Int
 }
 struct VibeEventInviteDecisionResponse: Decodable, Sendable {
     let accepted: Bool

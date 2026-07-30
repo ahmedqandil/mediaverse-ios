@@ -1,5 +1,6 @@
 import PhotosUI
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 private struct VibeEventTemplateIcon: View {
@@ -48,6 +49,7 @@ struct VibeEventsView: View {
         }
     }
 
+    @EnvironmentObject private var matrixSession: MatrixNativeSessionController
     @State private var scope: Scope = .upcoming
     @State private var events = [VibeEventCardModel]()
     @State private var loading = true
@@ -201,7 +203,13 @@ struct VibeEventsView: View {
         errorMessage = nil
         do {
             let requestedScope = scope == .shows || scope == .channels ? "upcoming" : scope.rawValue
-            let loaded = try await APIClient.shared.fetchVibeEvents(scope: requestedScope)
+            let matrixSpaceIDs = scope == .myVibes
+                ? try await joinedMatrixSpaceIDs()
+                : []
+            let loaded = try await APIClient.shared.fetchVibeEvents(
+                scope: requestedScope,
+                matrixSpaceIDs: matrixSpaceIDs
+            )
             switch scope {
             case .shows: events = loaded.filter { $0.affiliatedShow != nil }
             case .channels: events = loaded.filter { $0.affiliatedChannel != nil }
@@ -213,9 +221,13 @@ struct VibeEventsView: View {
     }
 
     @MainActor private func discoverAvailableScopes() async {
+        let joinedSpaceIDs = (try? await joinedMatrixSpaceIDs()) ?? []
         async let upcomingRequest = try? APIClient.shared.fetchVibeEvents(scope: "upcoming")
         async let liveRequest = try? APIClient.shared.fetchVibeEvents(scope: "live")
-        async let vibesRequest = try? APIClient.shared.fetchVibeEvents(scope: "my-vibes")
+        async let vibesRequest = try? APIClient.shared.fetchVibeEvents(
+            scope: "my-vibes",
+            matrixSpaceIDs: joinedSpaceIDs
+        )
         let upcoming = await upcomingRequest ?? []
         let live = await liveRequest ?? []
         let fromVibes = await vibesRequest ?? []
@@ -227,6 +239,14 @@ struct VibeEventsView: View {
         if upcoming.contains(where: { $0.affiliatedChannel != nil }) { scopes.insert(.channels) }
         availableScopes = scopes.isEmpty ? [.upcoming] : scopes
         if !availableScopes.contains(scope) { scope = availableScopes.first ?? .upcoming }
+    }
+
+    @MainActor
+    private func joinedMatrixSpaceIDs() async throws -> [String] {
+        guard matrixSession.isReady else { return [] }
+        return try await matrixSession.vibes().spaces
+            .filter { $0.membership == .joined }
+            .map(\.id)
     }
 }
 
@@ -295,9 +315,9 @@ struct VibeEventCardView: View {
                     .foregroundStyle(C.textMuted)
                     .lineLimit(2)
                 HStack(spacing: 8) {
-                    AsyncImage(url: C.mediaURL(event.club.avatarUrl)) { image in image.resizable().scaledToFill() } placeholder: { Circle().fill(C.surfaceAlt) }
+                    AsyncImage(url: C.mediaURL(event.club?.avatarUrl)) { image in image.resizable().scaledToFill() } placeholder: { Circle().fill(C.surfaceAlt) }
                         .frame(width: 28, height: 28).clipShape(Circle())
-                    Text(event.club.name).font(.caption.weight(.semibold)).foregroundStyle(C.textMuted).lineLimit(1)
+                    Text(event.club?.name ?? "Vibe").font(.caption.weight(.semibold)).foregroundStyle(C.textMuted).lineLimit(1)
                     Spacer()
                     if goingCount > 0 {
                         Label("\(goingCount) going", systemImage: "person.2.fill")
@@ -391,12 +411,14 @@ struct VibeEventDetailView: View {
     let slug: String
     var analyticsSource: String = "direct"
     @Environment(\.openURL) private var openURL
+    @EnvironmentObject private var matrixSession: MatrixNativeSessionController
     @State private var response: VibeEventDetailResponse?
     @State private var loading = true
     @State private var rsvpBusy = false
     @State private var errorMessage: String?
     @State private var showsManager = false
     @State private var showsRippleReport = false
+    @State private var showsMatrixEcho = false
     @State private var didTrackView = false
     @State private var analyticsSessionID = UUID().uuidString
     @State private var confirmedRSVPStatus: String?
@@ -443,7 +465,20 @@ struct VibeEventDetailView: View {
         }
         .sheet(isPresented: $showsRippleReport) {
             if let ripple = response?.event.associatedPost {
-                RippleReportSheet(postId: ripple.id, vibeSlug: response?.event.club.slug ?? "")
+                RippleReportSheet(postId: ripple.id, vibeSlug: response?.event.club?.slug ?? "")
+            }
+        }
+        .sheet(isPresented: $showsMatrixEcho) {
+            if let event = response?.event {
+                EchoVibeSheet(
+                    content: .event(
+                        id: event.id,
+                        title: event.title,
+                        imageURL: event.coverUrl,
+                        summary: event.summary,
+                        sourceName: event.club?.name ?? "Vibe"
+                    )
+                )
             }
         }
         .task {
@@ -474,9 +509,9 @@ struct VibeEventDetailView: View {
                     .foregroundStyle(C.text)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
-                    AsyncImage(url: C.mediaURL(event.club.avatarUrl)) { image in image.resizable().scaledToFill() } placeholder: { Circle().fill(C.surface) }
+                    AsyncImage(url: C.mediaURL(event.club?.avatarUrl)) { image in image.resizable().scaledToFill() } placeholder: { Circle().fill(C.surface) }
                         .frame(width: 42, height: 42).clipShape(Circle())
-                    Text(event.club.name).font(.headline).foregroundStyle(C.text)
+                    Text(event.club?.name ?? "Vibe").font(.headline).foregroundStyle(C.text)
                 }
                 infoCard(event)
                 if event.realtimeExperience?.isMatrixReady == true,
@@ -673,6 +708,15 @@ struct VibeEventDetailView: View {
             } else if response?.capabilities.joinWindowState == "closed" {
                 Label("The online access window has closed", systemImage: "lock.fill")
             }
+            if response?.capabilities.canShare == true {
+                Button {
+                    showsMatrixEcho = true
+                } label: {
+                    Label("Echo to Vibes", systemImage: "wave.3.right")
+                }
+                .buttonStyle(EventSecondaryButtonStyle())
+                .accessibilityHint("Choose one or more WeStreem Waves")
+            }
         }
         .font(.subheadline)
         .foregroundStyle(C.textMuted)
@@ -719,6 +763,13 @@ struct VibeEventDetailView: View {
                             }
                         }
                         .buttonStyle(.bordered)
+                        .tint(C.watch)
+                    } else if controller.capabilities.canControlPlayback,
+                              controller.watchParty == nil {
+                        Button("Start watch party") {
+                            Task { await watchCommand(.newEpoch, state: nil) }
+                        }
+                        .buttonStyle(.borderedProminent)
                         .tint(C.watch)
                     }
                 }
@@ -856,22 +907,51 @@ struct VibeEventDetailView: View {
 
     @MainActor private func watchCommand(
         _ action: EventWatchCommandAction,
-        state: EventWatchPartyState
+        state: EventWatchPartyState?
     ) async {
         guard liveController?.capabilities.canControlPlayback == true else { return }
         liveControllerBusy = true
         defer { liveControllerBusy = false }
         do {
-            let next = (Int(state.sequence) ?? 0) + 1
-            _ = try await APIClient.shared.sendVibeEventWatchCommand(
-                slug: slug,
-                request: .init(
-                    action: action,
-                    sequence: max(1, next),
-                    positionMs: max(0, state.positionMs),
-                    playbackEpoch: state.playbackEpoch
+            let next = (Int(state?.sequence ?? "0") ?? 0) + 1
+            let playbackEpoch = action == .newEpoch
+                ? "watch_\(UUID().uuidString.lowercased())"
+                : state?.playbackEpoch ?? ""
+            let positionMs = max(0, state?.positionMs ?? 0)
+            if liveController?.watchPartyAuthority == "MATRIX" {
+                guard
+                    let roomID = liveController?.matrixRoomId,
+                    let westreemEventID = liveController?.westreemEventId
+                else {
+                    throw MatrixSessionFoundationError.unavailable
+                }
+                let clientRequestID = "event-watch:\(UUID().uuidString.lowercased())"
+                let matrixEventID = try await matrixSession.sendEventWatchPartyAction(
+                    roomID: roomID,
+                    content: EventMatrixWatchPartyContent(
+                        westreemEventId: westreemEventID,
+                        action: action,
+                        clientRequestId: clientRequestID,
+                        playbackEpoch: playbackEpoch,
+                        sequence: max(1, next),
+                        positionMs: positionMs
+                    )
                 )
-            )
+                _ = try await APIClient.shared.sendVibeEventWatchCommand(
+                    slug: slug,
+                    request: .init(matrixEventId: matrixEventID)
+                )
+            } else {
+                _ = try await APIClient.shared.sendVibeEventWatchCommand(
+                    slug: slug,
+                    request: .init(
+                        action: action,
+                        sequence: max(1, next),
+                        positionMs: positionMs,
+                        playbackEpoch: playbackEpoch
+                    )
+                )
+            }
             await loadLiveController()
         } catch {
             liveControllerMessage = "The watch-party command was not accepted."
@@ -900,6 +980,37 @@ struct VibeEventDetailView: View {
         liveControllerBusy = true
         defer { liveControllerBusy = false }
         do {
+            if liveController?.stageAuthority == "MATRIX" {
+                guard
+                    let roomID = liveController?.matrixRoomId,
+                    let westreemEventID = liveController?.westreemEventId
+                else {
+                    throw MatrixSessionFoundationError.unavailable
+                }
+                let requestEventID = action.requiresSpeakerRequestEvent
+                    ? liveController?.speakerRequest?.matrixRequestEventId
+                    : nil
+                if action.requiresSpeakerRequestEvent, requestEventID == nil {
+                    throw MatrixSessionFoundationError.unavailable
+                }
+                let clientRequestID = "event-stage:\(UUID().uuidString.lowercased())"
+                let matrixEventID = try await matrixSession.sendEventLiveStageAction(
+                    roomID: roomID,
+                    content: EventMatrixLiveStageContent(
+                        westreemEventId: westreemEventID,
+                        action: action,
+                        clientRequestId: clientRequestID,
+                        requestEventId: requestEventID
+                    )
+                )
+                _ = try await APIClient.shared.updateVibeEventStage(
+                    slug: slug,
+                    action: action,
+                    matrixEventID: matrixEventID
+                )
+                await loadLiveController()
+                return
+            }
             _ = try await APIClient.shared.updateVibeEventStage(
                 slug: slug,
                 action: action,
@@ -1039,7 +1150,7 @@ struct VibeEventInviteView: View {
                         Text("PRIVATE EVENT INVITATION").font(.caption2.weight(.black)).tracking(1.4).foregroundStyle(C.watch)
                         Text(invite.event.title).font(.system(size: 28, weight: .black, design: .rounded)).foregroundStyle(C.text).multilineTextAlignment(.center)
                         Text(invite.event.summary).font(.body).foregroundStyle(C.textMuted).multilineTextAlignment(.center)
-                        Text("Hosted by \(invite.event.club.name)").font(.subheadline).foregroundStyle(C.textTertiary)
+                        Text("Hosted by \(invite.event.club?.name ?? "Vibe")").font(.subheadline).foregroundStyle(C.textTertiary)
                         HStack(spacing: 12) {
                             Button("Decline") { Task { await respond(accept: false) } }.buttonStyle(EventSecondaryButtonStyle())
                             Button("Accept invitation") { Task { await respond(accept: true) } }.buttonStyle(EventPrimaryButtonStyle())
@@ -1100,14 +1211,18 @@ struct VibeEventCreatorView: View {
     }
     let onCreated: (CreatedVibeEvent) -> Void
     var onDeleted: () -> Void = {}
-    var preselectedVibeSlug: String? = nil
-    var preselectedWaveID: String? = nil
+    var preselectedMatrixSpaceID: String? = nil
+    var preselectedMatrixRoomID: String? = nil
     var editEvent: VibeEventDetailModel? = nil
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var matrixSession: MatrixNativeSessionController
     @State private var templates = [VibeEventTemplateModel]()
-    @State private var vibes = [VibeSummary]()
+    @State private var vibes = [MatrixVibeSummary]()
+    @State private var waves = [MatrixWaveSummary]()
     @State private var selectedTemplate: VibeEventTemplateModel?
     @State private var selectedVibeID = ""
+    @State private var selectedWaveID = ""
+    @State private var creationRequestID = UUID().uuidString
     @State private var title = ""
     @State private var summary = ""
     @State private var details = ""
@@ -1133,11 +1248,12 @@ struct VibeEventCreatorView: View {
     @State private var affiliatedShowID = ""
     @State private var affiliatedChannelID = ""
     @State private var replayURL = ""
-    @State private var shows = [ShowBrowseCard]()
-    @State private var channels = [ChannelBrowseCard]()
+    @State private var approvedAffiliations = [VibeEventOriginAffiliation]()
+    @State private var originAuthorized = false
     @State private var busy = false
     @State private var creatorLoading = true
     @State private var creatorLoadError: String?
+    @State private var creatorReloadID = UUID()
     @State private var errorMessage: String?
     @State private var confirmsRemoval = false
     @State private var affiliationPicker: AffiliationPicker?
@@ -1149,11 +1265,16 @@ struct VibeEventCreatorView: View {
                     .tint(C.watch)
                     .foregroundStyle(C.textMuted)
             } else if let creatorLoadError {
-                ContentUnavailableView(
-                    "Event setup couldn’t load",
-                    systemImage: "calendar.badge.exclamationmark",
-                    description: Text(creatorLoadError)
-                )
+                VStack(spacing: 16) {
+                    ContentUnavailableView(
+                        "Event setup couldn’t load",
+                        systemImage: "calendar.badge.exclamationmark",
+                        description: Text(creatorLoadError)
+                    )
+                    Button("Try again") { creatorReloadID = UUID() }
+                        .buttonStyle(EventPrimaryButtonStyle())
+                        .padding(.horizontal, C.pagePad)
+                }
                 .foregroundStyle(C.text)
             } else if let template = selectedTemplate {
                 editor(template)
@@ -1175,12 +1296,16 @@ struct VibeEventCreatorView: View {
             NavigationStack {
                 EventAffiliationPicker(
                     kind: picker,
-                    shows: shows,
-                    channels: channels,
+                    affiliations: approvedAffiliations,
                     selectedID: picker == .show ? affiliatedShowID : affiliatedChannelID
                 ) { id in
-                    if picker == .show { affiliatedShowID = id }
-                    else { affiliatedChannelID = id }
+                    if picker == .show {
+                        affiliatedShowID = id
+                        if !id.isEmpty { affiliatedChannelID = "" }
+                    } else {
+                        affiliatedChannelID = id
+                        if !id.isEmpty { affiliatedShowID = "" }
+                    }
                     affiliationPicker = nil
                 }
             }
@@ -1191,40 +1316,66 @@ struct VibeEventCreatorView: View {
         } message: {
             Text("It will disappear from the Vibe, discovery, and public Event surfaces.")
         }
-        .task {
+        .task(id: "\(matrixSession.isReady)-\(creatorReloadID.uuidString)") {
             creatorLoading = true
             creatorLoadError = nil
+            originAuthorized = false
             do {
+                guard matrixSession.isReady else {
+                    throw NSError(
+                        domain: "VibeEvent",
+                        code: 2,
+                        userInfo: [NSLocalizedDescriptionKey: "Vibes is still connecting. Try again when WeStreem is ready."]
+                    )
+                }
                 async let templatesRequest = APIClient.shared.fetchVibeEventTemplates()
-                async let vibesRequest = APIClient.shared.fetchManagedCommunityVibes()
-                async let showsRequest = APIClient.shared.fetchShowsBrowse()
-                async let channelsRequest = APIClient.shared.fetchChannels()
                 templates = try await templatesRequest
-                vibes = try await vibesRequest
-                shows = (try? await showsRequest) ?? []
-                channels = (try? await channelsRequest) ?? []
+                vibes = try await matrixSession.vibes().spaces.filter {
+                    $0.membership == .joined
+                }
                 guard !templates.isEmpty else {
                     creatorLoadError = "No Event templates are currently available."
                     creatorLoading = false
                     return
                 }
-                if selectedVibeID.isEmpty {
-                    if editEvent == nil {
-                        guard let preselectedVibeSlug,
-                              let hostingVibe = vibes.first(where: { $0.slug == preselectedVibeSlug }) else {
-                            creatorLoadError = "Create an Event from the Vibe that will host it."
-                            creatorLoading = false
-                            return
-                        }
-                        selectedVibeID = hostingVibe.id
-                        vibes = [hostingVibe]
-                    } else {
-                        selectedVibeID = vibes.first?.id ?? ""
+                guard !vibes.isEmpty else {
+                    creatorLoadError = "Join or create a WeStreem Vibe before creating an Event."
+                    creatorLoading = false
+                    return
+                }
+                if let requestedSpaceID = editEvent?.matrixReference?.matrixSpaceId
+                    ?? preselectedMatrixSpaceID {
+                    guard vibes.contains(where: { $0.id == requestedSpaceID }) else {
+                        throw NSError(
+                            domain: "VibeEvent",
+                            code: 4,
+                            userInfo: [NSLocalizedDescriptionKey: editEvent == nil
+                                ? "The hosting WeStreem Vibe is unavailable."
+                                : "This legacy Event must be migrated before it can be edited."]
+                        )
                     }
+                    selectedVibeID = requestedSpaceID
+                    try await loadWaves(
+                        preferredRoomID: editEvent?.matrixReference?.matrixRoomId
+                            ?? preselectedMatrixRoomID,
+                        requiresExactRoom: editEvent != nil || preselectedMatrixRoomID != nil
+                    )
+                } else {
+                    var lastError: Error?
+                    for vibe in vibes {
+                        selectedVibeID = vibe.id
+                        do {
+                            try await loadWaves(preferredRoomID: nil)
+                            lastError = nil
+                            break
+                        } catch {
+                            lastError = error
+                        }
+                    }
+                    if let lastError { throw lastError }
                 }
                 if let event = editEvent {
                     selectedTemplate = templates.first(where: { $0.slug == "blank" }) ?? templates.first
-                    selectedVibeID = event.club.id ?? selectedVibeID
                     title = event.title
                     summary = event.summary
                     details = event.description ?? ""
@@ -1292,8 +1443,35 @@ struct VibeEventCreatorView: View {
         WestreemFormPage {
             WestreemFormPanel("Basics") {
                 Picker("Hosting Vibe", selection: $selectedVibeID) { ForEach(vibes) { Text($0.name).tag($0.id) } }
-                    .disabled(true)
+                    .disabled(editEvent != nil || preselectedMatrixSpaceID != nil)
                     .westreemField()
+                    .onChange(of: selectedVibeID) { _, _ in
+                        Task {
+                            do {
+                                try await loadWaves(preferredRoomID: nil)
+                            } catch {
+                                errorMessage = error.localizedDescription
+                            }
+                        }
+                    }
+                Picker("Event Wave", selection: $selectedWaveID) {
+                    ForEach(waves.filter { !$0.isNestedSpace }) {
+                        Text($0.name).tag($0.id)
+                    }
+                }
+                .disabled(editEvent != nil || preselectedMatrixRoomID != nil)
+                .westreemField()
+                .onChange(of: selectedWaveID) { _, roomID in
+                    guard !roomID.isEmpty else { return }
+                    Task {
+                        do {
+                            try await refreshOriginAuthorization()
+                            errorMessage = nil
+                        } catch {
+                            errorMessage = error.localizedDescription
+                        }
+                    }
+                }
                 TextField("Event title", text: $title)
                     .westreemField()
                 TextField("Summary", text: $summary, axis: .vertical)
@@ -1328,11 +1506,19 @@ struct VibeEventCreatorView: View {
                 VStack(alignment: .leading) {
                     Text("Cover focal position").font(.caption).foregroundStyle(C.textMuted)
                     HStack { Text("Horizontal"); Slider(value: $coverFocusX, in: 0...100) }
+                        .accessibilityLabel("Horizontal cover position")
+                        .accessibilityValue("\(Int(coverFocusX)) percent")
                     HStack { Text("Vertical"); Slider(value: $coverFocusY, in: 0...100) }
+                        .accessibilityLabel("Vertical cover position")
+                        .accessibilityValue("\(Int(coverFocusY)) percent")
                 }
             }
             WestreemFormPanel("Schedule") {
-                DatePicker("Starts", selection: $startsAt, in: Date()...).westreemField()
+                if editEvent == nil {
+                    DatePicker("Starts", selection: $startsAt, in: Date()...).westreemField()
+                } else {
+                    DatePicker("Starts", selection: $startsAt).westreemField()
+                }
                 Picker("Duration", selection: $duration) { ForEach([30,45,60,75,90,120,180], id: \.self) { Text("\($0) minutes").tag($0) } }
                     .westreemField()
             }
@@ -1387,14 +1573,16 @@ struct VibeEventCreatorView: View {
                     agenda.append(.init(id: UUID().uuidString, title: "", detail: nil))
                 }
             }
-            WestreemFormPanel("Affiliations", helper: "Optionally connect this Event to one Show and one Channel.") {
+            WestreemFormPanel("Affiliation", helper: "Optionally connect this Event to one approved Show or Channel.") {
                 Button {
                     affiliationPicker = .show
                 } label: {
                     HStack {
                         Text("Show").foregroundStyle(C.text)
                         Spacer()
-                        Text(shows.first(where: { $0.id == affiliatedShowID })?.title ?? "None")
+                        Text(approvedAffiliations.first(where: {
+                            $0.show?.id == affiliatedShowID
+                        })?.show?.title ?? "None")
                             .foregroundStyle(C.textMuted)
                         Image(systemName: "chevron.right").foregroundStyle(C.textTertiary)
                     }
@@ -1405,7 +1593,9 @@ struct VibeEventCreatorView: View {
                     HStack {
                         Text("Channel").foregroundStyle(C.text)
                         Spacer()
-                        Text(channels.first(where: { $0.id == affiliatedChannelID })?.name ?? "None")
+                        Text(approvedAffiliations.first(where: {
+                            $0.channel?.id == affiliatedChannelID
+                        })?.channel?.name ?? "None")
                             .foregroundStyle(C.textMuted)
                         Image(systemName: "chevron.right").foregroundStyle(C.textTertiary)
                     }
@@ -1448,9 +1638,9 @@ struct VibeEventCreatorView: View {
                     }
                 }
             }
-            if vibes.isEmpty {
+            if vibes.isEmpty || waves.isEmpty || !originAuthorized {
                 WestreemFeedbackBanner(
-                    message: "You need to manage a community Vibe before creating an Event.",
+                    message: "The Event needs a joined WeStreem Vibe and a Wave where you can publish.",
                     kind: .warning
                 )
             }
@@ -1462,11 +1652,11 @@ struct VibeEventCreatorView: View {
                     HStack { Spacer(); if busy { ProgressView() } else { Text(editEvent == nil ? "Publish Event" : "Save changes").fontWeight(.bold) }; Spacer() }
                 }
                 .buttonStyle(WestreemPrimaryButtonStyle(isBusy: busy))
-                .disabled(busy || vibes.isEmpty || title.trimmingCharacters(in: .whitespaces).isEmpty || summary.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(busy || !originAuthorized || selectedVibeID.isEmpty || selectedWaveID.isEmpty || title.trimmingCharacters(in: .whitespaces).isEmpty || summary.trimmingCharacters(in: .whitespaces).isEmpty)
                 if editEvent == nil {
                     Button("Save draft") { Task { await save(status: "DRAFT") } }
                     .buttonStyle(WestreemSecondaryButtonStyle())
-                    .disabled(busy || vibes.isEmpty || title.trimmingCharacters(in: .whitespaces).isEmpty || summary.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(busy || !originAuthorized || selectedVibeID.isEmpty || selectedWaveID.isEmpty || title.trimmingCharacters(in: .whitespaces).isEmpty || summary.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 if editEvent != nil {
                     Button("Remove Event", role: .destructive) { confirmsRemoval = true }
@@ -1476,12 +1666,79 @@ struct VibeEventCreatorView: View {
         }
     }
 
+    @MainActor
+    private func loadWaves(
+        preferredRoomID: String?,
+        requiresExactRoom: Bool = false
+    ) async throws {
+        guard !selectedVibeID.isEmpty else {
+            waves = []
+            selectedWaveID = ""
+            approvedAffiliations = []
+            originAuthorized = false
+            return
+        }
+        waves = try await matrixSession.waves(spaceID: selectedVibeID).rooms.filter {
+            $0.membership == .joined && !$0.isNestedSpace
+        }
+        let candidates = [
+            preferredRoomID.flatMap { preferred in
+                waves.first(where: { $0.id == preferred })
+            },
+        ].compactMap { $0 } + waves.filter { $0.id != preferredRoomID }
+        guard !candidates.isEmpty else {
+            selectedWaveID = ""
+            throw NSError(
+                domain: "VibeEvent",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Choose a joined Wave in this Vibe to host the Event."]
+            )
+        }
+        var lastError: Error?
+        for wave in candidates {
+            selectedWaveID = wave.id
+            do {
+                try await refreshOriginAuthorization()
+                return
+            } catch {
+                lastError = error
+                if requiresExactRoom { break }
+            }
+        }
+        selectedWaveID = ""
+        approvedAffiliations = []
+        originAuthorized = false
+        throw lastError ?? NSError(
+            domain: "VibeEvent",
+            code: 5,
+            userInfo: [NSLocalizedDescriptionKey: "You cannot publish Events in the available Waves."]
+        )
+    }
+
+    @MainActor
+    private func refreshOriginAuthorization() async throws {
+        originAuthorized = false
+        approvedAffiliations = []
+        guard !selectedVibeID.isEmpty, !selectedWaveID.isEmpty else { return }
+        let response = try await APIClient.shared.authorizeVibeEventOrigin(
+            matrixSpaceID: selectedVibeID,
+            matrixRoomID: selectedWaveID
+        )
+        approvedAffiliations = response.affiliations.filter {
+            $0.status == "APPROVED" && $0.entity?.id != nil
+        }
+        originAuthorized = true
+    }
+
     @MainActor private func save(status: String) async {
         guard let template = selectedTemplate else { return }
         busy = true; errorMessage = nil
         let end = startsAt.addingTimeInterval(TimeInterval(duration * 60))
         let request = CreateVibeEventRequest(
-            templateId: template.id, clubId: selectedVibeID, waveId: preselectedWaveID ?? editEvent?.wave?.id,
+            templateId: template.id,
+            matrixSpaceId: selectedVibeID,
+            matrixRoomId: selectedWaveID,
+            clientRequestId: creationRequestID,
             title: title.trimmingCharacters(in: .whitespacesAndNewlines),
             summary: summary.trimmingCharacters(in: .whitespacesAndNewlines), description: details.isEmpty ? nil : details,
             coverUrl: coverURL.isEmpty ? nil : coverURL,
@@ -1528,20 +1785,39 @@ struct VibeEventCreatorView: View {
     }
 
     @MainActor private func uploadCover(_ item: PhotosPickerItem) async {
-        guard let vibe = vibes.first(where: { $0.id == selectedVibeID }) else {
+        guard !selectedVibeID.isEmpty, !selectedWaveID.isEmpty else {
             errorMessage = "Choose the hosting Vibe before adding a cover."
             return
         }
         uploadingCover = true
         defer { uploadingCover = false; coverItem = nil }
         do {
-            guard let data = try await item.loadTransferable(type: Data.self) else {
+            guard let sourceData = try await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: sourceData),
+                  let data = image.jpegData(compressionQuality: 0.9) else {
                 throw NSError(domain: "VibeEvent", code: 1, userInfo: [NSLocalizedDescriptionKey: "The selected cover could not be read."])
             }
-            let mimeType = item.supportedContentTypes.first?.preferredMIMEType ?? "image/jpeg"
-            let uploaded = try await LegacySocialAPIAdapter(transport: APIClient.shared)
-                .uploadVibeProfileImage(toVibe: vibe.slug, data: data, mimeType: mimeType)
-            coverURL = uploaded.imageURL
+            let mimeType = "image/jpeg"
+            let ticket = try await APIClient.shared.requestVibeEventCoverUpload(
+                mimeType: mimeType,
+                bytes: data.count
+            )
+            guard let uploadURL = URL(string: ticket.uploadUrl),
+                  uploadURL.scheme?.lowercased() == "https",
+                  uploadURL.host?.isEmpty == false else {
+                throw NSError(
+                    domain: "VibeEvent",
+                    code: 4,
+                    userInfo: [NSLocalizedDescriptionKey: "The Event cover upload destination is invalid."]
+                )
+            }
+            try await StoriesAPIClient.shared.uploadMedia(
+                to: uploadURL,
+                data: data,
+                mimeType: mimeType,
+                onProgress: { _ in }
+            )
+            coverURL = ticket.deliveryUrl
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1550,63 +1826,47 @@ struct VibeEventCreatorView: View {
 
 private struct EventAffiliationPicker: View {
     let kind: VibeEventCreatorView.AffiliationPicker
-    let shows: [ShowBrowseCard]
-    let channels: [ChannelBrowseCard]
+    let affiliations: [VibeEventOriginAffiliation]
     let selectedID: String
     let onSelect: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
 
-    private var filteredShows: [ShowBrowseCard] {
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-        return shows.filter { $0.title.localizedCaseInsensitiveContains(query) }
-    }
-
-    private var filteredChannels: [ChannelBrowseCard] {
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-        return channels.filter {
-            $0.name.localizedCaseInsensitiveContains(query)
-                || $0.handle.localizedCaseInsensitiveContains(query)
+    private var filteredAffiliations: [VibeEventOriginAffiliation] {
+        let eligible = affiliations.filter { $0.isShow == (kind == .show) }
+        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return eligible }
+        return eligible.filter {
+            let entity = $0.entity
+            return entity?.title?.localizedCaseInsensitiveContains(normalized) == true
+                || entity?.name?.localizedCaseInsensitiveContains(normalized) == true
+                || entity?.handle?.localizedCaseInsensitiveContains(normalized) == true
         }
     }
 
     var body: some View {
         List {
-            if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                if selectedID.isEmpty {
+            if !selectedID.isEmpty {
+                Section("Selection") { clearSelection }
+            }
+            Section("Approved \(kind.rawValue)s") {
+                if filteredAffiliations.isEmpty {
                     ContentUnavailableView(
-                        "Search for a \(kind.rawValue)",
-                        systemImage: "magnifyingglass",
-                        description: Text("Results appear after you start typing.")
+                        "No approved \(kind.rawValue.lowercased()) affiliation",
+                        systemImage: "checkmark.seal",
+                        description: Text("Only affiliations approved for this Vibe can be used.")
                     )
                     .listRowBackground(Color.clear)
-                } else if kind == .show, let show = shows.first(where: { $0.id == selectedID }) {
-                    Section("Current affiliation") {
-                        selectionRow(id: show.id, title: show.title, subtitle: nil, image: show.coverUrl)
-                        clearSelection
-                    }
-                } else if kind == .channel, let channel = channels.first(where: { $0.id == selectedID }) {
-                    Section("Current affiliation") {
-                        selectionRow(id: channel.id, title: channel.name, subtitle: "@\(channel.handle)", image: channel.avatarUrl)
-                        clearSelection
-                    }
                 } else {
-                    clearSelection
-                }
-            } else {
-                Section("Results") {
-                    if kind == .show {
-                        ForEach(filteredShows) { show in
-                            selectionRow(id: show.id, title: show.title, subtitle: nil, image: show.coverUrl)
+                    ForEach(filteredAffiliations) { affiliation in
+                        if let entity = affiliation.entity, let id = entity.id {
+                            selectionRow(
+                                id: id,
+                                title: entity.title ?? entity.name ?? kind.rawValue,
+                                subtitle: entity.handle.map { "@\($0)" },
+                                image: nil
+                            )
                         }
-                    } else {
-                        ForEach(filteredChannels) { channel in
-                            selectionRow(id: channel.id, title: channel.name, subtitle: "@\(channel.handle)", image: channel.avatarUrl)
-                        }
-                    }
-                    if (kind == .show && filteredShows.isEmpty) || (kind == .channel && filteredChannels.isEmpty) {
-                        Text("No matching \(kind.rawValue.lowercased())s.")
-                            .foregroundStyle(C.textMuted)
                     }
                 }
             }
@@ -1651,9 +1911,10 @@ private struct EventAffiliationPicker: View {
 }
 
 struct VibeEventVibeSection: View {
-    let vibeSlug: String
+    let matrixSpaceID: String
     let canManage: Bool
-    var waveID: String? = nil
+    var matrixRoomID: String? = nil
+    @EnvironmentObject private var matrixSession: MatrixNativeSessionController
     @State private var showsCreator = false
 
     var body: some View {
@@ -1688,7 +1949,8 @@ struct VibeEventVibeSection: View {
             NavigationStack {
                 VibeEventCreatorView(onCreated: { _ in
                     showsCreator = false
-                }, preselectedVibeSlug: vibeSlug, preselectedWaveID: waveID)
+                }, preselectedMatrixSpaceID: matrixSpaceID, preselectedMatrixRoomID: matrixRoomID)
+                    .environmentObject(matrixSession)
             }
         }
     }
@@ -1722,7 +1984,8 @@ struct VibeEventManagerView: View {
                     VibeEventCreatorView(
                         onCreated: { _ in onSaved() },
                         onDeleted: onSaved,
-                        preselectedVibeSlug: event.club.slug,
+                        preselectedMatrixSpaceID: event.matrixReference?.matrixSpaceId,
+                        preselectedMatrixRoomID: event.matrixReference?.matrixRoomId,
                         editEvent: event
                     )
                 case .hosts:

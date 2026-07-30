@@ -8,6 +8,7 @@ struct MediaverseApp: App {
     private static let processStartedAt = Date()
     @UIApplicationDelegateAdaptor(MediaverseAppDelegate.self) var appDelegate
     @StateObject private var auth = AuthManager()
+    @StateObject private var matrixSession = MatrixNativeSessionController()
     @StateObject private var miniPlayer = MiniPlayerManager()
     @StateObject private var platformConfig = PlatformConfigManager()
     @StateObject private var globalUploads = GlobalUploadProgressManager.shared
@@ -51,6 +52,7 @@ struct MediaverseApp: App {
                 }
             }
             .environmentObject(auth)
+            .environmentObject(matrixSession)
             .environmentObject(miniPlayer)
             .environmentObject(platformConfig)
             .environmentObject(globalUploads)
@@ -70,6 +72,9 @@ struct MediaverseApp: App {
                 try? await Task.sleep(nanoseconds: 900_000_000)
                 isShowingBootSplash = false
                 CacheMetrics.shared.recordDuration("startup.bootSplash", startedAt: Self.processStartedAt)
+            }
+            .task(id: auth.currentUser?.id) {
+                await matrixSession.reconcile(westreemUserID: auth.currentUser?.id)
             }
             .onAppear {
                 _ = Self.configuredSharedURLCache

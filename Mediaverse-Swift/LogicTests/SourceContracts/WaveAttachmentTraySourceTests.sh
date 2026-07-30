@@ -1,30 +1,41 @@
 #!/bin/sh
 set -eu
 
-repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-view="$repo_dir/Social/Vibes/SocialDestinationViews.swift"
+root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
+view="$root/Social/Vibes/MatrixNativeMediaViews.swift"
+repository="$root/Social/Vibes/MatrixVibesRepositoryFoundation.swift"
 
-for capability in allowPhotos allowPolls allowVoiceMessages allowVideoMessages allowLinks; do
-  grep -Fq -- "wave?.$capability" "$view" || {
-    echo "FAIL: attachment tray must explicitly gate $capability."
+for label in \
+  'Photos and videos' \
+  'Record video' \
+  'Voice message' \
+  'File' \
+  'Poll' \
+  'Sticker'; do
+  grep -Fq -- "$label" "$view" || {
+    echo "FAIL: Matrix attachment tray is missing $label." >&2
     exit 1
   }
 done
-if grep -Fq 'SocialRealtimeRollout.voiceRipplesEnabled' "$view" || grep -Fq 'SocialRealtimeRollout.videoRipplesEnabled' "$view"; then
-  echo "FAIL: Westreem-owned media creation must not be blocked by Matrix projection rollout."
-  exit 1
-fi
-grep -Fq 'selectedComposerTool = tool' "$view" || { echo "FAIL: focused tool is not retained."; exit 1; }
-grep -Fq 'openFocusedComposer(tool)' "$view" || { echo "FAIL: focused composer transition missing."; exit 1; }
-grep -Fq 'guard selectedComposerTool == tool, selectedWave != nil else { return }' "$view" || {
-  echo "FAIL: delayed composer transition must preserve its Wave and selected tool."
+
+grep -Fq 'allowsMultipleSelection: true' "$view" || {
+  echo "FAIL: Matrix attachment tray must support multiple files." >&2
   exit 1
 }
-for tool in photo camera poll voice video link sticker event; do
-  grep -Fq -- ".$tool" "$view" || {
-    echo "FAIL: complete Wave creation tray is missing $tool."
+grep -Fq 'maximumAttachmentCount' "$view" || {
+  echo "FAIL: Matrix attachments must enforce the shared count limit." >&2
+  exit 1
+}
+for operation in sendGallery sendImage sendFile sendVoiceMessage sendVideo createPoll; do
+  grep -Fq -- "$operation(" "$repository" || {
+    echo "FAIL: Matrix repository is missing $operation." >&2
     exit 1
   }
 done
 
-echo "Swift Wave attachment tray source contracts passed."
+if grep -Eq 'LegacySocialAPIAdapter|/api/fan-clubs|/api/fan-club-posts' "$view" "$repository"; then
+  echo "FAIL: Matrix attachments crossed the retired social authority." >&2
+  exit 1
+fi
+
+echo "Matrix-native Wave attachment tray source contracts passed."

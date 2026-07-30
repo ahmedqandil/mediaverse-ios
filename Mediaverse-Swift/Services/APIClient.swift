@@ -207,6 +207,130 @@ actor APIClient: LegacySocialTransport {
         return try decoder.decode(T.self, from: data)
     }
 
+    /// Approved Matrix-native sticker packs are governed in Backstage and
+    /// served through an authenticated, integrity-verifying Westreem route.
+    /// Swift never consumes the original third-party media URL.
+    func matrixApprovedStickerPacks() async throws -> [MatrixNativeApprovedStickerPack] {
+        let data = try await getData(MatrixNativeApprovedStickerContract.listingPath)
+        let response = try decoder.decode(MatrixNativeApprovedStickerPacksResponse.self, from: data)
+        return response.packs.map { pack in
+            MatrixNativeApprovedStickerPack(
+                id: pack.id,
+                slug: pack.slug,
+                name: pack.name,
+                version: pack.version,
+                assets: pack.assets.filter(MatrixNativeApprovedStickerContract.accepts)
+            )
+        }
+    }
+
+    func matrixApprovedStickerData(
+        asset: MatrixNativeApprovedStickerAsset
+    ) async throws -> Data {
+        guard
+            MatrixNativeApprovedStickerContract.accepts(asset),
+            let path = MatrixNativeApprovedStickerContract.assetPath(id: asset.id)
+        else {
+            throw APIError.invalidResponse("Sticker metadata failed client validation")
+        }
+        let data = try await getData(path)
+        guard
+            data.count == asset.bytes,
+            MatrixNativeApprovedStickerContract.accepts(
+                data,
+                mimeType: asset.mimeType
+            )
+        else {
+            throw APIError.invalidResponse("Sticker failed client integrity validation")
+        }
+        return data
+    }
+
+    private struct MatrixLinkPreviewRequest: Encodable {
+        let url: String
+    }
+
+    private struct MatrixLinkPreviewResponse: Decodable {
+        struct Preview: Decodable {
+            let title: String?
+            let description: String?
+            let imageUrl: String?
+            let faviconUrl: String?
+            let domain: String
+            let finalUrl: String
+        }
+
+        let authority: String
+        let derivedBy: String
+        let preview: Preview
+    }
+
+    func matrixLinkPreview(
+        for rawURL: String
+    ) async throws -> MatrixNativeLinkPreviewMetadata {
+        guard let safeURL = MatrixNativeLinkPreviewContract.safePublicHTTPURL(rawURL) else {
+            throw APIError.invalidResponse("The link is not eligible for a safe preview")
+        }
+        let response: MatrixLinkPreviewResponse = try await post(
+            MatrixNativeLinkPreviewContract.endpoint,
+            body: MatrixLinkPreviewRequest(url: safeURL.absoluteString)
+        )
+        guard response.authority == "MATRIX",
+              response.derivedBy == "WESTREEM_SSRF_SAFE_PREVIEW"
+        else {
+            throw APIError.invalidResponse("The link preview authority is invalid")
+        }
+        return try MatrixNativeLinkPreviewMetadata(
+            title: response.preview.title,
+            description: response.preview.description,
+            imageURL: response.preview.imageUrl,
+            faviconURL: response.preview.faviconUrl,
+            domain: response.preview.domain,
+            finalURL: response.preview.finalUrl
+        )
+    }
+
+    struct MatrixNativeRoomRegistration: Decodable, Sendable {
+        let entityType: String
+        let matrixRoomId: String
+        let matrixSpaceId: String
+        let visibility: String
+        let encrypted: Bool
+    }
+
+    func registerMatrixNativeRoom(
+        entityType: String,
+        matrixRoomID: String,
+        matrixSpaceID: String
+    ) async throws -> MatrixNativeRoomRegistration {
+        struct Body: Encodable {
+            let entityType: String
+            let matrixRoomId: String
+            let matrixSpaceId: String
+        }
+        struct Response: Decodable {
+            let registration: MatrixNativeRoomRegistration
+        }
+        let response: Response = try await post(
+            "/api/matrix/native-bindings",
+            body: Body(
+                entityType: entityType,
+                matrixRoomId: matrixRoomID,
+                matrixSpaceId: matrixSpaceID
+            )
+        )
+        guard
+            response.registration.entityType == entityType,
+            response.registration.matrixRoomId == matrixRoomID,
+            response.registration.matrixSpaceId == matrixSpaceID
+        else {
+            throw APIError.invalidResponse(
+                "WeStreem Wave registration returned a mismatched identity"
+            )
+        }
+        return response.registration
+    }
+
     /// Frozen-backend bridge for the social adapter. Keeping this inside the
     /// existing client preserves its JWT, compatibility cookies, trust checks,
     /// caching, and error behavior for every social request.
@@ -1616,6 +1740,108 @@ actor APIClient: LegacySocialTransport {
         return try await get("/api/search?q=\(enc)&type=\(encodedType)&platform=ios")
     }
 
+    func searchVibeInviteCandidates(
+        q: String,
+        limit: Int = WestreemVibeInviteSearchContract.maximumResults
+    ) async throws -> [WestreemVibeInviteCandidate] {
+        guard let query = WestreemVibeInviteSearchContract.normalizedQuery(q) else {
+            return []
+        }
+        let encodedQuery = query.addingPercentEncoding(
+            withAllowedCharacters: .urlQueryAllowed
+        ) ?? query
+        let boundedLimit = min(
+            max(limit, 1),
+            WestreemVibeInviteSearchContract.maximumResults
+        )
+        let response: WestreemVibeInviteCandidatesResponse = try await get(
+            "/api/vibes/member-candidates?q=\(encodedQuery)&limit=\(boundedLimit)"
+        )
+        return response.results
+    }
+
+    func fetchVibeContacts() async throws -> [WestreemVibeContact] {
+        let response: WestreemVibeContactsResponse = try await get(
+            "/api/vibes/contacts"
+        )
+        return response.contacts
+    }
+
+    func createVibeContact(
+        westreemUserID: String
+    ) async throws -> WestreemVibeContact {
+        struct Body: Encodable { let westreemUserId: String }
+        struct Response: Decodable {
+            let contact: WestreemVibeContact
+            let created: Bool
+        }
+        let response: Response = try await post(
+            "/api/vibes/contacts",
+            body: Body(westreemUserId: westreemUserID)
+        )
+        return response.contact
+    }
+
+    func updateVibeContact(
+        id: String,
+        action: WestreemVibeContactAction
+    ) async throws -> WestreemVibeContact? {
+        struct Body: Encodable { let action: WestreemVibeContactAction }
+        struct Response: Decodable { let contact: WestreemVibeContact? }
+        let response: Response = try await patch(
+            "/api/vibes/contacts/\(C.pathSegment(id))",
+            body: Body(action: action)
+        )
+        return response.contact
+    }
+
+    func matchVibeContacts(
+        emailHashes: [String],
+        phoneHashes: [String]
+    ) async throws -> WestreemVibeContactMatchesResponse {
+        struct Body: Encodable {
+            let emailHashes: [String]
+            let phoneHashes: [String]
+        }
+        return try await post(
+            "/api/vibes/contact-matches",
+            body: Body(
+                emailHashes: Array(Array(Set(emailHashes)).sorted().prefix(500)),
+                phoneHashes: Array(Array(Set(phoneHashes)).sorted().prefix(500))
+            )
+        )
+    }
+
+    func createVibeInviteLink(
+        targetType: WestreemVibeInviteLinkTarget,
+        matrixSpaceID: String?,
+        matrixRoomID: String?,
+        maxUses: Int = 25,
+        expiresInSeconds: Int = 604_800
+    ) async throws -> WestreemVibeInviteLink {
+        struct Body: Encodable {
+            let targetType: WestreemVibeInviteLinkTarget
+            let matrixSpaceId: String?
+            let matrixRoomId: String?
+            let maxUses: Int
+            let expiresInSeconds: Int
+        }
+        struct Response: Decodable {
+            let inviteLink: WestreemVibeInviteLink
+        }
+        let response: Response = try await post(
+            "/api/vibes/invite-links",
+            body: Body(
+                targetType: targetType,
+                matrixSpaceId: matrixSpaceID,
+                matrixRoomId: matrixRoomID,
+                maxUses: min(max(maxUses, 1), 100),
+                expiresInSeconds: min(max(expiresInSeconds, 3_600), 2_592_000)
+            )
+        )
+        return response.inviteLink
+    }
+
     // MARK: - Browse: Shows
 
     func fetchShowsBrowse(genre: String? = nil, q: String? = nil) async throws -> [ShowBrowseCard] {
@@ -1914,17 +2140,31 @@ actor APIClient: LegacySocialTransport {
         return try await get("/api/notifications/counts")
     }
 
-    func registerPushToken(token: String, platform: String = "ios", environment: String, bundleId: String) async throws {
+    func registerPushToken(
+        token: String,
+        platform: String = "ios",
+        environment: String,
+        bundleId: String
+    ) async throws -> PushTokenRegistrationResponse {
         struct Body: Encodable {
             let token: String
             let platform: String
             let environment: String
             let bundleId: String
         }
-        struct Resp: Decodable { let ok: Bool? }
-        let _: Resp = try await post(
+        return try await post(
             "/api/notifications/push-token",
             body: Body(token: token, platform: platform, environment: environment, bundleId: bundleId)
+        )
+    }
+
+    func unregisterPushToken(
+        token: String
+    ) async throws -> PushTokenRemovalResponse {
+        struct Body: Encodable { let token: String }
+        return try await delete(
+            "/api/notifications/push-token",
+            body: Body(token: token)
         )
     }
 
@@ -1984,13 +2224,34 @@ actor APIClient: LegacySocialTransport {
 
     // MARK: - Vibe Events
 
-    func fetchVibeEvents(scope: String = "upcoming", vibe: String? = nil) async throws -> [VibeEventCardModel] {
+    func fetchVibeEvents(
+        scope: String = "upcoming",
+        vibe: String? = nil,
+        matrixSpaceIDs: [String] = []
+    ) async throws -> [VibeEventCardModel] {
         var events = [VibeEventCardModel]()
         var cursor: String?
         repeat {
-            var path = "/api/vibe-events?scope=\(C.pathSegment(scope))&limit=50"
-            if let vibe, !vibe.isEmpty { path += "&vibe=\(C.pathSegment(vibe))" }
-            if let cursor { path += "&cursor=\(C.pathSegment(cursor))" }
+            var components = URLComponents()
+            components.path = "/api/vibe-events"
+            components.queryItems = [
+                URLQueryItem(name: "scope", value: scope),
+                URLQueryItem(name: "limit", value: "50"),
+            ]
+            if let vibe, !vibe.isEmpty {
+                components.queryItems?.append(URLQueryItem(name: "vibe", value: vibe))
+            }
+            if let cursor {
+                components.queryItems?.append(URLQueryItem(name: "cursor", value: cursor))
+            }
+            for matrixSpaceID in Array(Set(matrixSpaceIDs)).prefix(100) {
+                components.queryItems?.append(
+                    URLQueryItem(name: "matrixSpaceId", value: matrixSpaceID)
+                )
+            }
+            guard let path = components.string else {
+                throw APIError.badURL("/api/vibe-events")
+            }
             let response: VibeEventListResponse = try await get(path)
             events.append(contentsOf: response.events.filter { event in !events.contains(where: { $0.id == event.id }) })
             cursor = response.nextCursor
@@ -2015,6 +2276,32 @@ actor APIClient: LegacySocialTransport {
             "/api/vibe-events/\(C.pathSegment(slug))/live/join",
             body: Body()
         )
+        return response.connection
+    }
+
+    func joinMatrixNativeRtcRoom(
+        roomID: String,
+        deviceID: String,
+        intent: MatrixNativeRtcIntent
+    ) async throws -> MatrixNativeRtcConnection {
+        let response: MatrixNativeRtcConnectionResponse = try await post(
+            "/api/matrix/rtc/join",
+            body: MatrixNativeRtcJoinRequest(
+                roomId: roomID,
+                deviceId: deviceID,
+                intent: intent.rawValue
+            )
+        )
+        guard
+            response.connection.authority == "MATRIX",
+            response.connection.membershipEventType
+                == MatrixNativeRtcContract.membershipEventType,
+            response.connection.provider == "LIVEKIT",
+            let url = URL(string: response.connection.url),
+            C.isTrustedRtcURL(url)
+        else {
+            throw MatrixNativeRtcError.invalidService
+        }
         return response.connection
     }
 
@@ -2043,11 +2330,16 @@ actor APIClient: LegacySocialTransport {
     func updateVibeEventStage(
         slug: String,
         action: EventStageAction,
-        requestID: String? = nil
+        requestID: String? = nil,
+        matrixEventID: String? = nil
     ) async throws -> EventStageResponse {
         try await post(
             "/api/vibe-events/\(C.pathSegment(slug))/live/stage",
-            body: EventStageRequest(action: action, requestId: requestID)
+            body: EventStageRequest(
+                action: action,
+                requestId: requestID,
+                matrixEventId: matrixEventID
+            )
         )
     }
 
@@ -2056,10 +2348,34 @@ actor APIClient: LegacySocialTransport {
         return response.templates
     }
 
-    func fetchManagedCommunityVibes() async throws -> [VibeSummary] {
-        struct Response: Decodable { let clubs: [VibeSummary] }
-        let response: Response = try await get("/api/fan-clubs?mine=1&limit=50")
-        return response.clubs.filter { !$0.isPersonal }
+    func authorizeVibeEventOrigin(
+        matrixSpaceID: String,
+        matrixRoomID: String
+    ) async throws -> VibeEventOriginResponse {
+        var components = URLComponents()
+        components.path = "/api/vibe-events/origin"
+        components.queryItems = [
+            URLQueryItem(name: "space", value: matrixSpaceID),
+            URLQueryItem(name: "room", value: matrixRoomID),
+        ]
+        guard let path = components.string else {
+            throw APIError.badURL("/api/vibe-events/origin")
+        }
+        return try await get(path)
+    }
+
+    func requestVibeEventCoverUpload(
+        mimeType: String,
+        bytes: Int
+    ) async throws -> VibeEventUploadTicket {
+        struct Request: Encodable {
+            let mimeType: String
+            let bytes: Int
+        }
+        return try await post(
+            "/api/vibe-events/media/upload-url",
+            body: Request(mimeType: mimeType, bytes: bytes)
+        )
     }
 
     func createVibeEvent(_ request: CreateVibeEventRequest) async throws -> CreatedVibeEvent {
@@ -2237,6 +2553,30 @@ actor APIClient: LegacySocialTransport {
         )
     }
 
+    /// Resolves a Westreem-owned entity into the canonical, versioned Matrix
+    /// bridge event. Eligibility, immutable IDs and provenance are decided by
+    /// Westreem on the server; the native client only transports the validated
+    /// result through MatrixRustSDK.
+    func resolveMatrixShare(
+        entityType: MatrixNativeWestreemShareEntityType,
+        entityID: String,
+        clientRequestID: String
+    ) async throws -> MatrixNativeWestreemReferenceEnvelope {
+        struct Body: Encodable {
+            let entityType: String
+            let entityId: String
+            let clientRequestId: String
+        }
+        return try await post(
+            "/api/matrix/share/resolve",
+            body: Body(
+                entityType: entityType.rawValue,
+                entityId: entityID,
+                clientRequestId: clientRequestID
+            )
+        )
+    }
+
     // MARK: - Private
 
     nonisolated private func validate(_ resp: URLResponse) throws {
@@ -2355,6 +2695,290 @@ actor APIClient: LegacySocialTransport {
             return 0
         }
         return Int64(http.value(forHTTPHeaderField: "Upload-Offset") ?? "") ?? 0
+    }
+}
+
+enum MatrixVibeAffiliationEntityType: String, Codable, CaseIterable, Sendable {
+    case show = "SHOW"
+    case channel = "CHANNEL"
+
+    var label: String {
+        switch self {
+        case .show: "Show"
+        case .channel: "Channel"
+        }
+    }
+}
+
+struct MatrixVibeAffiliationTarget: Identifiable, Codable, Equatable, Sendable {
+    let id: String
+    let type: MatrixVibeAffiliationEntityType
+    let name: String
+    let handle: String?
+    let imageUrl: String?
+}
+
+struct MatrixVibeAffiliationEntity: Codable, Equatable, Sendable {
+    let id: String
+    let title: String?
+    let name: String?
+    let handle: String?
+    let coverUrl: String?
+    let avatarUrl: String?
+
+    var displayName: String {
+        title ?? name ?? "Unavailable destination"
+    }
+}
+
+struct MatrixVibeAffiliationRecord: Identifiable, Codable, Equatable, Sendable {
+    let id: String
+    let matrixSpaceId: String
+    let showId: String?
+    let channelId: String?
+    let relationshipType: String
+    let status: String
+    let requestNote: String?
+    let reviewNote: String?
+    let reviewedAt: String?
+    let revokedAt: String?
+    let createdAt: String
+    let updatedAt: String
+    let entityType: MatrixVibeAffiliationEntityType
+    let show: MatrixVibeAffiliationEntity?
+    let channel: MatrixVibeAffiliationEntity?
+
+    var destinationName: String {
+        show?.displayName ?? channel?.displayName ?? "Unavailable destination"
+    }
+}
+
+extension APIClient {
+    func matrixVibeAffiliations(
+        matrixSpaceID: String
+    ) async throws -> [MatrixVibeAffiliationRecord] {
+        struct Response: Decodable {
+            let affiliations: [MatrixVibeAffiliationRecord]
+        }
+        var components = URLComponents()
+        components.path = "/api/matrix/vibe-affiliations"
+        components.queryItems = [
+            URLQueryItem(name: "matrixSpaceId", value: matrixSpaceID),
+        ]
+        guard let path = components.string else {
+            throw APIError.badURL("/api/matrix/vibe-affiliations")
+        }
+        return try JSONDecoder().decode(
+            Response.self,
+            from: try await socialData(path: path)
+        ).affiliations
+    }
+
+    func matrixVibeAffiliationTargets(
+        matrixSpaceID: String,
+        type: MatrixVibeAffiliationEntityType,
+        query: String
+    ) async throws -> [MatrixVibeAffiliationTarget] {
+        struct Response: Decodable {
+            let results: [MatrixVibeAffiliationTarget]
+        }
+        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.count >= 2 else { return [] }
+        var components = URLComponents()
+        components.path = "/api/matrix/vibe-affiliations"
+        components.queryItems = [
+            URLQueryItem(name: "mode", value: "targets"),
+            URLQueryItem(name: "matrixSpaceId", value: matrixSpaceID),
+            URLQueryItem(name: "type", value: type.rawValue),
+            URLQueryItem(name: "q", value: normalized),
+        ]
+        guard let path = components.string else {
+            throw APIError.badURL("/api/matrix/vibe-affiliations")
+        }
+        return try JSONDecoder().decode(
+            Response.self,
+            from: try await socialData(path: path)
+        ).results
+    }
+
+    func requestMatrixVibeAffiliation(
+        matrixSpaceID: String,
+        target: MatrixVibeAffiliationTarget,
+        note: String?
+    ) async throws -> MatrixVibeAffiliationRecord {
+        struct Body: Encodable {
+            let matrixSpaceId: String
+            let entityType: MatrixVibeAffiliationEntityType
+            let entityId: String
+            let requestNote: String?
+        }
+        struct Response: Decodable {
+            let affiliation: MatrixVibeAffiliationRecord
+        }
+        let cleanNote = note?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .prefix(2_000)
+        let body = Body(
+            matrixSpaceId: matrixSpaceID,
+            entityType: target.type,
+            entityId: target.id,
+            requestNote: cleanNote.flatMap { $0.isEmpty ? nil : String($0) }
+        )
+        return try JSONDecoder().decode(
+            Response.self,
+            from: try await socialPostData(
+                path: "/api/matrix/vibe-affiliations",
+                body: try JSONEncoder().encode(body)
+            )
+        ).affiliation
+    }
+}
+
+struct WestreemVibeInviteCandidate: Decodable, Identifiable, Hashable, Sendable {
+    var id: String { westreemUserId }
+    let westreemUserId: String
+    let matrixUserId: String
+    let handle: String
+    let displayName: String
+    let avatarUrl: String?
+    let contactStatus: WestreemVibeContactStatus?
+}
+
+private struct WestreemVibeInviteCandidatesResponse: Decodable, Sendable {
+    let results: [WestreemVibeInviteCandidate]
+}
+
+enum WestreemVibeContactStatus: String, Codable, Sendable {
+    case none = "NONE"
+    case pendingIncoming = "PENDING_IN"
+    case pendingOutgoing = "PENDING_OUT"
+    case contact = "CONTACT"
+}
+
+enum WestreemVibeContactAction: String, Encodable, Sendable {
+    case accept = "ACCEPT"
+    case decline = "DECLINE"
+    case remove = "REMOVE"
+}
+
+struct WestreemVibeContactPerson: Decodable, Identifiable, Hashable, Sendable {
+    var id: String { westreemUserId }
+    let westreemUserId: String
+    let matrixUserId: String
+    let handle: String
+    let displayName: String
+    let avatarUrl: String?
+}
+
+struct WestreemVibeContact: Decodable, Identifiable, Hashable, Sendable {
+    enum Status: String, Decodable, Sendable {
+        case pending = "PENDING"
+        case accepted = "ACCEPTED"
+    }
+
+    enum Direction: String, Decodable, Sendable {
+        case incoming = "INCOMING"
+        case outgoing = "OUTGOING"
+        case contact = "CONTACT"
+    }
+
+    let id: String
+    let status: Status
+    let direction: Direction
+    let user: WestreemVibeContactPerson
+    let createdAt: String
+    let updatedAt: String
+}
+
+private struct WestreemVibeContactsResponse: Decodable, Sendable {
+    let contacts: [WestreemVibeContact]
+}
+
+struct WestreemVibeContactMatch: Decodable, Identifiable, Hashable, Sendable {
+    var id: String { westreemUserId }
+    let westreemUserId: String
+    let matrixUserId: String
+    let handle: String
+    let displayName: String
+    let avatarUrl: String?
+    let contactStatus: WestreemVibeContactStatus
+    let matchedEmailHash: String
+
+    var inviteCandidate: WestreemVibeInviteCandidate {
+        WestreemVibeInviteCandidate(
+            westreemUserId: westreemUserId,
+            matrixUserId: matrixUserId,
+            handle: handle,
+            displayName: displayName,
+            avatarUrl: avatarUrl,
+            contactStatus: contactStatus
+        )
+    }
+}
+
+struct WestreemVibeContactMatchesResponse: Decodable, Sendable {
+    let matches: [WestreemVibeContactMatch]
+    let unsupportedKinds: [String]
+}
+
+enum WestreemVibeInviteLinkTarget: String, Codable, Sendable {
+    case space = "SPACE"
+    case room = "ROOM"
+}
+
+struct WestreemVibeInviteLink: Decodable, Identifiable, Sendable {
+    struct Target: Decodable, Sendable {
+        let name: String
+        let encrypted: Bool
+    }
+
+    let id: String
+    let targetType: WestreemVibeInviteLinkTarget
+    let matrixSpaceId: String?
+    let matrixRoomId: String?
+    let maxUses: Int
+    let useCount: Int
+    let expiresAt: String
+    let revokedAt: String?
+    let path: String
+    let url: String
+    let target: Target
+}
+
+extension APIClient: AtmoV2Transport {
+    func atmoV2Data(
+        path: String,
+        method: AtmoV2HTTPMethod,
+        body: Data?
+    ) async throws -> Data {
+        let isPersonalAtmo = path == AtmoV2Authority.basePath
+            || path.hasPrefix(AtmoV2Authority.basePath + "/")
+        let isAtmosphereFeed = path == AtmosphereV2Authority.feedPath
+            || path.hasPrefix(AtmosphereV2Authority.feedPath + "?")
+        guard (isPersonalAtmo || isAtmosphereFeed),
+              let url = URL(string: C.baseURL + path) else {
+            throw APIError.badURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = method.rawValue
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = body
+        }
+        attachAuth(&request)
+        let (data, response) = try await session.data(for: request)
+        do {
+            try validate(response)
+        } catch {
+            if let payload = try? JSONDecoder().decode(SocialAPIErrorPayload.self, from: data),
+               !payload.error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw APIError.invalidResponse(payload.error)
+            }
+            throw error
+        }
+        if method != .get { invalidateResponseCache() }
+        return data
     }
 }
 

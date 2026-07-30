@@ -90,10 +90,6 @@ struct AtmosphereView: View {
         .onChange(of: auth.isAuthenticated) { _, _ in
             Task { await loadNotificationCount() }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .rippleCreated)) { notification in
-            guard let ripple = notification.object as? Ripple else { return }
-            model.prepend(ripple)
-        }
         .onReceive(NotificationCenter.default.publisher(for: .userFollowChanged)) { _ in
             guard auth.isAuthenticated else { return }
             Task { await model.reload(.atmosphere) }
@@ -371,42 +367,51 @@ struct AtmosphereView: View {
         }
     }
 
-    private func simpleFeed(_ items: [AtmosphereFeedItem]) -> some View {
+    private func simpleFeed(_ items: [AtmosphereV2FeedItem]) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 12) {
                     Color.clear.frame(height: 0).id("atmosphere-feed-top")
-                    atmosphereBoundaryListings(model.beforeFeedListings, allowsFlashes: true)
-                    ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                    atmosphereBoundaryListings(model.beforeFeedListings, allowsFlashes: false)
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         switch item {
-                        case .ripple(let ripple):
-                            RippleCard(
-                                ripple: ripple,
-                                allowsEngagement: socialFeatures.rippleEngagementEnabled,
-                                activePreviewVideoId: $activePreviewVideoId,
-                                previewManager: previewManager,
-                                isAutoplayBlocked: isAutoplayBlocked,
-                                isPreservingPreviewHandoff: isPreservingPreviewHandoff,
-                                onPreviewPaused: { videoID in
-                                    suppressedPreviewVideoId = videoID
-                                    updatePreview(videos: feedVideos(from: model.atmosphereItems))
-                                },
-                                onVideoHandoff: { video, frame in
-                                    handoffToWatch(video, sourceFrame: frame)
-                                }
-                            )
+                        case .atmoPost(_, _, _, let post):
+                            AtmosphereAtmoPostCard(post: post)
                             .padding(.horizontal, feedCardInset)
-                        case .video(let video):
+                        case .video(_, _, _, let video):
                             atmosphereVideoCard(video)
-                        case .excludedEpisode, .excludedShort, .unsupported:
-                            EmptyView()
+                        case .publicVibeHighlight(_, _, let highlight):
+                            AtmospherePublicVibeHighlightCard(highlight: highlight)
+                                .padding(.horizontal, feedCardInset)
                         }
                         if let listing = inlineListing(after: index) {
                             NativeCurationListingView(listing: listing)
                                 .padding(.vertical, 6)
                         }
                     }
-                    atmosphereBoundaryListings(model.afterFeedListings, allowsFlashes: true)
+                    if model.atmosphereNextCursor != nil {
+                        VStack(spacing: 8) {
+                            if model.isLoadingMoreAtmosphere {
+                                ProgressView().tint(C.watch)
+                            } else if let message = model.atmospherePaginationError {
+                                Text(message)
+                                    .font(.caption)
+                                    .foregroundStyle(C.textMuted)
+                                Button("Try Again") {
+                                    Task { await model.loadMoreAtmosphere() }
+                                }
+                                .buttonStyle(.bordered)
+                                .tint(C.watch)
+                            } else {
+                                ProgressView()
+                                    .tint(C.watch)
+                                    .task { await model.loadMoreAtmosphere() }
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 18)
+                    }
+                    atmosphereBoundaryListings(model.afterFeedListings, allowsFlashes: false)
                 }
                 .padding(.vertical, C.pagePad)
                 .padding(.bottom, C.bottomMenuClearance)
@@ -431,7 +436,9 @@ struct AtmosphereView: View {
                     ContentUnavailableView(
                         "Your Atmosphere is quiet",
                         systemImage: "wind",
-                        description: Text("Follow people and Vibes to see their Ripples here.")
+                        description: Text(
+                            "Follow people, Channels, and Shows to shape your feed."
+                        )
                     )
                 }
             }
@@ -503,14 +510,12 @@ struct AtmosphereView: View {
         )
     }
 
-    private func feedVideos(from items: [AtmosphereFeedItem]) -> [FeedVideo] {
+    private func feedVideos(from items: [AtmosphereV2FeedItem]) -> [FeedVideo] {
         items.flatMap { item -> [FeedVideo] in
             switch item {
-            case .video(let video):
+            case .video(_, _, _, let video):
                 return [video.feedVideo]
-            case .ripple(let ripple):
-                return ripple.attachments.compactMap { $0.video?.feedVideo }
-            case .excludedEpisode, .excludedShort, .unsupported:
+            case .atmoPost, .publicVibeHighlight:
                 return []
             }
         }
@@ -709,7 +714,432 @@ struct AtmosphereView: View {
         guard every > 0, (zeroBasedIndex + 1).isMultiple(of: every) else { return nil }
         let injectionIndex = ((zeroBasedIndex + 1) / every) - 1
         guard model.inlineListings.indices.contains(injectionIndex) else { return nil }
-        return model.inlineListings[injectionIndex]
+        let listing = model.inlineListings[injectionIndex]
+        guard listing.normalizedTemplateType != "stories" else { return nil }
+        return listing
+    }
+}
+
+private struct AtmosphereAtmoPostCard: View {
+    let post: AtmoV2Post
+
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var spoilerRevealed = false
+
+    private var profileRoute: AppRoute? {
+        post.author.handle.map { .atmo($0) }
+    }
+
+    private var publicURL: URL? {
+        guard let handle = post.author.handle else { return nil }
+        var components = URLComponents(
+            string: "\(C.baseURL)/atmo/\(C.pathSegment(handle))"
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "post", value: post.id)
+        ]
+        return components?.url
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            authorHeader
+
+            if let body = post.body?.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ), !body.isEmpty {
+                if post.isSpoiler && !spoilerRevealed {
+                    Button("Reveal spoiler") { spoilerRevealed = true }
+                        .font(.subheadline.bold())
+                        .foregroundStyle(C.watch)
+                } else {
+                    Text(body)
+                        .font(.body)
+                        .foregroundStyle(C.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            let photos = post.attachments
+                .filter { $0.type == "IMAGE" }
+                .compactMap(\.imageUrl)
+            if !photos.isEmpty {
+                AtmosphereAtmoPhotoGrid(urls: Array(photos.prefix(4)))
+            }
+
+            ForEach(
+                post.attachments.filter {
+                    $0.type == "LINK" || $0.canonicalUrl != nil
+                }
+            ) { attachment in
+                AtmosphereAtmoAttachmentCard(attachment: attachment)
+            }
+
+            if let echo = post.echo {
+                VStack(alignment: .leading, spacing: 5) {
+                    Label("Echo", systemImage: "wave.3.right")
+                        .font(.caption.bold())
+                        .foregroundStyle(C.watch)
+                    Text(
+                        echo.sourceType
+                            .replacingOccurrences(of: "_", with: " ")
+                            .capitalized
+                    )
+                    .font(.caption)
+                    .foregroundStyle(C.textMuted)
+                }
+                .padding(11)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    C.elevated,
+                    in: RoundedRectangle(cornerRadius: 12)
+                )
+            }
+
+            if let poll = post.poll {
+                AtmosphereAtmoPollSummary(poll: poll)
+            }
+
+            actionSummary
+        }
+        .padding(14)
+        .background(C.surface.opacity(0.82))
+        .clipShape(
+            RoundedRectangle(
+                cornerRadius: horizontalSizeClass == .compact ? 0 : 16,
+                style: .continuous
+            )
+        )
+        .overlay {
+            if horizontalSizeClass == .compact {
+                VStack(spacing: 0) {
+                    Rectangle().fill(C.borderSubtle).frame(height: 1)
+                    Spacer()
+                    Rectangle().fill(C.borderSubtle).frame(height: 1)
+                }
+            } else {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(C.borderSubtle)
+            }
+        }
+    }
+
+    private var authorHeader: some View {
+        HStack(spacing: 10) {
+            routeToProfile {
+                SocialIdentityAvatar(
+                    image: post.author.image,
+                    name: post.author.name ?? "Atmo",
+                    size: 38
+                )
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                routeToProfile {
+                    Text(post.author.name ?? "Atmo")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(C.text)
+                }
+                if let handle = post.author.handle {
+                    Text("@\(handle)")
+                        .font(.caption)
+                        .foregroundStyle(C.textMuted)
+                }
+            }
+            Spacer()
+            if post.pinnedAt != nil {
+                Label("Pinned", systemImage: "pin.fill")
+                    .font(.caption2.bold())
+                    .foregroundStyle(C.watch)
+            }
+        }
+    }
+
+    private var actionSummary: some View {
+        WestreemHorizontalScrollView(showsIndicators: false) {
+            HStack(spacing: 18) {
+                profileAction(
+                    post.counts.energy > 0
+                        ? "\(post.counts.energy) Energy"
+                        : "Add Energy",
+                    systemImage: "bolt"
+                )
+                profileAction(
+                    post.counts.comments > 0
+                        ? "\(post.counts.comments) Comments"
+                        : "Comment",
+                    systemImage: "bubble.left"
+                )
+                profileAction(
+                    post.counts.echoes > 0
+                        ? "\(post.counts.echoes) Echoes"
+                        : "Echo",
+                    systemImage: "wave.3.right"
+                )
+                Button {
+                    guard let publicURL else { return }
+                    UIActivityViewController(
+                        activityItems: [publicURL],
+                        applicationActivities: nil
+                    ).presentFromRoot()
+                } label: {
+                    Label(
+                        post.counts.shares > 0
+                            ? "\(post.counts.shares) Shares"
+                            : "Share",
+                        systemImage: "square.and.arrow.up"
+                    )
+                }
+                .disabled(publicURL == nil)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(C.textMuted)
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 2)
+    }
+
+    private func profileAction(
+        _ label: String,
+        systemImage: String
+    ) -> some View {
+        Button {
+            guard let profileRoute else { return }
+            NotificationCenter.default.post(
+                name: .mentionNavigationRequested,
+                object: profileRoute
+            )
+        } label: {
+            Label(label, systemImage: systemImage)
+        }
+        .disabled(profileRoute == nil)
+        .accessibilityHint("Opens this Ripple in Personal Atmo")
+    }
+
+    @ViewBuilder
+    private func routeToProfile<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        if let profileRoute {
+            NavigationLink(value: profileRoute, label: content)
+                .buttonStyle(.plain)
+        } else {
+            content()
+        }
+    }
+}
+
+private struct AtmosphereAtmoPhotoGrid: View {
+    let urls: [String]
+
+    var body: some View {
+        LazyVGrid(
+            columns: [
+                GridItem(.flexible(), spacing: 4),
+                GridItem(.flexible(), spacing: 4)
+            ],
+            spacing: 4
+        ) {
+            ForEach(Array(urls.enumerated()), id: \.offset) { _, raw in
+                CachedRemoteImage(
+                    url: C.mediaURL(raw),
+                    targetSize: CGSize(width: 500, height: 360)
+                ) {
+                    $0.resizable().scaledToFill()
+                } placeholder: {
+                    C.elevated
+                }
+                .frame(height: urls.count == 1 ? 260 : 160)
+                .frame(maxWidth: .infinity)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .gridCellColumns(urls.count == 1 ? 2 : 1)
+            }
+        }
+        .accessibilityLabel("\(urls.count) attached photo\(urls.count == 1 ? "" : "s")")
+    }
+}
+
+private struct AtmosphereAtmoAttachmentCard: View {
+    let attachment: AtmoV2Attachment
+
+    private var destination: URL? {
+        let value = attachment.externalUrl ?? attachment.canonicalUrl
+        guard let value else { return nil }
+        if value.hasPrefix("/") {
+            return URL(string: C.baseURL + value)
+        }
+        return URL(string: value)
+    }
+
+    var body: some View {
+        Group {
+            if let destination {
+                Link(destination: destination) { content }
+                    .buttonStyle(.plain)
+            } else {
+                content
+            }
+        }
+    }
+
+    private var content: some View {
+        HStack(spacing: 11) {
+            if let raw = attachment.linkImageUrl
+                ?? attachment.mediaThumbnailUrl
+                ?? attachment.imageUrl {
+                CachedRemoteImage(
+                    url: C.mediaURL(raw),
+                    targetSize: CGSize(width: 100, height: 74)
+                ) {
+                    $0.resizable().scaledToFill()
+                } placeholder: {
+                    C.elevated
+                }
+                .frame(width: 92, height: 66)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 9))
+            } else {
+                Image(systemName: "link")
+                    .foregroundStyle(C.watch)
+                    .frame(width: 44, height: 44)
+                    .background(
+                        C.watch.opacity(0.1),
+                        in: RoundedRectangle(cornerRadius: 9)
+                    )
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(
+                    attachment.linkTitle
+                        ?? attachment.type
+                            .replacingOccurrences(of: "_", with: " ")
+                            .capitalized
+                )
+                .font(.subheadline.bold())
+                .foregroundStyle(C.text)
+                .lineLimit(2)
+                if let detail = attachment.linkDescription
+                    ?? attachment.linkDomain {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(C.textMuted)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 0)
+            if destination != nil {
+                Image(systemName: "arrow.up.right")
+                    .font(.caption.bold())
+                    .foregroundStyle(C.textTertiary)
+            }
+        }
+        .padding(10)
+        .background(
+            C.elevated,
+            in: RoundedRectangle(cornerRadius: 12)
+        )
+    }
+}
+
+private struct AtmosphereAtmoPollSummary: View {
+    let poll: AtmoV2Poll
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Label(poll.question, systemImage: "chart.bar.xaxis")
+                .font(.subheadline.bold())
+                .foregroundStyle(C.text)
+            ForEach(poll.options) { option in
+                HStack {
+                    Text(option.label)
+                    Spacer()
+                    if let count = option.voteCount {
+                        Text(count.formatted())
+                    }
+                    if option.selected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(C.watch)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(C.textMuted)
+                .padding(.horizontal, 10)
+                .frame(minHeight: 38)
+                .background(
+                    C.surface,
+                    in: RoundedRectangle(cornerRadius: 9)
+                )
+            }
+        }
+        .padding(11)
+        .background(
+            C.elevated,
+            in: RoundedRectangle(cornerRadius: 12)
+        )
+    }
+}
+
+private struct AtmospherePublicVibeHighlightCard: View {
+    let highlight: AtmosphereV2PublicHighlight
+
+    private var destination: URL? {
+        guard let raw = highlight.presentation.canonicalUrl else { return nil }
+        return raw.hasPrefix("/")
+            ? URL(string: C.baseURL + raw)
+            : URL(string: raw)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                SocialIdentityAvatar(
+                    image: highlight.presentation.author.image,
+                    name: highlight.presentation.author.name ?? "Vibe member",
+                    size: 38
+                )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(
+                        highlight.presentation.author.name
+                            ?? highlight.presentation.author.handle.map { "@\($0)" }
+                            ?? "Vibe member"
+                    )
+                    .font(.subheadline.bold())
+                    .foregroundStyle(C.text)
+                    Text(
+                        highlight.presentation.roomName.map {
+                            "Explicit public highlight from \($0)"
+                        } ?? "Explicit public Vibe highlight"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(C.textMuted)
+                }
+                Spacer()
+                Image(systemName: "wave.3.right")
+                    .foregroundStyle(C.watch)
+            }
+            Text(highlight.presentation.body)
+                .font(.body)
+                .foregroundStyle(C.text)
+                .fixedSize(horizontal: false, vertical: true)
+            if let destination {
+                Link(destination: destination) {
+                    Label(
+                        "Open public conversation",
+                        systemImage: "arrow.up.right"
+                    )
+                    .font(.caption.bold())
+                    .foregroundStyle(C.watch)
+                }
+            }
+        }
+        .padding(14)
+        .background(
+            C.surface.opacity(0.82),
+            in: RoundedRectangle(cornerRadius: 16)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(C.borderSubtle)
+        )
     }
 }
 
