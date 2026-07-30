@@ -476,7 +476,7 @@ private struct MatrixNativeVibeView: View {
             }
         }
         .background(C.bg.ignoresSafeArea())
-        .navigationTitle("Vibe")
+        .navigationTitle(space.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if permissions.mayOpenVibeManagement {
@@ -2202,8 +2202,8 @@ struct MatrixNativeWaveRoomView: View {
                                     item: item,
                                     showsDiscussion: true,
                                     openDiscussion: { threadRoot = item },
-                                    addEnergy: { key in
-                                        Task { await addEnergy(key, to: item) }
+                                    addEnergy: { keys in
+                                        Task { await addEnergy(keys, to: item) }
                                     },
                                     edit: { body in
                                         Task { await edit(item, body: body) }
@@ -2558,9 +2558,11 @@ struct MatrixNativeWaveRoomView: View {
     }
 
     @MainActor
-    private func addEnergy(_ key: String, to item: MatrixTimelineItem) async {
+    private func addEnergy(_ keys: [String], to item: MatrixTimelineItem) async {
         do {
-            _ = try await matrixSession.toggleEnergy(key, item: item, roomID: room.id)
+            for key in keys {
+                _ = try await matrixSession.toggleEnergy(key, item: item, roomID: room.id)
+            }
             await load(showSpinner: false)
         } catch {
             errorMessage = MatrixNativeCopy.message(for: error)
@@ -2684,14 +2686,16 @@ private struct MatrixNativePinnedRipplesView: View {
                                     item: item,
                                     showsDiscussion: false,
                                     openDiscussion: {},
-                                    addEnergy: { key in
+                                    addEnergy: { keys in
                                         Task {
                                             await perform {
-                                                _ = try await matrixSession.toggleEnergy(
-                                                    key,
-                                                    item: item,
-                                                    roomID: room.id
-                                                )
+                                                for key in keys {
+                                                    _ = try await matrixSession.toggleEnergy(
+                                                        key,
+                                                        item: item,
+                                                        roomID: room.id
+                                                    )
+                                                }
                                             }
                                         }
                                     },
@@ -2850,8 +2854,8 @@ private struct MatrixNativeThreadView: View {
                         item: displayedRoot,
                         showsDiscussion: false,
                         openDiscussion: {},
-                        addEnergy: { key in
-                            Task { await addEnergy(key, to: displayedRoot) }
+                        addEnergy: { keys in
+                            Task { await addEnergy(keys, to: displayedRoot) }
                         },
                         edit: { body in
                             Task { await edit(displayedRoot, body: body) }
@@ -2887,8 +2891,8 @@ private struct MatrixNativeThreadView: View {
                                 item: item,
                                 showsDiscussion: false,
                                 openDiscussion: {},
-                                addEnergy: { key in
-                                    Task { await addEnergy(key, to: item) }
+                                addEnergy: { keys in
+                                    Task { await addEnergy(keys, to: item) }
                                 },
                                 edit: { body in
                                     Task { await edit(item, body: body) }
@@ -3041,9 +3045,11 @@ private struct MatrixNativeThreadView: View {
     }
 
     @MainActor
-    private func addEnergy(_ key: String, to item: MatrixTimelineItem) async {
+    private func addEnergy(_ keys: [String], to item: MatrixTimelineItem) async {
         await perform {
-            _ = try await matrixSession.toggleEnergy(key, item: item, roomID: room.id)
+            for key in keys {
+                _ = try await matrixSession.toggleEnergy(key, item: item, roomID: room.id)
+            }
         }
     }
 
@@ -3196,7 +3202,7 @@ private struct MatrixNativeMessageRow: View {
     let item: MatrixTimelineItem
     let showsDiscussion: Bool
     let openDiscussion: () -> Void
-    let addEnergy: (String) -> Void
+    let addEnergy: ([String]) -> Void
     let edit: (String) -> Void
     let redact: () -> Void
     let report: (String) -> Void
@@ -3470,12 +3476,13 @@ private struct MatrixNativeMessageRow: View {
         .sheet(isPresented: $energyPresented) {
             MatrixNativeEnergyPicker(
                 item: item,
-                select: {
+                save: {
                     energyPresented = false
                     addEnergy($0)
-                }
+                },
+                cancel: { energyPresented = false }
             )
-            .presentationDetents([.height(330), .medium])
+            .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $editPresented) {
             MatrixNativeEditMessageSheet(
@@ -4774,53 +4781,125 @@ private struct MatrixNativeWaveRulesView: View {
 
 private struct MatrixNativeEnergyPicker: View {
     let item: MatrixTimelineItem
-    let select: (String) -> Void
+    let save: ([String]) -> Void
+    let cancel: () -> Void
+
+    @State private var selected: Set<String>
+
+    init(
+        item: MatrixTimelineItem,
+        save: @escaping ([String]) -> Void,
+        cancel: @escaping () -> Void
+    ) {
+        self.item = item
+        self.save = save
+        self.cancel = cancel
+        _selected = State(initialValue: Set(
+            item.energy
+                .filter(\.isSelectedByCurrentUser)
+                .map(\.key)
+        ))
+    }
+
+    private var originalSelection: Set<String> {
+        Set(item.energy.filter(\.isSelectedByCurrentUser).map(\.key))
+    }
 
     var body: some View {
         NavigationStack {
-            LazyVGrid(
-                columns: [GridItem(.flexible()), GridItem(.flexible())],
-                spacing: 10
-            ) {
-                ForEach(MatrixNativeEnergyOption.all) { option in
-                    let summary = item.energy.first { $0.key == option.id }
-                    Button {
-                        select(option.id)
-                    } label: {
-                        HStack(spacing: 9) {
-                            Image(systemName: option.systemImage)
-                                .foregroundStyle(C.watch)
-                            Text(option.label)
-                                .foregroundStyle(C.text)
-                            Spacer()
-                            if summary?.isSelectedByCurrentUser == true {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(C.watch)
-                            } else if let count = summary?.count, count > 0 {
-                                Text("\(count)")
-                                    .font(.caption.bold())
-                                    .foregroundStyle(C.textMuted)
-                            }
+            VStack(alignment: .leading, spacing: 18) {
+                Text(selected.isEmpty ? "Choose your Energy" : "\(selected.count) of 3 signals")
+                    .font(.title2.bold())
+                    .foregroundStyle(C.text)
+
+                GeometryReader { proxy in
+                    Capsule()
+                        .fill(C.borderSubtle)
+                        .overlay(alignment: .leading) {
+                            Capsule()
+                                .fill(matrixNativeEnergyGradient)
+                                .frame(
+                                    width: proxy.size.width
+                                        * CGFloat(selected.count) / 3
+                                )
                         }
-                        .padding(12)
-                        .background(C.surface, in: RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(C.borderSubtle))
+                }
+                .frame(height: 5)
+
+                LazyVGrid(
+                    columns: [GridItem(.flexible()), GridItem(.flexible())],
+                    spacing: 10
+                ) {
+                    ForEach(MatrixNativeEnergyOption.all) { option in
+                        Button {
+                            if selected.contains(option.id) {
+                                selected.remove(option.id)
+                            } else if selected.count < 3 {
+                                selected.insert(option.id)
+                            }
+                        } label: {
+                            Label(option.label, systemImage: option.systemImage)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .background(
+                                    selected.contains(option.id)
+                                        ? AnyShapeStyle(matrixNativeEnergyGradient)
+                                        : AnyShapeStyle(C.elevated),
+                                    in: RoundedRectangle(cornerRadius: 12)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(selected.contains(option.id) ? C.bg : C.text)
+                        .accessibilityAddTraits(
+                            selected.contains(option.id) ? .isSelected : []
+                        )
+                        .accessibilityLabel("\(option.label) Energy")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(
-                        summary?.isSelectedByCurrentUser == true
-                            ? "Remove \(option.label) Energy"
-                            : "Add \(option.label) Energy"
-                    )
+                }
+
+                Text("Choose up to three signals.")
+                    .font(.caption)
+                    .foregroundStyle(C.textMuted)
+
+                Spacer()
+
+                if !originalSelection.isEmpty {
+                    Button("Remove Energy", role: .destructive) {
+                        save(Array(originalSelection).sorted())
+                    }
                 }
             }
             .padding(C.pagePad)
             .background(C.bg.ignoresSafeArea())
             .navigationTitle("Add Energy")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: cancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        let changed = originalSelection.symmetricDifference(selected)
+                        save(Array(changed).sorted())
+                    }
+                    .disabled(selected == originalSelection)
+                }
+            }
         }
     }
 }
+
+private let matrixNativeEnergyGradient = LinearGradient(
+    colors: [
+        Color(red: 0.416, green: 0.890, blue: 0.514),
+        Color(red: 0.718, green: 0.910, blue: 0.459),
+        Color(red: 0.949, green: 0.827, blue: 0.420),
+        Color(red: 0.910, green: 0.631, blue: 0.373),
+        Color(red: 0.655, green: 0.502, blue: 0.843),
+        Color(red: 0.349, green: 0.404, blue: 0.788),
+    ],
+    startPoint: .leading,
+    endPoint: .trailing
+)
 
 private struct MatrixNativeEditMessageSheet: View {
     let initialBody: String
@@ -4975,15 +5054,18 @@ private struct MatrixNativeVibeHero: View {
     let permissions: MatrixNativeSpacePermissionSnapshot
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 14) {
                 MatrixNativeAvatar(
                     name: space.name,
                     imageURL: space.avatarURL,
-                    size: 64
+                    size: 72
                 )
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(space.name).font(.title3.bold()).foregroundStyle(C.text)
+                    Text(space.name)
+                        .font(.title2.bold())
+                        .foregroundStyle(C.text)
+                        .lineLimit(2)
                     if let topic = space.topic, !topic.isEmpty {
                         Text(topic)
                             .font(.footnote)
@@ -4996,11 +5078,9 @@ private struct MatrixNativeVibeHero: View {
                     }
                 }
                 Spacer()
-                Image(systemName: "person.3.sequence.fill")
-                    .foregroundStyle(C.watch)
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: 0) {
                 MatrixNativeVibeMetric(
                     value: "\(space.joinedMemberCount)",
                     label: "Members",
@@ -5049,18 +5129,19 @@ private struct MatrixNativeVibeMetric: View {
     let systemImage: String
 
     var body: some View {
-        HStack(spacing: 7) {
+        VStack(spacing: 5) {
             Image(systemName: systemImage)
                 .foregroundStyle(C.watch)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(value).font(.subheadline.bold()).foregroundStyle(C.text)
-                Text(label).font(.caption2).foregroundStyle(C.textMuted)
-            }
+            Text(value)
+                .font(.headline.bold().monospacedDigit())
+                .foregroundStyle(C.text)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(C.textMuted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(C.bg.opacity(0.42), in: RoundedRectangle(cornerRadius: 10))
+        .frame(maxWidth: .infinity, minHeight: 72)
         .accessibilityElement(children: .combine)
     }
 }
