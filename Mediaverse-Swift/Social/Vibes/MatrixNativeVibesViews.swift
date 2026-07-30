@@ -13,7 +13,7 @@ import UniformTypeIdentifiers
 struct MatrixNativeVibesRootView: View {
     private enum VibesSection: String, CaseIterable, Identifiable {
         case waves
-        case personalWaves
+        case vibes
         case explore
 
         var id: String { rawValue }
@@ -21,7 +21,7 @@ struct MatrixNativeVibesRootView: View {
         var label: String {
             switch self {
             case .waves: "Waves"
-            case .personalWaves: "Personal Waves"
+            case .vibes: "Vibes"
             case .explore: "Explore"
             }
         }
@@ -45,14 +45,6 @@ struct MatrixNativeVibesRootView: View {
                         Task { await matrixSession.retryConnection() }
                     }
                 )
-            } else if isLoading, spaces.isEmpty {
-                MatrixNativeLoadingView(title: "Loading Vibes")
-            } else if let errorMessage, spaces.isEmpty {
-                MatrixNativeUnavailableView(
-                    title: "Vibes unavailable",
-                    message: errorMessage,
-                    retry: { Task { await load() } }
-                )
             } else {
                 VStack(spacing: 0) {
                     Picker("Vibes section", selection: $selectedSection) {
@@ -66,14 +58,14 @@ struct MatrixNativeVibesRootView: View {
                     .padding(.bottom, 8)
 
                     switch selectedSection {
-                    case .personalWaves:
-                        MatrixNativeDirectMessagesView()
+                    case .vibes:
+                        vibesContent
                     case .explore:
                         MatrixNativePublicVibeDirectoryView {
                             Task { await load() }
                         }
                     case .waves:
-                        wavesContent
+                        MatrixNativeCombinedWavesView(spaces: spaces)
                     }
                 }
             }
@@ -85,7 +77,7 @@ struct MatrixNativeVibesRootView: View {
             MatrixNativeWaveRoomView(room: room)
         }
         .toolbar {
-            if selectedSection == .waves {
+            if selectedSection == .vibes {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showsCreateVibe = true
@@ -116,12 +108,20 @@ struct MatrixNativeVibesRootView: View {
     }
 
     @ViewBuilder
-    private var wavesContent: some View {
-        if spaces.isEmpty {
+    private var vibesContent: some View {
+        if isLoading, spaces.isEmpty {
+            MatrixNativeLoadingView(title: "Loading Vibes")
+        } else if let errorMessage, spaces.isEmpty {
+            MatrixNativeUnavailableView(
+                title: "Vibes unavailable",
+                message: errorMessage,
+                retry: { Task { await load() } }
+            )
+        } else if spaces.isEmpty {
             ContentUnavailableView {
-                Label("No Waves yet", systemImage: "person.3.sequence")
+                Label("No Vibes yet", systemImage: "person.3.sequence")
             } description: {
-                Text("Join or create a Vibe, then its Waves will appear here.")
+                Text("Join a public Vibe, accept an invitation, or create your own.")
             }
             .foregroundStyle(C.text)
         } else {
@@ -129,8 +129,8 @@ struct MatrixNativeVibesRootView: View {
                 LazyVStack(alignment: .leading, spacing: 12) {
                         MatrixNativeDirectoryHeader(
                             eyebrow: "WESTREEM VIBES",
-                            title: "Waves",
-                            message: "All your Vibes, Waves, invitations and unread conversations."
+                            title: "Vibes",
+                            message: "Your joined communities and pending invitations."
                         )
 
                         let invitations = spaces.filter { $0.membership == .invited }
@@ -219,6 +219,162 @@ struct MatrixNativeVibesRootView: View {
     }
 }
 
+/// Conversation-first Vibes inbox. Community Waves and secure Personal Waves
+/// share one activity surface while retaining Matrix as their sole authority.
+private struct MatrixNativeCombinedWavesView: View {
+    let spaces: [MatrixVibeSummary]
+
+    @EnvironmentObject private var matrixSession: MatrixNativeSessionController
+    @State private var communityWaves: [MatrixWaveSummary] = []
+    @State private var personalWaves: [MatrixDirectRoomSummary] = []
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+    @State private var showsNewMessage = false
+    @State private var createdRoom: MatrixDirectRoomSummary?
+
+    var body: some View {
+        Group {
+            if isLoading, communityWaves.isEmpty, personalWaves.isEmpty {
+                MatrixNativeLoadingView(title: "Loading Waves")
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        MatrixNativeDirectoryHeader(
+                            eyebrow: "YOUR CONVERSATIONS",
+                            title: "Waves",
+                            message: "Community Waves and secure Personal Waves in one place."
+                        )
+
+                        if communityWaves.isEmpty, personalWaves.isEmpty {
+                            ContentUnavailableView {
+                                Label("No Waves yet", systemImage: "wave.3.right")
+                            } description: {
+                                Text("Join a Vibe or start a Personal Wave.")
+                            } actions: {
+                                Button("New Personal Wave") { showsNewMessage = true }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(C.watch)
+                            }
+                            .foregroundStyle(C.text)
+                            .padding(.top, 50)
+                        }
+
+                        if !personalWaves.isEmpty {
+                            MatrixNativeSectionLabel(
+                                title: "Personal Waves",
+                                count: personalWaves.count
+                            )
+                            ForEach(personalWaves) { room in
+                                NavigationLink {
+                                    MatrixNativeWaveRoomView(room: room.timelineRoom)
+                                } label: {
+                                    MatrixDirectMessageRow(room: room)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+
+                        if !communityWaves.isEmpty {
+                            MatrixNativeSectionLabel(
+                                title: "Vibe Waves",
+                                count: communityWaves.count
+                            )
+                            ForEach(communityWaves) { room in
+                                NavigationLink {
+                                    if room.isNestedSpace {
+                                        MatrixNativeNestedSpaceView(room: room)
+                                    } else {
+                                        MatrixNativeWaveRoomView(room: room)
+                                    }
+                                } label: {
+                                    MatrixNativeWaveRow(room: room)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+
+                        if let errorMessage {
+                            Label(errorMessage, systemImage: "wifi.exclamationmark")
+                                .font(.footnote)
+                                .foregroundStyle(C.textMuted)
+                                .padding(.top, 4)
+                        }
+                    }
+                    .padding(.horizontal, C.pagePad)
+                    .padding(.top, 10)
+                    .padding(.bottom, 110)
+                }
+                .refreshable { await load() }
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showsNewMessage = true
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+                .accessibilityLabel("New Personal Wave")
+            }
+        }
+        .sheet(isPresented: $showsNewMessage) {
+            MatrixNativeNewDirectMessageView { room in
+                createdRoom = room
+                showsNewMessage = false
+                Task { await load() }
+            }
+        }
+        .navigationDestination(item: $createdRoom) { room in
+            MatrixNativeWaveRoomView(room: room.timelineRoom)
+        }
+        .task(id: joinedSpaceIDs) { await load() }
+    }
+
+    private var joinedSpaceIDs: [String] {
+        spaces
+            .filter { $0.membership == .joined }
+            .map(\.id)
+            .sorted()
+    }
+
+    @MainActor
+    private func load() async {
+        isLoading = true
+        var loadedCommunityWaves: [MatrixWaveSummary] = []
+        var failures = 0
+
+        for spaceID in joinedSpaceIDs {
+            do {
+                loadedCommunityWaves.append(
+                    contentsOf: try await matrixSession.waves(spaceID: spaceID).rooms
+                )
+            } catch {
+                failures += 1
+            }
+        }
+
+        do {
+            personalWaves = try await matrixSession.directMessages()
+        } catch {
+            failures += 1
+        }
+
+        communityWaves = Array(
+            Dictionary(
+                loadedCommunityWaves.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            ).values
+        )
+        .sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        errorMessage = failures > 0
+            ? "Some Waves could not synchronize. Pull to retry."
+            : nil
+        isLoading = false
+    }
+}
+
 private struct MatrixNativeVibeView: View {
     let space: MatrixVibeSummary
 
@@ -232,6 +388,7 @@ private struct MatrixNativeVibeView: View {
     @State private var showsCreateEvent = false
     @State private var showsInvitations = false
     @State private var showsAffiliations = false
+    @State private var events: [VibeEventCardModel] = []
 
     var body: some View {
         let activeLounges = rooms.filter {
@@ -254,6 +411,15 @@ private struct MatrixNativeVibeView: View {
                             rooms: rooms,
                             permissions: permissions
                         )
+                        if !events.isEmpty {
+                            MatrixNativeSectionLabel(title: "Events", count: events.count)
+                            ForEach(events.prefix(4)) { event in
+                                NavigationLink(value: AppRoute.event(event.slug)) {
+                                    VibeEventCardView(event: event)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
                         if !activeLounges.isEmpty {
                             MatrixNativeSectionLabel(
                                 title: "Live lounges",
@@ -310,12 +476,13 @@ private struct MatrixNativeVibeView: View {
             }
         }
         .background(C.bg.ignoresSafeArea())
-        .navigationTitle(space.name)
+        .navigationTitle("Vibe")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if permissions.mayOpenVibeManagement {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
+                        Section("Vibe settings") {
                         if permissions.mayCreateWave {
                             Button {
                                 showsCreateWave = true
@@ -344,10 +511,11 @@ private struct MatrixNativeVibeView: View {
                                 Label("Show & Channel affiliations", systemImage: "link")
                             }
                         }
+                        }
                     } label: {
-                        Image(systemName: "ellipsis.circle")
+                        Image(systemName: "gearshape")
                     }
-                    .accessibilityLabel("Vibe management")
+                    .accessibilityLabel("Vibe settings")
                 }
             }
         }
@@ -361,7 +529,10 @@ private struct MatrixNativeVibeView: View {
         .sheet(isPresented: $showsCreateEvent) {
             NavigationStack {
                 VibeEventCreatorView(
-                    onCreated: { _ in showsCreateEvent = false },
+                    onCreated: { _ in
+                        showsCreateEvent = false
+                        Task { await load() }
+                    },
                     preselectedMatrixSpaceID: space.id
                 )
                 .environmentObject(matrixSession)
@@ -409,6 +580,10 @@ private struct MatrixNativeVibeView: View {
         do {
             rooms = try await matrixSession.waves(spaceID: space.id).rooms
             permissions = try await matrixSession.spacePermissions(spaceID: space.id)
+            events = (try? await APIClient.shared.fetchVibeEvents(
+                scope: "my-vibes",
+                matrixSpaceIDs: [space.id]
+            )) ?? []
             errorMessage = nil
         } catch {
             permissions = .unavailable
@@ -2789,6 +2964,18 @@ private struct MatrixNativeThreadView: View {
         .background(C.bg.ignoresSafeArea())
         .navigationTitle("Discussion")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            NotificationCenter.default.post(
+                name: .matrixWaveVisibilityChanged,
+                object: true
+            )
+        }
+        .onDisappear {
+            NotificationCenter.default.post(
+                name: .matrixWaveVisibilityChanged,
+                object: false
+            )
+        }
         .task(id: root.id) {
             await load()
             while !Task.isCancelled {
@@ -2983,6 +3170,14 @@ private struct MatrixNativeWaveActivityStrip: View {
                 Label(
                     memberStatuses.joined(separator: "  ·  "),
                     systemImage: "person.crop.circle"
+                )
+            } else {
+                let joined = members.filter {
+                    $0.state == .joined && !$0.isService
+                }
+                Label(
+                    "\(joined.count) \(joined.count == 1 ? "member" : "members") in this Wave",
+                    systemImage: "person.2"
                 )
             }
         }

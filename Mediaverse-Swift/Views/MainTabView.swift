@@ -402,6 +402,25 @@ struct MainTabView: View {
             }
             .tag(AppTab.home)
 
+            NavigationStack(path: $myVibesPath) {
+                Group {
+                    if !platformConfig.isEnabled("vibes", aspect: .page) {
+                        PlatformSectionUnavailableView(item: platformConfig.browseItem(id: "vibes"))
+                    } else if socialFeatures.matrixNativeVibesEnabled {
+                        MatrixNativeVibesRootView()
+                    } else {
+                        AtmosphereView(initialTab: .myVibes, visibleTabs: [.myVibes])
+                    }
+                }
+                    .navigationDestination(for: AppRoute.self) { route in
+                        routeDestination(route)
+                    }
+            }
+            .ignoresSafeArea(edges: .bottom)
+            .toolbar(.hidden, for: .tabBar)
+            .tabItem { appTabLabel(vibesTabTitle, icon: "users", fallback: "person.3") }
+            .tag(AppTab.myVibes)
+
             if platformConfig.isEnabled("videos", aspect: .nav) {
                 NavigationStack(path: $videosPath) {
                     Group {
@@ -451,24 +470,6 @@ struct MainTabView: View {
             .tabItem { appTabLabel("Discover", icon: "explore", fallback: "safari") }
             .tag(AppTab.explore)
 
-            NavigationStack(path: $myVibesPath) {
-                Group {
-                    if !platformConfig.isEnabled("vibes", aspect: .page) {
-                        PlatformSectionUnavailableView(item: platformConfig.browseItem(id: "vibes"))
-                    } else if socialFeatures.matrixNativeVibesEnabled {
-                        MatrixNativeVibesRootView()
-                    } else {
-                        AtmosphereView(initialTab: .myVibes, visibleTabs: [.myVibes])
-                    }
-                }
-                    .navigationDestination(for: AppRoute.self) { route in
-                        routeDestination(route)
-                    }
-            }
-            .ignoresSafeArea(edges: .bottom)
-            .toolbar(.hidden, for: .tabBar)
-            .tabItem { appTabLabel(vibesTabTitle, icon: "users", fallback: "person.3") }
-            .tag(AppTab.myVibes)
         }
         .tint(C.watch)
         .toolbar(.hidden, for: .tabBar)
@@ -674,6 +675,9 @@ struct MainTabView: View {
                             fallback: "house"
                         )
                     }
+                    if platformConfig.isEnabled("vibes", aspect: .nav) {
+                        bottomTabButton(.myVibes, title: vibesTabTitle, icon: "users", fallback: "person.3")
+                    }
                     if platformConfig.isEnabled("videos", aspect: .nav) {
                         bottomTabButton(.videos, title: "Videos", icon: "play", fallback: "play.rectangle")
                     }
@@ -681,9 +685,6 @@ struct MainTabView: View {
                         bottomTabButton(.shorts, title: "Shorts", icon: "short", fallback: "bolt")
                     }
                     bottomTabButton(.explore, title: "Discover", icon: "explore", fallback: "safari")
-                    if platformConfig.isEnabled("vibes", aspect: .nav) {
-                        bottomTabButton(.myVibes, title: vibesTabTitle, icon: "users", fallback: "person.3")
-                    }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)

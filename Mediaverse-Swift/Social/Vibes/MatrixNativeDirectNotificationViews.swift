@@ -179,7 +179,7 @@ struct MatrixNativeDirectMessagesView: View {
     }
 }
 
-private struct MatrixDirectMessageRow: View {
+struct MatrixDirectMessageRow: View {
     let room: MatrixDirectRoomSummary
 
     var body: some View {
@@ -226,7 +226,7 @@ private struct MatrixDirectMessageRow: View {
     }
 }
 
-private struct MatrixNativeNewDirectMessageView: View {
+struct MatrixNativeNewDirectMessageView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var matrixSession: MatrixNativeSessionController
     let onCreated: (MatrixDirectRoomSummary) -> Void
