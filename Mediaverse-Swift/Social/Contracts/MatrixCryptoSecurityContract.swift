@@ -9,6 +9,7 @@ public enum MatrixHomeserverTrustPolicy {
     public static let approvedOrigins: Set<String> = [
         "https://vibes.westreem.com",
         "https://matrix.westreem.com",
+        "https://westreem-vibes-synapse.fly.dev",
     ]
 
     public static func normalizedApprovedOrigin(_ value: String) -> String? {

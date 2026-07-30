@@ -5,6 +5,8 @@ final class MatrixCryptoSecurityContractTests: XCTestCase {
     func testHomeserverPolicyPinsExistingWestreemOriginsExactly() {
         XCTAssertTrue(MatrixHomeserverTrustPolicy.accepts("https://vibes.westreem.com"))
         XCTAssertTrue(MatrixHomeserverTrustPolicy.accepts("https://matrix.westreem.com/"))
+        XCTAssertTrue(MatrixHomeserverTrustPolicy.accepts("https://westreem-vibes-synapse.fly.dev"))
+        XCTAssertFalse(MatrixHomeserverTrustPolicy.accepts("https://westreem-vibes-synapse.fly.dev.evil.test"))
         XCTAssertFalse(MatrixHomeserverTrustPolicy.accepts("https://vibes.westreem.com.evil.test"))
         XCTAssertFalse(MatrixHomeserverTrustPolicy.accepts("https://user@vibes.westreem.com"))
         XCTAssertFalse(MatrixHomeserverTrustPolicy.accepts("https://vibes.westreem.com:8448"))
