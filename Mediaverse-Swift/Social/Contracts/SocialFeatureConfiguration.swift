@@ -15,10 +15,10 @@ public struct SocialFeatureConfiguration: Equatable, Sendable {
     /// are enabled for the production client now that the rollout endpoints
     /// are live; an explicitly stored false remains the device kill switch.
     public var matrixRealtimeEnabled: Bool
-    /// Matrix-native Vibes is the production community client. Missing local
-    /// storage enables the client; an explicitly stored false remains the
-    /// emergency device kill switch. Matrix session startup still requires
-    /// the server's ownership-v2 capability response.
+    /// Matrix-native Vibes is compiled into the production community client.
+    /// Its live rollout is server-authoritative; stale device preferences from
+    /// pre-cutover builds must never override the authenticated ownership-v2
+    /// bootstrap.
     public var matrixNativeVibesEnabled: Bool
     /// Personal Atmo v2 remains a Westreem API cutover and is independent
     /// from community Vibes/Matrix. Missing storage must remain disabled.
@@ -92,10 +92,7 @@ public struct SocialFeatureConfiguration: Equatable, Sendable {
             rippleComposerEnabled: value(for: "social.ripple-composer.enabled", in: userDefaults),
             flashesEnergyEnabled: value(for: "social.flashes-energy.enabled", in: userDefaults),
             matrixRealtimeEnabled: optInValue(for: "social.matrix-realtime.enabled", in: userDefaults),
-            matrixNativeVibesEnabled: optInValue(
-                for: "social.matrix-native-vibes-v2.enabled",
-                in: userDefaults
-            ),
+            matrixNativeVibesEnabled: true,
             personalAtmoV2Enabled: strictOptInValue(
                 for: "social.personal-atmo-v2.enabled",
                 in: userDefaults

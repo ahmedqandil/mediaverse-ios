@@ -59,7 +59,7 @@ final class MatrixCapabilityPlanTests: XCTestCase {
         }
     }
 
-    func testMatrixNativeRuntimeDefaultsOnButStillRequiresV2ServerGate() throws {
+    func testMatrixNativeRuntimeIgnoresStaleDeviceFlagButRequiresV2ServerGate() throws {
         let suiteName = "MatrixCapabilityPlanTests.\(UUID().uuidString)"
         let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { suite.removePersistentDomain(forName: suiteName) }
@@ -74,8 +74,8 @@ final class MatrixCapabilityPlanTests: XCTestCase {
 
         suite.set(false, forKey: "social.matrix-native-vibes-v2.enabled")
         local = SocialFeatureConfiguration.runtime(userDefaults: suite)
-        XCTAssertFalse(local.matrixNativeVibesEnabled)
-        XCTAssertFalse(MatrixSessionRollout.resolved(
+        XCTAssertTrue(local.matrixNativeVibesEnabled)
+        XCTAssertTrue(MatrixSessionRollout.resolved(
             local: local,
             serverEnabled: true,
             ownershipVersion: 2

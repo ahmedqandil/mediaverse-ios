@@ -268,9 +268,11 @@ actor MatrixSessionCoordinator {
             return
         }
         do {
-            let bootstrap = try await ssoBootstrapProvider
-                .matrixSSOBootstrap()
-                .validated()
+            let offered = try await ssoBootstrapProvider.matrixSSOBootstrap()
+            guard offered.enabled, offered.ownershipVersion == 2 else {
+                throw MatrixSessionFoundationError.disabled
+            }
+            let bootstrap = try offered.validated()
             let rollout = MatrixSessionRollout(
                 localEnabled: localEnabled,
                 serverEnabled: bootstrap.enabled,
@@ -317,7 +319,11 @@ actor MatrixSessionCoordinator {
             sessionKeychain = keychain
 
             state = .requestingSession
-            let bootstrap = try await ssoBootstrapProvider.matrixSSOBootstrap().validated()
+            let offered = try await ssoBootstrapProvider.matrixSSOBootstrap()
+            guard offered.enabled, offered.ownershipVersion == 2 else {
+                throw MatrixSessionFoundationError.disabled
+            }
+            let bootstrap = try offered.validated()
             guard bootstrap.authMode == .sso,
                   let redirectURL = bootstrap.redirectURL
             else {
@@ -341,8 +347,18 @@ actor MatrixSessionCoordinator {
                     keychain.removeSession()
                     throw MatrixSessionFoundationError.invalidHomeserver
                 }
-                try await install(session: restored, identity: identity, keychain: keychain)
-                return
+                if identity.verifies(matrixUserID: restored.userId) {
+                    try await install(
+                        session: restored,
+                        identity: identity,
+                        keychain: keychain
+                    )
+                    return
+                }
+                // A session can outlive a prior app login. Never let a stale
+                // Matrix identity permanently poison reconnect for the current
+                // canonical Westreem user.
+                keychain.removeSession()
             }
 
             let built = try await buildClient(
@@ -409,6 +425,20 @@ actor MatrixSessionCoordinator {
 
             state = .restoring
             if let restored = keychain.storedSession() {
+                guard identity.verifies(matrixUserID: restored.userId) else {
+                    keychain.removeSession()
+                    state = .requestingSession
+                    let brokered = try await broker.matrixSession(
+                        deviceName: deviceName
+                    )
+                    try await installBrokeredSession(
+                        brokered,
+                        identity: identity,
+                        keychain: keychain,
+                        expectedHomeserverURL: expectedHomeserverURL
+                    )
+                    return
+                }
                 if let expectedHomeserverURL {
                     guard MatrixHomeserverTrustPolicy
                         .normalizedApprovedOrigin(restored.homeserverUrl)
@@ -446,35 +476,12 @@ actor MatrixSessionCoordinator {
 
             state = .requestingSession
             let brokered = try await broker.matrixSession(deviceName: deviceName)
-            guard identity.verifies(matrixUserID: brokered.userId) else {
-                throw MatrixSessionFoundationError.identityMismatch(
-                    expected: identity.matrixUserID,
-                    received: brokered.userId
-                )
-            }
-            guard MatrixHomeserverTrustPolicy.accepts(brokered.homeserverURL) else {
-                throw MatrixSessionFoundationError.invalidHomeserver
-            }
-            if let expectedHomeserverURL {
-                guard MatrixHomeserverTrustPolicy
-                    .normalizedApprovedOrigin(brokered.homeserverURL)
-                    == MatrixHomeserverTrustPolicy
-                        .normalizedApprovedOrigin(expectedHomeserverURL)
-                else {
-                    throw MatrixSessionFoundationError.invalidHomeserver
-                }
-            }
-            let session = Session(
-                accessToken: brokered.accessToken,
-                refreshToken: brokered.refreshToken,
-                userId: brokered.userId,
-                deviceId: brokered.deviceId,
-                homeserverUrl: brokered.homeserverURL,
-                oauthData: nil,
-                slidingSyncVersion: .native
+            try await installBrokeredSession(
+                brokered,
+                identity: identity,
+                keychain: keychain,
+                expectedHomeserverURL: expectedHomeserverURL
             )
-            keychain.saveSessionInKeychain(session: session)
-            try await install(session: session, identity: identity, keychain: keychain)
         } catch let error as MatrixSessionFoundationError {
             client = nil
             state = .failed(error)
@@ -494,6 +501,46 @@ actor MatrixSessionCoordinator {
         }
         sessionKeychain = nil
         state = .disconnected
+    }
+
+    private func installBrokeredSession(
+        _ brokered: MatrixClientSession,
+        identity: MatrixCanonicalIdentity,
+        keychain: MatrixSessionKeychain,
+        expectedHomeserverURL: String?
+    ) async throws {
+        guard brokered.isUsable() else {
+            throw MatrixSessionFoundationError.unavailable
+        }
+        guard identity.verifies(matrixUserID: brokered.userId) else {
+            throw MatrixSessionFoundationError.identityMismatch(
+                expected: identity.matrixUserID,
+                received: brokered.userId
+            )
+        }
+        guard MatrixHomeserverTrustPolicy.accepts(brokered.homeserverURL) else {
+            throw MatrixSessionFoundationError.invalidHomeserver
+        }
+        if let expectedHomeserverURL {
+            guard MatrixHomeserverTrustPolicy
+                .normalizedApprovedOrigin(brokered.homeserverURL)
+                == MatrixHomeserverTrustPolicy
+                    .normalizedApprovedOrigin(expectedHomeserverURL)
+            else {
+                throw MatrixSessionFoundationError.invalidHomeserver
+            }
+        }
+        let session = Session(
+            accessToken: brokered.accessToken,
+            refreshToken: brokered.refreshToken,
+            userId: brokered.userId,
+            deviceId: brokered.deviceId,
+            homeserverUrl: brokered.homeserverURL,
+            oauthData: nil,
+            slidingSyncVersion: .native
+        )
+        keychain.saveSessionInKeychain(session: session)
+        try await install(session: session, identity: identity, keychain: keychain)
     }
 
     func activeClient() -> Client? {
@@ -673,6 +720,15 @@ final class MatrixNativeSessionController:
             beginCryptoMaintenance()
             PushNotificationManager.shared.matrixSessionDidBecomeReady()
         }
+    }
+
+    func retryConnection() async {
+        guard let currentWestreemUserID else {
+            lifecycleState = .disconnected
+            syncState = .disabled
+            return
+        }
+        await reconcile(westreemUserID: currentWestreemUserID)
     }
 
     private func beginCryptoMaintenance() {
@@ -1417,9 +1473,8 @@ final class MatrixNativeSessionController:
     }
 
     private func requireReady() throws {
-        guard SocialFeatureConfiguration.runtime().matrixNativeVibesEnabled,
-              isReady else {
-            throw MatrixSessionFoundationError.disabled
+        guard isReady else {
+            throw MatrixSessionFoundationError.unavailable
         }
     }
 

@@ -24,7 +24,12 @@ struct MatrixNativeVibesRootView: View {
     var body: some View {
         Group {
             if !matrixSession.isReady {
-                MatrixNativeSessionGateView(state: matrixSession.lifecycleState)
+                MatrixNativeSessionGateView(
+                    state: matrixSession.lifecycleState,
+                    retry: {
+                        Task { await matrixSession.retryConnection() }
+                    }
+                )
             } else if isLoading, spaces.isEmpty {
                 MatrixNativeLoadingView(title: "Loading Vibes")
             } else if let errorMessage, spaces.isEmpty {
@@ -151,6 +156,7 @@ struct MatrixNativeVibesRootView: View {
                     Image(systemName: "plus")
                 }
                 .accessibilityLabel("Create Vibe")
+                .disabled(!matrixSession.isReady)
             }
         }
         .sheet(isPresented: $showsCreateVibe) {
@@ -1000,11 +1006,25 @@ private struct MatrixNativeRoomCreatorView: View {
     private var canCreate: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !isCreating
+            && matrixSession.isReady
     }
 
     var body: some View {
         NavigationStack {
             Form {
+                if !matrixSession.isReady {
+                    Section {
+                        Button("Reconnect to Vibes") {
+                            Task { await matrixSession.retryConnection() }
+                        }
+                    } header: {
+                        Text("Connection")
+                    } footer: {
+                        Text(
+                            "Creating becomes available as soon as your secure Vibes session reconnects."
+                        )
+                    }
+                }
                 Section("Identity") {
                     TextField("\(mode.noun) name", text: $name)
                     TextField("Description", text: $topic, axis: .vertical)
@@ -5117,6 +5137,7 @@ private struct MatrixNativeConnectionBanner: View {
 
 private struct MatrixNativeSessionGateView: View {
     let state: MatrixSessionLifecycleState
+    let retry: () -> Void
 
     var body: some View {
         switch state {
@@ -5126,19 +5147,19 @@ private struct MatrixNativeSessionGateView: View {
             MatrixNativeUnavailableView(
                 title: "Vibes unavailable",
                 message: MatrixNativeCopy.message(for: error),
-                retry: nil
+                retry: retry
             )
         case .disabled:
             MatrixNativeUnavailableView(
-                title: "Vibes are not enabled",
-                message: "Vibes has not been enabled for this account and device.",
-                retry: nil
+                title: "Connect to Vibes",
+                message: "Your secure Vibes session has not connected yet.",
+                retry: retry
             )
         default:
             MatrixNativeUnavailableView(
                 title: "Vibes disconnected",
                 message: "Reconnect your WeStreem session to continue.",
-                retry: nil
+                retry: retry
             )
         }
     }
@@ -5224,7 +5245,7 @@ private enum MatrixNativeCopy {
         }
         switch foundation {
         case .disabled:
-            return "Vibes is not enabled for this account and device."
+            return "Vibes is not currently available. Try connecting again."
         case .authenticationCancelled:
             return "Vibes sign-in was cancelled."
         case .invalidWestreemUserID, .identityMismatch:
