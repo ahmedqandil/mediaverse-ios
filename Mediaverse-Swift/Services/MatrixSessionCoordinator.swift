@@ -1166,13 +1166,18 @@ final class MatrixNativeSessionController:
     func timeline(roomID: String, paginate: Bool = false) async throws -> MatrixTimelinePage {
         try requireReady()
         try await directNotificationProvider.validateRoomAccess(roomID: roomID)
-        return try await repository.timeline(roomID: roomID, from: paginate ? "previous" : nil)
+        let page = try await repository.timeline(
+            roomID: roomID,
+            from: paginate ? "previous" : nil
+        )
+        return await resolvingPublicTimelineIdentities(page, roomID: roomID)
     }
 
     func pinnedMessages(roomID: String) async throws -> MatrixTimelinePage {
         try requireReady()
         try await directNotificationProvider.validateRoomAccess(roomID: roomID)
-        return try await repository.pinned(roomID: roomID)
+        let page = try await repository.pinned(roomID: roomID)
+        return await resolvingPublicTimelineIdentities(page, roomID: roomID)
     }
 
     func thread(
@@ -1182,10 +1187,63 @@ final class MatrixNativeSessionController:
     ) async throws -> MatrixTimelinePage {
         try requireReady()
         try await directNotificationProvider.validateRoomAccess(roomID: roomID)
-        return try await repository.thread(
+        let page = try await repository.thread(
             roomID: roomID,
             rootEventID: rootEventID,
             paginateBackwards: paginate
+        )
+        return await resolvingPublicTimelineIdentities(page, roomID: roomID)
+    }
+
+    private func resolvingPublicTimelineIdentities(
+        _ page: MatrixTimelinePage,
+        roomID: String
+    ) async -> MatrixTimelinePage {
+        guard
+            let room = try? await repository.waveManagement(roomID: roomID),
+            room.access == .publicRoom,
+            !room.isEncrypted,
+            let presentations = try? await APIClient.shared
+                .resolveMatrixIdentityPresentations(
+                    matrixUserIDs: page.items.map(\.senderID)
+                )
+        else {
+            return page
+        }
+        return MatrixTimelinePage(
+            roomID: page.roomID,
+            items: page.items.map { item in
+                guard let identity = presentations[item.senderID] else {
+                    return item
+                }
+                return MatrixTimelineItem(
+                    id: item.id,
+                    reference: item.reference,
+                    senderID: item.senderID,
+                    senderDisplayName: MatrixNativeMemberPresentationContract
+                        .displayName(
+                            identity.displayName,
+                            matrixUserID: item.senderID
+                        ),
+                    senderAvatarURL: identity.avatarUrl ?? item.senderAvatarURL,
+                    body: item.body,
+                    kind: item.kind,
+                    timestamp: item.timestamp,
+                    isOwn: item.isOwn,
+                    isEdited: item.isEdited,
+                    localSendState: item.localSendState,
+                    reactionCount: item.reactionCount,
+                    energy: item.energy,
+                    readReceiptCount: item.readReceiptCount,
+                    threadReplyCount: item.threadReplyCount,
+                    replyPreviews: item.replyPreviews,
+                    actions: item.actions,
+                    media: item.media,
+                    poll: item.poll,
+                    westreemReference: item.westreemReference
+                )
+            },
+            nextToken: page.nextToken
         )
     }
 
