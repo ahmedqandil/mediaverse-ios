@@ -241,6 +241,21 @@ public struct MatrixClientSession: Decodable, Equatable, Sendable {
         case homeserverURL = "homeserverUrl"
     }
 
+    private static func parseExpiry(_ value: String) -> Date? {
+        // JavaScript's Date.toISOString() always includes fractional seconds.
+        // ISO8601DateFormatter's default options do not accept that otherwise
+        // valid representation, so accept both server and legacy fixtures.
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [
+            .withInternetDateTime,
+            .withFractionalSeconds,
+        ]
+        if let parsed = fractional.date(from: value) {
+            return parsed
+        }
+        return ISO8601DateFormatter().date(from: value)
+    }
+
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         accessToken = try values.decode(String.self, forKey: .accessToken)
@@ -261,7 +276,7 @@ public struct MatrixClientSession: Decodable, Equatable, Sendable {
             userId.utf8.count <= Self.maximumUserIDLength,
             let url = URL(string: homeserverURL),
             url.scheme == "https",
-            let expiry = ISO8601DateFormatter().date(from: rawExpiry),
+            let expiry = Self.parseExpiry(rawExpiry),
             expiry.timeIntervalSince(now) > 30,
             expiry.timeIntervalSince(now) <= Self.maximumLifetime
         else {

@@ -2220,7 +2220,17 @@ struct MatrixNativeWaveRoomView: View {
             let isTyping = !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             Task { await matrixSession.setTyping(isTyping, roomID: room.id) }
         }
+        .onAppear {
+            NotificationCenter.default.post(
+                name: .matrixWaveVisibilityChanged,
+                object: true
+            )
+        }
         .onDisappear {
+            NotificationCenter.default.post(
+                name: .matrixWaveVisibilityChanged,
+                object: false
+            )
             Task { await matrixSession.setTyping(false, roomID: room.id) }
         }
     }

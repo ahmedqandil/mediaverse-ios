@@ -87,6 +87,28 @@ final class SocialContractDecodingTests: XCTestCase {
         XCTAssertFalse(unavailable.canStartClient)
     }
 
+    func testMatrixSessionAcceptsServerISOStringFractionalSeconds() throws {
+        let expiry = Date().addingTimeInterval(60 * 60)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [
+            .withInternetDateTime,
+            .withFractionalSeconds,
+        ]
+        let envelope = try decoder.decode(
+            MatrixClientSessionEnvelope.self,
+            from: Data(
+                """
+                {"session":{"accessToken":"ephemeral","refreshToken":"refreshable",
+                "deviceId":"IOS1","userId":"@u:matrix.test",
+                "homeserverUrl":"https://matrix.test",
+                "expiresAt":"\(formatter.string(from: expiry))"}}
+                """.utf8
+            )
+        )
+
+        XCTAssertTrue(envelope.session.isUsable())
+    }
+
     func testMatrixSessionRejectsMissingEmptyAndOversizedRefreshTokens() throws {
         let validExpiry = ISO8601DateFormatter().string(
             from: Date().addingTimeInterval(60 * 60)

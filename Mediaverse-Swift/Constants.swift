@@ -718,6 +718,7 @@ extension Notification.Name {
     static let mainTabScrollToTopRequested = Notification.Name("mainTabScrollToTopRequested")
     static let notificationCountsDidChange = Notification.Name("notificationCountsDidChange")
     static let matrixRoomRouteRequested = Notification.Name("matrixRoomRouteRequested")
+    static let matrixWaveVisibilityChanged = Notification.Name("matrixWaveVisibilityChanged")
     static let sessionExpired = Notification.Name("sessionExpired")
     static let horizontalCarouselInteractionChanged = Notification.Name("horizontalCarouselInteractionChanged")
 }

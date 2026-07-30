@@ -300,6 +300,14 @@ actor MatrixSessionCoordinator {
             client = nil
             state = .failed(error)
         } catch {
+            #if DEBUG
+            print(
+                "[matrix] negotiated session failed: "
+                    + String(reflecting: type(of: error))
+                    + " "
+                    + String(describing: error)
+            )
+            #endif
             client = nil
             state = .failed(.unavailable)
         }
@@ -402,6 +410,14 @@ actor MatrixSessionCoordinator {
             client = nil
             state = .failed(error)
         } catch {
+            #if DEBUG
+            print(
+                "[matrix] SSO session failed: "
+                    + String(reflecting: type(of: error))
+                    + " "
+                    + String(describing: error)
+            )
+            #endif
             client = nil
             state = .failed(.unavailable)
         }
@@ -486,6 +502,14 @@ actor MatrixSessionCoordinator {
             client = nil
             state = .failed(error)
         } catch {
+            #if DEBUG
+            print(
+                "[matrix] broker session failed: "
+                    + String(reflecting: type(of: error))
+                    + " "
+                    + String(describing: error)
+            )
+            #endif
             client = nil
             state = .failed(.unavailable)
         }

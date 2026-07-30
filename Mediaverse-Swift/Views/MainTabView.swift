@@ -34,6 +34,7 @@ struct MainTabView: View {
     @State private var isKeyboardVisible = false
     @State private var isShortsAdPlaybackActive = false
     @State private var isRoutedShortsPresented = false
+    @State private var isMatrixWavePresented = false
     @State private var isUploadEligible = false
     @State private var activeContextToast: ActiveContext?
     @State private var contextToastUserID: String?
@@ -72,7 +73,11 @@ struct MainTabView: View {
     }
 
     private var shouldHideBottomTabBar: Bool {
-        isCommentsOverlayPresented || isUploadSheetPresented || isKeyboardVisible || (isPlayerRouteActive && !isRoutedShortsPresented)
+        isCommentsOverlayPresented
+            || isUploadSheetPresented
+            || isKeyboardVisible
+            || isMatrixWavePresented
+            || (isPlayerRouteActive && !isRoutedShortsPresented)
     }
 
     private func scrollTarget(for tab: AppTab) -> String {
@@ -180,6 +185,9 @@ struct MainTabView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .routedShortsVisibilityChanged)) { notification in
                 isRoutedShortsPresented = (notification.object as? Bool) == true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .matrixWaveVisibilityChanged)) { notification in
+                isMatrixWavePresented = (notification.object as? Bool) == true
             }
             .onReceive(
                 NotificationCenter.default.publisher(for: .shortsAdPlaybackVisibilityChanged),

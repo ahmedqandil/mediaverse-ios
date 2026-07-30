@@ -31,6 +31,10 @@ require 'MatrixNativeThreadView(room: room, root: threadRoot)' "$view" \
   "Additional replies must open a native Matrix thread."
 require '.vibe, .vibeWave:' "$tabs" \
   "Vibe and Wave routes must hide global bottom chrome."
+require '.matrixWaveVisibilityChanged' "$view" \
+  "Matrix-native Wave rooms must announce their bottom chrome visibility."
+require 'isMatrixWavePresented' "$tabs" \
+  "The app shell must hide its custom bottom navigation while a Matrix-native Wave is open."
 
 if grep -Eq 'api[.]createRipple|LegacySocialAPIAdapter|/api/fan-clubs' "$view" "$media"; then
   echo "FAIL: Wave messages must not write through the retired Ripple authority." >&2
