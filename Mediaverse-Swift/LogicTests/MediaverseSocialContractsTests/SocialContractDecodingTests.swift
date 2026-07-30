@@ -49,16 +49,21 @@ final class SocialContractDecodingTests: XCTestCase {
     private let decoder = JSONDecoder()
 
     func testMatrixSessionAndWaveBindingFailClosed() throws {
+        let validExpiry = ISO8601DateFormatter().string(
+            from: Date().addingTimeInterval(60 * 60)
+        )
         let envelope = try decoder.decode(
             MatrixClientSessionEnvelope.self,
             from: Data(
                 """
-                {"session":{"accessToken":"ephemeral","deviceId":"IOS1","userId":"@u:matrix.test",
-                "homeserverUrl":"https://matrix.test","expiresAt":"2099-07-29T12:00:00Z"}}
+                {"session":{"accessToken":"ephemeral","refreshToken":"refreshable",
+                "deviceId":"IOS1","userId":"@u:matrix.test",
+                "homeserverUrl":"https://matrix.test","expiresAt":"\(validExpiry)"}}
                 """.utf8
             )
         )
         XCTAssertTrue(envelope.session.isUsable(at: Date(timeIntervalSince1970: 0)))
+        XCTAssertEqual(envelope.session.refreshToken, "refreshable")
 
         let response = try decoder.decode(
             VibeWavesResponse.self,
@@ -80,6 +85,98 @@ final class SocialContractDecodingTests: XCTestCase {
             from: Data(#"{"available":true,"identityReady":true}"#.utf8)
         )
         XCTAssertFalse(unavailable.canStartClient)
+    }
+
+    func testMatrixSessionRejectsMissingEmptyAndOversizedRefreshTokens() throws {
+        let validExpiry = ISO8601DateFormatter().string(
+            from: Date().addingTimeInterval(60 * 60)
+        )
+        let missing = Data(
+            """
+            {"session":{"accessToken":"ephemeral","deviceId":"IOS1",
+            "userId":"@u:matrix.test","homeserverUrl":"https://matrix.test",
+            "expiresAt":"\(validExpiry)"}}
+            """.utf8
+        )
+        XCTAssertThrowsError(
+            try decoder.decode(MatrixClientSessionEnvelope.self, from: missing)
+        )
+
+        let empty = Data(
+            """
+            {"session":{"accessToken":"ephemeral","refreshToken":"",
+            "deviceId":"IOS1","userId":"@u:matrix.test",
+            "homeserverUrl":"https://matrix.test",
+            "expiresAt":"\(validExpiry)"}}
+            """.utf8
+        )
+        XCTAssertThrowsError(
+            try decoder.decode(MatrixClientSessionEnvelope.self, from: empty)
+        )
+
+        let oversizedToken = String(repeating: "x", count: 8_193)
+        let oversized = Data(
+            """
+            {"session":{"accessToken":"ephemeral",
+            "refreshToken":"\(oversizedToken)","deviceId":"IOS1",
+            "userId":"@u:matrix.test","homeserverUrl":"https://matrix.test",
+            "expiresAt":"\(validExpiry)"}}
+            """.utf8
+        )
+        XCTAssertThrowsError(
+            try decoder.decode(MatrixClientSessionEnvelope.self, from: oversized)
+        )
+    }
+
+    func testMatrixSessionRejectsUnsafeIdentityAndExpiryBounds() throws {
+        func envelope(
+            deviceID: String = "IOS1",
+            userID: String = "@u:matrix.test",
+            expiry: Date
+        ) -> Data {
+            let rawExpiry = ISO8601DateFormatter().string(from: expiry)
+            return Data(
+                """
+                {"session":{"accessToken":"ephemeral",
+                "refreshToken":"refreshable","deviceId":"\(deviceID)",
+                "userId":"\(userID)","homeserverUrl":"https://matrix.test",
+                "expiresAt":"\(rawExpiry)"}}
+                """.utf8
+            )
+        }
+
+        XCTAssertThrowsError(
+            try decoder.decode(
+                MatrixClientSessionEnvelope.self,
+                from: envelope(
+                    deviceID: String(repeating: "d", count: 256),
+                    expiry: Date().addingTimeInterval(60 * 60)
+                )
+            )
+        )
+        XCTAssertThrowsError(
+            try decoder.decode(
+                MatrixClientSessionEnvelope.self,
+                from: envelope(
+                    userID: "@" + String(repeating: "u", count: 512),
+                    expiry: Date().addingTimeInterval(60 * 60)
+                )
+            )
+        )
+        XCTAssertThrowsError(
+            try decoder.decode(
+                MatrixClientSessionEnvelope.self,
+                from: envelope(expiry: Date().addingTimeInterval(30))
+            )
+        )
+        XCTAssertThrowsError(
+            try decoder.decode(
+                MatrixClientSessionEnvelope.self,
+                from: envelope(
+                    expiry: Date().addingTimeInterval((24 * 60 * 60) + 60)
+                )
+            )
+        )
     }
 
     func testMatrixSyncNormalizesTypingUnreadAndLatestEvent() throws {

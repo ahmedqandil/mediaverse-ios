@@ -219,34 +219,51 @@ public struct ConversationalMediaUploadCompletion: Decodable, Sendable {
     public let media: ConversationalMedia
 }
 
-/// Short-lived credentials issued by Westreem's authenticated session broker.
-/// Clients keep this value in memory only and must never log or persist it.
+/// Credentials issued by Westreem's authenticated Matrix session broker.
+/// The native Matrix foundation transfers these directly into the Rust SDK
+/// session; the SDK session is then stored only in the app's protected
+/// Keychain-backed session store. Tokens must never be logged.
 public struct MatrixClientSession: Decodable, Equatable, Sendable {
+    private static let maximumTokenLength = 8_192
+    private static let maximumDeviceIDLength = 255
+    private static let maximumUserIDLength = 512
+    private static let maximumLifetime: TimeInterval = 24 * 60 * 60
+
     public let accessToken: String
+    public let refreshToken: String
     public let deviceId: String
     public let userId: String
     public let homeserverURL: String
     public let expiresAt: Date
 
     private enum CodingKeys: String, CodingKey {
-        case accessToken, deviceId, userId, expiresAt
+        case accessToken, refreshToken, deviceId, userId, expiresAt
         case homeserverURL = "homeserverUrl"
     }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         accessToken = try values.decode(String.self, forKey: .accessToken)
+        refreshToken = try values.decode(String.self, forKey: .refreshToken)
         deviceId = try values.decode(String.self, forKey: .deviceId)
         userId = try values.decode(String.self, forKey: .userId)
         homeserverURL = try values.decode(String.self, forKey: .homeserverURL)
         let rawExpiry = try values.decode(String.self, forKey: .expiresAt)
+        let now = Date()
         guard
             !accessToken.isEmpty,
-            !deviceId.isEmpty,
+            accessToken.utf8.count <= Self.maximumTokenLength,
+            !refreshToken.isEmpty,
+            refreshToken.utf8.count <= Self.maximumTokenLength,
+            !deviceId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            deviceId.utf8.count <= Self.maximumDeviceIDLength,
             userId.hasPrefix("@"),
+            userId.utf8.count <= Self.maximumUserIDLength,
             let url = URL(string: homeserverURL),
             url.scheme == "https",
-            let expiry = ISO8601DateFormatter().date(from: rawExpiry)
+            let expiry = ISO8601DateFormatter().date(from: rawExpiry),
+            expiry.timeIntervalSince(now) > 30,
+            expiry.timeIntervalSince(now) <= Self.maximumLifetime
         else {
             throw DecodingError.dataCorruptedError(
                 forKey: .accessToken,

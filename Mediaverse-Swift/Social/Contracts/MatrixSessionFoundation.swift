@@ -81,16 +81,24 @@ public struct MatrixNativePersistencePolicy: Equatable, Sendable {
     )
 }
 
-/// Credential-free, server-authoritative metadata for Synapse upstream SSO.
+public enum MatrixNativeSessionAuthMode: String, Codable, Equatable, Sendable {
+    case sso = "SSO"
+    case brokerFallback = "BROKER_FALLBACK"
+}
+
+/// Credential-free, server-authoritative metadata selecting exactly one
+/// Matrix authentication mechanism for this client session.
 public struct MatrixSSOBootstrap: Decodable, Equatable, Sendable {
     public let enabled: Bool
     public let ownershipVersion: Int
+    public let authMode: MatrixNativeSessionAuthMode?
     public let homeserverURL: String
-    public let redirectURL: String
+    public let redirectURL: String?
     public let idpID: String?
 
     private enum CodingKeys: String, CodingKey {
         case enabled, ownershipVersion
+        case authMode
         case homeserverURL = "homeserverUrl"
         case redirectURL = "redirectUrl"
         case idpID = "idpId"
@@ -99,15 +107,39 @@ public struct MatrixSSOBootstrap: Decodable, Equatable, Sendable {
     public init(
         enabled: Bool,
         ownershipVersion: Int,
+        authMode: MatrixNativeSessionAuthMode? = .sso,
         homeserverURL: String,
-        redirectURL: String,
+        redirectURL: String? = "westreem://matrix/sso",
         idpID: String? = nil
     ) {
         self.enabled = enabled
         self.ownershipVersion = ownershipVersion
+        self.authMode = authMode
         self.homeserverURL = homeserverURL
         self.redirectURL = redirectURL
         self.idpID = idpID
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try values.decode(Bool.self, forKey: .enabled)
+        ownershipVersion = try values.decode(
+            Int.self,
+            forKey: .ownershipVersion
+        )
+        authMode = try values.decodeIfPresent(
+            MatrixNativeSessionAuthMode.self,
+            forKey: .authMode
+        )
+        homeserverURL = try values.decodeIfPresent(
+            String.self,
+            forKey: .homeserverURL
+        ) ?? ""
+        redirectURL = try values.decodeIfPresent(
+            String.self,
+            forKey: .redirectURL
+        )
+        idpID = try values.decodeIfPresent(String.self, forKey: .idpID)
     }
 
     public func validated() throws -> MatrixSSOBootstrap {
@@ -115,21 +147,40 @@ public struct MatrixSSOBootstrap: Decodable, Equatable, Sendable {
             enabled,
             ownershipVersion == 2,
             MatrixHomeserverTrustPolicy.accepts(homeserverURL),
-            let redirect = URL(string: redirectURL),
-            redirect.scheme?.caseInsensitiveCompare("westreem") == .orderedSame,
-            redirect.host?.caseInsensitiveCompare("matrix") == .orderedSame,
-            redirect.path == "/sso",
-            redirect.query == nil,
-            redirect.fragment == nil,
-            idpID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != true
+            let authMode
         else {
             throw MatrixSessionFoundationError.invalidSSOConfiguration
+        }
+        switch authMode {
+        case .sso:
+            guard
+                let redirectURL,
+                let redirect = URL(string: redirectURL),
+                redirect.scheme?.caseInsensitiveCompare("westreem")
+                    == .orderedSame,
+                redirect.host?.caseInsensitiveCompare("matrix")
+                    == .orderedSame,
+                redirect.path == "/sso",
+                redirect.query == nil,
+                redirect.fragment == nil,
+                idpID?.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ).isEmpty != true
+            else {
+                throw MatrixSessionFoundationError.invalidSSOConfiguration
+            }
+        case .brokerFallback:
+            guard redirectURL == nil, idpID == nil else {
+                throw MatrixSessionFoundationError.invalidSSOConfiguration
+            }
         }
         return self
     }
 
     public func accepts(callbackURL: URL) -> Bool {
         guard
+            authMode == .sso,
+            let redirectURL,
             let expected = URL(string: redirectURL),
             callbackURL.scheme?.caseInsensitiveCompare(expected.scheme ?? "") == .orderedSame,
             callbackURL.host?.caseInsensitiveCompare(expected.host ?? "") == .orderedSame,

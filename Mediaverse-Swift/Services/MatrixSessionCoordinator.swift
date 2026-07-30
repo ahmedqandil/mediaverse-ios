@@ -257,6 +257,52 @@ actor MatrixSessionCoordinator {
         self.ssoAuthenticator = ssoAuthenticator
     }
 
+    /// Fetches one credential-free, server-authoritative authentication
+    /// decision. A failure in one mechanism never activates the other.
+    func startNegotiated(
+        westreemUserID: String,
+        localEnabled: Bool
+    ) async {
+        guard localEnabled else {
+            state = .disabled
+            return
+        }
+        do {
+            let bootstrap = try await ssoBootstrapProvider
+                .matrixSSOBootstrap()
+                .validated()
+            let rollout = MatrixSessionRollout(
+                localEnabled: localEnabled,
+                serverEnabled: bootstrap.enabled,
+                ownershipVersion: bootstrap.ownershipVersion
+            )
+            guard rollout.mayStartSDK, let authMode = bootstrap.authMode else {
+                throw MatrixSessionFoundationError.disabled
+            }
+            switch authMode {
+            case .sso:
+                // startSSO independently revalidates the current server
+                // decision before opening ASWebAuthenticationSession.
+                await startSSO(
+                    westreemUserID: westreemUserID,
+                    localEnabled: localEnabled
+                )
+            case .brokerFallback:
+                await start(
+                    westreemUserID: westreemUserID,
+                    rollout: rollout,
+                    expectedHomeserverURL: bootstrap.homeserverURL
+                )
+            }
+        } catch let error as MatrixSessionFoundationError {
+            client = nil
+            state = .failed(error)
+        } catch {
+            client = nil
+            state = .failed(.unavailable)
+        }
+    }
+
     /// Native v2 activation. Synapse SSO is never entered before both the
     /// Westreem-authenticated server and the local rollout explicitly allow it.
     func startSSO(westreemUserID: String, localEnabled: Bool) async {
@@ -272,6 +318,11 @@ actor MatrixSessionCoordinator {
 
             state = .requestingSession
             let bootstrap = try await ssoBootstrapProvider.matrixSSOBootstrap().validated()
+            guard bootstrap.authMode == .sso,
+                  let redirectURL = bootstrap.redirectURL
+            else {
+                throw MatrixSessionFoundationError.invalidSSOConfiguration
+            }
             guard MatrixSessionRollout(
                 localEnabled: localEnabled,
                 serverEnabled: bootstrap.enabled,
@@ -300,7 +351,7 @@ actor MatrixSessionCoordinator {
                 keychain: keychain
             )
             let ssoHandler = try await built.startSsoLogin(
-                redirectUrl: bootstrap.redirectURL,
+                redirectUrl: redirectURL,
                 idpId: bootstrap.idpID
             )
             guard let authorizationURL = URL(string: ssoHandler.url()) else {
@@ -343,7 +394,8 @@ actor MatrixSessionCoordinator {
     func start(
         westreemUserID: String,
         rollout: MatrixSessionRollout = .disabled,
-        deviceName: String = "Westreem iOS"
+        deviceName: String = "Westreem iOS",
+        expectedHomeserverURL: String? = nil
     ) async {
         guard rollout.mayStartSDK else {
             state = .disabled
@@ -357,8 +409,39 @@ actor MatrixSessionCoordinator {
 
             state = .restoring
             if let restored = keychain.storedSession() {
-                try await install(session: restored, identity: identity, keychain: keychain)
-                return
+                if let expectedHomeserverURL {
+                    guard MatrixHomeserverTrustPolicy
+                        .normalizedApprovedOrigin(restored.homeserverUrl)
+                        == MatrixHomeserverTrustPolicy
+                            .normalizedApprovedOrigin(expectedHomeserverURL)
+                    else {
+                        keychain.removeSession()
+                        throw MatrixSessionFoundationError.invalidHomeserver
+                    }
+                    // Broker sessions must remain refreshable. Discard a
+                    // pre-upgrade access-token-only session and obtain a new
+                    // broker envelope instead of installing a session that
+                    // will fail as soon as its short-lived token expires.
+                    if restored.refreshToken?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .isEmpty != false {
+                        keychain.removeSession()
+                    } else {
+                        try await install(
+                            session: restored,
+                            identity: identity,
+                            keychain: keychain
+                        )
+                        return
+                    }
+                } else {
+                    try await install(
+                        session: restored,
+                        identity: identity,
+                        keychain: keychain
+                    )
+                    return
+                }
             }
 
             state = .requestingSession
@@ -372,9 +455,18 @@ actor MatrixSessionCoordinator {
             guard MatrixHomeserverTrustPolicy.accepts(brokered.homeserverURL) else {
                 throw MatrixSessionFoundationError.invalidHomeserver
             }
+            if let expectedHomeserverURL {
+                guard MatrixHomeserverTrustPolicy
+                    .normalizedApprovedOrigin(brokered.homeserverURL)
+                    == MatrixHomeserverTrustPolicy
+                        .normalizedApprovedOrigin(expectedHomeserverURL)
+                else {
+                    throw MatrixSessionFoundationError.invalidHomeserver
+                }
+            }
             let session = Session(
                 accessToken: brokered.accessToken,
-                refreshToken: nil,
+                refreshToken: brokered.refreshToken,
                 userId: brokered.userId,
                 deviceId: brokered.deviceId,
                 homeserverUrl: brokered.homeserverURL,
@@ -570,7 +662,7 @@ final class MatrixNativeSessionController:
         currentWestreemUserID = westreemUserID
         let coordinator = coordinator
         activationTask = Task {
-            await coordinator.startSSO(
+            await coordinator.startNegotiated(
                 westreemUserID: westreemUserID,
                 localEnabled: localEnabled
             )
@@ -810,12 +902,26 @@ final class MatrixNativeSessionController:
               let currentWestreemUserID,
               !sourceIsEncrypted,
               !sourceRoom.isEncrypted,
-              item.kind != .unableToDecrypt,
-              item.kind != .redacted,
               !destinationRoomIDs.isEmpty,
               !requestID.trimmingCharacters(
                 in: .whitespacesAndNewlines
               ).isEmpty
+        else {
+            throw MatrixNativeWaveActionError.unavailable
+        }
+        // Treat the view item as a locator only. Resolve the canonical source
+        // from the Matrix SDK immediately before forwarding so caller-supplied
+        // sender, body, kind, and inherited provenance can never become the
+        // authority for an Echo.
+        let sourcePage = try await repository.timeline(
+            roomID: sourceRoomID,
+            from: nil
+        )
+        guard let resolvedSource = sourcePage.items.first(where: {
+            $0.reference.remoteEventID == sourceEventID
+        }),
+        resolvedSource.kind != .unableToDecrypt,
+        resolvedSource.kind != .redacted
         else {
             throw MatrixNativeWaveActionError.unavailable
         }
@@ -828,7 +934,7 @@ final class MatrixNativeSessionController:
             .filter(allowedRoomIDs.contains)
             .filter {
                 MatrixNativeMatrixEchoContract.canEcho(
-                    existingReference: item.westreemReference,
+                    existingReference: resolvedSource.westreemReference,
                     to: $0
                 )
             }
@@ -857,11 +963,11 @@ final class MatrixNativeSessionController:
                 let reference = try MatrixNativeMatrixEchoContract.reference(
                     sourceRoomID: sourceRoomID,
                     sourceEventID: sourceEventID,
-                    sourceSenderMatrixUserID: item.senderID,
-                    sourceSenderName: item.senderDisplayName,
-                    sourceBody: item.body,
+                    sourceSenderMatrixUserID: resolvedSource.senderID,
+                    sourceSenderName: resolvedSource.senderDisplayName,
+                    sourceBody: resolvedSource.body,
                     actorWestreemUserID: currentWestreemUserID,
-                    existingReference: item.westreemReference,
+                    existingReference: resolvedSource.westreemReference,
                     idempotencyKey: transactionID
                 )
                 let envelope = try MatrixNativeWestreemReferenceEnvelope(

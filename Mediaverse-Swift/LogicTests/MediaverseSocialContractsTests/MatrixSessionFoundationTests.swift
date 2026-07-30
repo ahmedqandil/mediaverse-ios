@@ -126,6 +126,46 @@ final class MatrixSessionFoundationTests: XCTestCase {
         ).validated())
     }
 
+    func testBrokerBootstrapRequiresExplicitModeAndNoSSOParameters() throws {
+        let broker = MatrixSSOBootstrap(
+            enabled: true,
+            ownershipVersion: 2,
+            authMode: .brokerFallback,
+            homeserverURL: "https://vibes.westreem.com",
+            redirectURL: nil
+        )
+        XCTAssertNoThrow(try broker.validated())
+        XCTAssertFalse(
+            broker.accepts(
+                callbackURL: URL(
+                    string: "westreem://matrix/sso?loginToken=abc"
+                )!
+            )
+        )
+        XCTAssertThrowsError(
+            try MatrixSSOBootstrap(
+                enabled: true,
+                ownershipVersion: 2,
+                authMode: .brokerFallback,
+                homeserverURL: "https://vibes.westreem.com",
+                redirectURL: "westreem://matrix/sso"
+            ).validated()
+        )
+    }
+
+    func testDisabledBootstrapDecodesWithoutReceivingServerConfiguration() throws {
+        let value = try JSONDecoder().decode(
+            MatrixSSOBootstrap.self,
+            from: Data(
+                #"{"enabled":false,"ownershipVersion":2}"#.utf8
+            )
+        )
+        XCTAssertFalse(value.enabled)
+        XCTAssertNil(value.authMode)
+        XCTAssertEqual(value.homeserverURL, "")
+        XCTAssertThrowsError(try value.validated())
+    }
+
     func testNativeSessionUsesSynapseSSOAndNeverNativeOAuth() throws {
         let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         let coordinatorURL = testsDirectory
@@ -136,6 +176,11 @@ final class MatrixSessionFoundationTests: XCTestCase {
 
         XCTAssertTrue(source.contains(".startSsoLogin("))
         XCTAssertTrue(source.contains("ssoHandler.finish("))
+        XCTAssertTrue(source.contains("func startNegotiated("))
+        XCTAssertTrue(source.contains("switch authMode"))
+        XCTAssertTrue(source.contains("case .brokerFallback:"))
+        XCTAssertTrue(source.contains("expectedHomeserverURL: bootstrap.homeserverURL"))
+        XCTAssertTrue(source.contains("await coordinator.startNegotiated("))
         XCTAssertFalse(source.contains(".urlForOauth("))
         XCTAssertFalse(source.contains(".loginWithOauthCallback("))
         XCTAssertFalse(source.contains("OAuthConfiguration("))
