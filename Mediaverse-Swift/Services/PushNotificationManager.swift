@@ -25,7 +25,10 @@ struct MatrixHTTPPusherConfiguration: Decodable, Equatable, Sendable {
             canonicalReadAuthority == "MATRIX_RECEIPT",
             !storesNotificationContent,
             let gateway = URL(string: gatewayUrl),
-            C.isTrustedBackendURL(gateway)
+            C.isTrustedBackendURL(gateway),
+            gateway.path == "/_matrix/push/v1/notify",
+            gateway.query == nil,
+            gateway.fragment == nil
         else {
             throw MatrixSessionFoundationError.unavailable
         }
