@@ -46,21 +46,51 @@ struct MatrixNativeRtcConnectionResponse: Decodable, Sendable {
 }
 
 @MainActor
-private final class MatrixNativeRtcRoomModel: ObservableObject {
+private final class MatrixNativeRtcRoomModel: NSObject, ObservableObject, RoomDelegate {
     @Published var connection: MatrixNativeRtcConnection?
     @Published var joining = false
     @Published var connected = false
+    @Published var reconnecting = false
     @Published var microphoneEnabled = false
     @Published var cameraEnabled = false
     @Published var errorMessage: String?
 
     let liveKitRoom = Room()
 
+    override init() {
+        super.init()
+        liveKitRoom.add(delegate: self)
+    }
+
     func connect(_ connection: MatrixNativeRtcConnection) async throws {
         self.connection = connection
-        try await liveKitRoom.connect(url: connection.url, token: connection.token)
-        connected = true
-        UIAccessibility.post(notification: .announcement, argument: "Call connected")
+        var lastError: Error?
+        for attempt in 0..<3 {
+            do {
+                try await liveKitRoom.connect(
+                    url: connection.url,
+                    token: connection.token
+                )
+                connected = true
+                reconnecting = false
+                errorMessage = nil
+                UIAccessibility.post(
+                    notification: .announcement,
+                    argument: "Call connected"
+                )
+                return
+            } catch {
+                lastError = error
+                await liveKitRoom.disconnect()
+                guard attempt < 2 else { break }
+                try Task.checkCancellation()
+                try await Task.sleep(
+                    for: .milliseconds(attempt == 0 ? 500 : 1_250)
+                )
+            }
+        }
+        self.connection = nil
+        throw lastError ?? MatrixNativeRtcError.invalidService
     }
 
     func toggleMicrophone() async {
@@ -88,11 +118,41 @@ private final class MatrixNativeRtcRoomModel: ObservableObject {
     }
 
     func disconnect() async {
-        await liveKitRoom.disconnect()
         connection = nil
         connected = false
+        reconnecting = false
         microphoneEnabled = false
         cameraEnabled = false
+        await liveKitRoom.disconnect()
+    }
+
+    nonisolated func room(
+        _ room: Room,
+        didUpdateConnectionState connectionState: ConnectionState,
+        from oldConnectionState: ConnectionState
+    ) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            switch connectionState {
+            case .connected:
+                connected = true
+                reconnecting = false
+                errorMessage = nil
+            case .reconnecting:
+                reconnecting = true
+            case .disconnected:
+                reconnecting = false
+                if oldConnectionState == .connected
+                    || oldConnectionState == .reconnecting {
+                    connected = false
+                    errorMessage = "The call was interrupted. Tap Join call to reconnect."
+                }
+            case .connecting, .disconnecting:
+                break
+            @unknown default:
+                break
+            }
+        }
     }
 }
 
@@ -112,10 +172,20 @@ struct MatrixNativeRtcRoomView: View {
                     VStack(spacing: 16) {
                         MatrixNativeRtcVideoGrid(room: model.liveKitRoom)
                             .frame(maxWidth: .infinity, maxHeight: 500)
-                        Text("Vibe call access is synchronized securely")
+                        Text(
+                            model.reconnecting
+                                ? "Reconnecting your call…"
+                                : "Vibe call access is synchronized securely"
+                        )
                             .font(.caption)
-                            .foregroundStyle(C.textMuted)
-                            .accessibilityLabel("Call connected")
+                            .foregroundStyle(
+                                model.reconnecting ? C.watch : C.textMuted
+                            )
+                            .accessibilityLabel(
+                                model.reconnecting
+                                    ? "Call reconnecting"
+                                    : "Call connected"
+                            )
                         HStack(spacing: 18) {
                             control(
                                 model.microphoneEnabled
@@ -202,7 +272,9 @@ struct MatrixNativeRtcRoomView: View {
                 }
             }
         }
-        .interactiveDismissDisabled(model.joining)
+        .interactiveDismissDisabled(
+            model.joining || model.connected || model.reconnecting
+        )
         .onDisappear {
             Task {
                 await model.disconnect()
