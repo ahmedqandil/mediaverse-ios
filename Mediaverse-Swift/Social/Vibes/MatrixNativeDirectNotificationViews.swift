@@ -30,7 +30,7 @@ struct MatrixNativeDirectMessagesView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let errorMessage, rooms.isEmpty {
                 ContentUnavailableView {
-                    Label("Messages unavailable", systemImage: "bubble.left.and.exclamationmark.bubble.right")
+                    Label("Personal Waves unavailable", systemImage: "bubble.left.and.exclamationmark.bubble.right")
                 } description: {
                     Text(errorMessage)
                 } actions: {
@@ -101,7 +101,7 @@ struct MatrixNativeDirectMessagesView: View {
             }
         }
         .background(C.bg.ignoresSafeArea())
-        .navigationTitle("Messages")
+        .navigationTitle("Personal Waves")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "Search conversations")
         .toolbar {
@@ -146,7 +146,7 @@ struct MatrixNativeDirectMessagesView: View {
             rooms = try await matrixSession.directMessages()
             errorMessage = nil
         } catch {
-            errorMessage = "Direct messages could not synchronize. Check your connection and try again."
+            errorMessage = "Personal Waves could not synchronize. Check your connection and try again."
         }
         isLoading = false
     }

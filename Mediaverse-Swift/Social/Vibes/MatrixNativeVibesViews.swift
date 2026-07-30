@@ -11,15 +11,30 @@ import UniformTypeIdentifiers
 /// fallback. If the native rollout/session is unavailable it fails closed and
 /// leaves Personal Atmo and The Atmosphere untouched.
 struct MatrixNativeVibesRootView: View {
+    private enum VibesSection: String, CaseIterable, Identifiable {
+        case waves
+        case personalWaves
+        case explore
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .waves: "Waves"
+            case .personalWaves: "Personal Waves"
+            case .explore: "Explore"
+            }
+        }
+    }
+
     @EnvironmentObject private var matrixSession: MatrixNativeSessionController
+    @State private var selectedSection: VibesSection = .waves
     @State private var spaces: [MatrixVibeSummary] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var pendingInvitationID: String?
     @State private var routedRoom: MatrixWaveSummary?
-    @State private var showsPublicDirectory = false
     @State private var showsCreateVibe = false
-    @State private var showsSecurity = false
 
     var body: some View {
         Group {
@@ -38,50 +53,85 @@ struct MatrixNativeVibesRootView: View {
                     message: errorMessage,
                     retry: { Task { await load() } }
                 )
-            } else if spaces.isEmpty {
-                ContentUnavailableView {
-                    Label("No Vibes yet", systemImage: "person.3.sequence")
-                } description: {
-                    Text("Vibes you join or are invited to will appear here.")
-                }
-                .foregroundStyle(C.text)
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
+                VStack(spacing: 0) {
+                    Picker("Vibes section", selection: $selectedSection) {
+                        ForEach(VibesSection.allCases) { section in
+                            Text(section.label).tag(section)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal, C.pagePad)
+                    .padding(.top, 10)
+                    .padding(.bottom, 8)
+
+                    switch selectedSection {
+                    case .personalWaves:
+                        MatrixNativeDirectMessagesView()
+                    case .explore:
+                        MatrixNativePublicVibeDirectoryView {
+                            Task { await load() }
+                        }
+                    case .waves:
+                        wavesContent
+                    }
+                }
+            }
+        }
+        .background(C.bg.ignoresSafeArea())
+        .navigationTitle("Vibes")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $routedRoom) { room in
+            MatrixNativeWaveRoomView(room: room)
+        }
+        .toolbar {
+            if selectedSection == .waves {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showsCreateVibe = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel("Create Vibe")
+                    .disabled(!matrixSession.isReady)
+                }
+            }
+        }
+        .sheet(isPresented: $showsCreateVibe) {
+            MatrixNativeRoomCreatorView(mode: .vibe) { _ in
+                showsCreateVibe = false
+                await load()
+            }
+            .environmentObject(matrixSession)
+        }
+        .task(id: matrixSession.isReady) {
+            guard matrixSession.isReady else { return }
+            await load()
+            await openPendingPushRoute()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .matrixRoomRouteRequested)) { notification in
+            guard let route = notification.object as? MatrixNativePushRoute else { return }
+            Task { await open(route) }
+        }
+    }
+
+    @ViewBuilder
+    private var wavesContent: some View {
+        if spaces.isEmpty {
+            ContentUnavailableView {
+                Label("No Waves yet", systemImage: "person.3.sequence")
+            } description: {
+                Text("Join or create a Vibe, then its Waves will appear here.")
+            }
+            .foregroundStyle(C.text)
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
                         MatrixNativeDirectoryHeader(
                             eyebrow: "WESTREEM VIBES",
-                            title: "Your Vibes",
-                            message: "Spaces and invitations synchronized securely by Vibes."
+                            title: "Waves",
+                            message: "All your Vibes, Waves, invitations and unread conversations."
                         )
-
-                        NavigationLink {
-                            MatrixNativeDirectMessagesView()
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "bubble.left.and.bubble.right.fill")
-                                    .font(.headline)
-                                    .foregroundStyle(C.watch)
-                                    .frame(width: 42, height: 42)
-                                    .background(C.watch.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text("Messages")
-                                        .font(.headline)
-                                        .foregroundStyle(C.text)
-                                    Text("Private conversations powered by Vibes")
-                                        .font(.caption)
-                                        .foregroundStyle(C.textMuted)
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption.bold())
-                                    .foregroundStyle(C.textTertiary)
-                            }
-                            .padding(12)
-                            .background(C.surface, in: RoundedRectangle(cornerRadius: 14))
-                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(C.borderSubtle))
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
 
                         let invitations = spaces.filter { $0.membership == .invited }
                         if !invitations.isEmpty {
@@ -115,69 +165,12 @@ struct MatrixNativeVibesRootView: View {
                                 .foregroundStyle(C.textMuted)
                                 .padding(.top, 4)
                         }
-                    }
-                    .padding(.horizontal, C.pagePad)
-                    .padding(.top, 18)
-                    .padding(.bottom, 110)
                 }
-                .refreshable { await load() }
+                .padding(.horizontal, C.pagePad)
+                .padding(.top, 10)
+                .padding(.bottom, 110)
             }
-        }
-        .background(C.bg.ignoresSafeArea())
-        .navigationTitle("Vibes")
-        .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(item: $routedRoom) { room in
-            MatrixNativeWaveRoomView(room: room)
-        }
-        .navigationDestination(isPresented: $showsPublicDirectory) {
-            MatrixNativePublicVibeDirectoryView {
-                Task { await load() }
-            }
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button {
-                    showsSecurity = true
-                } label: {
-                    Image(systemName: "lock.shield")
-                }
-                .accessibilityLabel("Vibes security and recovery")
-
-                Button {
-                    showsPublicDirectory = true
-                } label: {
-                    Image(systemName: "safari")
-                }
-                .accessibilityLabel("Discover public Vibes")
-
-                Button {
-                    showsCreateVibe = true
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .accessibilityLabel("Create Vibe")
-                .disabled(!matrixSession.isReady)
-            }
-        }
-        .sheet(isPresented: $showsCreateVibe) {
-            MatrixNativeRoomCreatorView(mode: .vibe) { _ in
-                showsCreateVibe = false
-                await load()
-            }
-            .environmentObject(matrixSession)
-        }
-        .sheet(isPresented: $showsSecurity) {
-            MatrixNativeCryptoSecurityView()
-                .environmentObject(matrixSession)
-        }
-        .task(id: matrixSession.isReady) {
-            guard matrixSession.isReady else { return }
-            await load()
-            await openPendingPushRoute()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .matrixRoomRouteRequested)) { notification in
-            guard let route = notification.object as? MatrixNativePushRoute else { return }
-            Task { await open(route) }
+            .refreshable { await load() }
         }
     }
 
@@ -4115,7 +4108,7 @@ private struct MatrixNativeWaveMembersView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(member.displayName)
                                 .font(.subheadline.bold())
-                            Text(member.userID)
+                            Text(member.isCurrentUser ? "You" : roleLabel(member.role))
                                 .font(.caption)
                                 .foregroundStyle(C.textMuted)
                                 .lineLimit(1)
