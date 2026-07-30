@@ -39,6 +39,13 @@ final class MatrixNativeVibesUIContractTests: XCTestCase {
         )
         XCTAssertEqual(
             MatrixNativeMemberPresentationContract.displayName(
+                "u_123",
+                matrixUserID: matrixUserID
+            ),
+            "WeStreem member"
+        )
+        XCTAssertEqual(
+            MatrixNativeMemberPresentationContract.displayName(
                 "Ahmed Qandil",
                 matrixUserID: matrixUserID
             ),

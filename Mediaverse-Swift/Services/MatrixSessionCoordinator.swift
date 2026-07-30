@@ -946,7 +946,48 @@ final class MatrixNativeSessionController:
     func waveMembers(roomID: String) async throws -> [MatrixNativeWaveMember] {
         try requireReady()
         try await directNotificationProvider.validateRoomAccess(roomID: roomID)
-        return try await repository.waveMembers(roomID: roomID)
+        let members = try await repository.waveMembers(roomID: roomID)
+        guard
+            let room = try? await repository.waveManagement(roomID: roomID),
+            room.access == .publicRoom,
+            !room.isEncrypted
+        else {
+            return members
+        }
+        let presentations = (try? await APIClient.shared
+            .resolveMatrixIdentityPresentations(
+                matrixUserIDs: members.map(\.userID)
+            )) ?? [:]
+        let originalOrder = Dictionary(
+            uniqueKeysWithValues: members.enumerated().map { ($1.userID, $0) }
+        )
+        return members.map { member in
+            guard let identity = presentations[member.userID] else {
+                return member
+            }
+            return MatrixNativeWaveMember(
+                userID: member.userID,
+                displayName: MatrixNativeMemberPresentationContract.displayName(
+                    identity.displayName,
+                    matrixUserID: member.userID
+                ),
+                avatarURL: identity.avatarUrl ?? member.avatarURL,
+                role: member.role,
+                state: member.state,
+                isCurrentUser: member.isCurrentUser,
+                isService: member.isService,
+                statusEmoji: member.statusEmoji,
+                statusText: member.statusText
+            )
+        }.sorted { left, right in
+            guard left.role == right.role else {
+                return (originalOrder[left.userID] ?? 0)
+                    < (originalOrder[right.userID] ?? 0)
+            }
+            return left.displayName.localizedCaseInsensitiveCompare(
+                right.displayName
+            ) == .orderedAscending
+        }
     }
 
     func joinedWaveDestinations(

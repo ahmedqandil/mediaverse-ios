@@ -1022,10 +1022,17 @@ public enum MatrixNativeMemberPresentationContract {
         _ displayName: String?,
         matrixUserID: String
     ) -> String {
-        safeLabel(
+        let matrixLocalpart = matrixUserID
+            .split(separator: ":", maxSplits: 1)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+        return safeLabel(
             displayName,
             fallback: fallbackDisplayName,
-            forbiddenIdentifier: matrixUserID
+            forbiddenIdentifier: displayName == matrixLocalpart
+                ? displayName
+                : matrixUserID
         )
     }
 

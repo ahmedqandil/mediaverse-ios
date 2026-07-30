@@ -1760,6 +1760,29 @@ actor APIClient: LegacySocialTransport {
         return response.results
     }
 
+    func resolveMatrixIdentityPresentations(
+        matrixUserIDs: [String]
+    ) async throws -> [String: WestreemMatrixIdentityPresentation] {
+        struct Body: Encodable { let matrixUserIds: [String] }
+        struct Response: Decodable {
+            let presentations: [WestreemMatrixIdentityPresentation]
+        }
+        let uniqueIDs = Array(Set(matrixUserIDs)).sorted()
+        guard !uniqueIDs.isEmpty else { return [:] }
+        var resolved: [String: WestreemMatrixIdentityPresentation] = [:]
+        for offset in stride(from: 0, to: uniqueIDs.count, by: 50) {
+            let end = min(offset + 50, uniqueIDs.count)
+            let response: Response = try await post(
+                "/api/matrix/identity/presentations",
+                body: Body(matrixUserIds: Array(uniqueIDs[offset..<end]))
+            )
+            for presentation in response.presentations {
+                resolved[presentation.matrixUserId] = presentation
+            }
+        }
+        return resolved
+    }
+
     func fetchVibeContacts() async throws -> [WestreemVibeContact] {
         let response: WestreemVibeContactsResponse = try await get(
             "/api/vibes/contacts"
@@ -2842,6 +2865,13 @@ struct WestreemVibeInviteCandidate: Decodable, Identifiable, Hashable, Sendable 
     let displayName: String
     let avatarUrl: String?
     let contactStatus: WestreemVibeContactStatus?
+}
+
+struct WestreemMatrixIdentityPresentation: Decodable, Hashable, Sendable {
+    let matrixUserId: String
+    let displayName: String
+    let handle: String
+    let avatarUrl: String?
 }
 
 private struct WestreemVibeInviteCandidatesResponse: Decodable, Sendable {
