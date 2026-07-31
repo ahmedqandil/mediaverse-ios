@@ -2,6 +2,40 @@ import XCTest
 @testable import MediaverseSocialContracts
 
 final class MatrixNativeVibesUIContractTests: XCTestCase {
+    func testSlidingSyncScaleWindowsCoverTenThousandRoomsInBoundedBatches() {
+        for total in [10, 100, 1_000, 10_000] {
+            var range = MatrixNativeSlidingSyncScaleContract.initialRange(
+                totalRooms: total
+            )
+            var requests = range == nil ? 0 : 1
+            while let current = range,
+                  let next = MatrixNativeSlidingSyncScaleContract.nextRange(
+                    totalRooms: total,
+                    current: current
+                  ) {
+                XCTAssertLessThanOrEqual(
+                    next.upperBound - current.upperBound,
+                    MatrixNativeSlidingSyncScaleContract.batchRooms
+                )
+                range = next
+                requests += 1
+            }
+            XCTAssertEqual(range?.upperBound, total - 1)
+            XCTAssertLessThanOrEqual(requests, 201)
+        }
+    }
+
+    func testSlidingSyncActiveSubscriptionRemainsReplaceOnlyAcrossTenThousandSwitches() {
+        var subscription = Set<String>()
+        for index in 0..<10_000 {
+            subscription = MatrixNativeSlidingSyncScaleContract
+                .activeSubscription(roomID: "!wave-\(index):example.org")
+            XCTAssertEqual(subscription.count, 1)
+        }
+        XCTAssertEqual(subscription, ["!wave-9999:example.org"])
+        XCTAssertTrue(MatrixNativeSlidingSyncScaleContract
+            .activeSubscription(roomID: "not-a-room").isEmpty)
+    }
     func testMatrixAvatarPolicyAcceptsBoundedRasterAndRejectsUnsafeContent() throws {
         var png = Data([0x89, 0x50, 0x4E, 0x47])
         png.append(Data(repeating: 0, count: 32))
@@ -95,7 +129,8 @@ final class MatrixNativeVibesUIContractTests: XCTestCase {
                     " @alice:example.org ",
                     "@bob:example.org",
                     "@alice:example.org",
-                ]
+                ],
+                canonicalAlias: "#film-makers:example.org"
             )
         )
 
@@ -131,7 +166,8 @@ final class MatrixNativeVibesUIContractTests: XCTestCase {
                     name: String(repeating: "x", count: 256),
                     topic: "",
                     visibility: .publicVibe,
-                    inviteUserIDs: []
+                    inviteUserIDs: [],
+                    canonicalAlias: "#too-long:example.org"
                 )
             )
         ) { error in
@@ -139,6 +175,89 @@ final class MatrixNativeVibesUIContractTests: XCTestCase {
                 error as? MatrixNativeCreationValidationError,
                 .invalidName
             )
+        }
+    }
+
+    func testCreationAccessAndPublicAliasRemainExplicit() throws {
+        let knock = try MatrixNativeCreationContract.validate(
+            MatrixNativeRoomCreationDraft(
+                name: "Requests",
+                topic: "",
+                visibility: .knock,
+                inviteUserIDs: []
+            )
+        )
+        XCTAssertEqual(knock.visibility, .knock)
+        XCTAssertNil(knock.canonicalAlias)
+
+        XCTAssertThrowsError(try MatrixNativeCreationContract.validate(
+            MatrixNativeRoomCreationDraft(
+                name: "Public",
+                topic: "",
+                visibility: .publicVibe,
+                inviteUserIDs: [],
+                canonicalAlias: "not-an-alias"
+            )
+        )) { error in
+            XCTAssertEqual(error as? MatrixNativeCreationValidationError, .invalidCanonicalAlias)
+        }
+    }
+
+    func testCreationAvatarAcceptsOnlyBoundedImagePayloads() throws {
+        let avatar = MatrixNativeRoomCreationAvatar(
+            data: Data([0x89, 0x50, 0x4E, 0x47]),
+            filename: "vibe-avatar.png",
+            mimeType: "image/png",
+            width: 256,
+            height: 256
+        )
+        let validated = try MatrixNativeCreationContract.validate(
+            MatrixNativeRoomCreationDraft(
+                name: "Film Makers",
+                topic: "",
+                visibility: .privateVibe,
+                inviteUserIDs: [],
+                avatar: avatar
+            )
+        )
+        XCTAssertEqual(validated.avatar, avatar)
+
+        for invalid in [
+            MatrixNativeRoomCreationAvatar(
+                data: Data(),
+                filename: "empty.png",
+                mimeType: "image/png"
+            ),
+            MatrixNativeRoomCreationAvatar(
+                data: Data([0x01]),
+                filename: "script.svg",
+                mimeType: "text/html"
+            ),
+            MatrixNativeRoomCreationAvatar(
+                data: Data(
+                    repeating: 0x01,
+                    count: MatrixNativeCreationContract.maximumAvatarBytes + 1
+                ),
+                filename: "large.png",
+                mimeType: "image/png"
+            ),
+        ] {
+            XCTAssertThrowsError(
+                try MatrixNativeCreationContract.validate(
+                    MatrixNativeRoomCreationDraft(
+                        name: "Film Makers",
+                        topic: "",
+                        visibility: .privateVibe,
+                        inviteUserIDs: [],
+                        avatar: invalid
+                    )
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? MatrixNativeCreationValidationError,
+                    .invalidAvatar
+                )
+            }
         }
     }
 
@@ -245,6 +364,16 @@ final class MatrixNativeVibesUIContractTests: XCTestCase {
                 "https://user:secret@example.com/"
             )
         )
+        XCTAssertNil(
+            MatrixNativeLinkPreviewContract.safePublicHTTPURL(
+                "https://example.com:8443/admin"
+            )
+        )
+        XCTAssertNil(
+            MatrixNativeLinkPreviewContract.safePublicHTTPURL(
+                "file:///etc/passwd"
+            )
+        )
         XCTAssertNoThrow(
             try MatrixNativeLinkPreviewMetadata(
                 title: "Story",
@@ -255,6 +384,44 @@ final class MatrixNativeVibesUIContractTests: XCTestCase {
                 finalURL: "https://example.com/story"
             )
         )
+    }
+
+    func testLinkPreviewCacheIsolatesAccountsExpiresAndEvicts() throws {
+        let metadata = try MatrixNativeLinkPreviewMetadata(
+            title: "Story",
+            description: nil,
+            imageURL: nil,
+            faviconURL: nil,
+            domain: "example.com",
+            finalURL: "https://example.com/story"
+        )
+        let now = Date(timeIntervalSince1970: 1_000)
+        var cache = MatrixNativeLinkPreviewCache()
+        cache.insert(metadata, accountScope: "account-a", url: metadata.finalURL, now: now)
+        XCTAssertNil(cache.value(accountScope: "account-b", url: metadata.finalURL, now: now))
+        XCTAssertEqual(
+            cache.value(accountScope: "account-a", url: metadata.finalURL, now: now),
+            metadata
+        )
+        XCTAssertNil(
+            cache.value(
+                accountScope: "account-a",
+                url: metadata.finalURL,
+                now: now.addingTimeInterval(MatrixNativeLinkPreviewCache.timeToLive + 1)
+            )
+        )
+
+        for index in 0...MatrixNativeLinkPreviewCache.maximumEntriesPerAccount {
+            cache.insert(
+                metadata,
+                accountScope: "bounded",
+                url: "https://example.com/\(index)",
+                now: now.addingTimeInterval(Double(index))
+            )
+        }
+        XCTAssertNil(cache.value(accountScope: "bounded", url: "https://example.com/0", now: now))
+        cache.clear(accountScope: "bounded")
+        XCTAssertNil(cache.value(accountScope: "bounded", url: "https://example.com/100", now: now))
     }
 
     func testMatrixEchoPreservesDurableSourceProvenance() throws {
@@ -499,10 +666,17 @@ final class MatrixNativeVibesUIContractTests: XCTestCase {
                 hasEnded: false
             )
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             MatrixNativePollVisibilityContract.showsResults(
                 isDisclosed: true,
                 hasEnded: false
+            )
+        )
+        XCTAssertTrue(
+            MatrixNativePollVisibilityContract.showsResults(
+                isDisclosed: true,
+                hasEnded: false,
+                hasVoted: true
             )
         )
         XCTAssertTrue(

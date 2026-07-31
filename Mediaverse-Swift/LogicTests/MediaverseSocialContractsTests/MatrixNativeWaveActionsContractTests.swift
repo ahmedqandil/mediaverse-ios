@@ -133,6 +133,14 @@ final class MatrixNativeWaveActionsContractTests: XCTestCase {
         XCTAssertEqual(MatrixNativeMentionComposer.query(in: "@"), "")
     }
 
+    func testWaveAccessIncludesExactParentMembershipRestriction() {
+        XCTAssertTrue(MatrixNativeWaveAccess.allCases.contains(.restrictedToParent))
+        XCTAssertNotEqual(
+            MatrixNativeWaveAccess.restrictedToParent,
+            MatrixNativeWaveAccess.inviteOnly
+        )
+    }
+
     private func permits(
         _ action: MatrixNativeWaveAction,
         roomIsJoined: Bool? = nil,

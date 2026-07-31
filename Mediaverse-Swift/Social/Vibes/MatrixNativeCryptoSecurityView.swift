@@ -13,7 +13,9 @@ struct MatrixNativeCryptoSecurityView: View {
     @State private var errorMessage: String?
     @State private var showsRecoveryEntry = false
     @State private var showsVerification = false
+    @State private var showsQrVerification = false
     @State private var confirmsReset = false
+    @State private var resetConfirmation = ""
     let requiredForAction: Bool
     let onReady: (() -> Void)?
 
@@ -84,13 +86,23 @@ struct MatrixNativeCryptoSecurityView: View {
             MatrixNativeDeviceVerificationView()
                 .environmentObject(matrixSession)
         }
+        .sheet(isPresented: $showsQrVerification, onDismiss: {
+            Task { await load() }
+        }) {
+            MatrixNativeQrVerificationView()
+                .environmentObject(matrixSession)
+        }
         .alert("Replace the recovery key?", isPresented: $confirmsReset) {
-            Button("Cancel", role: .cancel) {}
+            TextField(MatrixNativeRecoveryResetPolicy.confirmation, text: $resetConfirmation)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+            Button("Cancel", role: .cancel) { resetConfirmation = "" }
             Button("Replace Key", role: .destructive) {
                 Task { await resetRecoveryKey() }
             }
+            .disabled(resetConfirmation != MatrixNativeRecoveryResetPolicy.confirmation)
         } message: {
-            Text("Existing copies of the old recovery key will stop working. Save the new key before leaving this screen.")
+            Text("Existing copies of the old recovery key will stop working. Type \(MatrixNativeRecoveryResetPolicy.confirmation) exactly, then save the new key before leaving this screen.")
         }
     }
 
@@ -118,6 +130,12 @@ struct MatrixNativeCryptoSecurityView: View {
                     showsVerification = true
                 } label: {
                     Label("Verify this device", systemImage: "checkmark.shield")
+                }
+                .disabled(isWorking)
+                Button {
+                    showsQrVerification = true
+                } label: {
+                    Label("Verify with QR code", systemImage: "qrcode.viewfinder")
                 }
                 .disabled(isWorking)
             }
@@ -243,8 +261,14 @@ struct MatrixNativeCryptoSecurityView: View {
 
     private var limitationSection: some View {
         Section("Device management") {
+            NavigationLink {
+                MatrixNativeDeviceListView()
+                    .environmentObject(matrixSession)
+            } label: {
+                Label("All devices", systemImage: "list.bullet.rectangle.portrait")
+            }
             Label(
-                "WeStreem can confirm this device and whether another verified device exists. Device listing and remote sign-out are not yet available.",
+                "Sign out of any WeStreem session that isn't yours from the devices list.",
                 systemImage: "info.circle"
             )
             .font(.footnote)
@@ -376,9 +400,14 @@ struct MatrixNativeCryptoSecurityView: View {
     @MainActor
     private func resetRecoveryKey() async {
         isWorking = true
-        defer { isWorking = false }
+        defer {
+            isWorking = false
+            resetConfirmation = ""
+        }
         do {
-            generatedRecoveryKey = try await matrixSession.resetCryptoRecoveryKey()
+            generatedRecoveryKey = try await matrixSession.resetCryptoRecoveryKey(
+                confirmation: resetConfirmation
+            )
             await load()
         } catch {
             errorMessage = "The Vibes recovery key could not be replaced."

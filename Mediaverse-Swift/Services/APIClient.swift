@@ -917,6 +917,10 @@ actor APIClient: LegacySocialTransport {
         return try await get("/api/videos/\(C.pathSegment(id))")
     }
 
+    func fetchWatchPartyLease(videoID: String) async throws -> WatchPartyPlaybackLease {
+        try await get("/api/matrix/watch-party/lease?videoId=\(C.pathSegment(videoID))")
+    }
+
     // MARK: - Episode detail
 
     func fetchEpisode(id: String) async throws -> EpisodeDetail {
@@ -2312,7 +2316,8 @@ actor APIClient: LegacySocialTransport {
             body: MatrixNativeRtcJoinRequest(
                 roomId: roomID,
                 deviceId: deviceID,
-                intent: intent.rawValue
+                intent: intent.rawValue,
+                context: nil
             )
         )
         guard
@@ -2321,11 +2326,38 @@ actor APIClient: LegacySocialTransport {
                 == MatrixNativeRtcContract.membershipEventType,
             response.connection.provider == "LIVEKIT",
             let url = URL(string: response.connection.url),
-            C.isTrustedRtcURL(url)
+            C.isTrustedRtcURL(url),
+            response.connection.url.utf8.count <= 2_048,
+            !response.connection.token.isEmpty,
+            response.connection.token.utf8.count <= 8_192,
+            !response.connection.roomName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            response.connection.roomName.utf8.count <= 255,
+            response.connection.canPublish,
+            response.connection.voiceEnabled,
+            response.connection.videoEnabled == (intent == .video),
+            (1...600).contains(response.connection.expiresInSeconds)
         else {
             throw MatrixNativeRtcError.invalidService
         }
         return response.connection
+    }
+
+    func joinMatrixNativeLiveStage(roomID: String, deviceID: String, expectsPublish: Bool) async throws -> MatrixNativeRtcConnection {
+        let response: MatrixNativeRtcConnectionResponse = try await post(
+            "/api/matrix/rtc/join",
+            body: MatrixNativeRtcJoinRequest(roomId: roomID, deviceId: deviceID, intent: "audio", context: "stage")
+        )
+        let connection = response.connection
+        guard connection.authority == "MATRIX",
+              connection.membershipEventType == MatrixNativeRtcContract.membershipEventType,
+              connection.provider == "LIVEKIT",
+              let url = URL(string: connection.url), C.isTrustedRtcURL(url),
+              connection.canPublish == expectsPublish,
+              connection.voiceEnabled == expectsPublish,
+              !connection.videoEnabled,
+              (1...600).contains(connection.expiresInSeconds)
+        else { throw MatrixNativeRtcError.invalidService }
+        return connection
     }
 
     func sendVibeEventWatchCommand(

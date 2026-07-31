@@ -114,6 +114,21 @@ public struct MatrixNativeEnergyOption: Identifiable, Equatable, Hashable, Senda
         .init(id: "com.westreem.energy.v1:CHILL", label: "Chill", systemImage: "face.smiling"),
         .init(id: "com.westreem.energy.v1:CLUTCH", label: "Clutch", systemImage: "bolt.fill"),
     ]
+
+    public static let intensityPrefix = "com.westreem.energy.v1:LEVEL_"
+
+    public static func intensityKey(for level: Int) -> String {
+        "\(intensityPrefix)\(min(max(level, 1), 5))"
+    }
+
+    public static func intensityLevel(for key: String) -> Int? {
+        guard key.hasPrefix(intensityPrefix),
+              let level = Int(key.dropFirst(intensityPrefix.count)),
+              (1...5).contains(level) else {
+            return nil
+        }
+        return level
+    }
 }
 
 public enum MatrixNativeWaveAction: String, CaseIterable, Sendable {
@@ -195,6 +210,7 @@ public enum MatrixNativeWaveActionPolicy {
 
     public static func isSupportedEnergyKey(_ key: String) -> Bool {
         MatrixNativeEnergyOption.all.contains { $0.id == key }
+            || MatrixNativeEnergyOption.intensityLevel(for: key) != nil
     }
 }
 
@@ -202,6 +218,7 @@ enum MatrixNativeWaveAccess: String, CaseIterable, Equatable, Sendable {
     case publicRoom
     case inviteOnly
     case requestToJoin
+    case restrictedToParent
 }
 
 enum MatrixNativeWaveHistory: String, CaseIterable, Equatable, Sendable {
@@ -244,6 +261,7 @@ enum MatrixNativeWaveManagementContract {
     static let maximumTopicLength = 4_000
     static let minimumSearchLength = 2
     static let maximumSearchLength = 128
+    static let maximumModerationReasonLength = 1_000
 
     static func normalizedProfile(
         name: String,
@@ -261,13 +279,32 @@ enum MatrixNativeWaveManagementContract {
     }
 
     static func normalizedSearch(_ query: String) -> String? {
-        let value = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = query
+            .precomposedStringWithCanonicalMapping
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
         guard value.count >= minimumSearchLength,
               value.count <= maximumSearchLength
         else {
             return nil
         }
         return value
+    }
+
+    static func normalizedModerationReason(_ reason: String) -> String? {
+        let value = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        return String(value.prefix(maximumModerationReasonLength))
+    }
+
+    static func uniqueSearchResultOffsets(
+        _ identities: [(roomID: String, eventID: String)]
+    ) -> [Int] {
+        var seen = Set<String>()
+        return identities.indices.filter { index in
+            let value = identities[index]
+            return seen.insert("\(value.roomID)\u{0}\(value.eventID)").inserted
+        }
     }
 
     static func mayManage(

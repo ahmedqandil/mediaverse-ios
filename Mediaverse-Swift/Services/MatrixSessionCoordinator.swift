@@ -1,6 +1,7 @@
 import AuthenticationServices
 import Foundation
 import MatrixRustSDK
+import Network
 import SwiftUI
 import UIKit
 
@@ -686,14 +687,44 @@ final class MatrixNativeSessionController:
     ObservableObject,
     MatrixNativePusherManaging
 {
+    private struct CachedValue<Value> {
+        let value: Value
+        let storedAt: Date
+
+        func isFresh(ttl: TimeInterval, now: Date = Date()) -> Bool {
+            now.timeIntervalSince(storedAt) < ttl
+        }
+    }
+
     private let coordinator: MatrixSessionCoordinator
     private let repository: MatrixVibesRepositoryFoundation
     private let directNotificationProvider: MatrixRustSDKDirectNotificationProvider
+    private let metadataCacheTTL: TimeInterval = 6
+    private let identityPresentationCacheTTL: TimeInterval = 5 * 60
+    private let timelineMemoryCacheTTL: TimeInterval = 5 * 60
+    private var cachedSpacePermissions: [String: CachedValue<MatrixNativeSpacePermissionSnapshot>] = [:]
+    private var cachedWaveManagement: [String: CachedValue<MatrixNativeWaveManagementSnapshot>] = [:]
+    private var cachedIdentityPresentations: [String: CachedValue<WestreemMatrixIdentityPresentation>] = [:]
+    private var cachedTimelines: [String: CachedValue<MatrixTimelinePage>] = [:]
+    private var cachedWaveDirectories: [String: CachedValue<MatrixWaveDirectoryPage>] = [:]
+    private var cachedDirectMessages: CachedValue<[MatrixDirectRoomSummary]>?
     private var activationTask: Task<Void, Never>?
     private var cryptoMaintenanceTask: Task<Void, Never>?
     @Published private(set) var lifecycleState: MatrixSessionLifecycleState = .disabled
     @Published private(set) var syncState: MatrixNativeSyncState = .disabled
     @Published private(set) var currentWestreemUserID: String?
+    /// Independent transport-level online signal driven by `NWPathMonitor`.
+    ///
+    /// This is separate from `syncState.offline` because the SDK reports
+    /// sync failures long after Wi-Fi drops (retry backoff). Views should
+    /// prefer this flag for the immediate "You're offline" banner and use
+    /// `syncState` for the finer-grained recovering/failed messaging.
+    @Published private(set) var isNetworkOnline: Bool = true
+    private let networkPathMonitor = NWPathMonitor()
+    private let networkPathMonitorQueue = DispatchQueue(
+        label: "com.westreem.matrix.network-path",
+        qos: .utility
+    )
 
     init(coordinator: MatrixSessionCoordinator = MatrixSessionCoordinator()) {
         self.coordinator = coordinator
@@ -709,12 +740,33 @@ final class MatrixNativeSessionController:
             sessionCoordinator: coordinator
         )
         PushNotificationManager.shared.installMatrixPusherManager(self)
+        startNetworkPathMonitor()
+    }
+
+    // No explicit `deinit`: `MatrixNativeSessionController` is a singleton for
+    // the app's lifetime. Adding a `nonisolated deinit` that touched the
+    // MainActor-isolated `networkPathMonitor` would either warn under Swift 6
+    // or force `@unchecked Sendable`; both are worse than letting the OS
+    // reclaim the monitor at process exit.
+
+    private func startNetworkPathMonitor() {
+        networkPathMonitor.pathUpdateHandler = { [weak self] path in
+            let online = path.status == .satisfied
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if self.isNetworkOnline != online {
+                    self.isNetworkOnline = online
+                }
+            }
+        }
+        networkPathMonitor.start(queue: networkPathMonitorQueue)
     }
 
     func reconcile(westreemUserID: String?) async {
         activationTask?.cancel()
         cryptoMaintenanceTask?.cancel()
         cryptoMaintenanceTask = nil
+        clearMetadataCaches()
         guard let westreemUserID else {
             currentWestreemUserID = nil
             await coordinator.disconnect(removeCredential: false)
@@ -777,6 +829,27 @@ final class MatrixNativeSessionController:
         }
     }
 
+    private func clearMetadataCaches() {
+        cachedSpacePermissions.removeAll()
+        cachedWaveManagement.removeAll()
+        cachedIdentityPresentations.removeAll()
+        cachedTimelines.removeAll()
+        cachedWaveDirectories.removeAll()
+        cachedDirectMessages = nil
+    }
+
+    private func invalidateWaveMetadata(roomID: String) {
+        cachedWaveManagement.removeValue(forKey: roomID)
+        // Wave mutations can change what the directory lists (name, access,
+        // membership), so the short-lived directory cache resets with them.
+        cachedWaveDirectories.removeAll()
+        cachedDirectMessages = nil
+    }
+
+    private func invalidateTimelineCache(roomID: String) {
+        cachedTimelines.removeValue(forKey: timelineMemoryCacheKey(roomID: roomID))
+    }
+
     func installMatrixPusher(
         configuration: MatrixHTTPPusherConfiguration,
         pushKey: String,
@@ -818,6 +891,18 @@ final class MatrixNativeSessionController:
         try await repository.joinPublicVibe(space)
     }
 
+    func publicVibePreview(_ space: MatrixPublicVibeSummary) async throws
+        -> MatrixPublicVibeSummary
+    {
+        try requireReady()
+        return try await repository.publicVibePreview(space)
+    }
+
+    func leavePublicVibe(_ space: MatrixPublicVibeSummary) async throws {
+        try requireReady()
+        try await repository.leavePublicVibe(space)
+    }
+
     func createVibe(
         _ draft: MatrixNativeRoomCreationDraft
     ) async throws -> MatrixNativeCreatedRoom {
@@ -833,10 +918,12 @@ final class MatrixNativeSessionController:
         if draft.isEncrypted {
             _ = try await coordinator.requireCryptoReadyForEncryptedAction()
         }
-        return try await repository.createWave(
+        let created = try await repository.createWave(
             inSpaceID: spaceID,
             draft: draft
         )
+        cachedWaveDirectories.removeValue(forKey: spaceID)
+        return created
     }
 
     func registerCreatedRoom(
@@ -850,7 +937,12 @@ final class MatrixNativeSessionController:
         spaceID: String
     ) async throws -> MatrixNativeSpacePermissionSnapshot {
         try requireReady()
-        return try await repository.spacePermissions(spaceID: spaceID)
+        if let cached = cachedSpacePermissions[spaceID], cached.isFresh(ttl: metadataCacheTTL) {
+            return cached.value
+        }
+        let snapshot = try await repository.spacePermissions(spaceID: spaceID)
+        cachedSpacePermissions[spaceID] = CachedValue(value: snapshot, storedAt: Date())
+        return snapshot
     }
 
     func inviteUsers(_ userIDs: [String], roomID: String) async throws -> [String] {
@@ -860,7 +952,12 @@ final class MatrixNativeSessionController:
 
     func waves(spaceID: String) async throws -> MatrixWaveDirectoryPage {
         try requireReady()
-        return try await repository.waves(spaceID: spaceID)
+        if let cached = cachedWaveDirectories[spaceID], cached.isFresh(ttl: metadataCacheTTL) {
+            return cached.value
+        }
+        let page = try await repository.waves(spaceID: spaceID)
+        cachedWaveDirectories[spaceID] = CachedValue(value: page, storedAt: Date())
+        return page
     }
 
     func refreshLocalWaveActivity(
@@ -895,6 +992,146 @@ final class MatrixNativeSessionController:
                 updatedByWestreemUserID: currentWestreemUserID
             )
         )
+        invalidateWaveMetadata(roomID: roomID)
+    }
+
+    // MARK: - Watch Party
+
+    func watchPartyState(
+        roomID: String
+    ) async throws -> MatrixNativeWatchPartyState? {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        return try await repository.watchPartyState(roomID: roomID)
+    }
+
+    func startWatchParty(
+        roomID: String,
+        videoId: String,
+        videoUrl: String?
+    ) async throws {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        try await repository.startWatchParty(
+            roomID: roomID,
+            videoId: videoId,
+            videoUrl: videoUrl
+        )
+    }
+
+    func updateWatchPartyPlayback(
+        roomID: String,
+        playbackState: MatrixNativeWatchPartyPlaybackState,
+        playheadMs: Int64
+    ) async throws {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        try await repository.updateWatchPartyPlayback(
+            roomID: roomID,
+            playbackState: playbackState,
+            playheadMs: playheadMs
+        )
+    }
+
+    func endWatchParty(roomID: String) async throws {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        try await repository.endWatchParty(roomID: roomID)
+    }
+
+    // MARK: - Live Stage
+
+    func liveStageState(
+        roomID: String
+    ) async throws -> MatrixNativeLiveStageState? {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        return try await repository.liveStageState(roomID: roomID)
+    }
+
+    func speakerRequests(
+        roomID: String
+    ) async throws -> [MatrixNativeSpeakerRequest] {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        return try await repository.speakerRequests(roomID: roomID)
+    }
+
+    func startLiveStage(roomID: String, title: String) async throws {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        try await repository.startLiveStage(roomID: roomID, title: title)
+    }
+
+    func endLiveStage(roomID: String) async throws {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        try await repository.endLiveStage(roomID: roomID)
+    }
+
+    func requestSpeaker(roomID: String) async throws {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        try await repository.requestSpeaker(roomID: roomID)
+    }
+
+    func approveSpeaker(roomID: String, userId: String) async throws {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        try await repository.approveSpeaker(roomID: roomID, userId: userId)
+    }
+
+    func denySpeaker(roomID: String, userId: String) async throws {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        try await repository.denySpeaker(roomID: roomID, userId: userId)
+    }
+
+    func removeSpeaker(roomID: String, userId: String) async throws {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        try await repository.removeSpeaker(roomID: roomID, userId: userId)
+    }
+
+    func updateLiveStageCohost(roomID: String, userId: String, add: Bool) async throws {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        try await repository.updateLiveStageCohost(roomID: roomID, userId: userId, add: add)
+    }
+
+    /// Own Matrix user ID (`@u_<hex>:vibes.westreem.com`) derived from the
+    /// current WeStreem session — surfaced to Watch Party and Live Stage UIs
+    /// so they can tell whether the current user is the host or a listener.
+    func currentMatrixUserID() -> String? {
+        guard let westreemUserID = currentWestreemUserID else { return nil }
+        return (try? MatrixCanonicalIdentity(
+            westreemUserID: westreemUserID
+        ))?.matrixUserID
+    }
+
+    func linkPreviewsEnabled(roomID: String, encrypted: Bool) async -> Bool {
+        guard !encrypted, isReady else { return false }
+        guard (try? await directNotificationProvider.validateRoomAccess(roomID: roomID)) != nil,
+              let client = await coordinator.activeClient()
+        else {
+            return false
+        }
+        struct Preference: Decodable { let disable: Bool? }
+        do {
+            guard let content = try await client.accountData(
+                eventType: "org.matrix.preview_urls"
+            ) else {
+                return true
+            }
+            let preference = try JSONDecoder().decode(
+                Preference.self,
+                from: Data(content.utf8)
+            )
+            return preference.disable != true
+        } catch {
+            // Corrupt or unreadable preference state must not disclose a URL.
+            return false
+        }
     }
 
     func waveManagement(
@@ -902,7 +1139,12 @@ final class MatrixNativeSessionController:
     ) async throws -> MatrixNativeWaveManagementSnapshot {
         try requireReady()
         try await directNotificationProvider.validateRoomAccess(roomID: roomID)
-        return try await repository.waveManagement(roomID: roomID)
+        if let cached = cachedWaveManagement[roomID], cached.isFresh(ttl: metadataCacheTTL) {
+            return cached.value
+        }
+        let snapshot = try await repository.waveManagement(roomID: roomID)
+        cachedWaveManagement[roomID] = CachedValue(value: snapshot, storedAt: Date())
+        return snapshot
     }
 
     func updateWaveProfile(
@@ -921,26 +1163,32 @@ final class MatrixNativeSessionController:
             avatar: avatar,
             removeAvatar: removeAvatar
         )
+        invalidateWaveMetadata(roomID: roomID)
     }
 
     func updateWaveAccess(
         roomID: String,
         access: MatrixNativeWaveAccess,
-        history: MatrixNativeWaveHistory
+        history: MatrixNativeWaveHistory,
+        restrictedParentSpaceID: String?
     ) async throws {
         try requireReady()
         try await directNotificationProvider.validateRoomAccess(roomID: roomID)
         try await repository.updateWaveAccess(
             roomID: roomID,
             access: access,
-            history: history
+            history: history,
+            restrictedParentSpaceID: restrictedParentSpaceID
         )
+        invalidateWaveMetadata(roomID: roomID)
     }
 
     func leaveWave(roomID: String) async throws {
         try requireReady()
         try await directNotificationProvider.validateRoomAccess(roomID: roomID)
         try await repository.leaveWave(roomID: roomID)
+        invalidateWaveMetadata(roomID: roomID)
+        invalidateTimelineCache(roomID: roomID)
     }
 
     func waveMembers(roomID: String) async throws -> [MatrixNativeWaveMember] {
@@ -948,7 +1196,7 @@ final class MatrixNativeSessionController:
         try await directNotificationProvider.validateRoomAccess(roomID: roomID)
         let members = try await repository.waveMembers(roomID: roomID)
         guard
-            let room = try? await repository.waveManagement(roomID: roomID),
+            let room = try? await waveManagement(roomID: roomID),
             room.access == .publicRoom,
             !room.isEncrypted
         else {
@@ -1127,6 +1375,7 @@ final class MatrixNativeSessionController:
             userID: userID,
             role: role
         )
+        invalidateWaveMetadata(roomID: roomID)
     }
 
     func moderateWaveMember(
@@ -1143,6 +1392,7 @@ final class MatrixNativeSessionController:
             action: action,
             reason: reason
         )
+        invalidateWaveMetadata(roomID: roomID)
     }
 
     func updateWaveNotification(
@@ -1152,6 +1402,7 @@ final class MatrixNativeSessionController:
         try requireReady()
         try await directNotificationProvider.validateRoomAccess(roomID: roomID)
         try await repository.updateWaveNotification(roomID: roomID, mode: mode)
+        invalidateWaveMetadata(roomID: roomID)
     }
 
     func searchWave(
@@ -1163,14 +1414,46 @@ final class MatrixNativeSessionController:
         return try await repository.searchWave(roomID: roomID, query: query)
     }
 
+    func cachedTimeline(roomID: String) -> MatrixTimelinePage? {
+        let key = timelineMemoryCacheKey(roomID: roomID)
+        guard let cached = cachedTimelines[key],
+              cached.isFresh(ttl: timelineMemoryCacheTTL) else {
+            return nil
+        }
+        return cached.value
+    }
+
     func timeline(roomID: String, paginate: Bool = false) async throws -> MatrixTimelinePage {
         try requireReady()
-        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        do {
+            try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        } catch {
+            // Access is gone; the cached page must not outlive it.
+            invalidateTimelineCache(roomID: roomID)
+            throw error
+        }
         let page = try await repository.timeline(
             roomID: roomID,
             from: paginate ? "previous" : nil
         )
-        return await resolvingPublicTimelineIdentities(page, roomID: roomID)
+        let resolvedPage = await resolvingPublicTimelineIdentities(page, roomID: roomID)
+        let cachedPage = cacheTimelinePage(
+            resolvedPage,
+            roomID: roomID,
+            paginate: paginate
+        )
+        return cachedPage
+    }
+
+    func releaseTimeline(roomID: String) async {
+        await repository.releaseTimeline(roomID: roomID)
+    }
+
+    func releaseThreadTimeline(roomID: String, rootEventID: String) async {
+        await repository.releaseThreadTimeline(
+            roomID: roomID,
+            rootEventID: rootEventID
+        )
     }
 
     func pinnedMessages(roomID: String) async throws -> MatrixTimelinePage {
@@ -1195,18 +1478,90 @@ final class MatrixNativeSessionController:
         return await resolvingPublicTimelineIdentities(page, roomID: roomID)
     }
 
+    func event(roomID: String, eventID: String) async throws -> MatrixTimelineItem {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        return try await repository.event(roomID: roomID, eventID: eventID)
+    }
+
+    private func cacheTimelinePage(
+        _ page: MatrixTimelinePage,
+        roomID: String,
+        paginate: Bool
+    ) -> MatrixTimelinePage {
+        let key = timelineMemoryCacheKey(roomID: roomID)
+        let mergedPage: MatrixTimelinePage
+        if let cached = cachedTimelines[key]?.value, !cached.items.isEmpty {
+            mergedPage = MatrixTimelinePage(
+                roomID: page.roomID,
+                items: MatrixTimelineMerge.items(
+                    existing: cached.items,
+                    loaded: page.items,
+                    paginate: paginate
+                ),
+                nextToken: page.nextToken
+            )
+        } else {
+            mergedPage = page
+        }
+        cachedTimelines = cachedTimelines.filter {
+            $0.value.isFresh(ttl: timelineMemoryCacheTTL)
+        }
+        cachedTimelines[key] = CachedValue(value: mergedPage, storedAt: Date())
+        return mergedPage
+    }
+
+    private func timelineMemoryCacheKey(roomID: String) -> String {
+        "\(currentWestreemUserID ?? "anonymous")::\(roomID)"
+    }
+
+    private func identityPresentations(
+        matrixUserIDs: [String]
+    ) async throws -> [String: WestreemMatrixIdentityPresentation] {
+        let uniqueIDs = Array(Set(matrixUserIDs)).sorted()
+        guard !uniqueIDs.isEmpty else { return [:] }
+
+        var presentations: [String: WestreemMatrixIdentityPresentation] = [:]
+        var missingIDs: [String] = []
+        for userID in uniqueIDs {
+            if let cached = cachedIdentityPresentations[userID],
+               cached.isFresh(ttl: identityPresentationCacheTTL) {
+                presentations[userID] = cached.value
+            } else {
+                missingIDs.append(userID)
+            }
+        }
+
+        if !missingIDs.isEmpty {
+            let resolved = try await APIClient.shared.resolveMatrixIdentityPresentations(
+                matrixUserIDs: missingIDs
+            )
+            cachedIdentityPresentations = cachedIdentityPresentations.filter {
+                $0.value.isFresh(ttl: identityPresentationCacheTTL)
+            }
+            let now = Date()
+            for (userID, presentation) in resolved {
+                cachedIdentityPresentations[userID] = CachedValue(
+                    value: presentation,
+                    storedAt: now
+                )
+                presentations[userID] = presentation
+            }
+        }
+        return presentations
+    }
+
     private func resolvingPublicTimelineIdentities(
         _ page: MatrixTimelinePage,
         roomID: String
     ) async -> MatrixTimelinePage {
         guard
-            let room = try? await repository.waveManagement(roomID: roomID),
+            let room = try? await waveManagement(roomID: roomID),
             room.access == .publicRoom,
             !room.isEncrypted,
-            let presentations = try? await APIClient.shared
-                .resolveMatrixIdentityPresentations(
-                    matrixUserIDs: page.items.map(\.senderID)
-                )
+            let presentations = try? await identityPresentations(
+                matrixUserIDs: page.items.map(\.senderID)
+            )
         else {
             return page
         }
@@ -1235,6 +1590,7 @@ final class MatrixNativeSessionController:
                     reactionCount: item.reactionCount,
                     energy: item.energy,
                     readReceiptCount: item.readReceiptCount,
+                    readReceiptUserIDs: item.readReceiptUserIDs,
                     threadReplyCount: item.threadReplyCount,
                     replyPreviews: item.replyPreviews,
                     actions: item.actions,
@@ -1416,9 +1772,29 @@ final class MatrixNativeSessionController:
         )
     }
 
+    func sendThreadAttachments(
+        _ uploads: [MatrixNativeUpload],
+        caption: String?,
+        roomID: String,
+        rootEventID: String,
+        transactionID: String
+    ) async throws {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        try await repository.sendThreadAttachments(
+            uploads,
+            caption: caption,
+            roomID: roomID,
+            rootEventID: rootEventID,
+            transactionID: transactionID
+        )
+    }
+
     func createPoll(
         question: String,
         options: [String],
+        maxSelections: UInt64,
+        isDisclosed: Bool,
         roomID: String,
         transactionID: String
     ) async throws {
@@ -1427,18 +1803,20 @@ final class MatrixNativeSessionController:
         try await repository.createPoll(
             question: question,
             options: options,
+            maxSelections: maxSelections,
+            isDisclosed: isDisclosed,
             roomID: roomID,
             transactionID: transactionID
         )
     }
 
-    func voteInPoll(roomID: String, eventID: String, optionID: String) async throws {
+    func voteInPoll(roomID: String, eventID: String, optionIDs: [String]) async throws {
         try requireReady()
         try await directNotificationProvider.validateRoomAccess(roomID: roomID)
         try await repository.voteInPoll(
             roomID: roomID,
             eventID: eventID,
-            optionIDs: [optionID]
+            optionIDs: optionIDs
         )
     }
 
@@ -1462,18 +1840,46 @@ final class MatrixNativeSessionController:
     ) async throws -> Data {
         try requireReady()
         try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        let cacheKey = MatrixNativeMediaCache.key(
+            roomID: roomID,
+            sourceJSON: media.sourceJSON
+        )
+        if let cached = MatrixNativeMediaCache.shared.read(key: cacheKey) {
+            // Cached bytes still have to satisfy the descriptor's constraints —
+            // never bypass MatrixNativeMediaPolicy just because we've seen this
+            // payload before.
+            if (try? MatrixNativeMediaPolicy.validateDownloadedData(cached, descriptor: media)) != nil {
+                return cached
+            }
+        }
         let data = try await repository.mediaData(
             roomID: roomID,
             sourceJSON: media.sourceJSON,
             expectedSize: media.size
         )
         try MatrixNativeMediaPolicy.validateDownloadedData(data, descriptor: media)
+        MatrixNativeMediaCache.shared.write(key: cacheKey, data: data)
         return data
     }
 
     func avatarData(avatarURL: String) async throws -> Data {
         try requireReady()
-        return try await repository.avatarData(avatarURL: avatarURL)
+        let key = MatrixNativeMediaCache.avatarKey(mxcURL: avatarURL)
+        if let cached = MatrixNativeMediaCache.shared.read(key: key) {
+            return cached
+        }
+        let data = try await repository.avatarData(avatarURL: avatarURL)
+        MatrixNativeMediaCache.shared.write(key: key, data: data)
+        return data
+    }
+
+    /// Enumerate thread summaries for a Wave. See
+    /// `MatrixVibesRepositoryFoundation.threadSummaries(roomID:)` for the
+    /// derivation.
+    func threadSummaries(roomID: String) async throws -> [MatrixNativeThreadSummary] {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        return try await repository.threadSummaries(roomID: roomID)
     }
 
     func setTyping(_ isTyping: Bool, roomID: String) async {
@@ -1492,15 +1898,36 @@ final class MatrixNativeSessionController:
         try? await repository.markRead(roomID: roomID)
     }
 
+    func markThreadRead(roomID: String, rootEventID: String) async {
+        guard isReady else { return }
+        guard (try? await directNotificationProvider.validateRoomAccess(roomID: roomID)) != nil else {
+            return
+        }
+        try? await repository.markThreadRead(
+            roomID: roomID,
+            rootEventID: rootEventID
+        )
+    }
+
     func acceptInvite(roomID: String) async throws {
         try requireReady()
         try await directNotificationProvider.validateRoomAccess(roomID: roomID)
         try await repository.acceptInvite(roomID: roomID)
     }
 
+    func pendingInvitations() async throws -> [MatrixNativeInvitationSummary] {
+        try requireReady()
+        return try await repository.pendingInvitations()
+    }
+
     func declineInvite(roomID: String) async throws {
         try requireReady()
         try await repository.declineInvite(roomID: roomID)
+    }
+
+    func declineInviteAndBlock(roomID: String) async throws {
+        try requireReady()
+        try await repository.declineInviteAndBlock(roomID: roomID)
     }
 
     func beginMatrixRtcMembership(
@@ -1523,7 +1950,12 @@ final class MatrixNativeSessionController:
 
     func directMessages() async throws -> [MatrixDirectRoomSummary] {
         try requireReady()
-        return try await directNotificationProvider.directRooms()
+        if let cached = cachedDirectMessages, cached.isFresh(ttl: metadataCacheTTL) {
+            return cached.value
+        }
+        let rooms = try await directNotificationProvider.directRooms()
+        cachedDirectMessages = CachedValue(value: rooms, storedAt: Date())
+        return rooms
     }
 
     func openOrCreateDirectMessage(
@@ -1532,11 +1964,13 @@ final class MatrixNativeSessionController:
         avatarURL: String?
     ) async throws -> MatrixDirectRoomSummary {
         try requireReady()
-        return try await directNotificationProvider.openOrCreateDirectRoom(
+        let room = try await directNotificationProvider.openOrCreateDirectRoom(
             westreemUserID: westreemUserID,
             displayName: displayName,
             avatarURL: avatarURL
         )
+        cachedDirectMessages = nil
+        return room
     }
 
     func matrixNotifications() async throws -> [MatrixNotificationSummary] {
@@ -1574,9 +2008,9 @@ final class MatrixNativeSessionController:
         try await coordinator.recoverCryptoIdentity(recoveryKey: recoveryKey)
     }
 
-    func resetCryptoRecoveryKey() async throws -> String {
+    func resetCryptoRecoveryKey(confirmation: String) async throws -> String {
         try requireReady()
-        return try await coordinator.resetCryptoRecoveryKey()
+        return try await coordinator.resetCryptoRecoveryKey(confirmation: confirmation)
     }
 
     func makeDeviceVerificationController(
@@ -1584,6 +2018,31 @@ final class MatrixNativeSessionController:
     ) async throws -> SessionVerificationController {
         try requireReady()
         return try await coordinator.makeDeviceVerificationController(delegate: delegate)
+    }
+
+    /// See `MatrixSessionCoordinator.beginQrLogin(delegate:)`.
+    func makeQrLoginController(
+        delegate: SessionVerificationControllerDelegate
+    ) async throws -> SessionVerificationController {
+        try requireReady()
+        return try await coordinator.beginQrLogin(delegate: delegate)
+    }
+
+    /// Enumerate remote Matrix devices for the current user.
+    /// Throws `MatrixNativeCryptoSecurityError.deviceEnumerationUnavailable`
+    /// on SDK versions that don't expose the API yet — the UI treats that as
+    /// "device management is unavailable" and hides destructive actions.
+    func matrixDevices() async throws -> [MatrixNativeDevice] {
+        try requireReady()
+        return try await coordinator.matrixDevices()
+    }
+
+    /// Sign out (delete) another Matrix device.
+    /// Throws `MatrixNativeCryptoSecurityError.deviceRevocationUnavailable`
+    /// until the SDK exposes the API.
+    func revokeMatrixDevice(deviceID: String) async throws {
+        try requireReady()
+        try await coordinator.revokeMatrixDevice(deviceID: deviceID)
     }
 
     func refreshRuntimeState() async {

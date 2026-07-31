@@ -61,25 +61,25 @@ final class UnifiedNotificationContractTests: XCTestCase {
 
     func testDirectMessageContractRejectsSelfAndNonCanonicalTargets() {
         XCTAssertFalse(MatrixDirectMessageContract.mayCreate(
-            currentMatrixUserID: "@u_1:vibes.westreem.com",
-            targetMatrixUserID: "@u_1:vibes.westreem.com"
+            currentMatrixUserID: "@u_31:vibes.westreem.com",
+            targetMatrixUserID: "@u_31:vibes.westreem.com"
         ))
         XCTAssertFalse(MatrixDirectMessageContract.mayCreate(
-            currentMatrixUserID: "@u_1:vibes.westreem.com",
+            currentMatrixUserID: "@u_31:vibes.westreem.com",
             targetMatrixUserID: "@handle:vibes.westreem.com"
         ))
         XCTAssertFalse(MatrixDirectMessageContract.mayCreate(
-            currentMatrixUserID: "@u_1:vibes.westreem.com",
-            targetMatrixUserID: "@u_2:external.example"
+            currentMatrixUserID: "@u_31:vibes.westreem.com",
+            targetMatrixUserID: "@u_32:external.example"
         ))
         XCTAssertTrue(MatrixDirectMessageContract.mayCreate(
-            currentMatrixUserID: "@u_1:vibes.westreem.com",
-            targetMatrixUserID: "@u_2:vibes.westreem.com"
+            currentMatrixUserID: "@u_31:vibes.westreem.com",
+            targetMatrixUserID: "@u_32:vibes.westreem.com"
         ))
         XCTAssertFalse(MatrixDirectMessageContract.mayCreate(
-            currentMatrixUserID: "@u_1:vibes.westreem.com",
-            targetMatrixUserID: "@u_2:vibes.westreem.com",
-            ignoredMatrixUserIDs: ["@u_2:vibes.westreem.com"]
+            currentMatrixUserID: "@u_31:vibes.westreem.com",
+            targetMatrixUserID: "@u_32:vibes.westreem.com",
+            ignoredMatrixUserIDs: ["@u_32:vibes.westreem.com"]
         ))
         XCTAssertEqual(MatrixDirectMessageContract.normalizedSearchQuery("  ahmed  "), "ahmed")
         XCTAssertNil(MatrixDirectMessageContract.normalizedSearchQuery("a"))
@@ -91,22 +91,28 @@ final class UnifiedNotificationContractTests: XCTestCase {
         XCTAssertTrue(MatrixDirectMessageContract.mayPresentExistingRoom(
             isEncrypted: true,
             isDirect: true,
-            peerMatrixUserID: "@u_2:vibes.westreem.com"
+            peerMatrixUserID: "@u_32:vibes.westreem.com"
         ))
         XCTAssertFalse(MatrixDirectMessageContract.mayPresentExistingRoom(
             isEncrypted: false,
             isDirect: true,
-            peerMatrixUserID: "@u_2:vibes.westreem.com"
+            peerMatrixUserID: "@u_32:vibes.westreem.com"
         ))
         XCTAssertFalse(MatrixDirectMessageContract.mayPresentExistingRoom(
             isEncrypted: true,
             isDirect: false,
-            peerMatrixUserID: "@u_2:vibes.westreem.com"
+            peerMatrixUserID: "@u_32:vibes.westreem.com"
         ))
         XCTAssertFalse(MatrixDirectMessageContract.mayPresentExistingRoom(
             isEncrypted: true,
             isDirect: true,
-            peerMatrixUserID: "@u_2:external.example"
+            peerMatrixUserID: "@u_32:external.example"
+        ))
+        XCTAssertFalse(MatrixDirectMessageContract.isCanonicalWestreemPeer(
+            "@u_nothex:vibes.westreem.com"
+        ))
+        XCTAssertFalse(MatrixDirectMessageContract.isCanonicalWestreemPeer(
+            "@u_3:vibes.westreem.com"
         ))
         XCTAssertFalse(MatrixDirectMessageContract.permitsLegacyMessageAPI)
     }

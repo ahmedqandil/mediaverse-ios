@@ -42,10 +42,122 @@ struct MatrixNativeLoungeParticipant: Identifiable, Equatable, Hashable, Sendabl
     let avatarURL: String?
 }
 
-struct MatrixTimelinePage: Equatable, Sendable {
+struct MatrixTimelinePage: Codable, Equatable, Sendable {
     let roomID: String
     let items: [MatrixTimelineItem]
     let nextToken: String?
+}
+
+struct MatrixNativeTimelineSnapshot: Sendable {
+    let items: [MatrixTimelineItem]
+    let hasMore: Bool
+}
+
+/// Summary of a single thread inside a Wave, sourced from the Matrix Rust
+/// SDK's server-backed `Room.threadListService()` and enriched from a focused
+/// thread timeline for actions and participation.
+///
+/// See `MatrixVibesRepositoryFoundation.threadSummaries(roomID:)`.
+public struct MatrixNativeThreadSummary: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let rootEventID: String
+    public let rootBody: String
+    public let rootSenderName: String
+    public let rootSenderAvatarURL: String?
+    public let rootTimestamp: Date
+    public let replyCount: Int
+    public let lastReplyAt: Date
+    public let lastReplySenderName: String?
+    public let lastReplyBody: String?
+    public let participants: [String]
+    /// Element's "My threads" filter includes a thread when the current user
+    /// authored either the root or a reply. This is derived from the focused
+    /// SDK thread timeline, never from display-name matching.
+    public let isParticipated: Bool
+    /// True when the last reply arrived after the current user last read
+    /// this thread. Currently derived from `replyCount > 0`; a future
+    /// per-thread receipt (once the SDK surfaces it) can tighten this.
+    public let hasUnread: Bool
+
+    public init(
+        id: String,
+        rootEventID: String,
+        rootBody: String,
+        rootSenderName: String,
+        rootSenderAvatarURL: String?,
+        rootTimestamp: Date,
+        replyCount: Int,
+        lastReplyAt: Date,
+        lastReplySenderName: String?,
+        lastReplyBody: String?,
+        participants: [String],
+        isParticipated: Bool,
+        hasUnread: Bool
+    ) {
+        self.id = id
+        self.rootEventID = rootEventID
+        self.rootBody = rootBody
+        self.rootSenderName = rootSenderName
+        self.rootSenderAvatarURL = rootSenderAvatarURL
+        self.rootTimestamp = rootTimestamp
+        self.replyCount = replyCount
+        self.lastReplyAt = lastReplyAt
+        self.lastReplySenderName = lastReplySenderName
+        self.lastReplyBody = lastReplyBody
+        self.participants = participants
+        self.isParticipated = isParticipated
+        self.hasUnread = hasUnread
+    }
+}
+
+enum MatrixTimelineMerge {
+    /// Merges a freshly loaded timeline page into previously known items.
+    ///
+    /// The loaded page is the authoritative snapshot of the live SDK
+    /// timeline: known items are updated in place, new items are appended
+    /// (or prepended history is deduplicated when paginating), and local
+    /// echoes that no longer exist in the live timeline are dropped —
+    /// otherwise a message that materialized under its remote event ID
+    /// would render twice next to its stale transaction-ID copy.
+    static func items(
+        existing: [MatrixTimelineItem],
+        loaded: [MatrixTimelineItem],
+        paginate: Bool
+    ) -> [MatrixTimelineItem] {
+        guard !existing.isEmpty else { return loaded }
+        let loadedIDs = Set(loaded.map(\.id))
+        let retained = existing.filter { item in
+            if case .transactionID = item.reference {
+                return loadedIDs.contains(item.id)
+            }
+            return true
+        }
+
+        if paginate {
+            var seen = Set<String>()
+            var merged: [MatrixTimelineItem] = []
+            for item in loaded + retained where seen.insert(item.id).inserted {
+                merged.append(item)
+            }
+            return merged
+        }
+
+        var merged: [MatrixTimelineItem] = []
+        var indexesByID: [String: Int] = [:]
+        for item in retained where indexesByID[item.id] == nil {
+            indexesByID[item.id] = merged.count
+            merged.append(item)
+        }
+        for item in loaded {
+            if let index = indexesByID[item.id] {
+                merged[index] = item
+            } else {
+                indexesByID[item.id] = merged.count
+                merged.append(item)
+            }
+        }
+        return merged
+    }
 }
 
 struct MatrixNativeWaveRulesSnapshot: Equatable, Sendable {
@@ -71,6 +183,7 @@ struct MatrixNativeWaveManagementSnapshot: Equatable, Sendable {
     let topic: String
     let avatarURL: String?
     let access: MatrixNativeWaveAccess
+    let restrictedParentSpaceID: String?
     let history: MatrixNativeWaveHistory
     let notificationMode: MatrixNativeWaveNotificationMode
     let isEncrypted: Bool
@@ -84,12 +197,256 @@ struct MatrixNativeWaveManagementSnapshot: Equatable, Sendable {
 }
 
 struct MatrixNativeWaveSearchResult: Identifiable, Equatable, Sendable {
-    var id: String { eventID }
+    var id: String { "\(roomID)\u{0}\(eventID)" }
+    let roomID: String
     let eventID: String
     let senderID: String
     let senderDisplayName: String
     let body: String
     let timestamp: Date
+}
+
+// MARK: - Watch Party (com.westreem.watch_party.v1)
+
+/// Playback state for a Wave-hosted synchronized watch party.
+///
+/// WeStreem branding: a Watch Party is hosted inside a Wave (Matrix room)
+/// and streams a WeStreem HLS video with a designated host controlling
+/// play/pause. Non-hosts observe and can re-sync to the host's playhead.
+enum MatrixNativeWatchPartyPlaybackState: String, Sendable, Equatable {
+    case playing
+    case paused
+}
+
+/// A snapshot of the current watch party state event
+/// (`com.westreem.watch_party.v1`, state key `""`).
+///
+/// Absent value means no active watch party. `endedAt != nil` means the
+/// most recent watch party has ended and the room can start a new one.
+struct MatrixNativeWatchPartyState: Sendable, Equatable {
+    let videoId: String
+    let videoUrl: String?
+    let startedBy: String?
+    let host: String?
+    let playbackState: MatrixNativeWatchPartyPlaybackState
+    let playheadMs: Int64
+    let startedAt: Int64
+    let lastUpdatedAt: Int64?
+    let playbackEpoch: String?
+    let sequence: Int64?
+    let endedAt: Int64?
+
+    var isActive: Bool { endedAt == nil }
+    var controllingUserID: String? {
+        MatrixWatchPartyCrossClientVersion.controllingUserID(
+            host: host,
+            startedBy: startedBy
+        )
+    }
+}
+
+// MARK: - Live Stage (com.westreem.live.stage.v1 + speaker.v1)
+
+/// Whether a live stage is currently open or has ended.
+enum MatrixNativeLiveStageStatus: String, Sendable, Equatable {
+    case live
+    case ended
+}
+
+/// Snapshot of a live stage state event (`com.westreem.live.stage.v1`,
+/// state key `""`). Hosts drive the stage; speakers are the users currently
+/// permitted to talk in the LiveKit lounge.
+struct MatrixNativeLiveStageState: Sendable, Equatable {
+    let status: MatrixNativeLiveStageStatus
+    let title: String
+    let hosts: [String]
+    let speakers: [String]
+    let startedAt: Int64
+    let endedAt: Int64?
+    let stageEpoch: String?
+    let sequence: Int64
+    let updatedAt: Int64
+
+    init(
+        status: MatrixNativeLiveStageStatus,
+        title: String,
+        hosts: [String],
+        speakers: [String],
+        startedAt: Int64,
+        endedAt: Int64?,
+        stageEpoch: String? = nil,
+        sequence: Int64 = 0,
+        updatedAt: Int64? = nil
+    ) {
+        self.status = status
+        self.title = title
+        self.hosts = hosts
+        self.speakers = speakers
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.stageEpoch = stageEpoch
+        self.sequence = sequence
+        self.updatedAt = updatedAt ?? endedAt ?? startedAt
+    }
+
+    var isLive: Bool { status == .live && endedAt == nil }
+}
+
+/// The three states a per-user `com.westreem.live.speaker.v1` state event
+/// can take. The `stateKey` for these events is the target user's Matrix ID.
+enum MatrixNativeSpeakerRole: String, Sendable, Equatable {
+    case speaker
+    case request
+    case denied
+}
+
+/// One per-user speaker record read from `com.westreem.live.speaker.v1`
+/// state events. `id` == `userId` so a request drawer can dedupe by user.
+struct MatrixNativeSpeakerRequest: Identifiable, Sendable, Equatable {
+    var id: String { userId }
+    let userId: String
+    let role: MatrixNativeSpeakerRole
+    let requestedAt: Int64
+}
+
+// MARK: - Wire-level contracts
+
+enum MatrixNativeWatchPartyContract {
+    static let eventType = "com.westreem.watch_party.v1"
+
+    static func encode(_ state: MatrixNativeWatchPartyState) throws -> String {
+        var content: [String: Any] = [
+            "schema_version": 1,
+            "videoId": state.videoId,
+            "playback_state": state.playbackState.rawValue,
+            "playhead_ms": state.playheadMs,
+            "started_at": state.startedAt,
+        ]
+        // Playback URLs are viewer-specific revocable WeStreem leases and must
+        // never be copied into Matrix room state.
+        if let by = state.startedBy { content["started_by"] = by }
+        if let host = state.host { content["host"] = host }
+        if let updated = state.lastUpdatedAt { content["last_updated_at"] = updated }
+        if let epoch = state.playbackEpoch { content["playback_epoch"] = epoch }
+        if let sequence = state.sequence { content["sequence"] = sequence }
+        if let ended = state.endedAt { content["ended_at"] = ended }
+        let data = try JSONSerialization.data(
+            withJSONObject: content,
+            options: [.sortedKeys]
+        )
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    static func decode(contentJSON: String) throws
+        -> MatrixNativeWatchPartyState {
+        guard let data = contentJSON.data(using: .utf8),
+              let raw = try JSONSerialization.jsonObject(with: data)
+                as? [String: Any] else {
+            throw MatrixNativeWaveActionError.unavailable
+        }
+        guard let videoId = raw["videoId"] as? String,
+              let playbackRaw = raw["playback_state"] as? String,
+              let playback = MatrixNativeWatchPartyPlaybackState(
+                rawValue: playbackRaw
+              ) else {
+            throw MatrixNativeWaveActionError.unavailable
+        }
+        return MatrixNativeWatchPartyState(
+            videoId: videoId,
+            videoUrl: raw["videoUrl"] as? String,
+            startedBy: raw["started_by"] as? String,
+            host: raw["host"] as? String,
+            playbackState: playback,
+            playheadMs: (raw["playhead_ms"] as? NSNumber)?.int64Value ?? 0,
+            startedAt: (raw["started_at"] as? NSNumber)?.int64Value ?? 0,
+            lastUpdatedAt: (raw["last_updated_at"] as? NSNumber)?.int64Value,
+            playbackEpoch: raw["playback_epoch"] as? String,
+            sequence: (raw["sequence"] as? NSNumber)?.int64Value,
+            endedAt: (raw["ended_at"] as? NSNumber)?.int64Value
+        )
+    }
+}
+
+enum MatrixNativeLiveStageContract {
+    static let stageEventType = "com.westreem.live.stage.v1"
+    static let speakerEventType = "com.westreem.live.speaker.v1"
+
+    static func encodeStage(_ state: MatrixNativeLiveStageState) throws -> String {
+        var content: [String: Any] = [
+            "status": state.status.rawValue,
+            "title": state.title,
+            "hosts": state.hosts,
+            "speakers": state.speakers,
+            "startedAt": state.startedAt,
+        ]
+        if let ended = state.endedAt { content["endedAt"] = ended }
+        if let epoch = state.stageEpoch { content["stageEpoch"] = epoch }
+        content["sequence"] = state.sequence
+        content["updatedAt"] = state.updatedAt
+        let data = try JSONSerialization.data(
+            withJSONObject: content,
+            options: [.sortedKeys]
+        )
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    static func decodeStage(contentJSON: String) throws
+        -> MatrixNativeLiveStageState {
+        guard let data = contentJSON.data(using: .utf8),
+              let raw = try JSONSerialization.jsonObject(with: data)
+                as? [String: Any] else {
+            throw MatrixNativeWaveActionError.unavailable
+        }
+        guard let statusRaw = raw["status"] as? String,
+              let status = MatrixNativeLiveStageStatus(rawValue: statusRaw) else {
+            throw MatrixNativeWaveActionError.unavailable
+        }
+        return MatrixNativeLiveStageState(
+            status: status,
+            title: (raw["title"] as? String) ?? "",
+            hosts: (raw["hosts"] as? [String]) ?? [],
+            speakers: (raw["speakers"] as? [String]) ?? [],
+            startedAt: (raw["startedAt"] as? NSNumber)?.int64Value ?? 0,
+            endedAt: (raw["endedAt"] as? NSNumber)?.int64Value,
+            stageEpoch: raw["stageEpoch"] as? String,
+            sequence: (raw["sequence"] as? NSNumber)?.int64Value ?? 0,
+            updatedAt: (raw["updatedAt"] as? NSNumber)?.int64Value
+        )
+    }
+
+    static func encodeSpeaker(
+        _ request: MatrixNativeSpeakerRequest
+    ) throws -> String {
+        let content: [String: Any] = [
+            "role": request.role.rawValue,
+            "requestedAt": request.requestedAt,
+        ]
+        let data = try JSONSerialization.data(
+            withJSONObject: content,
+            options: [.sortedKeys]
+        )
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    static func decodeSpeaker(
+        userId: String,
+        contentJSON: String
+    ) throws -> MatrixNativeSpeakerRequest {
+        guard let data = contentJSON.data(using: .utf8),
+              let raw = try JSONSerialization.jsonObject(with: data)
+                as? [String: Any] else {
+            throw MatrixNativeWaveActionError.unavailable
+        }
+        guard let roleRaw = raw["role"] as? String,
+              let role = MatrixNativeSpeakerRole(rawValue: roleRaw) else {
+            throw MatrixNativeWaveActionError.unavailable
+        }
+        return MatrixNativeSpeakerRequest(
+            userId: userId,
+            role: role,
+            requestedAt: (raw["requestedAt"] as? NSNumber)?.int64Value ?? 0
+        )
+    }
 }
 
 struct MatrixVibeSummary: Identifiable, Equatable, Sendable {
@@ -99,6 +456,61 @@ struct MatrixVibeSummary: Identifiable, Equatable, Sendable {
     let avatarURL: String?
     let joinedMemberCount: UInt64
     let membership: MatrixNativeMembership
+    /// Cached unread notification count. Populated when available from the room info;
+    /// defaults to 0 so sorting by unread degrades gracefully to alphabetical for Vibes.
+    var unreadCount: Int
+    /// ISO-8601 timestamp of the most recent event in this Vibe.
+    /// Nil when unavailable; activity-sort falls back to alphabetical order.
+    var lastActivityAt: String?
+
+    init(
+        id: String,
+        name: String,
+        topic: String?,
+        avatarURL: String?,
+        joinedMemberCount: UInt64,
+        membership: MatrixNativeMembership,
+        unreadCount: Int = 0,
+        lastActivityAt: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.topic = topic
+        self.avatarURL = avatarURL
+        self.joinedMemberCount = joinedMemberCount
+        self.membership = membership
+        self.unreadCount = unreadCount
+        self.lastActivityAt = lastActivityAt
+    }
+}
+
+enum MatrixNativeInvitationKind: String, Equatable, Sendable {
+    case vibe
+    case wave
+    case personalWave
+}
+
+struct MatrixNativeInvitationSummary: Identifiable, Equatable, Sendable {
+    let id: String
+    let name: String
+    let topic: String?
+    let avatarURL: String?
+    let kind: MatrixNativeInvitationKind
+    let isEncrypted: Bool
+    let inviterUserID: String?
+    let inviterName: String
+    let inviterAvatarURL: String?
+    let inviterIsBlocked: Bool
+
+    var canAccept: Bool {
+        MatrixInvitationSafetyContract.evaluate(
+            membershipIsInvited: true,
+            kind: MatrixInvitationKind(rawValue: kind.rawValue) ?? .wave,
+            isEncrypted: isEncrypted,
+            inviterIsBlocked: inviterIsBlocked,
+            inviterUserID: inviterUserID
+        ).canAccept
+    }
 }
 
 struct MatrixWaveSummary: Identifiable, Equatable, Hashable, Sendable {
@@ -111,6 +523,7 @@ struct MatrixWaveSummary: Identifiable, Equatable, Hashable, Sendable {
     let isNestedSpace: Bool
     let isDirect: Bool
     let isEncrypted: Bool
+    let unreadCount: UInt64
     let activeCallParticipantCount: Int
     let activeCallIntent: MatrixNativeRtcIntent?
     let activeCallParticipants: [MatrixNativeLoungeParticipant]
@@ -125,6 +538,7 @@ struct MatrixWaveSummary: Identifiable, Equatable, Hashable, Sendable {
         isNestedSpace: Bool,
         isDirect: Bool = false,
         isEncrypted: Bool = false,
+        unreadCount: UInt64 = 0,
         activeCallParticipantCount: Int = 0,
         activeCallIntent: MatrixNativeRtcIntent? = nil,
         activeCallParticipants: [MatrixNativeLoungeParticipant] = []
@@ -138,26 +552,27 @@ struct MatrixWaveSummary: Identifiable, Equatable, Hashable, Sendable {
         self.isNestedSpace = isNestedSpace
         self.isDirect = isDirect
         self.isEncrypted = isEncrypted
+        self.unreadCount = unreadCount
         self.activeCallParticipantCount = max(0, activeCallParticipantCount)
         self.activeCallIntent = activeCallIntent
         self.activeCallParticipants = Array(activeCallParticipants.prefix(3))
     }
 }
 
-enum MatrixNativeMembership: String, Equatable, Hashable, Sendable {
+enum MatrixNativeMembership: String, Codable, Equatable, Hashable, Sendable {
     case joined
     case invited
     case left
     case unknown
 }
 
-enum MatrixNativeLocalSendState: Equatable, Sendable {
+enum MatrixNativeLocalSendState: Codable, Equatable, Sendable {
     case sending
     case failed(isRecoverable: Bool)
     case sent
 }
 
-enum MatrixNativeMessageKind: Equatable, Sendable {
+enum MatrixNativeMessageKind: Codable, Equatable, Sendable {
     case text
     case notice
     case emote
@@ -172,10 +587,11 @@ enum MatrixNativeMessageKind: Equatable, Sendable {
     case westreemReference
     case redacted
     case unableToDecrypt
+    case unavailablePinned
     case unsupported
 }
 
-enum MatrixNativeEventReference: Equatable, Sendable {
+enum MatrixNativeEventReference: Codable, Equatable, Sendable {
     case eventID(String)
     case transactionID(String)
 
@@ -185,21 +601,21 @@ enum MatrixNativeEventReference: Equatable, Sendable {
     }
 }
 
-struct MatrixNativeEnergySummary: Identifiable, Equatable, Sendable {
+struct MatrixNativeEnergySummary: Codable, Identifiable, Equatable, Sendable {
     var id: String { key }
     let key: String
     let count: Int
     let isSelectedByCurrentUser: Bool
 }
 
-struct MatrixNativeReplyPreview: Identifiable, Equatable, Sendable {
+struct MatrixNativeReplyPreview: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let senderDisplayName: String
     let body: String
     let timestamp: Date
 }
 
-struct MatrixNativeTimelineActions: Equatable, Sendable {
+struct MatrixNativeTimelineActions: Codable, Equatable, Sendable {
     let canReply: Bool
     let canAddEnergy: Bool
     let canEdit: Bool
@@ -219,7 +635,7 @@ struct MatrixNativeTimelineActions: Equatable, Sendable {
     )
 }
 
-struct MatrixTimelineItem: Identifiable, Equatable, Sendable {
+struct MatrixTimelineItem: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let reference: MatrixNativeEventReference
     let senderID: String
@@ -234,6 +650,10 @@ struct MatrixTimelineItem: Identifiable, Equatable, Sendable {
     let reactionCount: Int
     let energy: [MatrixNativeEnergySummary]
     let readReceiptCount: Int
+    /// Matrix-authoritative public receipts attached to this exact event.
+    /// User IDs are retained so the UI can resolve current room-member names
+    /// and avatars; ignored users and our own receipt are excluded.
+    let readReceiptUserIDs: [String]
     let threadReplyCount: UInt64
     let replyPreviews: [MatrixNativeReplyPreview]
     let actions: MatrixNativeTimelineActions
@@ -262,9 +682,13 @@ struct MatrixNativeEchoDeliveryResult: Equatable, Sendable {
 
 protocol MatrixVibesSDKProviding: Sendable {
     func topLevelSpaces() async throws -> [MatrixVibeSummary]
+    func pendingInvitations() async throws -> [MatrixNativeInvitationSummary]
     func publicSpaces(query: String?, loadNextPage: Bool) async throws
         -> MatrixPublicVibeDirectoryPage
+    func publicSpacePreview(_ space: MatrixPublicVibeSummary) async throws
+        -> MatrixPublicVibeSummary
     func joinPublicSpace(_ space: MatrixPublicVibeSummary) async throws
+    func leavePublicSpace(_ space: MatrixPublicVibeSummary) async throws
     func createVibe(_ draft: MatrixNativeRoomCreationDraft) async throws
         -> MatrixNativeCreatedRoom
     func createWave(
@@ -297,7 +721,8 @@ protocol MatrixVibesSDKProviding: Sendable {
     func updateWaveAccess(
         roomID: String,
         access: MatrixNativeWaveAccess,
-        history: MatrixNativeWaveHistory
+        history: MatrixNativeWaveHistory,
+        restrictedParentSpaceID: String?
     ) async throws
     func leaveWave(roomID: String) async throws
     func waveMembers(roomID: String) async throws -> [MatrixNativeWaveMember]
@@ -324,12 +749,17 @@ protocol MatrixVibesSDKProviding: Sendable {
         query: String
     ) async throws -> [MatrixNativeWaveSearchResult]
     func pinnedItems(roomID: String) async throws -> [MatrixTimelineItem]
-    func timelineItems(roomID: String, paginateBackwards: Bool) async throws -> [MatrixTimelineItem]
+    func timelineItems(roomID: String, paginateBackwards: Bool) async throws
+        -> MatrixNativeTimelineSnapshot
+    func releaseTimeline(roomID: String) async
+    func releaseThreadTimeline(roomID: String, rootEventID: String) async
     func threadItems(
         roomID: String,
         rootEventID: String,
         paginateBackwards: Bool
     ) async throws -> [MatrixTimelineItem]
+    func threadSummaries(roomID: String) async throws -> [MatrixNativeThreadSummary]
+    func eventItem(roomID: String, eventID: String) async throws -> MatrixTimelineItem
     func sendThreadReply(
         roomID: String,
         rootEventID: String,
@@ -391,10 +821,19 @@ protocol MatrixVibesSDKProviding: Sendable {
         caption: String?,
         transactionID: String
     ) async throws
+    func sendThreadAttachments(
+        roomID: String,
+        rootEventID: String,
+        uploads: [MatrixNativeUpload],
+        caption: String?,
+        transactionID: String
+    ) async throws
     func createPoll(
         roomID: String,
         question: String,
         options: [String],
+        maxSelections: UInt64,
+        isDisclosed: Bool,
         transactionID: String
     ) async throws
     func voteInPoll(roomID: String, eventID: String, optionIDs: [String]) async throws
@@ -411,14 +850,47 @@ protocol MatrixVibesSDKProviding: Sendable {
     func avatarData(avatarURL: String) async throws -> Data
     func setTyping(roomID: String, isTyping: Bool) async throws
     func markRead(roomID: String) async throws
+    func markThreadRead(roomID: String, rootEventID: String) async throws
     func acceptInvite(roomID: String) async throws
     func declineInvite(roomID: String) async throws
+    func declineInviteAndBlock(roomID: String) async throws
     func beginRtcMembership(
         roomID: String,
         intent: MatrixNativeRtcIntent,
         livekitServiceURL: String
     ) async throws -> String
     func endRtcMembership(roomID: String) async throws
+
+    // MARK: Watch Party
+    func watchPartyState(
+        roomID: String
+    ) async throws -> MatrixNativeWatchPartyState?
+    func startWatchParty(
+        roomID: String,
+        videoId: String,
+        videoUrl: String?
+    ) async throws
+    func updateWatchPartyPlayback(
+        roomID: String,
+        playbackState: MatrixNativeWatchPartyPlaybackState,
+        playheadMs: Int64
+    ) async throws
+    func endWatchParty(roomID: String) async throws
+
+    // MARK: Live Stage
+    func liveStageState(
+        roomID: String
+    ) async throws -> MatrixNativeLiveStageState?
+    func speakerRequests(
+        roomID: String
+    ) async throws -> [MatrixNativeSpeakerRequest]
+    func startLiveStage(roomID: String, title: String) async throws
+    func endLiveStage(roomID: String) async throws
+    func requestSpeaker(roomID: String) async throws
+    func approveSpeaker(roomID: String, userId: String) async throws
+    func denySpeaker(roomID: String, userId: String) async throws
+    func removeSpeaker(roomID: String, userId: String) async throws
+    func updateLiveStageCohost(roomID: String, userId: String, add: Bool) async throws
 }
 
 enum MatrixNativeWaveActionError: LocalizedError, Equatable {
@@ -478,6 +950,11 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
     private var directoryAccumulator: MatrixRoomDirectoryAccumulator?
     private var directoryResultsHandle: TaskHandle?
     private var directoryQuery: String?
+    private var focusedTimelines: [String: MatrixFocusedTimelineSession] = [:]
+    private var focusedThreadTimelines: [String: MatrixFocusedTimelineSession] = [:]
+    private var submittedReportFingerprints = Set<String>()
+    private var submittedReportOrder: [String] = []
+    private var observedLiveStages: [String: MatrixNativeLiveStageState] = [:]
 
     init(sessionCoordinator: MatrixSessionCoordinator) {
         self.sessionCoordinator = sessionCoordinator
@@ -507,16 +984,67 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         return ordered
     }
 
+    func pendingInvitations() async throws -> [MatrixNativeInvitationSummary] {
+        let client = try await activeClient()
+        let currentUserID = try client.userId()
+        let ignored = Set(try await client.ignoredUsers())
+        var result: [MatrixNativeInvitationSummary] = []
+        for room in client.rooms().filter({ $0.membership() == .invited }) {
+            let info = try? await room.roomInfo()
+            let inviterID: String? = info?.inviter?.userId
+            let isDirect = await room.isDirect()
+            let encrypted = await room.isEncrypted()
+            // A Personal Wave must have a different, valid membership-event
+            // inviter and encryption before acceptance can be offered.
+            let validInviter: String?
+            if let inviterID,
+               inviterID.first == "@",
+               inviterID.contains(":"),
+               inviterID != currentUserID {
+                validInviter = inviterID
+            } else {
+                validInviter = nil
+            }
+            let kind: MatrixNativeInvitationKind = room.isSpace()
+                ? .vibe
+                : (isDirect ? .personalWave : .wave)
+            result.append(MatrixNativeInvitationSummary(
+                id: room.id(),
+                name: MatrixNativeMemberPresentationContract.roomName(
+                    room.displayName(),
+                    fallback: kind == .vibe ? "Invited Vibe" : kind == .personalWave ? "Personal Wave" : "Invited Wave"
+                ),
+                topic: room.topic(),
+                avatarURL: room.avatarUrl(),
+                kind: kind,
+                isEncrypted: encrypted,
+                inviterUserID: validInviter,
+                inviterName: {
+                    let displayName = info?.inviter?.displayName?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    return displayName.isEmpty
+                        ? (validInviter ?? "Unknown inviter")
+                        : displayName
+                }(),
+                inviterAvatarURL: info?.inviter?.avatarUrl,
+                inviterIsBlocked: validInviter.map(ignored.contains) ?? false
+            ))
+        }
+        return result.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
     func publicSpaces(
         query: String?,
         loadNextPage: Bool
     ) async throws -> MatrixPublicVibeDirectoryPage {
         let client = try await activeClient()
-        let trimmedQuery = query?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedQuery = trimmedQuery.flatMap {
-            $0.isEmpty ? nil : String($0.prefix(128))
-        }
+        let normalizedQuery = query.map {
+            $0.precomposedStringWithCanonicalMapping
+                .split(whereSeparator: \Character.isWhitespace)
+                .joined(separator: " ")
+        }.flatMap { $0.isEmpty ? nil : String($0.prefix(100)) }
 
         let search: RoomDirectorySearch
         let accumulator: MatrixRoomDirectoryAccumulator
@@ -597,16 +1125,22 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
     }
 
     func joinPublicSpace(_ space: MatrixPublicVibeSummary) async throws {
-        guard space.mayJoin, space.membership != .joined else {
+        let current = try await publicSpacePreview(space)
+        if current.membership == .joined { return }
+        guard current.mayJoin else {
             throw MatrixNativeWaveActionError.notAllowed
         }
         let client = try await activeClient()
-        let target = space.canonicalAlias ?? space.id
+        let target = current.canonicalAlias ?? current.id
         let joined = try await client.joinRoomByIdOrAlias(
             roomIdOrAlias: target,
-            serverNames: space.viaServers
+            serverNames: current.viaServers
         )
-        guard joined.isSpace(), joined.membership() == .joined else {
+        guard joined.id() == current.id,
+              joined.isSpace(),
+              joined.membership() == .joined,
+              !(await joined.isEncrypted())
+        else {
             if joined.membership() == .joined {
                 try? await joined.leave()
             }
@@ -614,17 +1148,64 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         }
     }
 
+    func publicSpacePreview(_ space: MatrixPublicVibeSummary) async throws
+        -> MatrixPublicVibeSummary
+    {
+        let client = try await activeClient()
+        let preview = try await client.getRoomPreviewFromRoomId(
+            roomId: space.id,
+            viaServers: space.viaServers
+        )
+        let info = preview.info()
+        guard info.roomId == space.id, info.roomType == .space else {
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        if let joined = try client.getRoom(roomId: info.roomId), await joined.isEncrypted() {
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        return MatrixPublicVibeSummary(
+            id: info.roomId,
+            name: info.name ?? "Public Vibe",
+            topic: info.topic,
+            avatarURL: info.avatarUrl,
+            canonicalAlias: info.canonicalAlias,
+            joinedMemberCount: info.numJoinedMembers,
+            membership: MatrixNativeMembership(info.membership),
+            mayJoin: Self.mayJoin(info.joinRule),
+            viaServers: Self.viaServers(roomID: info.roomId, alias: info.canonicalAlias)
+        )
+    }
+
+    func leavePublicSpace(_ space: MatrixPublicVibeSummary) async throws {
+        let current = try await publicSpacePreview(space)
+        guard current.membership == .joined else { return }
+        let client = try await activeClient()
+        guard let room = try client.getRoom(roomId: current.id),
+              room.isSpace(),
+              room.membership() == .joined,
+              !(await room.isEncrypted())
+        else { throw MatrixNativeWaveActionError.notAllowed }
+        try await room.leave()
+    }
+
     func createVibe(
         _ draft: MatrixNativeRoomCreationDraft
     ) async throws -> MatrixNativeCreatedRoom {
         let client = try await activeClient()
         let validated = try MatrixNativeCreationContract.validate(draft)
+        guard validated.visibility != .restricted else {
+            throw MatrixNativeWaveActionError.notAllowed
+        }
         let serviceUserID = try Self.serviceUserID(for: client.userId())
+        try Self.validateLocalAlias(validated.canonicalAlias, userID: client.userId())
+        let avatarURI = try await uploadCreationAvatar(validated.avatar, client: client)
         let roomID = try await client.createRoom(
             request: createRoomParameters(
                 validated,
                 isSpace: true,
-                serviceUserID: serviceUserID
+                serviceUserID: serviceUserID,
+                parentSpaceID: nil,
+                avatarURI: avatarURI
             )
         )
         let room = try await createdRoom(roomID, client: client)
@@ -671,11 +1252,15 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         }
         let validated = try MatrixNativeCreationContract.validate(draft)
         let serviceUserID = try Self.serviceUserID(for: client.userId())
+        try Self.validateLocalAlias(validated.canonicalAlias, userID: client.userId())
+        let avatarURI = try await uploadCreationAvatar(validated.avatar, client: client)
         let roomID = try await client.createRoom(
             request: createRoomParameters(
                 validated,
                 isSpace: false,
-                serviceUserID: serviceUserID
+                serviceUserID: serviceUserID,
+                parentSpaceID: spaceID,
+                avatarURI: avatarURI
             )
         )
         let child = try await createdRoom(roomID, client: client)
@@ -824,67 +1409,88 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         let client = try await activeClient()
         let list = try await client.spaceService().spaceRoomList(spaceId: spaceID)
         try await list.paginate()
-        var summaries: [MatrixWaveSummary] = []
-        for child in await list.rooms() {
-            let base = MatrixWaveSummary(child)
-            guard let matrixRoom = client.rooms().first(where: { $0.id() == child.roomId }) else {
-                summaries.append(base)
-                continue
-            }
-            let info = try? await matrixRoom.roomInfo()
-            let activeParticipantIDs = matrixRoom.hasActiveRoomCall()
-                ? Set(matrixRoom.activeRoomCallParticipants())
-                : []
-            let intent: MatrixNativeRtcIntent?
-            switch info?.activeRoomCallConsensusIntent {
-            case .full(.audio), .partial(intent: .audio, agreeingCount: _, totalCount: _):
-                intent = .audio
-            case .full(.video), .partial(intent: .video, agreeingCount: _, totalCount: _):
-                intent = .video
-            case .some(.none), nil:
-                intent = nil
-            }
-            var activeParticipants: [MatrixNativeLoungeParticipant] = []
-            if !activeParticipantIDs.isEmpty,
-               let iterator = try? await matrixRoom.members() {
-                memberLookup: while let chunk = iterator.nextChunk(chunkSize: 100),
-                                    !chunk.isEmpty {
-                    for member in chunk where
-                        member.membership == .join
-                            && activeParticipantIDs.contains(member.userId) {
-                        activeParticipants.append(
-                            MatrixNativeLoungeParticipant(
-                                id: member.userId,
-                                displayName: MatrixNativeMemberPresentationContract
-                                    .displayName(
-                                        member.displayName,
-                                        matrixUserID: member.userId
-                                    ),
-                                avatarURL: member.avatarUrl
-                            )
-                        )
-                        if activeParticipants.count == 3 { break memberLookup }
-                    }
+        let localRooms = Dictionary(
+            client.rooms().map { ($0.id(), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let children = await list.rooms()
+        // Summaries fan out concurrently: each one awaits several SDK calls
+        // (room info, encryption, members) that would otherwise serialize.
+        return await withTaskGroup(
+            of: (Int, MatrixWaveSummary).self,
+            returning: [MatrixWaveSummary].self
+        ) { group in
+            for (index, child) in children.enumerated() {
+                let matrixRoom = localRooms[child.roomId]
+                group.addTask {
+                    (index, await Self.waveSummary(child: child, matrixRoom: matrixRoom))
                 }
             }
-            summaries.append(
-                MatrixWaveSummary(
-                    id: base.id,
-                    name: base.name,
-                    topic: base.topic,
-                    avatarURL: base.avatarURL,
-                    joinedMemberCount: base.joinedMemberCount,
-                    membership: base.membership,
-                    isNestedSpace: base.isNestedSpace,
-                    isDirect: false,
-                    isEncrypted: await matrixRoom.isEncrypted(),
-                    activeCallParticipantCount: activeParticipantIDs.count,
-                    activeCallIntent: intent,
-                    activeCallParticipants: activeParticipants
-                )
-            )
+            var indexed: [(Int, MatrixWaveSummary)] = []
+            for await entry in group {
+                indexed.append(entry)
+            }
+            return indexed.sorted { $0.0 < $1.0 }.map(\.1)
         }
-        return summaries
+    }
+
+    private static func waveSummary(
+        child: SpaceRoom,
+        matrixRoom: Room?
+    ) async -> MatrixWaveSummary {
+        let base = MatrixWaveSummary(child)
+        guard let matrixRoom else { return base }
+        let info = try? await matrixRoom.roomInfo()
+        let activeParticipantIDs = matrixRoom.hasActiveRoomCall()
+            ? Set(matrixRoom.activeRoomCallParticipants())
+            : []
+        let intent: MatrixNativeRtcIntent?
+        switch info?.activeRoomCallConsensusIntent {
+        case .full(.audio), .partial(intent: .audio, agreeingCount: _, totalCount: _):
+            intent = .audio
+        case .full(.video), .partial(intent: .video, agreeingCount: _, totalCount: _):
+            intent = .video
+        case .some(.none), nil:
+            intent = nil
+        }
+        var activeParticipants: [MatrixNativeLoungeParticipant] = []
+        if !activeParticipantIDs.isEmpty,
+           let iterator = try? await matrixRoom.members() {
+            memberLookup: while let chunk = iterator.nextChunk(chunkSize: 100),
+                                !chunk.isEmpty {
+                for member in chunk where
+                    member.membership == .join
+                        && activeParticipantIDs.contains(member.userId) {
+                    activeParticipants.append(
+                        MatrixNativeLoungeParticipant(
+                            id: member.userId,
+                            displayName: MatrixNativeMemberPresentationContract
+                                .displayName(
+                                    member.displayName,
+                                    matrixUserID: member.userId
+                                ),
+                            avatarURL: member.avatarUrl
+                        )
+                    )
+                    if activeParticipants.count == 3 { break memberLookup }
+                }
+            }
+        }
+        return MatrixWaveSummary(
+            id: base.id,
+            name: base.name,
+            topic: base.topic,
+            avatarURL: base.avatarURL,
+            joinedMemberCount: base.joinedMemberCount,
+            membership: base.membership,
+            isNestedSpace: base.isNestedSpace,
+            isDirect: false,
+            isEncrypted: await matrixRoom.isEncrypted(),
+            unreadCount: info?.numUnreadNotifications ?? 0,
+            activeCallParticipantCount: activeParticipantIDs.count,
+            activeCallIntent: intent,
+            activeCallParticipants: activeParticipants
+        )
     }
 
     /// Refreshes lounge badges only from rooms already held by MatrixRustSDK.
@@ -1016,6 +1622,571 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         )
     }
 
+    // MARK: - Watch Party
+
+    func watchPartyState(
+        roomID: String
+    ) async throws -> MatrixNativeWatchPartyState? {
+        let client = try await activeClient()
+        let matrixRoom = try room(roomID, in: client)
+        guard matrixRoom.membership() == .joined else {
+            throw MatrixNativeWaveActionError.roomNotJoined
+        }
+        guard let (content, _) = try await latestCustomStateEvent(
+            room: matrixRoom,
+            client: client,
+            eventType: MatrixNativeWatchPartyContract.eventType,
+            stateKeyFilter: { $0.isEmpty }
+        ).first else {
+            return nil
+        }
+        return try MatrixNativeWatchPartyContract.decode(contentJSON: content)
+    }
+
+    func startWatchParty(
+        roomID: String,
+        videoId: String,
+        videoUrl: String?
+    ) async throws {
+        let client = try await activeClient()
+        let matrixRoom = try room(roomID, in: client)
+        guard matrixRoom.membership() == .joined else {
+            throw MatrixNativeWaveActionError.roomNotJoined
+        }
+        let powerLevels = try await matrixRoom.getPowerLevels()
+        guard powerLevels.canOwnUserSendState(
+            stateEvent: stateEventTypeFromString(
+                s: MatrixNativeWatchPartyContract.eventType
+            )
+        ) else {
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        let now = Self.currentEpochMs()
+        let currentUserID = try client.userId()
+        let state = MatrixNativeWatchPartyState(
+            videoId: videoId,
+            videoUrl: videoUrl,
+            startedBy: currentUserID,
+            host: currentUserID,
+            playbackState: .playing,
+            playheadMs: 0,
+            startedAt: now,
+            lastUpdatedAt: now,
+            playbackEpoch: MatrixWatchPartyCrossClientVersion.playbackEpoch(
+                nowMilliseconds: now,
+                sequence: 0
+            ),
+            sequence: 0,
+            endedAt: nil
+        )
+        _ = try await matrixRoom.sendStateEventRaw(
+            eventType: MatrixNativeWatchPartyContract.eventType,
+            stateKey: "",
+            content: try MatrixNativeWatchPartyContract.encode(state)
+        )
+    }
+
+    func updateWatchPartyPlayback(
+        roomID: String,
+        playbackState: MatrixNativeWatchPartyPlaybackState,
+        playheadMs: Int64
+    ) async throws {
+        let client = try await activeClient()
+        let matrixRoom = try room(roomID, in: client)
+        guard matrixRoom.membership() == .joined else {
+            throw MatrixNativeWaveActionError.roomNotJoined
+        }
+        let powerLevels = try await matrixRoom.getPowerLevels()
+        guard powerLevels.canOwnUserSendState(
+            stateEvent: stateEventTypeFromString(
+                s: MatrixNativeWatchPartyContract.eventType
+            )
+        ) else {
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        guard let existing = try await watchPartyState(roomID: roomID),
+              existing.isActive else {
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        let currentUserID = try client.userId()
+        guard existing.controllingUserID == currentUserID else {
+            // Only the host may drive playback state changes.
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        guard let nextSequence = MatrixWatchPartyCrossClientVersion.nextSequence(
+            after: existing.sequence
+        ) else {
+            throw MatrixNativeWaveActionError.unavailable
+        }
+        let now = Self.currentEpochMs()
+        let updated = MatrixNativeWatchPartyState(
+            videoId: existing.videoId,
+            videoUrl: existing.videoUrl,
+            startedBy: existing.startedBy,
+            host: currentUserID,
+            playbackState: playbackState,
+            playheadMs: max(0, playheadMs),
+            startedAt: existing.startedAt,
+            lastUpdatedAt: now,
+            playbackEpoch: existing.playbackEpoch,
+            sequence: nextSequence,
+            endedAt: nil
+        )
+        _ = try await matrixRoom.sendStateEventRaw(
+            eventType: MatrixNativeWatchPartyContract.eventType,
+            stateKey: "",
+            content: try MatrixNativeWatchPartyContract.encode(updated)
+        )
+    }
+
+    func endWatchParty(roomID: String) async throws {
+        let client = try await activeClient()
+        let matrixRoom = try room(roomID, in: client)
+        guard matrixRoom.membership() == .joined else {
+            throw MatrixNativeWaveActionError.roomNotJoined
+        }
+        let powerLevels = try await matrixRoom.getPowerLevels()
+        guard powerLevels.canOwnUserSendState(
+            stateEvent: stateEventTypeFromString(
+                s: MatrixNativeWatchPartyContract.eventType
+            )
+        ) else {
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        guard let existing = try await watchPartyState(roomID: roomID),
+              existing.isActive else {
+            return
+        }
+        guard existing.controllingUserID == (try client.userId()) else {
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        guard let nextSequence = MatrixWatchPartyCrossClientVersion.nextSequence(
+            after: existing.sequence
+        ) else {
+            throw MatrixNativeWaveActionError.unavailable
+        }
+        let now = Self.currentEpochMs()
+        let ended = MatrixNativeWatchPartyState(
+            videoId: existing.videoId,
+            videoUrl: existing.videoUrl,
+            startedBy: existing.startedBy,
+            host: existing.host,
+            playbackState: .paused,
+            playheadMs: existing.playheadMs,
+            startedAt: existing.startedAt,
+            lastUpdatedAt: now,
+            playbackEpoch: existing.playbackEpoch,
+            sequence: nextSequence,
+            endedAt: now
+        )
+        _ = try await matrixRoom.sendStateEventRaw(
+            eventType: MatrixNativeWatchPartyContract.eventType,
+            stateKey: "",
+            content: try MatrixNativeWatchPartyContract.encode(ended)
+        )
+    }
+
+    // MARK: - Live Stage
+
+    func liveStageState(
+        roomID: String
+    ) async throws -> MatrixNativeLiveStageState? {
+        let client = try await activeClient()
+        let matrixRoom = try room(roomID, in: client)
+        guard matrixRoom.membership() == .joined else {
+            throw MatrixNativeWaveActionError.roomNotJoined
+        }
+        guard let (content, _) = try await latestCustomStateEvent(
+            room: matrixRoom,
+            client: client,
+            eventType: MatrixNativeLiveStageContract.stageEventType,
+            stateKeyFilter: { $0.isEmpty }
+        ).first else {
+            return nil
+        }
+        let state = try MatrixNativeLiveStageContract.decodeStage(contentJSON: content)
+        var joinedHosts: [String] = []
+        for userID in state.hosts {
+            if (try? await matrixRoom.member(userId: userID).membership) == .join {
+                joinedHosts.append(userID)
+            }
+        }
+        guard state.isLive, joinedHosts.isEmpty else {
+            observedLiveStages[roomID] = state
+            return state
+        }
+        let powerLevels = try await matrixRoom.getPowerLevels()
+        guard powerLevels.canOwnUserSendState(stateEvent: stateEventTypeFromString(
+            s: MatrixNativeLiveStageContract.stageEventType
+        )) else {
+            observedLiveStages[roomID] = state
+            return state
+        }
+        var eligibleSpeakers: [String] = []
+        for userID in state.speakers where !state.hosts.contains(userID) {
+            if (try? await matrixRoom.member(userId: userID).membership) == .join {
+                eligibleSpeakers.append(userID)
+            }
+        }
+        let now = Self.currentEpochMs()
+        let successor = eligibleSpeakers.sorted().first
+        let recovered = MatrixNativeLiveStageState(
+            status: successor == nil ? .ended : .live,
+            title: state.title,
+            hosts: successor.map { [$0] } ?? [],
+            speakers: successor.map { Array(Set(state.speakers + [$0])).sorted() } ?? state.speakers,
+            startedAt: state.startedAt,
+            endedAt: successor == nil ? now : nil,
+            stageEpoch: state.stageEpoch,
+            sequence: state.sequence + 1,
+            updatedAt: now
+        )
+        _ = try await matrixRoom.sendStateEventRaw(
+            eventType: MatrixNativeLiveStageContract.stageEventType,
+            stateKey: "",
+            content: try MatrixNativeLiveStageContract.encodeStage(recovered)
+        )
+        observedLiveStages[roomID] = recovered
+        return recovered
+    }
+
+    func speakerRequests(
+        roomID: String
+    ) async throws -> [MatrixNativeSpeakerRequest] {
+        let client = try await activeClient()
+        let matrixRoom = try room(roomID, in: client)
+        guard matrixRoom.membership() == .joined else {
+            throw MatrixNativeWaveActionError.roomNotJoined
+        }
+        let entries = try await latestCustomStateEvent(
+            room: matrixRoom,
+            client: client,
+            eventType: MatrixNativeLiveStageContract.speakerEventType,
+            stateKeyFilter: { !$0.isEmpty }
+        )
+        var seen = Set<String>()
+        var requests: [MatrixNativeSpeakerRequest] = []
+        for (content, stateKey) in entries where !seen.contains(stateKey) {
+            seen.insert(stateKey)
+            if let request = try? MatrixNativeLiveStageContract.decodeSpeaker(
+                userId: stateKey,
+                contentJSON: content
+            ), request.role != .request || request.requestedAt > 0 {
+                requests.append(request)
+            }
+        }
+        return requests
+    }
+
+    func startLiveStage(roomID: String, title: String) async throws {
+        let client = try await activeClient()
+        let matrixRoom = try room(roomID, in: client)
+        guard matrixRoom.membership() == .joined else {
+            throw MatrixNativeWaveActionError.roomNotJoined
+        }
+        guard !(await matrixRoom.isEncrypted()) else {
+            // Live Stage media E2EE has not been proven for the shared native
+            // LiveKit transport. Match Web's fail-closed eligibility boundary.
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        let powerLevels = try await matrixRoom.getPowerLevels()
+        guard powerLevels.canOwnUserSendState(
+            stateEvent: stateEventTypeFromString(
+                s: MatrixNativeLiveStageContract.stageEventType
+            )
+        ) else {
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        let host = try client.userId()
+        let now = Self.currentEpochMs()
+        let state = MatrixNativeLiveStageState(
+            status: .live,
+            title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+            hosts: [host],
+            speakers: [host],
+            startedAt: now,
+            endedAt: nil,
+            stageEpoch: UUID().uuidString.replacingOccurrences(of: "-", with: "_"),
+            sequence: 0,
+            updatedAt: now
+        )
+        _ = try await matrixRoom.sendStateEventRaw(
+            eventType: MatrixNativeLiveStageContract.stageEventType,
+            stateKey: "",
+            content: try MatrixNativeLiveStageContract.encodeStage(state)
+        )
+    }
+
+    func endLiveStage(roomID: String) async throws {
+        let client = try await activeClient()
+        let matrixRoom = try room(roomID, in: client)
+        guard matrixRoom.membership() == .joined else {
+            throw MatrixNativeWaveActionError.roomNotJoined
+        }
+        let powerLevels = try await matrixRoom.getPowerLevels()
+        guard powerLevels.canOwnUserSendState(
+            stateEvent: stateEventTypeFromString(
+                s: MatrixNativeLiveStageContract.stageEventType
+            )
+        ) else {
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        let expected = observedLiveStages[roomID]
+        guard let existing = try await liveStageState(roomID: roomID),
+              existing.isLive else {
+            return
+        }
+        guard expected == nil || expected == existing else {
+            throw MatrixNativeWaveActionError.unavailable
+        }
+        let ended = MatrixNativeLiveStageState(
+            status: .ended,
+            title: existing.title,
+            hosts: existing.hosts,
+            speakers: existing.speakers,
+            startedAt: existing.startedAt,
+            endedAt: Self.currentEpochMs(),
+            stageEpoch: existing.stageEpoch,
+            sequence: existing.sequence + 1,
+            updatedAt: Self.currentEpochMs()
+        )
+        _ = try await matrixRoom.sendStateEventRaw(
+            eventType: MatrixNativeLiveStageContract.stageEventType,
+            stateKey: "",
+            content: try MatrixNativeLiveStageContract.encodeStage(ended)
+        )
+    }
+
+    func requestSpeaker(roomID: String) async throws {
+        let client = try await activeClient()
+        let matrixRoom = try room(roomID, in: client)
+        guard matrixRoom.membership() == .joined else {
+            throw MatrixNativeWaveActionError.roomNotJoined
+        }
+        guard let stage = try await liveStageState(roomID: roomID), stage.isLive else {
+            throw MatrixNativeWaveActionError.unavailable
+        }
+        let existing = try await speakerRequests(roomID: roomID)
+            .first { $0.userId == (try? client.userId()) }
+        guard existing?.role != .denied else {
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        // Own user's speaker state key = own Matrix user ID.
+        // A member may always write their own speaker request unless the
+        // room's power_levels ban this event type outright.
+        let ownID = try client.userId()
+        let isCancelling = existing?.role == .request && existing?.requestedAt ?? 0 > 0
+        let request = MatrixNativeSpeakerRequest(
+            userId: ownID,
+            role: .request,
+            // A zero timestamp is an interoperable tombstone: it remains
+            // schema-valid but both clients exclude it from the live queue.
+            requestedAt: isCancelling ? 0 : Self.currentEpochMs()
+        )
+        _ = try await matrixRoom.sendStateEventRaw(
+            eventType: MatrixNativeLiveStageContract.speakerEventType,
+            stateKey: ownID,
+            content: try MatrixNativeLiveStageContract.encodeSpeaker(request)
+        )
+    }
+
+    func approveSpeaker(roomID: String, userId: String) async throws {
+        try await mutateSpeaker(
+            roomID: roomID,
+            userId: userId,
+            role: .speaker,
+            addToStageSpeakers: true
+        )
+    }
+
+    func denySpeaker(roomID: String, userId: String) async throws {
+        try await mutateSpeaker(
+            roomID: roomID,
+            userId: userId,
+            role: .denied,
+            addToStageSpeakers: false
+        )
+    }
+
+    func removeSpeaker(roomID: String, userId: String) async throws {
+        try await mutateSpeaker(
+            roomID: roomID,
+            userId: userId,
+            role: .denied,
+            addToStageSpeakers: false,
+            removeFromStageSpeakers: true
+        )
+    }
+
+    func updateLiveStageCohost(roomID: String, userId: String, add: Bool) async throws {
+        let expected = observedLiveStages[roomID]
+        let client = try await activeClient()
+        let matrixRoom = try room(roomID, in: client)
+        guard matrixRoom.membership() == .joined,
+              (try await matrixRoom.member(userId: userId)).membership == .join else {
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        let powerLevels = try await matrixRoom.getPowerLevels()
+        guard powerLevels.canOwnUserSendState(stateEvent: stateEventTypeFromString(
+            s: MatrixNativeLiveStageContract.stageEventType
+        )), let current = try await liveStageState(roomID: roomID), current.isLive,
+              expected == nil || expected == current else {
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        guard userId != current.hosts.first else { throw MatrixNativeWaveActionError.notAllowed }
+        var hosts = current.hosts.filter { $0 != userId }
+        if add { hosts.append(userId) }
+        let updated = MatrixNativeLiveStageState(
+            status: current.status, title: current.title,
+            hosts: hosts.reduce(into: []) { if !$0.contains($1) { $0.append($1) } },
+            speakers: Array(Set(current.speakers + (add ? [userId] : []))).sorted(),
+            startedAt: current.startedAt, endedAt: current.endedAt,
+            stageEpoch: current.stageEpoch, sequence: current.sequence + 1,
+            updatedAt: Self.currentEpochMs()
+        )
+        _ = try await matrixRoom.sendStateEventRaw(
+            eventType: MatrixNativeLiveStageContract.stageEventType,
+            stateKey: "", content: try MatrixNativeLiveStageContract.encodeStage(updated)
+        )
+        observedLiveStages[roomID] = updated
+    }
+
+    private func mutateSpeaker(
+        roomID: String,
+        userId: String,
+        role: MatrixNativeSpeakerRole,
+        addToStageSpeakers: Bool,
+        removeFromStageSpeakers: Bool = false
+    ) async throws {
+        let expected = observedLiveStages[roomID]
+        let client = try await activeClient()
+        let matrixRoom = try room(roomID, in: client)
+        guard matrixRoom.membership() == .joined else {
+            throw MatrixNativeWaveActionError.roomNotJoined
+        }
+        let powerLevels = try await matrixRoom.getPowerLevels()
+        guard powerLevels.canOwnUserSendState(
+            stateEvent: stateEventTypeFromString(
+                s: MatrixNativeLiveStageContract.speakerEventType
+            )
+        ), powerLevels.canOwnUserSendState(
+            stateEvent: stateEventTypeFromString(
+                s: MatrixNativeLiveStageContract.stageEventType
+            )
+        ) else {
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        let target = try await matrixRoom.member(userId: userId)
+        guard target.membership == .join, !target.isServiceMember else {
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        guard let existing = try await liveStageState(roomID: roomID),
+              existing.isLive else {
+            throw MatrixNativeWaveActionError.unavailable
+        }
+        guard expected == nil || expected == existing else {
+            throw MatrixNativeWaveActionError.unavailable
+        }
+        guard !existing.hosts.contains(userId) else {
+            // Hosts cannot be denied or removed through speaker moderation.
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        let request = MatrixNativeSpeakerRequest(
+            userId: userId,
+            role: role,
+            requestedAt: Self.currentEpochMs()
+        )
+        if addToStageSpeakers || removeFromStageSpeakers {
+            var speakers = existing.speakers
+            if removeFromStageSpeakers {
+                speakers.removeAll { $0 == userId }
+            }
+            if addToStageSpeakers, !speakers.contains(userId) {
+                speakers.append(userId)
+            }
+            let updated = MatrixNativeLiveStageState(
+                status: existing.status,
+                title: existing.title,
+                hosts: existing.hosts,
+                speakers: speakers,
+                startedAt: existing.startedAt,
+                endedAt: existing.endedAt,
+                stageEpoch: existing.stageEpoch,
+                sequence: existing.sequence + 1,
+                updatedAt: Self.currentEpochMs()
+            )
+            _ = try await matrixRoom.sendStateEventRaw(
+                eventType: MatrixNativeLiveStageContract.stageEventType,
+                stateKey: "",
+                content: try MatrixNativeLiveStageContract.encodeStage(updated)
+            )
+        }
+        // The stage document is the media authorization authority, so commit
+        // it before the per-user queue projection. If this advisory write
+        // fails, a refresh still converges to the safe publish permission.
+        _ = try await matrixRoom.sendStateEventRaw(
+            eventType: MatrixNativeLiveStageContract.speakerEventType,
+            stateKey: userId,
+            content: try MatrixNativeLiveStageContract.encodeSpeaker(request)
+        )
+    }
+
+    // MARK: - Custom state event recovery
+
+    /// Recover the latest `com.westreem.*` custom state events by pagerinating
+    /// the timeline until start or a bounded page count is reached. The
+    /// matrix-rust-components-swift 26.07.28 binding does not expose a direct
+    /// getter for arbitrary custom state, so we mirror the recovery pattern
+    /// used for `com.westreem.room.rules.v1` (see `recoverWaveRules`).
+    ///
+    /// Returns tuples of (contentJSON, stateKey) with newest events first.
+    // TODO: verify against SDK — replace with a direct `roomStateEvent`
+    // reader when matrix-rust-components-swift exposes one.
+    private func latestCustomStateEvent(
+        room matrixRoom: Room,
+        client: Client,
+        eventType: String,
+        stateKeyFilter: (String) -> Bool
+    ) async throws -> [(String, String)] {
+        let timeline = try await matrixRoom.timeline()
+        let context = try await timelineContext(room: matrixRoom, client: client)
+        let accumulator = MatrixTimelineAccumulator(context: context)
+        let taskHandle = await timeline.addListener(listener: accumulator)
+        defer { withExtendedLifetime(taskHandle) {} }
+        await Task.yield()
+
+        for page in 0...Self.maximumCustomStateRecoveryPages {
+            let matches = accumulator.customStateEvents(
+                eventType: eventType,
+                stateKeyFilter: stateKeyFilter
+            )
+            if !matches.isEmpty {
+                return matches
+            }
+            guard page < Self.maximumCustomStateRecoveryPages else {
+                return []
+            }
+            let hitTimelineStart = try await timeline.paginateBackwards(
+                numEvents: Self.customStateRecoveryPageSize
+            )
+            await Task.yield()
+            if hitTimelineStart {
+                return accumulator.customStateEvents(
+                    eventType: eventType,
+                    stateKeyFilter: stateKeyFilter
+                )
+            }
+        }
+        return []
+    }
+
+    private static let maximumCustomStateRecoveryPages: Int = 4
+    private static let customStateRecoveryPageSize: UInt16 = 250
+
+    private static func currentEpochMs() -> Int64 {
+        Int64(Date().timeIntervalSince1970 * 1_000)
+    }
+
     func waveManagement(
         roomID: String
     ) async throws -> MatrixNativeWaveManagementSnapshot {
@@ -1043,6 +2214,7 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
             topic: info.topic ?? "",
             avatarURL: info.avatarUrl,
             access: try Self.access(info.joinRule),
+            restrictedParentSpaceID: try Self.restrictedParentSpaceID(info.joinRule),
             history: try Self.history(info.historyVisibility),
             notificationMode: Self.notificationMode(notifications.mode),
             isEncrypted: await matrixRoom.isEncrypted(),
@@ -1122,12 +2294,32 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
     func updateWaveAccess(
         roomID: String,
         access: MatrixNativeWaveAccess,
-        history: MatrixNativeWaveHistory
+        history: MatrixNativeWaveHistory,
+        restrictedParentSpaceID: String?
     ) async throws {
         let client = try await activeClient()
         let matrixRoom = try room(roomID, in: client)
         guard matrixRoom.membership() == .joined, !matrixRoom.isSpace() else {
             throw MatrixNativeWaveActionError.roomNotJoined
+        }
+        if await matrixRoom.isEncrypted(), access != .inviteOnly {
+            throw MatrixNativeWaveActionError.notAllowed
+        }
+        if access == .restrictedToParent {
+            guard let restrictedParentSpaceID else {
+                throw MatrixNativeWaveActionError.notAllowed
+            }
+            let parent = try room(restrictedParentSpaceID, in: client)
+            guard parent.membership() == .joined, parent.isSpace() else {
+                throw MatrixNativeWaveActionError.notAllowed
+            }
+            let list = try await client.spaceService().spaceRoomList(
+                spaceId: restrictedParentSpaceID
+            )
+            try await list.paginate()
+            guard await list.rooms().contains(where: { $0.roomId == roomID }) else {
+                throw MatrixNativeWaveActionError.notAllowed
+            }
         }
         let powerLevels = try await matrixRoom.getPowerLevels()
         guard powerLevels.canOwnUserSendState(
@@ -1141,7 +2333,9 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         }
         // Both permissions are checked before either state event is sent.
         // Synapse remains authoritative and rejects any concurrent downgrade.
-        try await matrixRoom.updateJoinRules(newRule: Self.joinRule(access))
+        try await matrixRoom.updateJoinRules(
+            newRule: try Self.joinRule(access, parentSpaceID: restrictedParentSpaceID)
+        )
         try await matrixRoom.updateHistoryVisibility(
             visibility: Self.sdkHistory(history)
         )
@@ -1175,7 +2369,8 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
                 MatrixNativeWaveMember(
                     $0,
                     ownUserID: ownUserID,
-                    exposePresence: !ignoredUserIDs.contains($0.userId)
+                    exposePresence: $0.membership == .join
+                        && !ignoredUserIDs.contains($0.userId)
                 )
             })
         }
@@ -1246,16 +2441,18 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
             throw MatrixNativeWaveActionError.roomNotJoined
         }
         let ownUserID = try client.userId()
-        let ignoredUserIDs = Set(try await client.ignoredUsers())
         let pair = AsyncStream<[String]>.makeStream()
         let listener = MatrixNativeTypingListener { userIDs in
-            pair.continuation.yield(
-                Array(
-                    Set(userIDs.filter {
-                        $0 != ownUserID && !ignoredUserIDs.contains($0)
-                    })
-                ).sorted()
-            )
+            Task {
+                let ignoredUserIDs = Set((try? await client.ignoredUsers()) ?? [])
+                pair.continuation.yield(
+                    Array(
+                        Set(userIDs.filter {
+                            $0 != ownUserID && !ignoredUserIDs.contains($0)
+                        })
+                    ).sorted()
+                )
+            }
         }
         let handle = matrixRoom.subscribeToTypingNotifications(listener: listener)
         pair.continuation.onTermination = { @Sendable _ in
@@ -1320,12 +2517,17 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         else {
             throw MatrixNativeWaveActionError.notAllowed
         }
-        let normalizedReason = reason?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedReason = reason.flatMap(
+            MatrixNativeWaveManagementContract.normalizedModerationReason
+        )
+        let powerLevels = try await matrixRoom.getPowerLevels()
         switch action {
         case .kick:
             guard member.membership == .join || member.membership == .invite
             else { throw MatrixNativeWaveActionError.notAllowed }
+            guard powerLevels.canOwnUserKick() else {
+                throw MatrixNativeWaveActionError.notAllowed
+            }
             try await matrixRoom.kickUser(
                 userId: userID,
                 reason: normalizedReason
@@ -1334,12 +2536,18 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
             guard member.membership != .ban else {
                 throw MatrixNativeWaveActionError.notAllowed
             }
+            guard powerLevels.canOwnUserBan() else {
+                throw MatrixNativeWaveActionError.notAllowed
+            }
             try await matrixRoom.banUser(
                 userId: userID,
                 reason: normalizedReason
             )
         case .unban:
             guard member.membership == .ban else {
+                throw MatrixNativeWaveActionError.notAllowed
+            }
+            guard powerLevels.canOwnUserBan() else {
                 throw MatrixNativeWaveActionError.notAllowed
             }
             try await matrixRoom.unbanUser(
@@ -1400,17 +2608,26 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
             page += 1
             try await search.paginate()
         }
-        return Array(accumulator.results.prefix(100))
+        let accumulated = accumulator.results
+        let offsets = MatrixNativeWaveManagementContract.uniqueSearchResultOffsets(
+            accumulated.map { ($0.roomID, $0.eventID) }
+        )
+        return offsets.prefix(100).map { accumulated[$0] }
     }
 
     private static func access(
         _ joinRule: JoinRule?
     ) throws -> MatrixNativeWaveAccess {
         switch joinRule {
-        case .public: .publicRoom
-        case .invite: .inviteOnly
-        case .knock: .requestToJoin
-        case .none, .private, .restricted, .knockRestricted, .custom:
+        case .public: return .publicRoom
+        case .invite: return .inviteOnly
+        case .knock: return .requestToJoin
+        case let .restricted(rules):
+            guard rules.count == 1,
+                  case .roomMembership = rules[0]
+            else { throw MatrixNativeWaveActionError.unavailable }
+            return .restrictedToParent
+        case .none, .private, .knockRestricted, .custom:
             throw MatrixNativeWaveActionError.unavailable
         }
     }
@@ -1437,11 +2654,28 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         }
     }
 
-    private static func joinRule(_ value: MatrixNativeWaveAccess) -> JoinRule {
+    private static func restrictedParentSpaceID(_ joinRule: JoinRule?) throws -> String? {
+        guard case let .restricted(rules) = joinRule else { return nil }
+        guard rules.count == 1,
+              case let .roomMembership(roomId) = rules[0],
+              roomId.first == "!",
+              roomId.contains(":"),
+              !roomId.contains(where: \.isWhitespace)
+        else { throw MatrixNativeWaveActionError.unavailable }
+        return roomId
+    }
+
+    private static func joinRule(
+        _ value: MatrixNativeWaveAccess,
+        parentSpaceID: String?
+    ) throws -> JoinRule {
         switch value {
-        case .publicRoom: .public
-        case .inviteOnly: .invite
-        case .requestToJoin: .knock
+        case .publicRoom: return .public
+        case .inviteOnly: return .invite
+        case .requestToJoin: return .knock
+        case .restrictedToParent:
+            guard let parentSpaceID else { throw MatrixNativeWaveActionError.notAllowed }
+            return .restricted(rules: [.roomMembership(roomId: parentSpaceID)])
         }
     }
 
@@ -1522,26 +2756,120 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         throw MatrixNativeWaveRulesReadError.incompleteHistory
     }
 
-    func timelineItems(roomID: String, paginateBackwards: Bool) async throws -> [MatrixTimelineItem] {
+    func timelineItems(roomID: String, paginateBackwards: Bool) async throws
+        -> MatrixNativeTimelineSnapshot {
+        let session: MatrixFocusedTimelineSession
+        if let existing = focusedTimelines[roomID] {
+            session = existing
+        } else {
+            let client = try await activeClient()
+            let matrixRoom = try room(roomID, in: client)
+            let context = try await timelineContext(room: matrixRoom, client: client)
+            let timeline = try await matrixRoom.timeline()
+            let accumulator = MatrixTimelineAccumulator(context: context)
+            let taskHandle = await timeline.addListener(listener: accumulator)
+            session = MatrixFocusedTimelineSession(
+                timeline: timeline,
+                accumulator: accumulator,
+                taskHandle: taskHandle
+            )
+            focusedTimelines[roomID] = session
+            await accumulator.waitForInitialSnapshot()
+        }
+        if paginateBackwards, !session.hitTimelineStart {
+            session.hitTimelineStart = try await session.timeline.paginateBackwards(numEvents: 50)
+            // Rust completes pagination after dispatching its TimelineDiff batch.
+            // Yield once so the listener can publish that batch before snapshotting.
+            await Task.yield()
+        }
+        return MatrixNativeTimelineSnapshot(
+            items: session.accumulator.timelineItems,
+            hasMore: !session.hitTimelineStart
+        )
+    }
+
+    func releaseTimeline(roomID: String) async {
+        focusedTimelines.removeValue(forKey: roomID)?.taskHandle.cancel()
+    }
+
+    func releaseThreadTimeline(roomID: String, rootEventID: String) async {
+        focusedThreadTimelines.removeValue(
+            forKey: Self.threadTimelineKey(roomID: roomID, rootEventID: rootEventID)
+        )?.taskHandle.cancel()
+    }
+
+    func eventItem(roomID: String, eventID: String) async throws -> MatrixTimelineItem {
         let client = try await activeClient()
         let matrixRoom = try room(roomID, in: client)
         let context = try await timelineContext(room: matrixRoom, client: client)
         let timeline = try await matrixRoom.timeline()
-        let accumulator = MatrixTimelineAccumulator(context: context)
-        let taskHandle = await timeline.addListener(listener: accumulator)
-        if paginateBackwards {
-            _ = try await timeline.paginateBackwards(numEvents: 50)
+        if let event = try? await timeline.getEventTimelineItemByEventId(eventId: eventID),
+           !context.ignoredUserIDs.contains(event.sender),
+           let item = MatrixTimelineItem(event, context: context) {
+            return item
         }
-        await Task.yield()
-        withExtendedLifetime(taskHandle) {}
-        return accumulator.timelineItems
+        try await timeline.fetchDetailsForEvent(eventId: eventID)
+        let event = try await timeline.getEventTimelineItemByEventId(eventId: eventID)
+        guard !context.ignoredUserIDs.contains(event.sender),
+              let item = MatrixTimelineItem(event, context: context) else {
+            throw MatrixNativeWaveActionError.unavailable
+        }
+        return item
+    }
+
+    func threadSummaries(roomID: String) async throws -> [MatrixNativeThreadSummary] {
+        let client = try await activeClient()
+        let matrixRoom = try room(roomID, in: client)
+        let service = matrixRoom.threadListService()
+        try await service.paginate()
+
+        var summaries: [MatrixNativeThreadSummary] = []
+        for listed in service.items().prefix(100) {
+            let rootID = listed.rootEvent.eventId
+            guard let root = try? await eventItem(roomID: roomID, eventID: rootID) else {
+                continue
+            }
+            let focused = (try? await threadItems(
+                roomID: roomID,
+                rootEventID: rootID,
+                paginateBackwards: false
+            )) ?? []
+            let replies = focused.filter { $0.id != rootID }
+            let latest = replies.last
+            let participants = Set(
+                [root.senderDisplayName] + replies.map(\.senderDisplayName)
+            ).filter { !$0.isEmpty }.sorted()
+            summaries.append(
+                MatrixNativeThreadSummary(
+                    id: rootID,
+                    rootEventID: rootID,
+                    rootBody: root.body,
+                    rootSenderName: root.senderDisplayName,
+                    rootSenderAvatarURL: root.senderAvatarURL,
+                    rootTimestamp: root.timestamp,
+                    replyCount: Int(listed.numReplies),
+                    lastReplyAt: latest?.timestamp ?? root.timestamp,
+                    lastReplySenderName: latest?.senderDisplayName,
+                    lastReplyBody: latest?.body,
+                    participants: participants,
+                    isParticipated: root.isOwn || replies.contains(where: \.isOwn),
+                    // This SDK release does not expose per-thread unread state
+                    // on ThreadListItem. Do not manufacture unread badges from
+                    // reply count; the focused receipt path remains accurate.
+                    hasUnread: false
+                )
+            )
+        }
+        return summaries.sorted { $0.lastReplyAt > $1.lastReplyAt }
     }
 
     func pinnedItems(roomID: String) async throws -> [MatrixTimelineItem] {
         let client = try await activeClient()
         let matrixRoom = try room(roomID, in: client)
         let context = try await timelineContext(room: matrixRoom, client: client)
-        let pinnedEventIDs = (try await matrixRoom.roomInfo()).pinnedEventIds
+        let pinnedEventIDs = Array(
+            (try await matrixRoom.roomInfo()).pinnedEventIds.prefix(100)
+        )
         guard !pinnedEventIDs.isEmpty else { return [] }
         let timeline = try await matrixRoom.timeline()
         var valuesByID: [String: MatrixTimelineItem] = [:]
@@ -1565,7 +2893,41 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
                 valuesByID[eventID] = item
             }
         }
-        return pinnedEventIDs.compactMap { valuesByID[$0] }
+        return pinnedEventIDs.map { eventID in
+            valuesByID[eventID] ?? MatrixTimelineItem(
+                id: eventID,
+                reference: .eventID(eventID),
+                senderID: "",
+                senderDisplayName: MatrixPinnedEventFallbackContract.sender,
+                senderAvatarURL: nil,
+                body: MatrixPinnedEventFallbackContract.body,
+                kind: .unavailablePinned,
+                timestamp: .distantPast,
+                isOwn: false,
+                isEdited: false,
+                localSendState: nil,
+                reactionCount: 0,
+                energy: [],
+                readReceiptCount: 0,
+                readReceiptUserIDs: [],
+                threadReplyCount: 0,
+                replyPreviews: [],
+                actions: MatrixNativeTimelineActions(
+                    canReply: false,
+                    canAddEnergy: false,
+                    canEdit: false,
+                    canRedact: false,
+                    canReport: false,
+                    canPin: MatrixPinnedEventFallbackContract.mayUnpin(
+                        canManagePins: context.mayPin
+                    ),
+                    isPinned: true
+                ),
+                media: [],
+                poll: nil,
+                westreemReference: nil
+            )
+        }
     }
 
     func threadItems(
@@ -1573,27 +2935,49 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         rootEventID: String,
         paginateBackwards: Bool
     ) async throws -> [MatrixTimelineItem] {
-        let client = try await activeClient()
-        let matrixRoom = try room(roomID, in: client)
-        let context = try await timelineContext(room: matrixRoom, client: client)
-        let timeline = try await matrixRoom.timelineWithConfiguration(
-            configuration: TimelineConfiguration(
-                focus: .thread(rootEventId: rootEventID),
-                filter: .all,
-                internalIdPrefix: "westreem-thread-\(rootEventID)",
-                dateDividerMode: .daily,
-                trackReadReceipts: .messageLikeEvents,
-                reportUtds: true
+        let key = Self.threadTimelineKey(roomID: roomID, rootEventID: rootEventID)
+        let session: MatrixFocusedTimelineSession
+        if let existing = focusedThreadTimelines[key] {
+            session = existing
+        } else {
+            let client = try await activeClient()
+            let matrixRoom = try room(roomID, in: client)
+            let context = try await timelineContext(room: matrixRoom, client: client)
+            let timeline = try await matrixRoom.timelineWithConfiguration(
+                configuration: TimelineConfiguration(
+                    focus: .thread(rootEventId: rootEventID),
+                    filter: .all,
+                    internalIdPrefix: "westreem-thread-\(rootEventID)",
+                    dateDividerMode: .daily,
+                    trackReadReceipts: .messageLikeEvents,
+                    reportUtds: true
+                )
             )
-        )
-        let accumulator = MatrixTimelineAccumulator(context: context)
-        let taskHandle = await timeline.addListener(listener: accumulator)
-        if paginateBackwards {
-            _ = try await timeline.paginateBackwards(numEvents: 50)
+            let accumulator = MatrixTimelineAccumulator(context: context)
+            let taskHandle = await timeline.addListener(listener: accumulator)
+            session = MatrixFocusedTimelineSession(
+                timeline: timeline,
+                accumulator: accumulator,
+                taskHandle: taskHandle
+            )
+            focusedThreadTimelines[key] = session
+            // A focused timeline's initial items are delivered asynchronously
+            // as its first TimelineDiff batch. Retain the listener and await
+            // that batch; a single Task.yield races real devices and produced
+            // the false "No replies yet" state seen in Discussion.
+            await accumulator.waitForInitialSnapshot()
         }
-        await Task.yield()
-        withExtendedLifetime(taskHandle) {}
-        return accumulator.timelineItems
+        if paginateBackwards, !session.hitTimelineStart {
+            session.hitTimelineStart = try await session.timeline.paginateBackwards(
+                numEvents: 50
+            )
+            await Task.yield()
+        }
+        return session.accumulator.timelineItems
+    }
+
+    private static func threadTimelineKey(roomID: String, rootEventID: String) -> String {
+        "\(roomID)\u{1f}\(rootEventID)"
     }
 
     func sendThreadReply(
@@ -1780,14 +3164,48 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         let client = try await activeClient()
         let matrixRoom = try room(roomID, in: client)
         let context = try await timelineContext(room: matrixRoom, client: client)
-        guard senderID != context.currentUserID,
+        let timeline = try await matrixRoom.timeline()
+        if (try? await timeline.getEventTimelineItemByEventId(eventId: eventID)) == nil {
+            try await timeline.fetchDetailsForEvent(eventId: eventID)
+        }
+        let liveEvent = try await timeline.getEventTimelineItemByEventId(
+            eventId: eventID
+        )
+        let liveItem = MatrixTimelineItem(liveEvent, context: context)
+        guard liveEvent.sender == senderID,
+              liveItem?.reference.remoteEventID == eventID,
+              liveItem?.kind != .redacted,
+              liveItem?.kind != .unableToDecrypt,
+              senderID != context.currentUserID,
               !context.ignoredUserIDs.contains(senderID),
               !context.roomIsEncrypted,
               let normalized = MatrixNativeWaveActionPolicy.normalizedReportReason(reason)
         else {
             throw MatrixNativeWaveActionError.notAllowed
         }
-        try await matrixRoom.reportContent(eventId: eventID, reason: normalized)
+        let fingerprint = [
+            try client.userId(),
+            roomID,
+            eventID,
+            normalized,
+        ].joined(separator: "\u{0}")
+        guard submittedReportFingerprints.insert(fingerprint).inserted else {
+            // Exact retry is already pending or confirmed for this live
+            // session. Treat it as converged rather than creating a duplicate
+            // Synapse report.
+            return
+        }
+        do {
+            try await matrixRoom.reportContent(eventId: eventID, reason: normalized)
+            submittedReportOrder.append(fingerprint)
+            if submittedReportOrder.count > 512 {
+                let expired = submittedReportOrder.removeFirst()
+                submittedReportFingerprints.remove(expired)
+            }
+        } catch {
+            submittedReportFingerprints.remove(fingerprint)
+            throw error
+        }
     }
 
     func setPinned(
@@ -1799,10 +3217,36 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         let client = try await activeClient()
         let matrixRoom = try room(roomID, in: client)
         let context = try await timelineContext(room: matrixRoom, client: client)
-        guard !context.ignoredUserIDs.contains(senderID), context.mayPin else {
-            throw MatrixNativeWaveActionError.notAllowed
-        }
+        let currentPinnedIDs = Set((try await matrixRoom.roomInfo()).pinnedEventIds)
         let timeline = try await matrixRoom.timeline()
+        let event = try? await timeline.getEventTimelineItemByEventId(
+            eventId: eventID
+        )
+        let projected = event.flatMap { MatrixTimelineItem($0, context: context) }
+        let eventIsAvailable = projected.map {
+            $0.kind != .redacted
+                && $0.kind != .unableToDecrypt
+                && $0.kind != .unavailablePinned
+        } ?? false
+        let decision = MatrixPinnedEventMutationContract.decide(
+            eventID: eventID,
+            pinned: pinned,
+            currentPinnedEventIDs: currentPinnedIDs,
+            canManagePins: context.mayPin,
+            eventIsAvailable: eventIsAvailable,
+            senderMatches: event?.sender == senderID,
+            senderIsIgnored: event.map {
+                context.ignoredUserIDs.contains($0.sender)
+            } ?? false
+        )
+        switch decision {
+        case .deny:
+            throw MatrixNativeWaveActionError.notAllowed
+        case .noOp:
+            return
+        case .mutate:
+            break
+        }
         if pinned {
             _ = try await timeline.pinEvent(eventId: eventID)
         } else {
@@ -1944,16 +3388,35 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         )
     }
 
+    func sendThreadAttachments(
+        roomID: String,
+        rootEventID: String,
+        uploads: [MatrixNativeUpload],
+        caption: String?,
+        transactionID: String
+    ) async throws {
+        try await performAttachmentSend(
+            roomID: roomID,
+            uploads: uploads,
+            caption: caption,
+            threadRootEventID: rootEventID
+        )
+    }
+
     func createPoll(
         roomID: String,
         question: String,
         options: [String],
+        maxSelections: UInt64,
+        isDisclosed: Bool,
         transactionID: String
     ) async throws {
         try await performPollSend(
             roomID: roomID,
             question: question,
-            options: options
+            options: options,
+            maxSelections: maxSelections,
+            isDisclosed: isDisclosed
         )
     }
 
@@ -2036,10 +3499,53 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         try await timeline.markAsRead(receiptType: .read)
     }
 
+    func markThreadRead(roomID: String, rootEventID: String) async throws {
+        let key = Self.threadTimelineKey(roomID: roomID, rootEventID: rootEventID)
+        if focusedThreadTimelines[key] == nil {
+            _ = try await threadItems(
+                roomID: roomID,
+                rootEventID: rootEventID,
+                paginateBackwards: false
+            )
+        }
+        guard let session = focusedThreadTimelines[key] else {
+            throw MatrixNativeWaveActionError.unavailable
+        }
+        try await session.timeline.markAsRead(receiptType: .read)
+    }
+
     func acceptInvite(roomID: String) async throws {
         let client = try await activeClient()
         let invited = try room(roomID, in: client)
         guard invited.membership() == .invited else {
+            throw MatrixSessionFoundationError.unavailable
+        }
+        let currentUserID = try client.userId()
+        let info = try await invited.roomInfo()
+        let ignored = Set(try await client.ignoredUsers())
+        let rawInviterUserID: String? = info.inviter?.userId
+        let inviterUserID: String?
+        if let rawInviterUserID,
+           rawInviterUserID.first == "@",
+           rawInviterUserID.contains(":"),
+           rawInviterUserID != currentUserID {
+            inviterUserID = rawInviterUserID
+        } else {
+            inviterUserID = nil
+        }
+        let isDirect = await invited.isDirect()
+        let isEncrypted = await invited.isEncrypted()
+        let kind: MatrixInvitationKind = invited.isSpace()
+            ? .vibe
+            : (isDirect ? .personalWave : .wave)
+        let safety = MatrixInvitationSafetyContract.evaluate(
+            membershipIsInvited: true,
+            kind: kind,
+            isEncrypted: isEncrypted,
+            inviterIsBlocked: inviterUserID.map(ignored.contains) ?? false,
+            inviterUserID: inviterUserID
+        )
+        guard safety.canAccept else {
             throw MatrixSessionFoundationError.unavailable
         }
         try await invited.join()
@@ -2052,6 +3558,35 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
             throw MatrixSessionFoundationError.unavailable
         }
         try await invited.leave()
+    }
+
+    func declineInviteAndBlock(roomID: String) async throws {
+        let client = try await activeClient()
+        let invited = try room(roomID, in: client)
+        let info = try await invited.roomInfo()
+        let ignored = Set(try await client.ignoredUsers())
+        guard let plan = MatrixInviteDeclineBlockContract.plan(
+            membershipIsInvited: invited.membership() == .invited,
+            inviterUserID: info.inviter?.userId,
+            currentUserID: try client.userId(),
+            ignoredUserIDs: ignored
+        ) else {
+            throw MatrixSessionFoundationError.unavailable
+        }
+        if plan.mustAddIgnore {
+            try await client.ignoreUser(userId: plan.inviterUserID)
+        }
+        do {
+            try await invited.leave()
+        } catch {
+            if MatrixInviteDeclineBlockContract.mustRollbackNewIgnore(
+                plan: plan,
+                leaveSucceeded: false
+            ) {
+                try? await client.unignoreUser(userId: plan.inviterUserID)
+            }
+            throw error
+        }
     }
 
     func beginRtcMembership(
@@ -2211,7 +3746,8 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
     private func performAttachmentSend(
         roomID: String,
         uploads: [MatrixNativeUpload],
-        caption: String?
+        caption: String?,
+        threadRootEventID: String? = nil
     ) async throws {
         let client = try await activeClient()
         let matrixRoom = try room(roomID, in: client)
@@ -2220,7 +3756,20 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         // Timeline attachment APIs inspect the room encryption state and
         // upload encrypted file descriptors when required. Keeping this on
         // MatrixRustSDK avoids exposing media keys to Westreem.
-        let timeline = try await matrixRoom.timeline()
+        let timeline = if let threadRootEventID {
+            try await matrixRoom.timelineWithConfiguration(
+                configuration: TimelineConfiguration(
+                    focus: .thread(rootEventId: threadRootEventID),
+                    filter: .all,
+                    internalIdPrefix: "westreem-thread-media-\(threadRootEventID)",
+                    dateDividerMode: .daily,
+                    trackReadReceipts: .messageLikeEvents,
+                    reportUtds: true
+                )
+            )
+        } else {
+            try await matrixRoom.timeline()
+        }
 
         if uploads.count > 1 {
             let items = uploads.map(MatrixNativeGalleryFactory.item)
@@ -2229,7 +3778,7 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
                     caption: normalizedCaption(caption),
                     formattedCaption: nil,
                     mentions: nil,
-                    inReplyTo: nil
+                    inReplyTo: threadRootEventID
                 ),
                 itemInfos: items
             )
@@ -2240,7 +3789,7 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
                 caption: normalizedCaption(caption),
                 formattedCaption: nil,
                 mentions: nil,
-                inReplyTo: nil
+                inReplyTo: threadRootEventID
             )
             let handle: SendAttachmentJoinHandle
             switch upload.kind {
@@ -2256,10 +3805,17 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
                     audioInfo: MatrixNativeGalleryFactory.audioInfo(upload)
                 )
             case .voice:
+                // Pass captured MSC3245 waveform if available.
+                // Our contract stores MSC3245 samples as 0...1024 integers.
+                // MatrixRustSDK accepts the same amplitudes normalized to
+                // 0...1 Float values at its Swift FFI boundary.
+                let waveformFloat = upload.waveform?.map {
+                    Float(min(max($0, 0), 1_024)) / 1_024.0
+                } ?? []
                 handle = try timeline.sendVoiceMessage(
                     params: params,
                     audioInfo: MatrixNativeGalleryFactory.audioInfo(upload),
-                    waveform: []
+                    waveform: waveformFloat
                 )
             case .video:
                 handle = try timeline.sendVideo(
@@ -2282,7 +3838,9 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
     private func performPollSend(
         roomID: String,
         question: String,
-        options: [String]
+        options: [String],
+        maxSelections: UInt64,
+        isDisclosed: Bool
     ) async throws {
         let validated = try MatrixNativeMediaPolicy.validatePoll(
             question: question,
@@ -2290,11 +3848,12 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         )
         let client = try await activeClient()
         let timeline = try await room(roomID, in: client).timeline()
+        let boundedMaxSelections = min(max(1, maxSelections), UInt64(validated.1.count))
         try await timeline.createPoll(
             question: validated.0,
             answers: validated.1,
-            maxSelections: 1,
-            pollKind: .disclosed
+            maxSelections: UInt8(clamping: boundedMaxSelections),
+            pollKind: isDisclosed ? .disclosed : .undisclosed
         )
     }
 
@@ -2343,9 +3902,22 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
     private func createRoomParameters(
         _ creation: MatrixNativeValidatedRoomCreation,
         isSpace: Bool,
-        serviceUserID: String
+        serviceUserID: String,
+        parentSpaceID: String?,
+        avatarURI: String?
     ) -> CreateRoomParameters {
         let isPublic = creation.visibility == .publicVibe
+        let joinRule: JoinRule = switch creation.visibility {
+        case .publicVibe: .public
+        case .privateVibe: .invite
+        case .knock: .knock
+        case .restricted:
+            if let parentSpaceID {
+                .restricted(rules: [.roomMembership(roomId: parentSpaceID)])
+            } else {
+                .invite
+            }
+        }
         return CreateRoomParameters(
             name: creation.name,
             topic: creation.topic,
@@ -2357,6 +3929,7 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
             visibility: isPublic ? .public : .private,
             preset: isPublic ? .publicChat : .privateChat,
             invite: [serviceUserID],
+            avatar: avatarURI,
             powerLevelContentOverride: PowerLevels(
                 usersDefault: 0,
                 eventsDefault: 0,
@@ -2371,10 +3944,58 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
                     ? ["m.space.child": 50]
                     : [MatrixNativeRtcContract.membershipEventType: 0]
             ),
-            joinRuleOverride: isPublic ? .public : .invite,
+            joinRuleOverride: joinRule,
             historyVisibilityOverride: isPublic ? .shared : .invited,
+            canonicalAlias: creation.canonicalAlias,
             isSpace: isSpace
         )
+    }
+
+    private func uploadCreationAvatar(
+        _ avatar: MatrixNativeRoomCreationAvatar?,
+        client: Client
+    ) async throws -> String? {
+        guard let avatar else { return nil }
+        let upload = MatrixNativeUpload(
+            kind: .image,
+            data: avatar.data,
+            filename: avatar.filename,
+            mimeType: avatar.mimeType,
+            width: avatar.width,
+            height: avatar.height
+        )
+        let maximum = min(
+            try await client.getMaxMediaUploadSize(),
+            UInt64(MatrixNativeCreationContract.maximumAvatarBytes)
+        )
+        try MatrixNativeMediaPolicy.validate(
+            [upload],
+            serverMaximumBytes: maximum
+        )
+        let mediaURI = try await client.uploadMedia(
+            mimeType: upload.mimeType,
+            data: upload.data,
+            progressWatcher: nil
+        )
+        guard mediaURI.hasPrefix("mxc://"),
+              mediaURI.utf8.count <= 2_048,
+              !mediaURI.contains(where: \.isWhitespace),
+              (try? MediaSource.fromUrl(url: mediaURI)) != nil
+        else {
+            throw MatrixNativeMediaError.mediaUnavailable
+        }
+        return mediaURI
+    }
+
+    private static func validateLocalAlias(_ alias: String?, userID: String) throws {
+        guard let alias else { return }
+        guard let userSeparator = userID.firstIndex(of: ":"),
+              let aliasSeparator = alias.firstIndex(of: ":"),
+              String(alias[alias.index(after: aliasSeparator)...])
+                .caseInsensitiveCompare(String(userID[userID.index(after: userSeparator)...])) == .orderedSame
+        else {
+            throw MatrixNativeCreationValidationError.invalidCanonicalAlias
+        }
     }
 
     private func setPublicSharingState(
@@ -2656,6 +4277,7 @@ private final class MatrixWaveSearchAccumulator:
                 default: profileName = nil
                 }
                 return MatrixNativeWaveSearchResult(
+                    roomID: resultRoomID,
                     eventID: result.eventId,
                     senderID: result.sender,
                     senderDisplayName: MatrixNativeMemberPresentationContract
@@ -2710,6 +4332,9 @@ private final class MatrixTimelineAccumulator: TimelineListener, @unchecked Send
     private let lock = NSLock()
     private let context: MatrixNativeTimelineContext
     private var items: [TimelineItem] = []
+    private var updateGeneration = 0
+    private var waiters: [(UUID, Int, CheckedContinuation<Void, Never>)] = []
+    private var cancelledWaiters = Set<UUID>()
 
     init(context: MatrixNativeTimelineContext) {
         self.context = context
@@ -2778,8 +4403,35 @@ private final class MatrixTimelineAccumulator: TimelineListener, @unchecked Send
         }
     }
 
-    func onUpdate(diff: [TimelineDiff]) {
+    /// Returns the newest observed state events matching `eventType` whose
+    /// `state_key` satisfies `stateKeyFilter`. Newest events appear first;
+    /// for keys that repeat, only the most recent write is returned.
+    /// Yields `(contentJSON, stateKey)` tuples.
+    func customStateEvents(
+        eventType: String,
+        stateKeyFilter: (String) -> Bool
+    ) -> [(String, String)] {
         lock.withLock {
+            var seen = Set<String>()
+            var results: [(String, String)] = []
+            for item in items.reversed() {
+                guard let event = item.asEvent(),
+                      event.eventTypeRaw == eventType,
+                      let (contentJSON, stateKey) =
+                        MatrixNativeRawEvent.contentAndStateKey(event),
+                      stateKeyFilter(stateKey),
+                      !seen.contains(stateKey) else {
+                    continue
+                }
+                seen.insert(stateKey)
+                results.append((contentJSON, stateKey))
+            }
+            return results
+        }
+    }
+
+    func onUpdate(diff: [TimelineDiff]) {
+        let continuations: [CheckedContinuation<Void, Never>] = lock.withLock {
             for change in diff {
                 switch change {
                 case let .append(values):
@@ -2808,7 +4460,62 @@ private final class MatrixTimelineAccumulator: TimelineListener, @unchecked Send
                     items = values
                 }
             }
+            updateGeneration += 1
+            let ready = waiters.compactMap { _, generation, continuation in
+                generation < updateGeneration ? continuation : nil
+            }
+            waiters.removeAll { $0.1 < updateGeneration }
+            return ready
         }
+        continuations.forEach { $0.resume() }
+    }
+
+    func waitForInitialSnapshot() async {
+        await waitForUpdate(after: 0)
+    }
+
+    func waitForUpdate(after generation: Int) async {
+        if lock.withLock({ updateGeneration > generation }) { return }
+        let waiterID = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let shouldResume = lock.withLock {
+                    if updateGeneration > generation
+                        || cancelledWaiters.remove(waiterID) != nil {
+                        return true
+                    }
+                    waiters.append((waiterID, generation, continuation))
+                    return false
+                }
+                if shouldResume { continuation.resume() }
+            }
+        } onCancel: {
+            cancelWaiter(waiterID)
+        }
+    }
+
+    private func cancelWaiter(_ id: UUID) {
+        let continuation: CheckedContinuation<Void, Never>? = lock.withLock {
+            if let index = waiters.firstIndex(where: { $0.0 == id }) {
+                return waiters.remove(at: index).2
+            }
+            cancelledWaiters.insert(id)
+            return nil
+        }
+        continuation?.resume()
+    }
+}
+
+private final class MatrixFocusedTimelineSession: @unchecked Sendable {
+    let timeline: Timeline
+    let accumulator: MatrixTimelineAccumulator
+    let taskHandle: TaskHandle
+    var hitTimelineStart = false
+
+    init(timeline: Timeline, accumulator: MatrixTimelineAccumulator, taskHandle: TaskHandle) {
+        self.timeline = timeline
+        self.accumulator = accumulator
+        self.taskHandle = taskHandle
     }
 }
 
@@ -2849,6 +4556,11 @@ actor MatrixVibesRepositoryFoundation: VibesRepository {
         )
     }
 
+    func pendingInvitations() async throws -> [MatrixNativeInvitationSummary] {
+        try requireEnabled()
+        return try await sdk.pendingInvitations()
+    }
+
     func publicVibes(
         query: String?,
         loadNextPage: Bool
@@ -2863,6 +4575,18 @@ actor MatrixVibesRepositoryFoundation: VibesRepository {
     func joinPublicVibe(_ space: MatrixPublicVibeSummary) async throws {
         try requireEnabled()
         try await sdk.joinPublicSpace(space)
+    }
+
+    func publicVibePreview(_ space: MatrixPublicVibeSummary) async throws
+        -> MatrixPublicVibeSummary
+    {
+        try requireEnabled()
+        return try await sdk.publicSpacePreview(space)
+    }
+
+    func leavePublicVibe(_ space: MatrixPublicVibeSummary) async throws {
+        try requireEnabled()
+        try await sdk.leavePublicSpace(space)
     }
 
     func createVibe(
@@ -2924,6 +4648,97 @@ actor MatrixVibesRepositoryFoundation: VibesRepository {
         try await sdk.updateWaveRules(roomID: roomID, state: state)
     }
 
+    // MARK: Watch Party
+
+    func watchPartyState(
+        roomID: String
+    ) async throws -> MatrixNativeWatchPartyState? {
+        try requireEnabled()
+        return try await sdk.watchPartyState(roomID: roomID)
+    }
+
+    func startWatchParty(
+        roomID: String,
+        videoId: String,
+        videoUrl: String?
+    ) async throws {
+        try requireEnabled()
+        try await sdk.startWatchParty(
+            roomID: roomID,
+            videoId: videoId,
+            videoUrl: videoUrl
+        )
+    }
+
+    func updateWatchPartyPlayback(
+        roomID: String,
+        playbackState: MatrixNativeWatchPartyPlaybackState,
+        playheadMs: Int64
+    ) async throws {
+        try requireEnabled()
+        try await sdk.updateWatchPartyPlayback(
+            roomID: roomID,
+            playbackState: playbackState,
+            playheadMs: playheadMs
+        )
+    }
+
+    func endWatchParty(roomID: String) async throws {
+        try requireEnabled()
+        try await sdk.endWatchParty(roomID: roomID)
+    }
+
+    // MARK: Live Stage
+
+    func liveStageState(
+        roomID: String
+    ) async throws -> MatrixNativeLiveStageState? {
+        try requireEnabled()
+        return try await sdk.liveStageState(roomID: roomID)
+    }
+
+    func speakerRequests(
+        roomID: String
+    ) async throws -> [MatrixNativeSpeakerRequest] {
+        try requireEnabled()
+        return try await sdk.speakerRequests(roomID: roomID)
+    }
+
+    func startLiveStage(roomID: String, title: String) async throws {
+        try requireEnabled()
+        try await sdk.startLiveStage(roomID: roomID, title: title)
+    }
+
+    func endLiveStage(roomID: String) async throws {
+        try requireEnabled()
+        try await sdk.endLiveStage(roomID: roomID)
+    }
+
+    func requestSpeaker(roomID: String) async throws {
+        try requireEnabled()
+        try await sdk.requestSpeaker(roomID: roomID)
+    }
+
+    func approveSpeaker(roomID: String, userId: String) async throws {
+        try requireEnabled()
+        try await sdk.approveSpeaker(roomID: roomID, userId: userId)
+    }
+
+    func denySpeaker(roomID: String, userId: String) async throws {
+        try requireEnabled()
+        try await sdk.denySpeaker(roomID: roomID, userId: userId)
+    }
+
+    func removeSpeaker(roomID: String, userId: String) async throws {
+        try requireEnabled()
+        try await sdk.removeSpeaker(roomID: roomID, userId: userId)
+    }
+
+    func updateLiveStageCohost(roomID: String, userId: String, add: Bool) async throws {
+        try requireEnabled()
+        try await sdk.updateLiveStageCohost(roomID: roomID, userId: userId, add: add)
+    }
+
     func waveManagement(
         roomID: String
     ) async throws -> MatrixNativeWaveManagementSnapshot {
@@ -2951,13 +4766,15 @@ actor MatrixVibesRepositoryFoundation: VibesRepository {
     func updateWaveAccess(
         roomID: String,
         access: MatrixNativeWaveAccess,
-        history: MatrixNativeWaveHistory
+        history: MatrixNativeWaveHistory,
+        restrictedParentSpaceID: String?
     ) async throws {
         try requireEnabled()
         try await sdk.updateWaveAccess(
             roomID: roomID,
             access: access,
-            history: history
+            history: history,
+            restrictedParentSpaceID: restrictedParentSpaceID
         )
     }
 
@@ -3031,14 +4848,23 @@ actor MatrixVibesRepositoryFoundation: VibesRepository {
 
     func timeline(roomID: String, from token: String?) async throws -> MatrixTimelinePage {
         try requireEnabled()
+        let snapshot = try await sdk.timelineItems(
+            roomID: roomID,
+            paginateBackwards: token != nil
+        )
         return MatrixTimelinePage(
             roomID: roomID,
-            items: try await sdk.timelineItems(
-                roomID: roomID,
-                paginateBackwards: token != nil
-            ),
-            nextToken: nil
+            items: snapshot.items,
+            nextToken: snapshot.hasMore ? "previous" : nil
         )
+    }
+
+    func releaseTimeline(roomID: String) async {
+        await sdk.releaseTimeline(roomID: roomID)
+    }
+
+    func releaseThreadTimeline(roomID: String, rootEventID: String) async {
+        await sdk.releaseThreadTimeline(roomID: roomID, rootEventID: rootEventID)
     }
 
     func pinned(roomID: String) async throws -> MatrixTimelinePage {
@@ -3056,15 +4882,34 @@ actor MatrixVibesRepositoryFoundation: VibesRepository {
         paginateBackwards: Bool = false
     ) async throws -> MatrixTimelinePage {
         try requireEnabled()
+        let items = try await sdk.threadItems(
+            roomID: roomID,
+            rootEventID: rootEventID,
+            paginateBackwards: paginateBackwards
+        )
         return MatrixTimelinePage(
             roomID: roomID,
-            items: try await sdk.threadItems(
-                roomID: roomID,
-                rootEventID: rootEventID,
-                paginateBackwards: paginateBackwards
-            ),
-            nextToken: nil
+            items: items,
+            // The current Rust binding returns only whether pagination hit
+            // the start while the listener owns the page. A full 50-event
+            // page is therefore the conservative signal that another page
+            // may exist; an empty/short page closes the bounded UI affordance.
+            nextToken: items.count >= 50 ? "previous" : nil
         )
+    }
+
+    func event(roomID: String, eventID: String) async throws -> MatrixTimelineItem {
+        try requireEnabled()
+        return try await sdk.eventItem(roomID: roomID, eventID: eventID)
+    }
+
+    /// Load the first server-sorted thread-list page through the Matrix Rust
+    /// SDK. The provider enriches each listed root with its focused timeline,
+    /// so My/All classification remains identity-based and room-window
+    /// eviction cannot make a valid thread disappear.
+    func threadSummaries(roomID: String) async throws -> [MatrixNativeThreadSummary] {
+        try requireEnabled()
+        return try await sdk.threadSummaries(roomID: roomID)
     }
 
     func sendThreadReply(
@@ -3219,9 +5064,28 @@ actor MatrixVibesRepositoryFoundation: VibesRepository {
         )
     }
 
+    func sendThreadAttachments(
+        _ uploads: [MatrixNativeUpload],
+        caption: String?,
+        roomID: String,
+        rootEventID: String,
+        transactionID: String
+    ) async throws {
+        try requireEnabled()
+        try await sdk.sendThreadAttachments(
+            roomID: roomID,
+            rootEventID: rootEventID,
+            uploads: uploads,
+            caption: caption,
+            transactionID: transactionID
+        )
+    }
+
     func createPoll(
         question: String,
         options: [String],
+        maxSelections: UInt64,
+        isDisclosed: Bool,
         roomID: String,
         transactionID: String
     ) async throws {
@@ -3230,6 +5094,8 @@ actor MatrixVibesRepositoryFoundation: VibesRepository {
             roomID: roomID,
             question: question,
             options: options,
+            maxSelections: maxSelections,
+            isDisclosed: isDisclosed,
             transactionID: transactionID
         )
     }
@@ -3284,6 +5150,11 @@ actor MatrixVibesRepositoryFoundation: VibesRepository {
         try await sdk.markRead(roomID: roomID)
     }
 
+    func markThreadRead(roomID: String, rootEventID: String) async throws {
+        try requireEnabled()
+        try await sdk.markThreadRead(roomID: roomID, rootEventID: rootEventID)
+    }
+
     func acceptInvite(roomID: String) async throws {
         try requireEnabled()
         try await sdk.acceptInvite(roomID: roomID)
@@ -3292,6 +5163,11 @@ actor MatrixVibesRepositoryFoundation: VibesRepository {
     func declineInvite(roomID: String) async throws {
         try requireEnabled()
         try await sdk.declineInvite(roomID: roomID)
+    }
+
+    func declineInviteAndBlock(roomID: String) async throws {
+        try requireEnabled()
+        try await sdk.declineInviteAndBlock(roomID: roomID)
     }
 
     func beginRtcMembership(
@@ -3503,7 +5379,14 @@ private extension MatrixTimelineItem {
                     localSendState: MatrixNativeLocalSendState(item.localSendState),
                     reactionCount: 0,
                     energy: [],
-                    readReceiptCount: item.readReceipts.count,
+                    readReceiptCount: Self.visibleReadReceiptUserIDs(
+                        item,
+                        context: context
+                    ).count,
+                    readReceiptUserIDs: Self.visibleReadReceiptUserIDs(
+                        item,
+                        context: context
+                    ),
                     threadReplyCount: 0,
                     replyPreviews: [],
                     actions: actions,
@@ -3518,7 +5401,10 @@ private extension MatrixTimelineItem {
         } else {
             guard case let .msgLike(content) = item.content else { return nil }
             westreemReference = nil
-            presentation = MatrixNativeMessagePresentation(content.kind)
+            presentation = MatrixNativeMessagePresentation(
+                content.kind,
+                currentUserID: context.currentUserID
+            )
             reactions = content.reactions
             threadSummary = content.threadSummary
         }
@@ -3657,7 +5543,8 @@ private extension MatrixTimelineItem {
             localSendState: MatrixNativeLocalSendState(item.localSendState),
             reactionCount: reactions.reduce(0) { $0 + $1.senders.count },
             energy: energy,
-            readReceiptCount: item.readReceipts.count,
+            readReceiptCount: Self.visibleReadReceiptUserIDs(item, context: context).count,
+            readReceiptUserIDs: Self.visibleReadReceiptUserIDs(item, context: context),
             threadReplyCount: threadSummary?.numReplies() ?? 0,
             replyPreviews: preview.map { [$0] } ?? [],
             actions: actions,
@@ -3665,6 +5552,21 @@ private extension MatrixTimelineItem {
             poll: presentation.poll,
             westreemReference: westreemReference
         )
+    }
+
+    private static func visibleReadReceiptUserIDs(
+        _ item: EventTimelineItem,
+        context: MatrixNativeTimelineContext
+    ) -> [String] {
+        item.readReceipts.keys
+            .filter {
+                $0 != context.currentUserID && !context.ignoredUserIDs.contains($0)
+            }
+            .sorted { lhs, rhs in
+                let left = item.readReceipts[lhs]?.timestamp ?? 0
+                let right = item.readReceipts[rhs]?.timestamp ?? 0
+                return left > right
+            }
     }
 }
 
@@ -3682,6 +5584,29 @@ private enum MatrixNativeRawEvent {
             return nil
         }
         return String(data: contentData, encoding: .utf8)
+    }
+
+    /// Returns `(contentJSON, stateKey)` when the raw event carries a
+    /// `state_key`. Used to project custom WeStreem state events (watch
+    /// party, live stage, speaker requests) from the timeline stream.
+    /// Returns `nil` for message events or events without a state key.
+    static func contentAndStateKey(
+        _ item: EventTimelineItem
+    ) -> (String, String)? {
+        guard
+            let rawJSON = item.lazyProvider.latestJson(),
+            let data = rawJSON.data(using: .utf8),
+            let root = try? JSONSerialization.jsonObject(with: data)
+                as? [String: Any],
+            let stateKey = root["state_key"] as? String,
+            let content = root["content"] as? [String: Any],
+            JSONSerialization.isValidJSONObject(content),
+            let contentData = try? JSONSerialization.data(withJSONObject: content),
+            let contentJSON = String(data: contentData, encoding: .utf8)
+        else {
+            return nil
+        }
+        return (contentJSON, stateKey)
     }
 }
 
@@ -3743,7 +5668,7 @@ private struct MatrixNativeMessagePresentation {
         poll = nil
     }
 
-    init(_ content: MsgLikeKind) {
+    init(_ content: MsgLikeKind, currentUserID: String? = nil) {
         switch content {
         case let .message(message):
             body = message.body
@@ -3815,7 +5740,13 @@ private struct MatrixNativeMessagePresentation {
                 },
                 maxSelections: maxSelections,
                 isDisclosed: pollKind == .disclosed,
-                hasEnded: endTime != nil
+                hasEnded: endTime != nil,
+                selectedOptionIDs: Set(answers.compactMap { answer in
+                    guard let currentUserID,
+                          votes[answer.id]?.contains(currentUserID) == true
+                    else { return nil }
+                    return answer.id
+                })
             )
         case .redacted:
             body = "Message removed"
@@ -3861,6 +5792,13 @@ private extension MatrixNativeMediaDescriptor {
     }
 
     init(_ content: AudioMessageContent) {
+        // MSC3245 waveform on inbound voice messages is not exposed by the
+        // current matrix-rust-components-swift binding — `UnstableVoiceContent`
+        // is just a marker for voice messages and carries no waveform data.
+        // We leave the waveform nil here; the audio playback view falls back to
+        // a static bar pattern. Wire this up once the SDK exposes it (probably
+        // via a future `UnstableAudioDetailsContent` extension).
+        let waveform: [UInt16]? = nil
         self.init(
             id: content.source.url(),
             kind: content.voice == nil ? .audio : .voice,
@@ -3870,7 +5808,8 @@ private extension MatrixNativeMediaDescriptor {
             width: nil,
             height: nil,
             duration: content.info?.duration,
-            sourceJSON: content.source.toJson()
+            sourceJSON: content.source.toJson(),
+            waveform: waveform
         )
     }
 

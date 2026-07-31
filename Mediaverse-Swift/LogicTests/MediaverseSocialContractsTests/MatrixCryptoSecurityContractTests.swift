@@ -83,7 +83,8 @@ final class MatrixCryptoSecurityContractTests: XCTestCase {
             topic: "",
             visibility: .publicVibe,
             inviteUserIDs: [],
-            isEncrypted: true
+            isEncrypted: true,
+            canonicalAlias: "#public:example.org"
         )
         XCTAssertFalse(try MatrixNativeCreationContract.validate(publicDraft).isEncrypted)
 
@@ -106,6 +107,14 @@ final class MatrixCryptoSecurityContractTests: XCTestCase {
         XCTAssertThrowsError(try MatrixNativeRecoveryKeyPolicy.normalized(
             String(repeating: "x", count: MatrixNativeRecoveryKeyPolicy.maximumLength + 1)
         ))
+    }
+
+    func testRecoveryResetRequiresExactDestructiveConfirmation() throws {
+        XCTAssertNoThrow(try MatrixNativeRecoveryResetPolicy.validate(
+            MatrixNativeRecoveryResetPolicy.confirmation
+        ))
+        XCTAssertThrowsError(try MatrixNativeRecoveryResetPolicy.validate("reset secure vibes"))
+        XCTAssertThrowsError(try MatrixNativeRecoveryResetPolicy.validate(" RESET SECURE VIBES "))
     }
 
     func testPinnedSDKLimitationsForbidParallelDeviceAPI() {

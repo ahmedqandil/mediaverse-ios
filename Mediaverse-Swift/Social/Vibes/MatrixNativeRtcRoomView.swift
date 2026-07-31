@@ -26,6 +26,7 @@ struct MatrixNativeRtcJoinRequest: Encodable, Sendable {
     let roomId: String
     let deviceId: String
     let intent: String
+    let context: String?
 }
 
 struct MatrixNativeRtcConnection: Decodable, Equatable, Sendable {

@@ -84,6 +84,10 @@ actor MatrixRustSDKDirectNotificationProvider {
     private let sessionCoordinator: MatrixSessionCoordinator
     private let notificationBuffer = MatrixSyncNotificationBuffer()
     private var registeredClientKey: String?
+    /// Covers the SDK-sync window after createRoom returns. The immutable
+    /// current-user/peer key prevents account crossover and actor isolation
+    /// ensures concurrent initiations cannot create parallel rooms.
+    private var recentlyCreatedDirectRooms: [String: MatrixDirectRoomSummary] = [:]
 
     init(sessionCoordinator: MatrixSessionCoordinator) {
         self.sessionCoordinator = sessionCoordinator
@@ -149,6 +153,12 @@ actor MatrixRustSDKDirectNotificationProvider {
             )
         }
 
+        let creationKey = "\(currentUserID)\u{0}\(target.matrixUserID)"
+        if let pending = recentlyCreatedDirectRooms[creationKey] {
+            _ = try await sessionCoordinator.requireCryptoReadyForEncryptedAction()
+            return pending
+        }
+
         if let existing = try client.getDmRoom(userId: target.matrixUserID) {
             let info = try await existing.roomInfo()
             let infoIsDirect = info.isDirect || info.isDm
@@ -161,11 +171,13 @@ actor MatrixRustSDKDirectNotificationProvider {
                 throw MatrixDirectMessageError.existingRoomIsNotSecure
             }
             _ = try await sessionCoordinator.requireCryptoReadyForEncryptedAction()
-            return await directSummary(
+            let summary = await directSummary(
                 room: existing,
                 info: info,
                 currentUserID: currentUserID
             )
+            recentlyCreatedDirectRooms.removeValue(forKey: creationKey)
+            return summary
         }
 
         // Do not create an encrypted room until this device can recover every
@@ -184,7 +196,7 @@ actor MatrixRustSDKDirectNotificationProvider {
             )
         )
 
-        return MatrixDirectRoomSummary(
+        let summary = MatrixDirectRoomSummary(
             id: roomID,
             name: normalized(displayName) ?? "Direct message",
             avatarURL: avatarURL,
@@ -194,6 +206,14 @@ actor MatrixRustSDKDirectNotificationProvider {
             lastMessage: nil,
             lastActivity: Date()
         )
+        recentlyCreatedDirectRooms[creationKey] = summary
+        if recentlyCreatedDirectRooms.count > 128,
+           let evictionKey = recentlyCreatedDirectRooms.keys.sorted().first(where: {
+               $0 != creationKey
+           }) {
+            recentlyCreatedDirectRooms.removeValue(forKey: evictionKey)
+        }
+        return summary
     }
 
     func roomSummary(roomID: String) async throws -> MatrixWaveSummary {

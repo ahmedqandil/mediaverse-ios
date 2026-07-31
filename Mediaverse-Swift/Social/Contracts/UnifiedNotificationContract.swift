@@ -162,7 +162,11 @@ public enum MatrixDirectMessageContract {
             return false
         }
         let localpart = String(parts[0])
-        return localpart.hasPrefix("@u_") && localpart.count > 3
+        guard localpart.hasPrefix("@u_") else { return false }
+        let encodedIdentity = localpart.dropFirst(3)
+        return !encodedIdentity.isEmpty
+            && encodedIdentity.count.isMultiple(of: 2)
+            && encodedIdentity.allSatisfy { $0.isNumber || ("a"..."f").contains($0) }
     }
 }
 

@@ -87,6 +87,14 @@ final class PushNotificationManager {
 
     private init() {}
 
+    func registerNotificationCategories() {
+        let identifiers = ["MATRIX_MESSAGE", "MATRIX_INVITE", "MATRIX_CALL", "MATRIX_LIVE"]
+        let categories = Set(identifiers.map {
+            UNNotificationCategory(identifier: $0, actions: [], intentIdentifiers: [], options: [])
+        })
+        UNUserNotificationCenter.current().setNotificationCategories(categories)
+    }
+
     func installMatrixPusherManager(
         _ manager: any MatrixNativePusherManaging
     ) {
@@ -139,7 +147,9 @@ final class PushNotificationManager {
     func didRegister(deviceToken: Data) {
         let token = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
         latestDeviceToken = token
-        debug("received APNs token prefix=\(String(token.prefix(12)))")
+        // Device tokens are credentials. Never expose even a stable prefix in
+        // diagnostic output; successful registration is enough telemetry.
+        debug("received APNs device token")
         Task { await uploadLatestTokenIfPossible() }
     }
 
@@ -180,14 +190,29 @@ final class PushNotificationManager {
         let roomID = stringValue("matrixRoomId")
             ?? stringValue("matrix_room_id")
             ?? stringValue("room_id")
-        guard let roomID, roomID.hasPrefix("!"), roomID.contains(":") else { return nil }
+        guard let roomID, isCanonicalMatrixIdentifier(roomID, sigil: "!") else { return nil }
         let eventID = stringValue("matrixEventId")
             ?? stringValue("matrix_event_id")
             ?? stringValue("event_id")
         return MatrixNativePushRoute(
             roomID: roomID,
-            eventID: eventID?.hasPrefix("$") == true ? eventID : nil
+            eventID: eventID.flatMap {
+                isCanonicalMatrixIdentifier($0, sigil: "$") ? $0 : nil
+            }
         )
+    }
+
+    private static func isCanonicalMatrixIdentifier(
+        _ value: String,
+        sigil: Character
+    ) -> Bool {
+        guard value.count >= 2, value.count <= 512, value.first == sigil,
+              (sigil == "$" || value.contains(":")),
+              value.unicodeScalars.allSatisfy({
+                  !CharacterSet.controlCharacters.contains($0)
+              })
+        else { return false }
+        return true
     }
 
     func consumePendingRoute() -> AppRoute? {
@@ -201,7 +226,7 @@ final class PushNotificationManager {
     func uploadLatestTokenIfPossible() async {
         guard !isUploadingToken else { return }
         guard let token = latestDeviceToken else { return }
-        guard SessionStorage.token != nil else {
+        guard let sessionToken = SessionStorage.token else {
             debug("session not ready; will retry APNs token upload later")
             return
         }
@@ -215,6 +240,10 @@ final class PushNotificationManager {
                 environment: apnsEnvironment,
                 bundleId: bundleIdentifier
             )
+            guard latestDeviceToken == token, SessionStorage.token == sessionToken else {
+                debug("discarded stale APNs registration response after session change")
+                return
+            }
             debug("uploaded APNs token for \(apnsEnvironment) topic=\(bundleIdentifier)")
             guard let matrixPusher = response.matrixPusher else {
                 pendingMatrixPusher = nil
@@ -236,18 +265,25 @@ final class PushNotificationManager {
 
     func unregisterForSignOut() async {
         guard let token = installedPushKey ?? latestDeviceToken else { return }
+        let localRemoval = MatrixPusherRemoval(
+            authority: "MATRIX_PUSHER_API",
+            pushKey: token.lowercased(),
+            appId: "com.westreem.app"
+        )
         do {
             let response = try await APIClient.shared.unregisterPushToken(
                 token: token
             )
             let removal = try response.matrixRemoval.validated()
             try await matrixPusherManager?.removeMatrixPusher(removal)
-            installedPushKey = nil
-            pendingMatrixPusher = nil
             debug("removed Westreem and Matrix push registrations")
         } catch {
             debug("push token removal failed: \(error.localizedDescription)")
+            try? await matrixPusherManager?.removeMatrixPusher(localRemoval)
         }
+        latestDeviceToken = nil
+        installedPushKey = nil
+        pendingMatrixPusher = nil
     }
 
     private func synchronizeMatrixPusher(

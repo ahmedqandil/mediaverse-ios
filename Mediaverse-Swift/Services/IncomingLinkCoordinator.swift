@@ -47,6 +47,21 @@ final class IncomingLinkCoordinator: ObservableObject {
             return
         }
 
+        if let target = MatrixCrossClientCompatibility.resolveDeepLink(
+            url.absoluteString
+        ) {
+            let route = MatrixNativePushRoute(
+                roomID: target.roomID,
+                eventID: target.eventID
+            )
+            MatrixNativePushRouteStore.shared.stage(route)
+            NotificationCenter.default.post(
+                name: .matrixRoomRouteRequested,
+                object: route
+            )
+            return
+        }
+
         if let route = AppRoute.route(link: url.absoluteString) {
             openRoute(route)
             return

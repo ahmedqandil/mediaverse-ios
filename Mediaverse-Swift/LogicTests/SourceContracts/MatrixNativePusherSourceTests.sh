@@ -16,6 +16,16 @@ grep -Fq 'func installMatrixPusherManager' "$push"
 grep -Fq 'func matrixSessionDidBecomeReady()' "$push"
 grep -Fq 'func unregisterForSignOut() async' "$push"
 grep -Fq 'APIClient.shared.unregisterPushToken' "$push"
+grep -Fq 'discarded stale APNs registration response after session change' "$push"
+grep -Fq 'try? await matrixPusherManager?.removeMatrixPusher(localRemoval)' "$push"
+grep -Fq 'latestDeviceToken = nil' "$push"
+grep -Fq '"MATRIX_MESSAGE", "MATRIX_INVITE", "MATRIX_CALL", "MATRIX_LIVE"' "$push"
+grep -Fq 'isCanonicalMatrixIdentifier(roomID, sigil: "!")' "$push"
+grep -Fq 'value.count <= 512' "$push"
+if grep -Eq 'token prefix=|latestDeviceToken\?\.prefix|installedPushKey\?\.prefix' "$push"; then
+  echo "Swift must not expose APNs token material in logs" >&2
+  exit 1
+fi
 
 grep -Fq 'func registerPushToken(' "$client"
 grep -Fq 'PushTokenRegistrationResponse' "$client"

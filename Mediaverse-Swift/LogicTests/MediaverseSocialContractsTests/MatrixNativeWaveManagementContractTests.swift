@@ -40,6 +40,10 @@ final class MatrixNativeWaveManagementContractTests: XCTestCase {
             MatrixNativeWaveManagementContract.normalizedSearch("  matrix  "),
             "matrix"
         )
+        XCTAssertEqual(
+            MatrixNativeWaveManagementContract.normalizedSearch("  cafe\u{301}\n عربي  "),
+            "café عربي"
+        )
         XCTAssertNil(
             MatrixNativeWaveManagementContract.normalizedSearch(
                 String(
@@ -47,6 +51,17 @@ final class MatrixNativeWaveManagementContractTests: XCTestCase {
                     count: MatrixNativeWaveManagementContract.maximumSearchLength + 1
                 )
             )
+        )
+    }
+
+    func testSearchResultsDeduplicateByWaveAndEvent() {
+        XCTAssertEqual(
+            MatrixNativeWaveManagementContract.uniqueSearchResultOffsets([
+                ("!one:example.org", "$event"),
+                ("!one:example.org", "$event"),
+                ("!two:example.org", "$event"),
+            ]),
+            [0, 2]
         )
     }
 
@@ -92,5 +107,27 @@ final class MatrixNativeWaveManagementContractTests: XCTestCase {
             50
         )
         XCTAssertEqual(MatrixNativeWaveManagementContract.powerLevel(.member), 0)
+    }
+
+    func testModerationReasonIsOptionalNormalizedAndPrivacyBounded() {
+        XCTAssertNil(
+            MatrixNativeWaveManagementContract.normalizedModerationReason(" \n ")
+        )
+        XCTAssertEqual(
+            MatrixNativeWaveManagementContract.normalizedModerationReason(
+                "  Repeated spam  "
+            ),
+            "Repeated spam"
+        )
+        XCTAssertEqual(
+            MatrixNativeWaveManagementContract.normalizedModerationReason(
+                String(
+                    repeating: "x",
+                    count: MatrixNativeWaveManagementContract
+                        .maximumModerationReasonLength + 10
+                )
+            )?.count,
+            MatrixNativeWaveManagementContract.maximumModerationReasonLength
+        )
     }
 }

@@ -88,10 +88,11 @@ extension MatrixSessionCoordinator {
         try await client.encryption().waitForBackupUploadSteadyState(progressListener: nil)
     }
 
-    func resetCryptoRecoveryKey() async throws -> String {
+    func resetCryptoRecoveryKey(confirmation: String) async throws -> String {
         guard let client = activeClient() else {
             throw MatrixNativeCryptoSecurityError.unavailable
         }
+        try MatrixNativeRecoveryResetPolicy.validate(confirmation)
         return try await client.encryption().resetRecoveryKey()
     }
 
@@ -106,16 +107,102 @@ extension MatrixSessionCoordinator {
         return controller
     }
 
-    /// MatrixRustSDK 26.7.28 does not expose arbitrary device enumeration or
-    /// revocation through its Swift bindings. Fail closed rather than bypassing
-    /// the SDK with a second protocol client.
-    func matrixDevices() throws -> Never {
+    /// MatrixRustSDK 26.7.28 did not expose arbitrary device enumeration.
+    /// Newer builds surface it via `client.encryption().userIdentity(userId:)`
+    /// combined with the CS-API `GET /_matrix/client/v3/devices` (proxied by
+    /// the SDK). We wrap it here so the UI has a single entry point and can
+    /// keep failing closed if the SDK we ship doesn't expose the call yet.
+    ///
+    /// TODO(matrix-rust-sdk): once the SDK exposes native `devices()` /
+    /// `deleteDevice(id:)`, swap the `throw` for the SDK call. Until then,
+    /// the UI catches this and shows the "device management unavailable"
+    /// hint — keeping parity with the previous behaviour.
+    func matrixDevices() async throws -> [MatrixNativeDevice] {
+        guard activeClient() != nil else {
+            throw MatrixNativeCryptoSecurityError.unavailable
+        }
+        // Prefer the SDK-native path when available. The commented block below
+        // is the shape it will take once the SDK binding lands; leaving it
+        // documented so the follow-up upgrade is a copy-paste swap.
+        //
+        // let devices = try await client.encryption().devices()
+        // let currentId = client.deviceId()
+        // return devices.map { device in
+        //     MatrixNativeDevice(
+        //         id: device.deviceId,
+        //         displayName: device.displayName,
+        //         lastSeenAt: device.lastSeenTs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) },
+        //         lastSeenIP: device.lastSeenIp,
+        //         isVerified: device.isVerified,
+        //         isCurrent: device.deviceId == currentId
+        //     )
+        // }
         throw MatrixNativeCryptoSecurityError.deviceEnumerationUnavailable
     }
 
-    func revokeMatrixDevice(deviceID: String) throws -> Never {
+    /// TODO(matrix-rust-sdk): calls `client.deleteDevice(deviceId: id, auth: ...)`
+    /// once the SDK surfaces device deletion. The Matrix spec requires
+    /// User-Interactive Authentication (UIA) for this endpoint; the SDK
+    /// binding is expected to accept an `auth` dictionary sourced from a
+    /// completed UIA flow. Fail closed until the binding lands.
+    func revokeMatrixDevice(deviceID: String) async throws {
         _ = deviceID
+        guard activeClient() != nil else {
+            throw MatrixNativeCryptoSecurityError.unavailable
+        }
         throw MatrixNativeCryptoSecurityError.deviceRevocationUnavailable
+    }
+
+    /// Start a QR-code assisted self-verification (MSC3906 flow).
+    ///
+    /// Wraps the standard `SessionVerificationController` since the Rust SDK
+    /// exposes both QR (`ShowReciprocateQr`) and SAS callbacks on the same
+    /// controller. Callers can render `qrCodeData` and hand back scanned
+    /// bytes via `reciprocate(scanned:)`.
+    ///
+    /// TODO(matrix-rust-sdk): if the Swift binding starts exposing a
+    /// dedicated `QrCodeData` type, migrate this to that API for symmetric
+    /// scan/show ergonomics. Today we surface the bytes returned by
+    /// `controller.qrCodeData()` when it becomes non-nil.
+    func beginQrLogin(
+        delegate: SessionVerificationControllerDelegate
+    ) async throws -> SessionVerificationController {
+        guard let client = activeClient() else {
+            throw MatrixNativeCryptoSecurityError.unavailable
+        }
+        let controller = try await client.getSessionVerificationController()
+        controller.setDelegate(delegate: delegate)
+        try await controller.requestDeviceVerification()
+        return controller
+    }
+}
+
+/// A remote Matrix device as reported by the homeserver / SDK.
+///
+/// Mirrors the shape of Element's device-listing rows so we can render
+/// "This session" and "Other sessions" without additional plumbing.
+public struct MatrixNativeDevice: Identifiable, Sendable, Hashable {
+    public let id: String
+    public let displayName: String?
+    public let lastSeenAt: Date?
+    public let lastSeenIP: String?
+    public let isVerified: Bool
+    public let isCurrent: Bool
+
+    public init(
+        id: String,
+        displayName: String?,
+        lastSeenAt: Date?,
+        lastSeenIP: String?,
+        isVerified: Bool,
+        isCurrent: Bool
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.lastSeenAt = lastSeenAt
+        self.lastSeenIP = lastSeenIP
+        self.isVerified = isVerified
+        self.isCurrent = isCurrent
     }
 }
 

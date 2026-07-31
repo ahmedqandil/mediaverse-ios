@@ -14,6 +14,7 @@ class MediaverseAppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        PushNotificationManager.shared.registerNotificationCategories()
         return true
     }
 

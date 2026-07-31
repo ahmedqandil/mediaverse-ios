@@ -589,6 +589,74 @@ public struct MatrixNativeLinkPreviewMetadata: Codable, Equatable, Sendable {
     }
 }
 
+/// Short-lived preview metadata owned by one immutable account scope.
+/// Successful metadata only is inserted; callers keep failures/unavailable
+/// states outside this cache so network errors cannot become sticky.
+public struct MatrixNativeLinkPreviewCache: Sendable {
+    private struct Entry: Sendable {
+        let expiresAt: Date
+        let value: MatrixNativeLinkPreviewMetadata
+    }
+
+    public static let timeToLive: TimeInterval = 10 * 60
+    public static let maximumEntriesPerAccount = 100
+    private var entries: [String: [String: Entry]] = [:]
+    private var order: [String: [String]] = [:]
+
+    public init() {}
+
+    public mutating func value(
+        accountScope: String,
+        url: String,
+        now: Date = Date()
+    ) -> MatrixNativeLinkPreviewMetadata? {
+        guard let entry = entries[accountScope]?[url] else { return nil }
+        guard entry.expiresAt > now else {
+            remove(accountScope: accountScope, url: url)
+            return nil
+        }
+        touch(accountScope: accountScope, url: url)
+        return entry.value
+    }
+
+    public mutating func insert(
+        _ value: MatrixNativeLinkPreviewMetadata,
+        accountScope: String,
+        url: String,
+        now: Date = Date()
+    ) {
+        guard !accountScope.isEmpty else { return }
+        entries[accountScope, default: [:]][url] = Entry(
+            expiresAt: now.addingTimeInterval(Self.timeToLive),
+            value: value
+        )
+        touch(accountScope: accountScope, url: url)
+        while (order[accountScope]?.count ?? 0) > Self.maximumEntriesPerAccount,
+              let oldest = order[accountScope]?.first {
+            remove(accountScope: accountScope, url: oldest)
+        }
+    }
+
+    public mutating func remove(accountScope: String, url: String) {
+        entries[accountScope]?.removeValue(forKey: url)
+        order[accountScope]?.removeAll { $0 == url }
+        if entries[accountScope]?.isEmpty == true {
+            entries.removeValue(forKey: accountScope)
+            order.removeValue(forKey: accountScope)
+        }
+    }
+
+    public mutating func clear(accountScope: String) {
+        entries.removeValue(forKey: accountScope)
+        order.removeValue(forKey: accountScope)
+    }
+
+    private mutating func touch(accountScope: String, url: String) {
+        order[accountScope, default: []].removeAll { $0 == url }
+        order[accountScope, default: []].append(url)
+    }
+}
+
 public enum MatrixNativeLinkPreviewContract {
     public static let endpoint = "/api/matrix/link-preview"
     public static let imageProxyPath = "/api/link-preview/image"
@@ -613,6 +681,7 @@ public enum MatrixNativeLinkPreviewContract {
               components.user == nil,
               components.password == nil,
               components.fragment == nil,
+              isAllowedPort(components.port, scheme: components.scheme),
               let host = components.host?.lowercased(),
               !host.isEmpty,
               host != "localhost",
@@ -623,6 +692,15 @@ public enum MatrixNativeLinkPreviewContract {
             return nil
         }
         return components.url
+    }
+
+    private static func isAllowedPort(_ port: Int?, scheme: String?) -> Bool {
+        guard let port else { return true }
+        switch scheme?.lowercased() {
+        case "http": return port == 80
+        case "https": return port == 443
+        default: return false
+        }
     }
 
     private static func isPrivateLiteralHost(_ host: String) -> Bool {
@@ -782,6 +860,30 @@ public enum MatrixNativeMatrixEchoContract {
 public enum MatrixNativeVibeVisibility: String, CaseIterable, Sendable {
     case publicVibe
     case privateVibe
+    case knock
+    case restricted
+}
+
+public struct MatrixNativeRoomCreationAvatar: Equatable, Sendable {
+    public let data: Data
+    public let filename: String
+    public let mimeType: String
+    public let width: UInt64?
+    public let height: UInt64?
+
+    public init(
+        data: Data,
+        filename: String,
+        mimeType: String,
+        width: UInt64? = nil,
+        height: UInt64? = nil
+    ) {
+        self.data = data
+        self.filename = filename
+        self.mimeType = mimeType
+        self.width = width
+        self.height = height
+    }
 }
 
 public struct MatrixNativeRoomCreationDraft: Equatable, Sendable {
@@ -790,19 +892,25 @@ public struct MatrixNativeRoomCreationDraft: Equatable, Sendable {
     public let visibility: MatrixNativeVibeVisibility
     public let inviteUserIDs: [String]
     public let isEncrypted: Bool
+    public let canonicalAlias: String?
+    public let avatar: MatrixNativeRoomCreationAvatar?
 
     public init(
         name: String,
         topic: String,
         visibility: MatrixNativeVibeVisibility,
         inviteUserIDs: [String],
-        isEncrypted: Bool = false
+        isEncrypted: Bool = false,
+        canonicalAlias: String? = nil,
+        avatar: MatrixNativeRoomCreationAvatar? = nil
     ) {
         self.name = name
         self.topic = topic
         self.visibility = visibility
         self.inviteUserIDs = inviteUserIDs
         self.isEncrypted = isEncrypted
+        self.canonicalAlias = canonicalAlias
+        self.avatar = avatar
     }
 }
 
@@ -812,6 +920,8 @@ public struct MatrixNativeValidatedRoomCreation: Equatable, Sendable {
     public let visibility: MatrixNativeVibeVisibility
     public let inviteUserIDs: [String]
     public let isEncrypted: Bool
+    public let canonicalAlias: String?
+    public let avatar: MatrixNativeRoomCreationAvatar?
 }
 
 public enum MatrixNativeCreationValidationError: Error, Equatable, Sendable {
@@ -819,12 +929,15 @@ public enum MatrixNativeCreationValidationError: Error, Equatable, Sendable {
     case topicTooLong
     case tooManyInvitations
     case invalidMatrixUserID(String)
+    case invalidCanonicalAlias
+    case invalidAvatar
 }
 
 public enum MatrixNativeCreationContract {
     public static let maximumNameLength = 255
     public static let maximumTopicLength = 4_000
     public static let maximumInitialInvitations = 100
+    public static let maximumAvatarBytes = 10 * 1_024 * 1_024
 
     public static func validate(
         _ draft: MatrixNativeRoomCreationDraft
@@ -837,6 +950,32 @@ public enum MatrixNativeCreationContract {
         let topic = draft.topic.trimmingCharacters(in: .whitespacesAndNewlines)
         guard topic.count <= maximumTopicLength else {
             throw MatrixNativeCreationValidationError.topicTooLong
+        }
+
+        let canonicalAlias = draft.canonicalAlias?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if draft.visibility == .publicVibe {
+            guard let canonicalAlias,
+                  canonicalAlias.utf8.count <= 255,
+                  canonicalAlias.first == "#",
+                  let separator = canonicalAlias.dropFirst().firstIndex(of: ":"),
+                  separator > canonicalAlias.index(after: canonicalAlias.startIndex),
+                  separator < canonicalAlias.index(before: canonicalAlias.endIndex),
+                  !canonicalAlias.contains(where: \.isWhitespace)
+            else {
+                throw MatrixNativeCreationValidationError.invalidCanonicalAlias
+            }
+        }
+
+        if let avatar = draft.avatar {
+            let mimeType = avatar.mimeType.lowercased()
+            guard !avatar.data.isEmpty,
+                  avatar.data.count <= maximumAvatarBytes,
+                  mimeType.hasPrefix("image/"),
+                  !mimeType.contains(where: \.isWhitespace),
+                  !avatar.filename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                throw MatrixNativeCreationValidationError.invalidAvatar
+            }
         }
 
         var inviteUserIDs: [String] = []
@@ -859,7 +998,9 @@ public enum MatrixNativeCreationContract {
             topic: topic.isEmpty ? nil : topic,
             visibility: draft.visibility,
             inviteUserIDs: inviteUserIDs,
-            isEncrypted: draft.isEncrypted && draft.visibility == .privateVibe
+            isEncrypted: draft.isEncrypted && draft.visibility == .privateVibe,
+            canonicalAlias: draft.visibility == .publicVibe ? canonicalAlias : nil,
+            avatar: draft.avatar
         )
     }
 
@@ -1080,6 +1221,38 @@ public enum MatrixNativeVibesUIContract {
     public static let supportsEncryptedOrDirectMatrixRTC = false
 }
 
+/// Matrix Rust SDK owns native Sliding Sync transport. This policy bounds the
+/// product-side room projection and visible-room subscription work without
+/// introducing a competing sync implementation.
+public enum MatrixNativeSlidingSyncScaleContract {
+    public static let initialRooms = 10
+    public static let batchRooms = 50
+    public static let maximumRooms = 10_000
+
+    public static func initialRange(totalRooms: Int) -> ClosedRange<Int>? {
+        let total = min(max(totalRooms, 0), maximumRooms)
+        guard total > 0 else { return nil }
+        return 0...min(total - 1, initialRooms - 1)
+    }
+
+    public static func nextRange(
+        totalRooms: Int,
+        current: ClosedRange<Int>
+    ) -> ClosedRange<Int>? {
+        let total = min(max(totalRooms, 0), maximumRooms)
+        guard total > 0, current.upperBound < total - 1 else { return nil }
+        return 0...min(total - 1, current.upperBound + batchRooms)
+    }
+
+    public static func activeSubscription(roomID: String?) -> Set<String> {
+        guard let roomID = roomID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              roomID.first == "!",
+              roomID.contains(":"),
+              !roomID.contains(where: { $0.isWhitespace }) else { return [] }
+        return [roomID]
+    }
+}
+
 /// Pure, executable safety rules shared by the native UI and contract tests.
 /// Media whose bounded duration cannot be proven must never be sent.
 public enum MatrixNativeMediaDurationKind: Sendable {
@@ -1115,10 +1288,14 @@ public enum MatrixNativeMediaSafetyContract {
 }
 
 public enum MatrixNativePollVisibilityContract {
-    /// Disclosed polls may show live results. Undisclosed polls reveal no
-    /// counts or bars until they have ended.
-    public static func showsResults(isDisclosed: Bool, hasEnded: Bool) -> Bool {
-        isDisclosed || hasEnded
+    /// Element reveals disclosed results after the current user has voted;
+    /// undisclosed polls reveal nothing until the poll ends.
+    public static func showsResults(
+        isDisclosed: Bool,
+        hasEnded: Bool,
+        hasVoted: Bool = false
+    ) -> Bool {
+        hasEnded || (isDisclosed && hasVoted)
     }
 }
 

@@ -115,6 +115,7 @@ public enum MatrixNativeCryptoSecurityError: Error, Equatable, Sendable {
     case unavailable
     case recoveryKeyRequired
     case recoveryKeyInvalid
+    case recoveryResetConfirmationInvalid
     case deviceEnumerationUnavailable
     case deviceRevocationUnavailable
     case setupRequired
@@ -131,6 +132,16 @@ public enum MatrixNativeCryptoSecurityError: Error, Equatable, Sendable {
             true
         default:
             false
+        }
+    }
+}
+
+public enum MatrixNativeRecoveryResetPolicy {
+    public static let confirmation = "RESET SECURE VIBES"
+
+    public static func validate(_ value: String) throws {
+        guard value == confirmation else {
+            throw MatrixNativeCryptoSecurityError.recoveryResetConfirmationInvalid
         }
     }
 }
