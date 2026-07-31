@@ -132,6 +132,14 @@ final class MatrixSessionKeychain: ClientSessionDelegate, @unchecked Sendable {
 }
 
 enum MatrixSessionStorePaths {
+    private struct Binding: Codable, Equatable {
+        let version: Int
+        let userID: String
+        let deviceID: String
+    }
+
+    private static let bindingFilename = "session-binding-v1.json"
+
     static func directory(for identity: MatrixCanonicalIdentity) throws -> URL {
         let digest = SHA256.hash(data: Data(identity.matrixUserID.utf8))
             .map { String(format: "%02x", $0) }
@@ -152,5 +160,55 @@ enum MatrixSessionStorePaths {
             attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
         )
         return directory
+    }
+
+    static func isBound(to session: Session, identity: MatrixCanonicalIdentity) throws -> Bool {
+        let url = try directory(for: identity).appendingPathComponent(bindingFilename)
+        guard let data = try? Data(contentsOf: url),
+              let binding = try? JSONDecoder().decode(Binding.self, from: data)
+        else {
+            return false
+        }
+        return binding == Binding(
+            version: 1,
+            userID: session.userId,
+            deviceID: session.deviceId
+        )
+    }
+
+    static func bind(session: Session, identity: MatrixCanonicalIdentity) throws {
+        let binding = Binding(
+            version: 1,
+            userID: session.userId,
+            deviceID: session.deviceId
+        )
+        let data = try JSONEncoder().encode(binding)
+        let url = try directory(for: identity).appendingPathComponent(bindingFilename)
+        try data.write(to: url, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            ofItemAtPath: url.path
+        )
+    }
+
+    static func quarantineUnboundStore(for identity: MatrixCanonicalIdentity) throws {
+        let directory = try directory(for: identity)
+        let contents = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        )
+        guard !contents.isEmpty else { return }
+        let quarantine = directory
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                directory.lastPathComponent + ".unbound-" + UUID().uuidString,
+                isDirectory: true
+            )
+        try FileManager.default.moveItem(at: directory, to: quarantine)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+        )
     }
 }

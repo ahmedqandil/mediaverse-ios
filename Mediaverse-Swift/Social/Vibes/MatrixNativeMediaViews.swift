@@ -14,6 +14,8 @@ struct MatrixNativeRichComposer: View {
     let sendAttachments: ([MatrixNativeUpload], String?) -> Void
     let sendPoll: (String, [String], UInt64, Bool) -> Void
     let sendSticker: (MatrixNativeUpload) -> Void
+    var accountID = "matrix-session"
+    var sendQueuedAttachments: (([MatrixNativeUpload], String?, String) async throws -> Void)? = nil
     var allowsPollsAndStickers = true
 
     @State private var attachments: [MatrixNativeUpload] = []
@@ -27,6 +29,8 @@ struct MatrixNativeRichComposer: View {
     @State private var isPreparing = false
     @State private var errorMessage: String?
     @State private var selectedMentions: [MatrixNativeMentionTarget] = []
+    @State private var attachmentQuality = MatrixNativeAttachmentQuality.standard
+    @ObservedObject private var uploadQueue = MatrixNativeAttachmentUploadQueue.shared
 
     private var canSend: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty
@@ -67,6 +71,15 @@ struct MatrixNativeRichComposer: View {
             }
 
             if !attachments.isEmpty {
+                Picker("Upload quality", selection: $attachmentQuality) {
+                    ForEach(MatrixNativeAttachmentQuality.allCases, id: \.self) { quality in
+                        Text(quality.title).tag(quality)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, C.pagePad)
+                .accessibilityLabel("Photo and video upload quality")
+
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(attachments) { attachment in
@@ -78,6 +91,15 @@ struct MatrixNativeRichComposer: View {
                     .padding(.horizontal, C.pagePad)
                 }
                 .accessibilityLabel("Selected attachments")
+            }
+
+            if let batch = activeRoomBatches.first {
+                MatrixNativeUploadBatchProgressRow(
+                    items: batch,
+                    retry: { retryBatch(batch[0].batchID) },
+                    cancel: { uploadQueue.cancel(id: batch[0].id) }
+                )
+                .padding(.horizontal, C.pagePad)
             }
 
             HStack(alignment: .bottom, spacing: 9) {
@@ -240,11 +262,41 @@ struct MatrixNativeRichComposer: View {
             selectedMentions = []
         } else {
             let caption = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            sendAttachments(attachments, caption.isEmpty ? nil : caption)
+            let normalizedCaption = caption.isEmpty ? nil : caption
+            if let sendQueuedAttachments {
+                do {
+                    try uploadQueue.enqueueBatch(
+                        uploads: attachments,
+                        accountID: accountID,
+                        roomID: roomID,
+                        quality: attachmentQuality,
+                        caption: normalizedCaption,
+                        sender: sendQueuedAttachments
+                    )
+                } catch {
+                    errorMessage = MatrixNativeMediaCopy.message(for: error)
+                    return
+                }
+            } else {
+                sendAttachments(attachments, normalizedCaption)
+            }
             attachments = []
             text = ""
             selectedMentions = []
         }
+    }
+
+    private var activeRoomBatches: [[MatrixNativeQueuedAttachment]] {
+        let roomItems = uploadQueue.items.filter { $0.roomID == roomID && $0.stage != .delivered }
+        let order = roomItems.reduce(into: [UUID]()) { result, item in
+            if !result.contains(item.batchID) { result.append(item.batchID) }
+        }
+        return order.map { batchID in roomItems.filter { $0.batchID == batchID } }
+    }
+
+    private func retryBatch(_ batchID: UUID) {
+        guard let sendQueuedAttachments else { return }
+        uploadQueue.retry(batchID: batchID, using: sendQueuedAttachments)
     }
 
     private func selectMention(_ target: MatrixNativeMentionTarget) {
@@ -283,24 +335,15 @@ struct MatrixNativeRichComposer: View {
                     )
                     : nil
 
-                // Image compression: mirror web behaviour — images >2 MB are downscaled
-                // to max 2048 px on the long edge and re-encoded as JPEG at 0.85 quality.
-                // Preserves originals when compression produces a larger file.
+                // Keep selected source bytes intact. The persistent upload queue applies
+                // the chosen Data Saver / Standard / Original policy off the room screen.
                 let (finalData, finalMime, finalExt, finalWidth, finalHeight): (Data, String, String, UInt64?, UInt64?)
-                if kind == .image, let compressed = Self.compressImage(data: data) {
-                    finalData    = compressed.data
-                    finalMime    = "image/jpeg"
-                    finalExt     = "jpg"
-                    finalWidth   = UInt64(compressed.width)
-                    finalHeight  = UInt64(compressed.height)
-                } else {
-                    let img = kind == .image ? UIImage(data: data) : nil
-                    finalData    = data
-                    finalMime    = mime
-                    finalExt     = fileExtension
-                    finalWidth   = img.map { UInt64(max(1, $0.size.width  * $0.scale)) }
-                    finalHeight  = img.map { UInt64(max(1, $0.size.height * $0.scale)) }
-                }
+                let img = kind == .image ? UIImage(data: data) : nil
+                finalData    = data
+                finalMime    = mime
+                finalExt     = fileExtension
+                finalWidth   = img.map { UInt64(max(1, $0.size.width  * $0.scale)) }
+                finalHeight  = img.map { UInt64(max(1, $0.size.height * $0.scale)) }
                 prepared.append(MatrixNativeUpload(
                     kind: kind,
                     data: finalData,
@@ -481,6 +524,54 @@ struct MatrixNativeRichComposer: View {
         } catch {
             errorMessage = MatrixNativeMediaCopy.message(for: error)
         }
+    }
+}
+
+private struct MatrixNativeUploadBatchProgressRow: View {
+    let items: [MatrixNativeQueuedAttachment]
+    let retry: () -> Void
+    let cancel: () -> Void
+
+    private var authoritativeProgress: Double? {
+        let values = items.compactMap(\.progress)
+        guard values.count == items.count, !values.isEmpty else { return nil }
+        return values.reduce(0, +) / Double(values.count)
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8).fill(C.elevated)
+                Image(systemName: items.count > 1 ? "photo.stack" : "photo")
+                    .foregroundStyle(C.watch)
+            }
+            .frame(width: 42, height: 42)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(items.first?.stage.title ?? "Uploading") \(items.count) \(items.count == 1 ? "attachment" : "attachments")")
+                    .font(.caption.weight(.semibold))
+                if let authoritativeProgress {
+                    ProgressView(value: authoritativeProgress)
+                        .tint(C.watch)
+                        .accessibilityLabel("Upload progress")
+                        .accessibilityValue("\(Int(authoritativeProgress * 100)) percent")
+                } else {
+                    ProgressView()
+                        .tint(C.watch)
+                        .accessibilityLabel(items.first?.stage.title ?? "Upload in progress")
+                        .accessibilityValue("Progress unavailable")
+                }
+            }
+            Spacer(minLength: 4)
+            if items.contains(where: { $0.stage == .failed }) {
+                Button("Retry", action: retry).font(.caption.bold())
+            } else {
+                Button(action: cancel) { Image(systemName: "xmark.circle.fill") }
+                    .accessibilityLabel("Cancel attachment upload")
+            }
+        }
+        .padding(8)
+        .background(C.surface, in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -1173,17 +1264,62 @@ private struct MatrixNativeRemoteMediaThumbnail: View {
     var body: some View {
         Group {
             if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .clipped()
-                    .frame(maxWidth: .infinity)
+                ZStack {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .clipped()
+
+                    if media.effectiveKind == .video {
+                        Image(systemName: "play.fill")
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 52, height: 52)
+                            .background(.black.opacity(0.58), in: Circle())
+                            .accessibilityHidden(true)
+
+                        if let duration = media.duration, duration > 0 {
+                            VStack {
+                                Spacer()
+                                HStack {
+                                    Spacer()
+                                    Text(MatrixNativeMediaCopy.duration(duration))
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 4)
+                                        .background(.black.opacity(0.68), in: Capsule())
+                                }
+                                .padding(8)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity)
                 .frame(height: media.effectiveKind == .sticker ? 150 : 190)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .contentShape(Rectangle())
-            } else if state == .loading {
-                ProgressView().tint(C.watch)
-                    .frame(height: 44)
+            } else if state == .idle || state == .loading {
+                HStack(spacing: 10) {
+                    ProgressView().tint(C.watch)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(
+                            media.effectiveKind == .video
+                                ? "Loading video preview"
+                                : "Loading image preview"
+                        )
+                        .font(.subheadline.weight(.semibold))
+                        Text(MatrixNativeMediaCopy.displayTitle(for: media))
+                            .font(.caption2)
+                            .foregroundStyle(C.textMuted)
+                            .lineLimit(1)
+                    }
+                }
+                .foregroundStyle(C.text)
+                .padding(12)
+                .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
+                .background(C.elevated, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(C.borderSubtle))
             } else if state == .unavailable {
                 VStack(alignment: .leading, spacing: 9) {
                     Label(
@@ -1217,20 +1353,45 @@ private struct MatrixNativeRemoteMediaThumbnail: View {
             guard [.image, .sticker, .video].contains(media.effectiveKind) else { return }
             state = .loading
             do {
-                let data = try await matrixSession.mediaData(roomID: roomID, media: media)
-                switch media.effectiveKind {
-                case .image, .sticker:
-                    guard let decoded = UIImage(data: data) else {
-                        throw MatrixNativeMediaError.invalidAttachment
+                let thumbnailImage: UIImage?
+                if let thumbnail = media.authenticatedThumbnail,
+                   let thumbnailData = try? await matrixSession.mediaData(
+                       roomID: roomID,
+                       media: thumbnail
+                   ) {
+                    thumbnailImage = UIImage(data: thumbnailData)
+                } else {
+                    thumbnailImage = nil
+                }
+                if let thumbnailImage {
+                    image = thumbnailImage
+                } else if let generatedData = try? await matrixSession.mediaThumbnailData(
+                    roomID: roomID,
+                    media: media
+                ), let generatedImage = UIImage(data: generatedData) {
+                    // Events created without thumbnail_url still use
+                    // Synapse's authenticated Matrix thumbnail endpoint.
+                    // R2 remains an implementation detail and no public or
+                    // presigned object URL reaches the client.
+                    image = generatedImage
+                } else {
+                    // Older events may have no thumbnail. Preserve Element's
+                    // final original-media fallback through MatrixRustSDK.
+                    let data = try await matrixSession.mediaData(roomID: roomID, media: media)
+                    switch media.effectiveKind {
+                    case .image, .sticker:
+                        guard let decoded = UIImage(data: data) else {
+                            throw MatrixNativeMediaError.invalidAttachment
+                        }
+                        image = decoded
+                    case .video:
+                        image = try await MatrixNativeMediaCopy.videoThumbnail(
+                            from: data,
+                            filename: media.filename
+                        )
+                    case .audio, .voice, .file:
+                        break
                     }
-                    image = decoded
-                case .video:
-                    image = try await MatrixNativeMediaCopy.videoThumbnail(
-                        from: data,
-                        filename: media.filename
-                    )
-                case .audio, .voice, .file:
-                    break
                 }
                 state = .ready
             } catch {
@@ -1253,9 +1414,18 @@ private struct MatrixNativeInlineAudioMessage: View {
     @State private var currentTime: TimeInterval = 0
     @State private var duration: TimeInterval = 0
     @State private var errorMessage: String?
+    @State private var analyzedWaveform: [Float] = []
 
     private var effectiveDuration: TimeInterval {
         max(duration, media.duration ?? 0, 1)
+    }
+
+    private var displayedWaveform: [Float] {
+        if let waveform = media.waveform, !waveform.isEmpty {
+            return waveform.map { Float($0) / 1024.0 }
+        }
+        if !analyzedWaveform.isEmpty { return analyzedWaveform }
+        return MatrixNativeWaveformAnalyzer.fallbackSamples
     }
 
     var body: some View {
@@ -1277,7 +1447,7 @@ private struct MatrixNativeInlineAudioMessage: View {
             .disabled(isLoading || errorMessage != nil)
             .accessibilityLabel(isPlaying ? "Pause voice message" : "Play voice message")
 
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 7) {
                     Text(MatrixNativeMediaCopy.duration(isPlaying ? currentTime : effectiveDuration))
                         .font(.caption2.monospacedDigit())
@@ -1285,15 +1455,24 @@ private struct MatrixNativeInlineAudioMessage: View {
                     Spacer(minLength: 0)
                 }
 
-                Slider(
-                    value: Binding(
-                        get: { min(currentTime, effectiveDuration) },
-                        set: { seek(to: $0) }
-                    ),
-                    in: 0...effectiveDuration
-                )
-                .tint(C.watch)
-                .disabled(player == nil)
+                GeometryReader { waveformGeometry in
+                    WaveformBarsView(
+                        samples: displayedWaveform,
+                        progress: min(max(currentTime / effectiveDuration, 0), 1)
+                    )
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0).onEnded { value in
+                            guard player != nil, waveformGeometry.size.width > 0 else { return }
+                            let fraction = min(
+                                max(value.location.x / waveformGeometry.size.width, 0),
+                                1
+                            )
+                            seek(to: fraction * effectiveDuration)
+                        }
+                    )
+                }
+                .frame(height: 30)
                 .accessibilityLabel("Voice message progress")
 
                 if let errorMessage {
@@ -1328,6 +1507,7 @@ private struct MatrixNativeInlineAudioMessage: View {
             if duration <= 0 {
                 duration = try await AVURLAsset(url: url).load(.duration).seconds
             }
+            analyzedWaveform = await MatrixNativeWaveformAnalyzer.samples(from: url)
             installTimeObserver(on: player)
             errorMessage = nil
         } catch {
@@ -1380,6 +1560,7 @@ private struct MatrixNativeInlineAudioMessage: View {
         timeObserver = nil
         isPlaying = false
         currentTime = 0
+        analyzedWaveform = []
         if let localFileURL { try? FileManager.default.removeItem(at: localFileURL) }
         localFileURL = nil
     }
@@ -1763,11 +1944,14 @@ private struct WaveformBarsView: View {
     var body: some View {
         GeometryReader { geo in
             let count = max(1, samples.count)
-            let barWidth = max(2, (geo.size.width - CGFloat(count - 1)) / CGFloat(count))
-            HStack(alignment: .bottom, spacing: 1) {
-                ForEach(0 ..< count, id: \.self) { i in
-                    let pct = count > 1 ? Double(i) / Double(count - 1) : 0
-                    let amp = samples.isEmpty ? 0.4 : Double(samples[i])
+            let barWidth: CGFloat = 2
+            let spacing: CGFloat = 2
+            let visibleCount = max(1, min(count, Int(geo.size.width / (barWidth + spacing))))
+            HStack(alignment: .center, spacing: spacing) {
+                ForEach(0 ..< visibleCount, id: \.self) { i in
+                    let sourceIndex = min(count - 1, i * count / visibleCount)
+                    let pct = visibleCount > 1 ? Double(i) / Double(visibleCount - 1) : 0
+                    let amp = samples.isEmpty ? 0.4 : Double(samples[sourceIndex])
                     let h = max(3, amp * geo.size.height)
                     Capsule()
                         .fill(pct <= progress ? C.watch : C.watch.opacity(0.3))
@@ -1776,6 +1960,45 @@ private struct WaveformBarsView: View {
             }
         }
         .frame(height: 40)
+    }
+}
+
+private enum MatrixNativeWaveformAnalyzer {
+    static let fallbackSamples: [Float] = (0..<48).map { index in
+        let phase = Float(index) / 47
+        return 0.18 + 0.55 * abs(sin(phase * .pi * 4))
+    }
+
+    static func samples(from url: URL) async -> [Float] {
+        await Task.detached(priority: .utility) {
+            guard let file = try? AVAudioFile(forReading: url) else { return [] }
+            let format = file.processingFormat
+            let frameCount = min(file.length, AVAudioFramePosition(UInt32.max))
+            guard frameCount > 0,
+                  let buffer = AVAudioPCMBuffer(
+                    pcmFormat: format,
+                    frameCapacity: AVAudioFrameCount(frameCount)
+                  ),
+                  (try? file.read(into: buffer)) != nil,
+                  let channels = buffer.floatChannelData else { return [] }
+
+            let sampleCount = Int(buffer.frameLength)
+            let bucketCount = min(80, max(24, sampleCount / 1_024))
+            guard sampleCount > 0, bucketCount > 0 else { return [] }
+            let channelCount = Int(format.channelCount)
+
+            return (0..<bucketCount).map { bucket in
+                let start = bucket * sampleCount / bucketCount
+                let end = max(start + 1, (bucket + 1) * sampleCount / bucketCount)
+                var peak: Float = 0
+                for frame in start..<min(end, sampleCount) {
+                    for channel in 0..<channelCount {
+                        peak = max(peak, abs(channels[channel][frame]))
+                    }
+                }
+                return min(max(pow(peak, 0.45), 0.08), 1)
+            }
+        }.value
     }
 }
 

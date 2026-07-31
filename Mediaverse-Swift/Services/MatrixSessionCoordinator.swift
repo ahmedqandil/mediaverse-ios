@@ -348,26 +348,34 @@ actor MatrixSessionCoordinator {
 
             state = .restoring
             if let restored = keychain.storedSession() {
-                guard
-                    MatrixHomeserverTrustPolicy.accepts(restored.homeserverUrl),
-                    MatrixHomeserverTrustPolicy.normalizedApprovedOrigin(restored.homeserverUrl)
-                        == MatrixHomeserverTrustPolicy.normalizedApprovedOrigin(bootstrap.homeserverURL)
-                else {
+                if try !MatrixSessionStorePaths.isBound(
+                    to: restored,
+                    identity: identity
+                ) {
                     keychain.removeSession()
-                    throw MatrixSessionFoundationError.invalidHomeserver
+                    try MatrixSessionStorePaths.quarantineUnboundStore(for: identity)
+                } else {
+                    guard
+                        MatrixHomeserverTrustPolicy.accepts(restored.homeserverUrl),
+                        MatrixHomeserverTrustPolicy.normalizedApprovedOrigin(restored.homeserverUrl)
+                            == MatrixHomeserverTrustPolicy.normalizedApprovedOrigin(bootstrap.homeserverURL)
+                    else {
+                        keychain.removeSession()
+                        throw MatrixSessionFoundationError.invalidHomeserver
+                    }
+                    if identity.verifies(matrixUserID: restored.userId) {
+                        try await install(
+                            session: restored,
+                            identity: identity,
+                            keychain: keychain
+                        )
+                        return
+                    }
+                    // A session can outlive a prior app login. Never let a stale
+                    // Matrix identity permanently poison reconnect for the current
+                    // canonical Westreem user.
+                    keychain.removeSession()
                 }
-                if identity.verifies(matrixUserID: restored.userId) {
-                    try await install(
-                        session: restored,
-                        identity: identity,
-                        keychain: keychain
-                    )
-                    return
-                }
-                // A session can outlive a prior app login. Never let a stale
-                // Matrix identity permanently poison reconnect for the current
-                // canonical Westreem user.
-                keychain.removeSession()
             }
 
             let built = try await buildClient(
@@ -442,7 +450,19 @@ actor MatrixSessionCoordinator {
 
             state = .restoring
             if let restored = keychain.storedSession() {
-                guard identity.verifies(matrixUserID: restored.userId) else {
+                if try !MatrixSessionStorePaths.isBound(
+                    to: restored,
+                    identity: identity
+                ) {
+                    // Keychain survives an app reinstall while Application
+                    // Support does not. Restoring that old Matrix device into
+                    // a new crypto store reuses one-time-key identifiers and
+                    // leaves encrypted attachment sends stuck as local echoes.
+                    // Preserve the untrusted store for diagnosis and broker a
+                    // fresh Matrix device instead.
+                    keychain.removeSession()
+                    try MatrixSessionStorePaths.quarantineUnboundStore(for: identity)
+                } else if !identity.verifies(matrixUserID: restored.userId) {
                     keychain.removeSession()
                     state = .requestingSession
                     let brokered = try await broker.matrixSession(
@@ -455,8 +475,7 @@ actor MatrixSessionCoordinator {
                         expectedHomeserverURL: expectedHomeserverURL
                     )
                     return
-                }
-                if let expectedHomeserverURL {
+                } else if let expectedHomeserverURL {
                     guard MatrixHomeserverTrustPolicy
                         .normalizedApprovedOrigin(restored.homeserverUrl)
                         == MatrixHomeserverTrustPolicy
@@ -641,6 +660,7 @@ actor MatrixSessionCoordinator {
         }
         client = built
         try await installSyncRuntime(client: built)
+        try MatrixSessionStorePaths.bind(session: session, identity: identity)
         state = .ready(userID: session.userId, deviceID: session.deviceId)
     }
 
@@ -1860,6 +1880,22 @@ final class MatrixNativeSessionController:
         try MatrixNativeMediaPolicy.validateDownloadedData(data, descriptor: media)
         MatrixNativeMediaCache.shared.write(key: cacheKey, data: data)
         return data
+    }
+
+    func mediaThumbnailData(
+        roomID: String,
+        media: MatrixNativeMediaDescriptor,
+        width: UInt64 = 450,
+        height: UInt64 = 600
+    ) async throws -> Data {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        return try await repository.mediaThumbnailData(
+            roomID: roomID,
+            sourceJSON: media.sourceJSON,
+            width: width,
+            height: height
+        )
     }
 
     func avatarData(avatarURL: String) async throws -> Data {

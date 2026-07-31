@@ -55,6 +55,11 @@ struct MatrixNativeMediaDescriptor: Codable, Identifiable, Equatable, Sendable {
     let height: UInt64?
     let duration: TimeInterval?
     let sourceJSON: String
+    let thumbnailSourceJSON: String?
+    let thumbnailMimeType: String?
+    let thumbnailSize: UInt64?
+    let thumbnailWidth: UInt64?
+    let thumbnailHeight: UInt64?
     /// MSC3245 waveform data (0–1024 amplitude samples). Populated from the
     /// matrix-rust-components-swift `AudioMessageContent.voice?.waveform` property
     /// for received voice messages. Nil when not a voice message or not available.
@@ -70,6 +75,11 @@ struct MatrixNativeMediaDescriptor: Codable, Identifiable, Equatable, Sendable {
         height: UInt64?,
         duration: TimeInterval?,
         sourceJSON: String,
+        thumbnailSourceJSON: String? = nil,
+        thumbnailMimeType: String? = nil,
+        thumbnailSize: UInt64? = nil,
+        thumbnailWidth: UInt64? = nil,
+        thumbnailHeight: UInt64? = nil,
         waveform: [UInt16]? = nil
     ) {
         self.id = id
@@ -81,11 +91,33 @@ struct MatrixNativeMediaDescriptor: Codable, Identifiable, Equatable, Sendable {
         self.height = height
         self.duration = duration
         self.sourceJSON = sourceJSON
+        self.thumbnailSourceJSON = thumbnailSourceJSON
+        self.thumbnailMimeType = thumbnailMimeType
+        self.thumbnailSize = thumbnailSize
+        self.thumbnailWidth = thumbnailWidth
+        self.thumbnailHeight = thumbnailHeight
         self.waveform = waveform
     }
 }
 
 extension MatrixNativeMediaDescriptor {
+    /// Element prefers the event-provided thumbnail because it is smaller and
+    /// its MediaSource retains the encrypted-file metadata in encrypted rooms.
+    var authenticatedThumbnail: MatrixNativeMediaDescriptor? {
+        guard let thumbnailSourceJSON, !thumbnailSourceJSON.isEmpty else { return nil }
+        return MatrixNativeMediaDescriptor(
+            id: "\(id)::thumbnail",
+            kind: .image,
+            filename: "thumbnail-\(filename)",
+            mimeType: thumbnailMimeType,
+            size: thumbnailSize,
+            width: thumbnailWidth,
+            height: thumbnailHeight,
+            duration: nil,
+            sourceJSON: thumbnailSourceJSON
+        )
+    }
+
     var effectiveKind: MatrixNativeAttachmentKind {
         if kind == .sticker { return .sticker }
 

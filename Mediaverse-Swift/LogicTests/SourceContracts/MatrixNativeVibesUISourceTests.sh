@@ -12,6 +12,23 @@ grep -q 'struct MatrixNativeVibesRootView' "$view"
 grep -q 'MatrixNativeWaveRoomView' "$view"
 grep -q 'actor MatrixVibesRepositoryFoundation' "$repository"
 grep -q 'timelineItems(roomID:' "$repository"
+grep -q 'focus: .live(hideThreadedEvents: true)' "$repository"
+grep -Fq 'internalIdPrefix: "westreem-room-\(roomID)"' "$repository"
+grep -q 'trackReadReceipts: .messageLikeEvents' "$repository"
+grep -q 'struct MatrixNativeRoomActivityPresentation' "$repository"
+for activity_case in \
+  callInvite \
+  rtcNotification \
+  roomMembership \
+  profileChange \
+  state \
+  failedToParseMessageLike \
+  failedToParseState; do
+  grep -Eq "case (let )?\.$activity_case" "$repository" || {
+    echo "Missing Matrix room activity projection: $activity_case" >&2
+    exit 1
+  }
+done
 grep -q 'handle.tryResend()' "$repository"
 grep -q 'typingNotice(isTyping:' "$repository"
 grep -q 'markAsRead(receiptType: .read)' "$repository"
@@ -65,5 +82,9 @@ done
 grep -q 'requestEarlierMessagesFromTopSentinel' "$view"
 grep -q 'requestEarlierMessagesIfNeeded' "$view"
 grep -q 'isLoadingHistory' "$view"
+grep -q 'MatrixNativeTimelineDaySeparator' "$view"
+grep -q 'calendar.isDateInToday(date)' "$view"
+grep -q 'Text(item.timestamp, style: .time)' "$view"
+grep -q 'isPassiveRoomActivity ? 3' "$view"
 
 echo "Matrix-native Vibes UI source contract passed"

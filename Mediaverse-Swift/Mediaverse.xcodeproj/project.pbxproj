@@ -111,6 +111,9 @@
 		F7A0C001301A000100000001 /* DesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7A0C011301A000100000001 /* DesignTokens.swift */; };
 		C7A0C00A301A000100000001 /* MatrixNativeMediaFoundation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A0C018301A000100000001 /* MatrixNativeMediaFoundation.swift */; };
 		C7A0C00B301A000100000001 /* MatrixNativeMediaViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A0C019301A000100000001 /* MatrixNativeMediaViews.swift */; };
+		DA70C001301A000100000001 /* MatrixNativeAttachmentPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA70C011301A000100000001 /* MatrixNativeAttachmentPipeline.swift */; };
+		DA70C002301A000100000001 /* MatrixNativeRoomAttachmentModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA70C012301A000100000001 /* MatrixNativeRoomAttachmentModels.swift */; };
+		DA70C003301A000100000001 /* MatrixNativeRoomAttachmentGalleryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA70C013301A000100000001 /* MatrixNativeRoomAttachmentGalleryView.swift */; };
 		C8A0C001301A000100000001 /* AtmoV2Contracts.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8A0C011301A000100000001 /* AtmoV2Contracts.swift */; };
 		C9A0C001301A000100000001 /* UnifiedNotificationContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9A0C011301A000100000001 /* UnifiedNotificationContract.swift */; };
 		CAA0C001301A000100000001 /* MatrixNativeDirectNotificationFoundation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAA0C011301A000100000001 /* MatrixNativeDirectNotificationFoundation.swift */; };
@@ -283,6 +286,9 @@
 		F7A0C011301A000100000001 /* DesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignTokens.swift; sourceTree = "<group>"; };
 		C7A0C018301A000100000001 /* MatrixNativeMediaFoundation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeMediaFoundation.swift; sourceTree = "<group>"; };
 		C7A0C019301A000100000001 /* MatrixNativeMediaViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeMediaViews.swift; sourceTree = "<group>"; };
+		DA70C011301A000100000001 /* MatrixNativeAttachmentPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeAttachmentPipeline.swift; sourceTree = "<group>"; };
+		DA70C012301A000100000001 /* MatrixNativeRoomAttachmentModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeRoomAttachmentModels.swift; sourceTree = "<group>"; };
+		DA70C013301A000100000001 /* MatrixNativeRoomAttachmentGalleryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeRoomAttachmentGalleryView.swift; sourceTree = "<group>"; };
 		C8A0C011301A000100000001 /* AtmoV2Contracts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtmoV2Contracts.swift; sourceTree = "<group>"; };
 		C9A0C011301A000100000001 /* UnifiedNotificationContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnifiedNotificationContract.swift; sourceTree = "<group>"; };
 		CAA0C011301A000100000001 /* MatrixNativeDirectNotificationFoundation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeDirectNotificationFoundation.swift; sourceTree = "<group>"; };
@@ -715,6 +721,9 @@
 				C7A0C016301A000100000001 /* MatrixNativeVibesViews.swift */,
 				C7A0C018301A000100000001 /* MatrixNativeMediaFoundation.swift */,
 				C7A0C019301A000100000001 /* MatrixNativeMediaViews.swift */,
+				DA70C011301A000100000001 /* MatrixNativeAttachmentPipeline.swift */,
+				DA70C012301A000100000001 /* MatrixNativeRoomAttachmentModels.swift */,
+				DA70C013301A000100000001 /* MatrixNativeRoomAttachmentGalleryView.swift */,
 				CAA0C011301A000100000001 /* MatrixNativeDirectNotificationFoundation.swift */,
 				CAA0C012301A000100000001 /* MatrixNativeDirectNotificationViews.swift */,
 				CBA0C012301A000100000001 /* MatrixNativeRtcRoomView.swift */,
@@ -992,6 +1001,9 @@
 				F9A0C001301A000100000001 /* MatrixInvitePinConvergenceContracts.swift in Sources */,
 				C7A0C00A301A000100000001 /* MatrixNativeMediaFoundation.swift in Sources */,
 				C7A0C00B301A000100000001 /* MatrixNativeMediaViews.swift in Sources */,
+				DA70C001301A000100000001 /* MatrixNativeAttachmentPipeline.swift in Sources */,
+				DA70C002301A000100000001 /* MatrixNativeRoomAttachmentModels.swift in Sources */,
+				DA70C003301A000100000001 /* MatrixNativeRoomAttachmentGalleryView.swift in Sources */,
 				C8A0C001301A000100000001 /* AtmoV2Contracts.swift in Sources */,
 				C9A0C001301A000100000001 /* UnifiedNotificationContract.swift in Sources */,
 				CAA0C001301A000100000001 /* MatrixNativeDirectNotificationFoundation.swift in Sources */,

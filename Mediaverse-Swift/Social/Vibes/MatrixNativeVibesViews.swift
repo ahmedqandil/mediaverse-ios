@@ -2565,6 +2565,13 @@ struct MatrixNativeWaveRoomView: View {
     @State private var settingsPresented = false
     @State private var pinnedPresented = false
     @State private var searchPresented = false
+    @State private var attachmentGalleryPresented = false
+    @State private var attachmentGallerySelection: Set<String> = []
+    @State private var attachmentGalleryPreviewIndex: Int?
+    @State private var attachmentGalleryStarredIDs: Set<String> = []
+    @State private var attachmentGalleryHiddenIDs: Set<String> = []
+    @State private var pendingAttachmentForwardIDs: [String] = []
+    @State private var attachmentGalleryHasMoreHistory = true
     @State private var threadRoot: MatrixTimelineItem?
     @State private var threadPanelPresented = false
     @State private var watchPartyPresented = false
@@ -2617,6 +2624,12 @@ struct MatrixNativeWaveRoomView: View {
                             .padding(.top, 60)
                         } else {
                             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                                if matrixNativeStartsNewDay(
+                                    item,
+                                    after: index > 0 ? items[index - 1] : nil
+                                ) {
+                                    MatrixNativeTimelineDaySeparator(date: item.timestamp)
+                                }
                                 MatrixNativeMessageRow(
                                     roomID: room.id,
                                     roomIsEncrypted: room.isEncrypted,
@@ -2746,6 +2759,17 @@ struct MatrixNativeWaveRoomView: View {
                 },
                 sendSticker: { upload in
                     Task { await sendSticker(upload) }
+                },
+                accountID: {
+                    if case let .ready(userID, _) = matrixSession.lifecycleState { return userID }
+                    return "matrix-session"
+                }(),
+                sendQueuedAttachments: { uploads, caption, transactionID in
+                    try await sendQueuedAttachments(
+                        uploads,
+                        caption: caption,
+                        transactionID: transactionID
+                    )
                 }
             )
         }
@@ -2780,6 +2804,13 @@ struct MatrixNativeWaveRoomView: View {
                     Image(systemName: "bubble.left.and.bubble.right")
                 }
                 .accessibilityLabel("Threads")
+
+                Button {
+                    attachmentGalleryPresented = true
+                } label: {
+                    Image(systemName: "square.grid.2x2")
+                }
+                .accessibilityLabel("Media, documents, and links")
 
                 Menu {
                     if !room.isEncrypted, !room.isDirect {
@@ -2825,6 +2856,46 @@ struct MatrixNativeWaveRoomView: View {
         .fullScreenCover(isPresented: $rtcPresented) {
             MatrixNativeRtcRoomView(room: room)
                 .environmentObject(matrixSession)
+        }
+        .sheet(isPresented: $attachmentGalleryPresented) {
+            NavigationStack {
+                MatrixNativeRoomAttachmentGalleryView(
+                    roomID: room.id,
+                    accountID: attachmentGalleryAccountID,
+                    roomIsEncrypted: room.isEncrypted,
+                    sections: attachmentGallerySections,
+                    selection: $attachmentGallerySelection,
+                    activePreviewIndex: $attachmentGalleryPreviewIndex,
+                    starredIDs: attachmentGalleryStarredIDs,
+                    hasMore: attachmentGalleryHasMoreHistory,
+                    loadMore: { Task { await load(paginate: true, showSpinner: false) } },
+                    deleteForMe: {
+                        attachmentGalleryHiddenIDs.formUnion($0)
+                        persistAttachmentGalleryLocalState()
+                    },
+                    deleteForEveryone: { references in
+                        Task { await deleteGalleryAttachmentsForEveryone(references) }
+                    },
+                    forward: { pendingAttachmentForwardIDs = $0 },
+                    setStarred: { attachments, starred in
+                        let ids = Set(attachments.map(\.id))
+                        if starred { attachmentGalleryStarredIDs.formUnion(ids) }
+                        else { attachmentGalleryStarredIDs.subtract(ids) }
+                        persistAttachmentGalleryLocalState()
+                    }
+                )
+                .environmentObject(matrixSession)
+                .navigationTitle("Room attachments")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { attachmentGalleryPresented = false }
+                    }
+                }
+            }
+        }
+        .onChange(of: attachmentGalleryPresented) { _, presented in
+            if presented { restoreAttachmentGalleryLocalState() }
         }
         .alert("Secure calls are preparing", isPresented: $secureCallNoticePresented) {
             Button("OK", role: .cancel) {}
@@ -3050,6 +3121,7 @@ struct MatrixNativeWaveRoomView: View {
         }
         do {
             let page = try await matrixSession.timeline(roomID: room.id, paginate: paginate)
+            attachmentGalleryHasMoreHistory = page.nextToken != nil
             errorMessage = nil
             items = MatrixTimelineMerge.items(
                 existing: items,
@@ -3089,6 +3161,62 @@ struct MatrixNativeWaveRoomView: View {
         }
         isLoading = false
         isLoadingHistory = false
+    }
+
+    private func attachmentGallerySections(
+        _ tab: MatrixNativeRoomAttachmentGalleryTab
+    ) -> [MatrixNativeRoomAttachmentSection] {
+        let category: MatrixNativeRoomAttachmentCategory = switch tab {
+        case .media: .media
+        case .documents: .documents
+        case .links: .links
+        }
+        let attachments = MatrixNativeRoomAttachmentDerivation.attachments(from: items)
+            .filter { !attachmentGalleryHiddenIDs.contains($0.id) }
+        return MatrixNativeRoomAttachmentDerivation.sections(
+            from: attachments,
+            category: category
+        )
+    }
+
+    private var attachmentGalleryAccountID: String {
+        if case let .ready(userID, _) = matrixSession.lifecycleState { return userID }
+        return ""
+    }
+
+    private func restoreAttachmentGalleryLocalState() {
+        let state = MatrixNativeRoomAttachmentLocalStore.shared.load(
+            accountID: attachmentGalleryAccountID,
+            roomID: room.id
+        )
+        attachmentGalleryHiddenIDs = state.hiddenIDs
+        attachmentGalleryStarredIDs = state.starredIDs
+    }
+
+    private func persistAttachmentGalleryLocalState() {
+        MatrixNativeRoomAttachmentLocalStore.shared.save(
+            MatrixNativeRoomAttachmentLocalState(
+                hiddenIDs: attachmentGalleryHiddenIDs,
+                starredIDs: attachmentGalleryStarredIDs
+            ),
+            accountID: attachmentGalleryAccountID,
+            roomID: room.id
+        )
+    }
+
+    @MainActor
+    private func deleteGalleryAttachmentsForEveryone(
+        _ references: [MatrixNativeEventReference]
+    ) async {
+        let referenceSet = Set(references.compactMap(\.remoteEventID))
+        let candidates = items.filter {
+            referenceSet.contains($0.reference.remoteEventID ?? "") && $0.actions.canRedact
+        }
+        for item in candidates {
+            do { try await matrixSession.redactMessage(item: item, roomID: room.id) }
+            catch { errorMessage = MatrixNativeMediaCopy.message(for: error); return }
+        }
+        await load(showSpinner: false)
     }
 
     @MainActor
@@ -3248,6 +3376,44 @@ struct MatrixNativeWaveRoomView: View {
                 $0.state = .failed(isRecoverable: false)
             }
             errorMessage = MatrixNativeMediaCopy.message(for: error)
+        }
+    }
+
+    /// Queue-owned gallery send. The queue supplies one stable transaction ID
+    /// and invokes this exactly once after every selected item is prepared.
+    @MainActor
+    private func sendQueuedAttachments(
+        _ uploads: [MatrixNativeUpload],
+        caption: String?,
+        transactionID: String
+    ) async throws {
+        guard !uploads.isEmpty else { return }
+        let body = caption?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let optimisticBody = body.flatMap { $0.isEmpty ? nil : $0 }
+            ?? MatrixNativeMediaCopy.summary(for: uploads)
+        if !optimistic.contains(where: { $0.id == transactionID }) {
+            optimistic.append(OptimisticMessage(
+                id: transactionID,
+                body: optimisticBody,
+                createdAt: Date(),
+                state: .sending
+            ))
+        }
+        errorMessage = nil
+        do {
+            try await matrixSession.sendAttachments(
+                uploads,
+                caption: body,
+                roomID: room.id,
+                transactionID: transactionID
+            )
+            updateOptimistic(transactionID) { $0.state = .sent }
+            optimistic.removeAll { $0.id == transactionID }
+            await load(showSpinner: false)
+        } catch {
+            updateOptimistic(transactionID) { $0.state = .failed(isRecoverable: true) }
+            errorMessage = MatrixNativeMediaCopy.message(for: error)
+            throw error
         }
     }
 
@@ -3681,6 +3847,12 @@ private struct MatrixNativeThreadView: View {
                             .padding(.vertical, 34)
                     } else {
                         ForEach(Array(replies.enumerated()), id: \.element.id) { index, item in
+                            if matrixNativeStartsNewDay(
+                                item,
+                                after: index > 0 ? replies[index - 1] : nil
+                            ) {
+                                MatrixNativeTimelineDaySeparator(date: item.timestamp)
+                            }
                             MatrixNativeMessageRow(
                                 roomID: room.id,
                                 roomIsEncrypted: room.isEncrypted,
@@ -4043,6 +4215,43 @@ private func matrixNativeStartsMessageGroup(
     return previous.senderID != item.senderID
 }
 
+private func matrixNativeStartsNewDay(
+    _ item: MatrixTimelineItem,
+    after previous: MatrixTimelineItem?
+) -> Bool {
+    guard let previous else { return true }
+    return !Calendar.autoupdatingCurrent.isDate(
+        item.timestamp,
+        inSameDayAs: previous.timestamp
+    )
+}
+
+private struct MatrixNativeTimelineDaySeparator: View {
+    let date: Date
+
+    private var label: String {
+        let calendar = Calendar.autoupdatingCurrent
+        if calendar.isDateInToday(date) { return "Today" }
+        if calendar.isDateInYesterday(date) { return "Yesterday" }
+        return date.formatted(.dateTime.weekday(.wide).month(.wide).day().year())
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Rectangle().fill(C.borderSubtle).frame(height: 1)
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(C.textMuted)
+                .fixedSize()
+            Rectangle().fill(C.borderSubtle).frame(height: 1)
+        }
+        .padding(.horizontal, C.pagePad)
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+    }
+}
+
 private struct MatrixNativeMessageRow: View {
     let roomID: String
     let roomIsEncrypted: Bool
@@ -4094,6 +4303,19 @@ private struct MatrixNativeMessageRow: View {
             && !item.body.trimmingCharacters(
                 in: .whitespacesAndNewlines
             ).isEmpty
+    }
+
+    private var isPassiveRoomActivity: Bool {
+        item.kind == .notice
+            && !item.actions.canReply
+            && !item.actions.canAddEnergy
+            && !item.actions.canEdit
+            && !item.actions.canRedact
+            && !item.actions.canReport
+            && !item.actions.canPin
+            && item.media.isEmpty
+            && item.poll == nil
+            && item.threadReplyCount == 0
     }
 
     private var tagEnergy: [MatrixNativeEnergySummary] {
@@ -4155,7 +4377,12 @@ private struct MatrixNativeMessageRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            if showsSenderHeader {
+            if isPassiveRoomActivity {
+                Image(systemName: "info.circle")
+                    .font(.caption2)
+                    .foregroundStyle(C.textTertiary)
+                    .frame(width: 20, height: 20)
+            } else if showsSenderHeader {
                 MatrixNativeAvatar(
                     name: item.senderDisplayName,
                     imageURL: item.senderAvatarURL,
@@ -4167,14 +4394,24 @@ private struct MatrixNativeMessageRow: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                if showsSenderHeader {
+                if isPassiveRoomActivity {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(item.body)
+                            .font(.caption)
+                            .foregroundStyle(C.textMuted)
+                            .multilineTextAlignment(.leading)
+                        Text(item.timestamp, style: .time)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(C.textTertiary)
+                    }
+                } else if showsSenderHeader {
                     HStack(alignment: .firstTextBaseline, spacing: 7) {
                         Text(item.senderDisplayName)
                             .font(.subheadline.bold())
                             .foregroundStyle(C.text)
                             .lineLimit(1)
-                        Text(item.timestamp, format: .relative(presentation: .named))
-                            .font(.caption2)
+                        Text(item.timestamp, style: .time)
+                            .font(.caption2.monospacedDigit())
                             .foregroundStyle(C.textTertiary)
                         if item.isEdited {
                             Text("edited").font(.caption2).foregroundStyle(C.textTertiary)
@@ -4182,7 +4419,9 @@ private struct MatrixNativeMessageRow: View {
                     }
                 }
 
-                if let reference = item.westreemReference {
+                if isPassiveRoomActivity {
+                    EmptyView()
+                } else if let reference = item.westreemReference {
                     MatrixNativeWestreemReferenceCard(reference: reference)
                 } else if let visibleBodyText {
                     Label {
@@ -4290,7 +4529,8 @@ private struct MatrixNativeMessageRow: View {
                     if let state = item.localSendState {
                         Text(MatrixNativeCopy.label(for: state))
                     }
-                    Menu {
+                    if !isPassiveRoomActivity {
+                        Menu {
                         if item.actions.canAddEnergy {
                             Button("Add Energy", systemImage: "bolt.fill") {
                                 energyPresented = true
@@ -4336,11 +4576,12 @@ private struct MatrixNativeMessageRow: View {
                                 deleteConfirmationPresented = true
                             }
                         }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .frame(minWidth: 28, minHeight: 28)
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .frame(minWidth: 28, minHeight: 28)
+                        }
+                        .accessibilityLabel("More message actions")
                     }
-                    .accessibilityLabel("More message actions")
                 }
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(C.textMuted)
@@ -4349,8 +4590,8 @@ private struct MatrixNativeMessageRow: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, C.pagePad)
-        .padding(.vertical, showsSenderHeader ? 9 : 3)
-        .background(item.isOwn ? C.watch.opacity(0.035) : Color.clear)
+        .padding(.vertical, isPassiveRoomActivity ? 3 : (showsSenderHeader ? 9 : 3))
+        .background(!isPassiveRoomActivity && item.isOwn ? C.watch.opacity(0.035) : Color.clear)
         .contentShape(Rectangle())
         .contextMenu {
             if item.actions.canAddEnergy {

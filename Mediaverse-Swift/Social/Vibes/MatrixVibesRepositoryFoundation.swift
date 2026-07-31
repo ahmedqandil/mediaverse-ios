@@ -847,6 +847,12 @@ protocol MatrixVibesSDKProviding: Sendable {
         sourceJSON: String,
         expectedSize: UInt64?
     ) async throws -> Data
+    func mediaThumbnailData(
+        roomID: String,
+        sourceJSON: String,
+        width: UInt64,
+        height: UInt64
+    ) async throws -> Data
     func avatarData(avatarURL: String) async throws -> Data
     func setTyping(roomID: String, isTyping: Bool) async throws
     func markRead(roomID: String) async throws
@@ -2765,7 +2771,16 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
             let client = try await activeClient()
             let matrixRoom = try room(roomID, in: client)
             let context = try await timelineContext(room: matrixRoom, client: client)
-            let timeline = try await matrixRoom.timeline()
+            let timeline = try await matrixRoom.timelineWithConfiguration(
+                configuration: TimelineConfiguration(
+                    focus: .live(hideThreadedEvents: true),
+                    filter: .all,
+                    internalIdPrefix: "westreem-room-\(roomID)",
+                    dateDividerMode: .daily,
+                    trackReadReceipts: .messageLikeEvents,
+                    reportUtds: false
+                )
+            )
             let accumulator = MatrixTimelineAccumulator(context: context)
             let taskHandle = await timeline.addListener(listener: accumulator)
             session = MatrixFocusedTimelineSession(
@@ -2950,7 +2965,7 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
                     internalIdPrefix: "westreem-thread-\(rootEventID)",
                     dateDividerMode: .daily,
                     trackReadReceipts: .messageLikeEvents,
-                    reportUtds: true
+                    reportUtds: false
                 )
             )
             let accumulator = MatrixTimelineAccumulator(context: context)
@@ -3001,7 +3016,7 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
                 internalIdPrefix: "westreem-thread-send-\(rootEventID)",
                 dateDividerMode: .daily,
                 trackReadReceipts: .messageLikeEvents,
-                reportUtds: true
+                reportUtds: false
             )
         )
         guard let content = try await messageContent(
@@ -3462,6 +3477,22 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         return data
     }
 
+    func mediaThumbnailData(
+        roomID: String,
+        sourceJSON: String,
+        width: UInt64,
+        height: UInt64
+    ) async throws -> Data {
+        let client = try await activeClient()
+        _ = try room(roomID, in: client)
+        let source = try MediaSource.fromJson(json: sourceJSON)
+        return try await client.getMediaThumbnail(
+            mediaSource: source,
+            width: width,
+            height: height
+        )
+    }
+
     func avatarData(avatarURL: String) async throws -> Data {
         guard avatarURL.hasPrefix("mxc://") else {
             throw MatrixNativeMediaError.mediaUnavailable
@@ -3759,7 +3790,7 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
                     internalIdPrefix: "westreem-thread-media-\(threadRootEventID)",
                     dateDividerMode: .daily,
                     trackReadReceipts: .messageLikeEvents,
-                    reportUtds: true
+                    reportUtds: false
                 )
             )
         } else {
@@ -5130,6 +5161,21 @@ actor MatrixVibesRepositoryFoundation: VibesRepository {
         )
     }
 
+    func mediaThumbnailData(
+        roomID: String,
+        sourceJSON: String,
+        width: UInt64,
+        height: UInt64
+    ) async throws -> Data {
+        try requireEnabled()
+        return try await sdk.mediaThumbnailData(
+            roomID: roomID,
+            sourceJSON: sourceJSON,
+            width: width,
+            height: height
+        )
+    }
+
     func avatarData(avatarURL: String) async throws -> Data {
         try requireEnabled()
         return try await sdk.avatarData(avatarURL: avatarURL)
@@ -5324,6 +5370,51 @@ private extension MatrixTimelineItem {
             profileName,
             matrixUserID: item.sender
         )
+
+        if case .msgLike = item.content {
+            // Message-like events continue through the full message/media,
+            // reaction, thread and action projection below.
+        } else if let activity = MatrixNativeRoomActivityPresentation(
+            item.content,
+            senderDisplayName: displayName
+        ) {
+            self.init(
+                id: id,
+                reference: reference,
+                senderID: item.sender,
+                senderDisplayName: displayName,
+                senderAvatarURL: avatarURL,
+                body: activity.body,
+                kind: .notice,
+                timestamp: Date(
+                    timeIntervalSince1970: TimeInterval(item.timestamp) / 1_000
+                ),
+                isOwn: item.isOwn,
+                isEdited: false,
+                localSendState: nil,
+                reactionCount: 0,
+                energy: [],
+                readReceiptCount: 0,
+                readReceiptUserIDs: [],
+                threadReplyCount: 0,
+                replyPreviews: [],
+                actions: MatrixNativeTimelineActions(
+                    canReply: false,
+                    canAddEnergy: false,
+                    canEdit: false,
+                    canRedact: false,
+                    canReport: false,
+                    canPin: false,
+                    isPinned: false
+                ),
+                media: [],
+                poll: nil,
+                westreemReference: nil
+            )
+            return
+        } else {
+            return nil
+        }
 
         let westreemReference: MatrixNativeWestreemReferenceV1?
         let presentation: MatrixNativeMessagePresentation
@@ -5648,6 +5739,123 @@ private extension MatrixNativeReplyPreview {
     }
 }
 
+private struct MatrixNativeRoomActivityPresentation {
+    var body: String
+
+    init?(_ content: TimelineItemContent, senderDisplayName: String) {
+        switch content {
+        case .msgLike:
+            return nil
+        case .callInvite:
+            body = "\(senderDisplayName) started a call"
+        case let .rtcNotification(_, _, activeMembers, _, isJoined):
+            if isJoined {
+                body = "You joined the call"
+            } else if activeMembers.isEmpty {
+                body = "The call ended"
+            } else {
+                body = "A call is active"
+            }
+        case let .roomMembership(_, userDisplayName, change, reason):
+            let member = userDisplayName?.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty == false ? userDisplayName! : senderDisplayName
+            let suffix = reason?.trimmingCharacters(in: .whitespacesAndNewlines)
+            switch change {
+            case .joined, .invitationAccepted:
+                body = "\(member) joined the Wave"
+            case .left:
+                body = "\(member) left the Wave"
+            case .invited:
+                body = "\(member) was invited"
+            case .kicked:
+                body = "\(member) was removed from the Wave"
+            case .banned, .kickedAndBanned:
+                body = "\(member) was banned"
+            case .unbanned:
+                body = "\(member) was unbanned"
+            case .invitationRejected, .invitationRevoked:
+                body = "\(member)'s invitation was declined"
+            case .knocked:
+                body = "\(member) requested to join"
+            case .knockAccepted:
+                body = "\(member)'s join request was accepted"
+            case .knockRetracted, .knockDenied:
+                body = "\(member)'s join request was closed"
+            case .some(.none), .some(.error), .some(.notImplemented), nil:
+                body = "\(member)'s membership changed"
+            }
+            if let suffix, !suffix.isEmpty {
+                body += ": \(suffix)"
+            }
+        case let .profileChange(displayName, previousDisplayName, avatarURL, previousAvatarURL):
+            if displayName != previousDisplayName {
+                body = "\(senderDisplayName) changed their display name"
+            } else if avatarURL != previousAvatarURL {
+                body = "\(senderDisplayName) changed their profile photo"
+            } else {
+                body = "\(senderDisplayName) updated their profile"
+            }
+        case let .state(_, state):
+            switch state {
+            case let .roomName(name):
+                body = name?.isEmpty == false
+                    ? "\(senderDisplayName) named this Wave \(name!)"
+                    : "\(senderDisplayName) removed the Wave name"
+            case let .roomTopic(topic):
+                body = topic?.isEmpty == false
+                    ? "\(senderDisplayName) changed the Wave topic"
+                    : "\(senderDisplayName) removed the Wave topic"
+            case .roomAvatar:
+                body = "\(senderDisplayName) changed the Wave photo"
+            case .roomPinnedEvents:
+                body = "\(senderDisplayName) updated pinned messages"
+            case .roomPowerLevels:
+                body = "\(senderDisplayName) changed member permissions"
+            case .roomJoinRules:
+                body = "\(senderDisplayName) changed who can join"
+            case .roomHistoryVisibility:
+                body = "\(senderDisplayName) changed history visibility"
+            case .roomEncryption:
+                body = "Encryption was enabled for this Wave"
+            case .roomCreate:
+                body = "\(senderDisplayName) created this Wave"
+            case .roomGuestAccess:
+                body = "\(senderDisplayName) changed guest access"
+            case .roomCanonicalAlias:
+                body = "\(senderDisplayName) changed the Wave address"
+            case .roomTombstone:
+                body = "This Wave was replaced"
+            case .roomThirdPartyInvite:
+                body = "\(senderDisplayName) updated an invitation"
+            case .spaceChild, .spaceParent:
+                body = "\(senderDisplayName) changed the Wave hierarchy"
+            case .policyRuleRoom, .policyRuleServer, .policyRuleUser, .roomServerAcl:
+                body = "\(senderDisplayName) changed a room safety setting"
+            case let .custom(eventType):
+                if eventType == "com.westreem.public_sharing.v1" {
+                    body = "\(senderDisplayName) changed Wave sharing settings"
+                } else if eventType.contains(".call.member") {
+                    // Matrix RTC membership state is transport metadata. The
+                    // user-facing call lifecycle is projected by
+                    // `rtcNotification`; exposing every state heartbeat makes
+                    // the room timeline unusably noisy.
+                    return nil
+                } else {
+                    // Unknown custom state is application/protocol metadata.
+                    // Keep it available to feature-specific state readers but
+                    // do not leak its raw type into the human timeline.
+                    return nil
+                }
+            }
+        case let .failedToParseMessageLike(eventType, _):
+            body = "Unsupported message activity: \(eventType)"
+        case let .failedToParseState(eventType, _, _):
+            body = "Unsupported room activity: \(eventType)"
+        }
+    }
+}
+
 private struct MatrixNativeMessagePresentation {
     let body: String
     let kind: MatrixNativeMessageKind
@@ -5773,6 +5981,7 @@ private struct MatrixNativeMessagePresentation {
 
 private extension MatrixNativeMediaDescriptor {
     init(_ content: ImageMessageContent) {
+        let thumbnail = content.info?.thumbnailInfo
         self.init(
             id: content.source.url(),
             kind: .image,
@@ -5782,7 +5991,12 @@ private extension MatrixNativeMediaDescriptor {
             width: content.info?.width,
             height: content.info?.height,
             duration: nil,
-            sourceJSON: content.source.toJson()
+            sourceJSON: content.source.toJson(),
+            thumbnailSourceJSON: content.info?.thumbnailSource?.toJson(),
+            thumbnailMimeType: thumbnail?.mimetype,
+            thumbnailSize: thumbnail?.size,
+            thumbnailWidth: thumbnail?.width,
+            thumbnailHeight: thumbnail?.height
         )
     }
 
@@ -5809,6 +6023,7 @@ private extension MatrixNativeMediaDescriptor {
     }
 
     init(_ content: VideoMessageContent) {
+        let thumbnail = content.info?.thumbnailInfo
         self.init(
             id: content.source.url(),
             kind: .video,
@@ -5818,7 +6033,12 @@ private extension MatrixNativeMediaDescriptor {
             width: content.info?.width,
             height: content.info?.height,
             duration: content.info?.duration,
-            sourceJSON: content.source.toJson()
+            sourceJSON: content.source.toJson(),
+            thumbnailSourceJSON: content.info?.thumbnailSource?.toJson(),
+            thumbnailMimeType: thumbnail?.mimetype,
+            thumbnailSize: thumbnail?.size,
+            thumbnailWidth: thumbnail?.width,
+            thumbnailHeight: thumbnail?.height
         )
     }
 

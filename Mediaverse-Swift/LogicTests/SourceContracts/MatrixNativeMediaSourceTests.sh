@@ -35,6 +35,7 @@ done
 grep -q 'handle.join()' "$repository"
 grep -q 'MediaSource.fromJson(json: sourceJSON)' "$repository"
 grep -q 'getMediaContent(mediaSource: source)' "$repository"
+grep -q 'getMediaThumbnail(' "$repository"
 grep -q 'permitsDirectCloudflareUpload = false' "$migration_contract"
 grep -q 'permitsClientTranscoding = false' "$migration_contract"
 grep -q 'uploadProgressOwner: LifecycleOwner = .matrixRustSDK' "$migration_contract"
@@ -78,6 +79,17 @@ if sed -n '/func mediaData(/,/func avatarData/p' "$repository" | grep -q 'guard 
 fi
 grep -q 'state == .unavailable' "$views"
 grep -q 'Button("Retry")' "$views"
+grep -q 'thumbnailSourceJSON: content.info?.thumbnailSource?.toJson()' "$repository"
+grep -q 'if let thumbnail = media.authenticatedThumbnail' "$views"
+grep -q 'thumbnailData = try? await matrixSession.mediaData' "$views"
+grep -q 'Loading image preview' "$views"
+grep -q 'state == .idle || state == .loading' "$views"
+grep -q 'Image(systemName: "play.fill")' "$views"
+grep -q 'generatedData = try? await matrixSession.mediaThumbnailData' "$views"
+grep -q 'MatrixNativeWaveformAnalyzer.samples(from: url)' "$views"
+grep -q 'static let fallbackSamples' "$views"
+grep -q 'let barWidth: CGFloat = 2' "$views"
+grep -q 'WaveformBarsView(' "$views"
 
 if grep -Eq 'LegacySocialAPIAdapter|MatrixWaveClient|URLSession[(]|/api/fan-clubs|/api/fan-club-posts' \
   "$foundation" "$views" "$repository"; then
