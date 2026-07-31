@@ -1,6 +1,6 @@
 import Foundation
 
-enum MatrixNativeAttachmentKind: String, Equatable, Sendable {
+enum MatrixNativeAttachmentKind: String, Codable, Equatable, Sendable {
     case image
     case audio
     case voice
@@ -33,14 +33,14 @@ struct MatrixNativeUpload: Identifiable, Equatable, Sendable {
         self.kind = kind
         self.data = data
         self.filename = filename
-        self.mimeType = mimeType.lowercased()
+        self.mimeType = MatrixNativeMediaPolicy.baseMimeType(mimeType) ?? mimeType.lowercased()
         self.width = width
         self.height = height
         self.duration = duration
     }
 }
 
-struct MatrixNativeMediaDescriptor: Identifiable, Equatable, Sendable {
+struct MatrixNativeMediaDescriptor: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let kind: MatrixNativeAttachmentKind
     let filename: String
@@ -52,13 +52,58 @@ struct MatrixNativeMediaDescriptor: Identifiable, Equatable, Sendable {
     let sourceJSON: String
 }
 
-struct MatrixNativePollOption: Identifiable, Equatable, Sendable {
+extension MatrixNativeMediaDescriptor {
+    var effectiveKind: MatrixNativeAttachmentKind {
+        if kind == .sticker { return .sticker }
+
+        let lowercasedName = filename.lowercased()
+        let lowercasedMime = effectiveMimeType ?? ""
+
+        if kind == .audio || lowercasedMime.hasPrefix("audio/") {
+            // Case-insensitive ranged search avoids copying the whole event
+            // JSON on every render.
+            if sourceJSON.range(of: "org.matrix.msc3245.voice", options: .caseInsensitive) != nil
+                || sourceJSON.range(of: "\"voice\"", options: .caseInsensitive) != nil
+                || lowercasedName.contains("voice") {
+                return .voice
+            }
+            return .audio
+        }
+
+        if lowercasedMime.hasPrefix("image/") { return .image }
+        if lowercasedMime.hasPrefix("video/") { return .video }
+        return kind
+    }
+
+    var effectiveMimeType: String? {
+        if let base = MatrixNativeMediaPolicy.baseMimeType(mimeType) { return base }
+        let lowercasedName = filename.lowercased()
+        if lowercasedName.hasSuffix(".jpg") || lowercasedName.hasSuffix(".jpeg") { return "image/jpeg" }
+        if lowercasedName.hasSuffix(".png") { return "image/png" }
+        if lowercasedName.hasSuffix(".gif") { return "image/gif" }
+        if lowercasedName.hasSuffix(".heic") { return "image/heic" }
+        if lowercasedName.hasSuffix(".heif") { return "image/heif" }
+        if lowercasedName.hasSuffix(".webp") { return "image/webp" }
+        if lowercasedName.hasSuffix(".mp4") || lowercasedName.hasSuffix(".m4v") { return "video/mp4" }
+        if lowercasedName.hasSuffix(".mov") { return "video/quicktime" }
+        if lowercasedName.hasSuffix(".m4a") { return "audio/mp4" }
+        if lowercasedName.hasSuffix(".mp3") { return "audio/mpeg" }
+        if lowercasedName.hasSuffix(".aac") { return "audio/aac" }
+        if lowercasedName.hasSuffix(".wav") { return "audio/wav" }
+        if lowercasedName.hasSuffix(".webm") {
+            return filename.lowercased().contains("voice") ? "audio/webm" : "video/webm"
+        }
+        return nil
+    }
+}
+
+struct MatrixNativePollOption: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let text: String
     let voteCount: Int
 }
 
-struct MatrixNativePollDescriptor: Equatable, Sendable {
+struct MatrixNativePollDescriptor: Codable, Equatable, Sendable {
     let question: String
     let options: [MatrixNativePollOption]
     let maxSelections: UInt64
@@ -115,10 +160,10 @@ enum MatrixNativeMediaPolicy {
         "image/jpeg", "image/png", "image/gif", "image/heic", "image/heif", "image/webp",
     ])
     private static let audioTypes = Set([
-        "audio/mp4", "audio/m4a", "audio/mpeg", "audio/aac", "audio/wav", "audio/x-wav",
+        "audio/mp4", "audio/m4a", "audio/mpeg", "audio/aac", "audio/wav", "audio/x-wav", "audio/webm",
     ])
     private static let videoTypes = Set([
-        "video/mp4", "video/quicktime",
+        "video/mp4", "video/quicktime", "video/webm",
     ])
     private static let fileTypes = Set([
         "application/pdf",
@@ -130,6 +175,18 @@ enum MatrixNativeMediaPolicy {
         "text/plain",
         "text/csv",
     ])
+
+    /// Reduces a MIME string to its lowercase base type. Web clients record
+    /// voice messages with parameterized types like "audio/webm;codecs=opus";
+    /// allowlist and signature checks match on the base type only.
+    static func baseMimeType(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let base = raw
+            .components(separatedBy: ";")[0]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return base.isEmpty ? nil : base
+    }
 
     static func validate(
         _ uploads: [MatrixNativeUpload],
@@ -211,12 +268,11 @@ enum MatrixNativeMediaPolicy {
         _ data: Data,
         descriptor: MatrixNativeMediaDescriptor
     ) throws {
-        guard let mimeType = descriptor.mimeType?.lowercased(),
+        guard let mimeType = descriptor.effectiveMimeType,
               descriptor.size == nil || descriptor.size == UInt64(data.count) else {
             throw MatrixNativeMediaError.mediaUnavailable
         }
-        let validationKind: MatrixNativeAttachmentKind =
-            descriptor.kind == .sticker ? .sticker : descriptor.kind
+        let validationKind = descriptor.effectiveKind
         let candidate = MatrixNativeUpload(
             kind: validationKind,
             data: data,
@@ -292,6 +348,8 @@ enum MatrixNativeMediaPolicy {
                 && data.dropFirst(8).prefix(4) == Data("WEBP".utf8)
         case "image/heic", "image/heif", "video/mp4", "video/quicktime", "audio/mp4", "audio/m4a":
             return data.dropFirst(4).prefix(4) == Data("ftyp".utf8)
+        case "audio/webm", "video/webm":
+            return bytes.starts(with: [0x1A, 0x45, 0xDF, 0xA3])
         case "audio/mpeg":
             return data.prefix(3) == Data("ID3".utf8)
                 || (bytes.count >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0)

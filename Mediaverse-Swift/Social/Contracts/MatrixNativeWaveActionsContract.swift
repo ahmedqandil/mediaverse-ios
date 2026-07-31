@@ -114,6 +114,21 @@ public struct MatrixNativeEnergyOption: Identifiable, Equatable, Hashable, Senda
         .init(id: "com.westreem.energy.v1:CHILL", label: "Chill", systemImage: "face.smiling"),
         .init(id: "com.westreem.energy.v1:CLUTCH", label: "Clutch", systemImage: "bolt.fill"),
     ]
+
+    public static let intensityPrefix = "com.westreem.energy.v1:LEVEL_"
+
+    public static func intensityKey(for level: Int) -> String {
+        "\(intensityPrefix)\(min(max(level, 1), 5))"
+    }
+
+    public static func intensityLevel(for key: String) -> Int? {
+        guard key.hasPrefix(intensityPrefix),
+              let level = Int(key.dropFirst(intensityPrefix.count)),
+              (1...5).contains(level) else {
+            return nil
+        }
+        return level
+    }
 }
 
 public enum MatrixNativeWaveAction: String, CaseIterable, Sendable {
@@ -195,6 +210,7 @@ public enum MatrixNativeWaveActionPolicy {
 
     public static func isSupportedEnergyKey(_ key: String) -> Bool {
         MatrixNativeEnergyOption.all.contains { $0.id == key }
+            || MatrixNativeEnergyOption.intensityLevel(for: key) != nil
     }
 }
 

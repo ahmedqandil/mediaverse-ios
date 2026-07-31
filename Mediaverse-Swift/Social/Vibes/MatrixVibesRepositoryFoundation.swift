@@ -42,10 +42,60 @@ struct MatrixNativeLoungeParticipant: Identifiable, Equatable, Hashable, Sendabl
     let avatarURL: String?
 }
 
-struct MatrixTimelinePage: Equatable, Sendable {
+struct MatrixTimelinePage: Codable, Equatable, Sendable {
     let roomID: String
     let items: [MatrixTimelineItem]
     let nextToken: String?
+}
+
+enum MatrixTimelineMerge {
+    /// Merges a freshly loaded timeline page into previously known items.
+    ///
+    /// The loaded page is the authoritative snapshot of the live SDK
+    /// timeline: known items are updated in place, new items are appended
+    /// (or prepended history is deduplicated when paginating), and local
+    /// echoes that no longer exist in the live timeline are dropped —
+    /// otherwise a message that materialized under its remote event ID
+    /// would render twice next to its stale transaction-ID copy.
+    static func items(
+        existing: [MatrixTimelineItem],
+        loaded: [MatrixTimelineItem],
+        paginate: Bool
+    ) -> [MatrixTimelineItem] {
+        guard !existing.isEmpty else { return loaded }
+        let loadedIDs = Set(loaded.map(\.id))
+        let retained = existing.filter { item in
+            if case .transactionID = item.reference {
+                return loadedIDs.contains(item.id)
+            }
+            return true
+        }
+
+        if paginate {
+            var seen = Set<String>()
+            var merged: [MatrixTimelineItem] = []
+            for item in loaded + retained where seen.insert(item.id).inserted {
+                merged.append(item)
+            }
+            return merged
+        }
+
+        var merged: [MatrixTimelineItem] = []
+        var indexesByID: [String: Int] = [:]
+        for item in retained where indexesByID[item.id] == nil {
+            indexesByID[item.id] = merged.count
+            merged.append(item)
+        }
+        for item in loaded {
+            if let index = indexesByID[item.id] {
+                merged[index] = item
+            } else {
+                indexesByID[item.id] = merged.count
+                merged.append(item)
+            }
+        }
+        return merged
+    }
 }
 
 struct MatrixNativeWaveRulesSnapshot: Equatable, Sendable {
@@ -144,20 +194,20 @@ struct MatrixWaveSummary: Identifiable, Equatable, Hashable, Sendable {
     }
 }
 
-enum MatrixNativeMembership: String, Equatable, Hashable, Sendable {
+enum MatrixNativeMembership: String, Codable, Equatable, Hashable, Sendable {
     case joined
     case invited
     case left
     case unknown
 }
 
-enum MatrixNativeLocalSendState: Equatable, Sendable {
+enum MatrixNativeLocalSendState: Codable, Equatable, Sendable {
     case sending
     case failed(isRecoverable: Bool)
     case sent
 }
 
-enum MatrixNativeMessageKind: Equatable, Sendable {
+enum MatrixNativeMessageKind: Codable, Equatable, Sendable {
     case text
     case notice
     case emote
@@ -175,7 +225,7 @@ enum MatrixNativeMessageKind: Equatable, Sendable {
     case unsupported
 }
 
-enum MatrixNativeEventReference: Equatable, Sendable {
+enum MatrixNativeEventReference: Codable, Equatable, Sendable {
     case eventID(String)
     case transactionID(String)
 
@@ -185,21 +235,21 @@ enum MatrixNativeEventReference: Equatable, Sendable {
     }
 }
 
-struct MatrixNativeEnergySummary: Identifiable, Equatable, Sendable {
+struct MatrixNativeEnergySummary: Codable, Identifiable, Equatable, Sendable {
     var id: String { key }
     let key: String
     let count: Int
     let isSelectedByCurrentUser: Bool
 }
 
-struct MatrixNativeReplyPreview: Identifiable, Equatable, Sendable {
+struct MatrixNativeReplyPreview: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let senderDisplayName: String
     let body: String
     let timestamp: Date
 }
 
-struct MatrixNativeTimelineActions: Equatable, Sendable {
+struct MatrixNativeTimelineActions: Codable, Equatable, Sendable {
     let canReply: Bool
     let canAddEnergy: Bool
     let canEdit: Bool
@@ -219,7 +269,7 @@ struct MatrixNativeTimelineActions: Equatable, Sendable {
     )
 }
 
-struct MatrixTimelineItem: Identifiable, Equatable, Sendable {
+struct MatrixTimelineItem: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let reference: MatrixNativeEventReference
     let senderID: String

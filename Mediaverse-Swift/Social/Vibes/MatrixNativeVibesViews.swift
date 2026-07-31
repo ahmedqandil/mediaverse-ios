@@ -340,24 +340,14 @@ private struct MatrixNativeCombinedWavesView: View {
     @MainActor
     private func load() async {
         isLoading = true
-        var loadedCommunityWaves: [MatrixWaveSummary] = []
-        var failures = 0
+        let spaceIDs = joinedSpaceIDs
 
-        for spaceID in joinedSpaceIDs {
-            do {
-                loadedCommunityWaves.append(
-                    contentsOf: try await matrixSession.waves(spaceID: spaceID).rooms
-                )
-            } catch {
-                failures += 1
-            }
-        }
+        async let communityResult = loadCommunityWaves(spaceIDs: spaceIDs)
+        async let personalResult = loadPersonalWaves()
 
-        do {
-            personalWaves = try await matrixSession.directMessages()
-        } catch {
-            failures += 1
-        }
+        let (loadedCommunityWaves, communityFailures) = await communityResult
+        let loadedPersonalWaves = await personalResult
+        personalWaves = loadedPersonalWaves.rooms
 
         communityWaves = Array(
             Dictionary(
@@ -368,10 +358,38 @@ private struct MatrixNativeCombinedWavesView: View {
         .sorted {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
+        let failures = communityFailures + loadedPersonalWaves.failures
         errorMessage = failures > 0
             ? "Some Waves could not synchronize. Pull to retry."
             : nil
         isLoading = false
+    }
+
+    @MainActor
+    private func loadCommunityWaves(spaceIDs: [String]) async -> ([MatrixWaveSummary], Int) {
+        var loadedCommunityWaves: [MatrixWaveSummary] = []
+        var failures = 0
+
+        for spaceID in spaceIDs {
+            do {
+                loadedCommunityWaves.append(
+                    contentsOf: try await matrixSession.waves(spaceID: spaceID).rooms
+                )
+            } catch {
+                failures += 1
+            }
+        }
+
+        return (loadedCommunityWaves, failures)
+    }
+
+    @MainActor
+    private func loadPersonalWaves() async -> (rooms: [MatrixDirectRoomSummary], failures: Int) {
+        do {
+            return (try await matrixSession.directMessages(), 0)
+        } catch {
+            return ([], 1)
+        }
     }
 }
 
@@ -2143,6 +2161,7 @@ struct MatrixNativeWaveRoomView: View {
 
     let room: MatrixWaveSummary
     var opensLiveLounge = false
+    private let initialHistoryPrefetchPageCount = 1
 
     @EnvironmentObject private var matrixSession: MatrixNativeSessionController
     @Environment(\.dismiss) private var dismissRoom
@@ -2151,8 +2170,15 @@ struct MatrixNativeWaveRoomView: View {
     @State private var typingUserIDs: [String] = []
     @State private var optimistic: [OptimisticMessage] = []
     @State private var draft = ""
+    @State private var lastSentTypingState = false
     @State private var isLoading = true
     @State private var isLoadingHistory = false
+    @State private var isPrefetchingInitialHistory = false
+    @State private var hasLoadedInitialTimeline = false
+    @State private var autoPaginationEnabled = false
+    @State private var lastAutoPaginationTriggerID: String?
+    @State private var paginationAnchorID: String?
+    @State private var pendingBottomScrollID: String?
     @State private var errorMessage: String?
     @State private var rtcPresented = false
     @State private var secureCallNoticePresented = false
@@ -2170,19 +2196,17 @@ struct MatrixNativeWaveRoomView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 3) {
-                        Button {
-                            Task { await load(paginate: true) }
-                        } label: {
-                            if isLoadingHistory {
-                                ProgressView().tint(C.watch)
-                            } else {
-                                Label("Load earlier messages", systemImage: "arrow.up")
-                            }
+                        if isLoadingHistory {
+                            ProgressView()
+                                .tint(C.watch)
+                                .padding(.vertical, 12)
+                        } else {
+                            Color.clear
+                                .frame(height: 1)
+                                .onAppear {
+                                    requestEarlierMessagesFromTopSentinel()
+                                }
                         }
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(C.watch)
-                        .padding(.vertical, 12)
-                        .disabled(isLoadingHistory)
 
                         if isLoading, items.isEmpty, optimistic.isEmpty {
                             ProgressView().tint(C.watch).padding(.top, 70)
@@ -2195,11 +2219,15 @@ struct MatrixNativeWaveRoomView: View {
                             .foregroundStyle(C.text)
                             .padding(.top, 60)
                         } else {
-                            ForEach(items) { item in
+                            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                                 MatrixNativeMessageRow(
                                     roomID: room.id,
                                     roomIsEncrypted: room.isEncrypted,
                                     item: item,
+                                    showsSenderHeader: matrixNativeStartsMessageGroup(
+                                        item,
+                                        after: index > 0 ? items[index - 1] : nil
+                                    ),
                                     showsDiscussion: true,
                                     openDiscussion: { threadRoot = item },
                                     addEnergy: { keys in
@@ -2222,10 +2250,14 @@ struct MatrixNativeWaveRoomView: View {
                                     }
                                 )
                                     .id(item.id)
+                                    .onAppear {
+                                        requestEarlierMessagesIfNeeded(visibleItemID: item.id)
+                                    }
                             }
-                            ForEach(optimistic) { message in
+                            ForEach(Array(optimistic.enumerated()), id: \.element.id) { index, message in
                                 MatrixNativeOptimisticMessageRow(
                                     message: message,
+                                    showsSenderHeader: index == 0 ? items.last?.isOwn != true : false,
                                     retry: { Task { await retry(message) } },
                                     remove: { optimistic.removeAll { $0.id == message.id } }
                                 )
@@ -2245,8 +2277,24 @@ struct MatrixNativeWaveRoomView: View {
                 .scrollDismissesKeyboard(.interactively)
                 .refreshable { await load() }
                 .onChange(of: items.count + optimistic.count) { _, _ in
-                    if let id = optimistic.last?.id ?? items.last?.id {
-                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) }
+                    if let anchorID = paginationAnchorID {
+                        paginationAnchorID = nil
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(anchorID, anchor: .top)
+                        }
+                    } else if !isLoadingHistory,
+                              !isPrefetchingInitialHistory,
+                              let id = optimistic.last?.id ?? items.last?.id {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(id, anchor: .bottom)
+                        }
+                    }
+                }
+                .onChange(of: pendingBottomScrollID) { _, id in
+                    guard let id else { return }
+                    pendingBottomScrollID = nil
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(id, anchor: .bottom)
                     }
                 }
             }
@@ -2346,14 +2394,10 @@ struct MatrixNativeWaveRoomView: View {
             )
             .environmentObject(matrixSession)
         }
-        .navigationDestination(
-            isPresented: Binding(
-                get: { threadRoot != nil },
-                set: { if !$0 { threadRoot = nil } }
-            )
-        ) {
-            if let threadRoot {
-                MatrixNativeThreadView(room: room, root: threadRoot)
+        .sheet(item: $threadRoot) { root in
+            NavigationStack {
+                MatrixNativeThreadView(room: room, root: root)
+                    .environmentObject(matrixSession)
             }
         }
         .task(id: room.id) {
@@ -2385,8 +2429,7 @@ struct MatrixNativeWaveRoomView: View {
             }
         }
         .onChange(of: draft) { _, value in
-            let isTyping = !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            Task { await matrixSession.setTyping(isTyping, roomID: room.id) }
+            updateTypingState(!value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .onAppear {
             NotificationCenter.default.post(
@@ -2399,23 +2442,107 @@ struct MatrixNativeWaveRoomView: View {
                 name: .matrixWaveVisibilityChanged,
                 object: false
             )
+            lastSentTypingState = false
             Task { await matrixSession.setTyping(false, roomID: room.id) }
+        }
+    }
+
+    private func updateTypingState(_ isTyping: Bool) {
+        guard isTyping != lastSentTypingState else { return }
+        lastSentTypingState = isTyping
+        Task { await matrixSession.setTyping(isTyping, roomID: room.id) }
+    }
+
+    private func requestEarlierMessagesFromTopSentinel() {
+        guard let firstItemID = items.first?.id else { return }
+        requestEarlierMessagesIfNeeded(visibleItemID: firstItemID)
+    }
+
+    private func requestEarlierMessagesIfNeeded(visibleItemID: String) {
+        guard autoPaginationEnabled,
+              hasLoadedInitialTimeline,
+              !isLoading,
+              !isLoadingHistory,
+              visibleItemID == items.first?.id,
+              lastAutoPaginationTriggerID != visibleItemID else {
+            return
+        }
+        lastAutoPaginationTriggerID = visibleItemID
+        Task { await load(paginate: true, showSpinner: false) }
+    }
+
+    @MainActor
+    private func prefetchInitialHistoryPages(count: Int) async {
+        guard count > 0 else { return }
+        isPrefetchingInitialHistory = true
+        defer { isPrefetchingInitialHistory = false }
+        for _ in 0..<count {
+            guard !Task.isCancelled else { return }
+            let previousCount = items.count
+            do {
+                let page = try await matrixSession.timeline(roomID: room.id, paginate: true)
+                let merged = MatrixTimelineMerge.items(
+                    existing: items,
+                    loaded: page.items,
+                    paginate: true
+                )
+                guard merged.count > previousCount else { return }
+                items = merged
+            } catch {
+                return
+            }
+        }
+    }
+
+    @MainActor
+    private func loadMembers() async {
+        if let loadedMembers = try? await matrixSession.waveMembers(roomID: room.id) {
+            members = loadedMembers
         }
     }
 
     @MainActor
     private func load(paginate: Bool = false, showSpinner: Bool = true) async {
-        if paginate { isLoadingHistory = true } else if showSpinner { isLoading = true }
-        await matrixSession.refreshRuntimeState()
+        guard !(paginate && isLoadingHistory) else { return }
+        let anchorID = paginate ? items.first?.id : nil
+        if !paginate,
+           items.isEmpty,
+           let cachedPage = matrixSession.cachedTimeline(roomID: room.id) {
+            items = cachedPage.items
+            reconcileOptimisticMessages()
+            isLoading = false
+        }
+        if paginate { isLoadingHistory = true } else if showSpinner && items.isEmpty { isLoading = true }
+        if !paginate {
+            Task { await matrixSession.refreshRuntimeState() }
+        }
         do {
             let page = try await matrixSession.timeline(roomID: room.id, paginate: paginate)
-            items = page.items
-            if let loadedMembers = try? await matrixSession.waveMembers(roomID: room.id) {
-                members = loadedMembers
+            items = MatrixTimelineMerge.items(
+                existing: items,
+                loaded: page.items,
+                paginate: paginate
+            )
+            if paginate {
+                paginationAnchorID = anchorID
+            } else if !hasLoadedInitialTimeline {
+                hasLoadedInitialTimeline = true
+                await prefetchInitialHistoryPages(count: initialHistoryPrefetchPageCount)
+                pendingBottomScrollID = optimistic.last?.id ?? items.last?.id
+                Task {
+                    try? await Task.sleep(for: .milliseconds(600))
+                    guard !Task.isCancelled else { return }
+                    await MainActor.run { autoPaginationEnabled = true }
+                }
+            }
+            if !paginate {
+                Task { await loadMembers() }
             }
             reconcileOptimisticMessages()
             errorMessage = nil
-            await matrixSession.markRead(roomID: room.id)
+            if !paginate {
+                await matrixSession.markRead(roomID: room.id)
+            }
         } catch let error as MatrixNativeCryptoSecurityError
             where error.requiresGuidedRecovery {
             errorMessage = nil
@@ -2684,6 +2811,7 @@ private struct MatrixNativePinnedRipplesView: View {
                                     roomID: room.id,
                                     roomIsEncrypted: room.isEncrypted,
                                     item: item,
+                                    showsSenderHeader: true,
                                     showsDiscussion: false,
                                     openDiscussion: {},
                                     addEnergy: { keys in
@@ -2852,6 +2980,7 @@ private struct MatrixNativeThreadView: View {
                         roomID: room.id,
                         roomIsEncrypted: room.isEncrypted,
                         item: displayedRoot,
+                        showsSenderHeader: true,
                         showsDiscussion: false,
                         openDiscussion: {},
                         addEnergy: { keys in
@@ -2884,11 +3013,15 @@ private struct MatrixNativeThreadView: View {
                             .foregroundStyle(C.textMuted)
                             .padding(.vertical, 34)
                     } else {
-                        ForEach(replies) { item in
+                        ForEach(Array(replies.enumerated()), id: \.element.id) { index, item in
                             MatrixNativeMessageRow(
                                 roomID: room.id,
                                 roomIsEncrypted: room.isEncrypted,
                                 item: item,
+                                showsSenderHeader: matrixNativeStartsMessageGroup(
+                                    item,
+                                    after: index > 0 ? replies[index - 1] : nil
+                                ),
                                 showsDiscussion: false,
                                 openDiscussion: {},
                                 addEnergy: { keys in
@@ -3196,10 +3329,19 @@ private struct MatrixNativeWaveActivityStrip: View {
     }
 }
 
+private func matrixNativeStartsMessageGroup(
+    _ item: MatrixTimelineItem,
+    after previous: MatrixTimelineItem?
+) -> Bool {
+    guard let previous else { return true }
+    return previous.senderID != item.senderID
+}
+
 private struct MatrixNativeMessageRow: View {
     let roomID: String
     let roomIsEncrypted: Bool
     let item: MatrixTimelineItem
+    let showsSenderHeader: Bool
     let showsDiscussion: Bool
     let openDiscussion: () -> Void
     let addEnergy: ([String]) -> Void
@@ -3248,47 +3390,112 @@ private struct MatrixNativeMessageRow: View {
             ).isEmpty
     }
 
+    private var tagEnergy: [MatrixNativeEnergySummary] {
+        item.energy.filter { MatrixNativeEnergyOption.intensityLevel(for: $0.key) == nil }
+    }
+
+    private var intensityEnergy: [MatrixNativeEnergySummary] {
+        item.energy.filter { MatrixNativeEnergyOption.intensityLevel(for: $0.key) != nil }
+    }
+
+    private var matrixEnergyCount: Int {
+        item.energy.map(\.count).max() ?? 0
+    }
+
+    private var matrixEnergyTotal: Int {
+        let explicitTotal = intensityEnergy.reduce(0) { total, summary in
+            total + (MatrixNativeEnergyOption.intensityLevel(for: summary.key) ?? 0) * summary.count
+        }
+        guard explicitTotal == 0 else { return explicitTotal }
+        return matrixEnergyCount * min(max(tagEnergy.count, 1), 5)
+    }
+
+    private var matrixEnergyTags: [String] {
+        tagEnergy
+            .sorted { lhs, rhs in
+                if lhs.count != rhs.count { return lhs.count > rhs.count }
+                return lhs.key < rhs.key
+            }
+            .compactMap { matrixEnergyTagLabel(for: $0.key) }
+    }
+
+    private var visibleBodyText: String? {
+        let trimmed = item.body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard !item.media.isEmpty else { return trimmed }
+
+        let normalized = trimmed.lowercased()
+        if item.media.contains(where: { $0.filename.lowercased() == normalized }) {
+            return nil
+        }
+
+        let generatedMediaBodies = Set([
+            "shared image",
+            "shared photo",
+            "shared video",
+            "image",
+            "photo",
+            "video",
+            "audio",
+            "voice message",
+            "file",
+        ])
+        return generatedMediaBodies.contains(normalized) ? nil : trimmed
+    }
+
+    private var showsBodyIcon: Bool {
+        item.kind != .text && item.media.isEmpty
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            MatrixNativeAvatar(
-                name: item.senderDisplayName,
-                imageURL: item.senderAvatarURL,
-                size: 36
-            )
+            if showsSenderHeader {
+                MatrixNativeAvatar(
+                    name: item.senderDisplayName,
+                    imageURL: item.senderAvatarURL,
+                    size: 36
+                )
+            } else {
+                Color.clear
+                    .frame(width: 36, height: 1)
+            }
+
             VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    Text(item.senderDisplayName)
-                        .font(.subheadline.bold())
-                        .foregroundStyle(C.text)
-                        .lineLimit(1)
-                    Text(item.timestamp, format: .relative(presentation: .named))
-                        .font(.caption2)
-                        .foregroundStyle(C.textTertiary)
-                    if item.isEdited {
-                        Text("edited").font(.caption2).foregroundStyle(C.textTertiary)
+                if showsSenderHeader {
+                    HStack(alignment: .firstTextBaseline, spacing: 7) {
+                        Text(item.senderDisplayName)
+                            .font(.subheadline.bold())
+                            .foregroundStyle(C.text)
+                            .lineLimit(1)
+                        Text(item.timestamp, format: .relative(presentation: .named))
+                            .font(.caption2)
+                            .foregroundStyle(C.textTertiary)
+                        if item.isEdited {
+                            Text("edited").font(.caption2).foregroundStyle(C.textTertiary)
+                        }
                     }
                 }
 
                 if let reference = item.westreemReference {
                     MatrixNativeWestreemReferenceCard(reference: reference)
-                } else {
+                } else if let visibleBodyText {
                     Label {
-                        Text(item.body)
+                        Text(visibleBodyText)
                             .font(.body)
                             .foregroundStyle(item.kind == .redacted ? C.textMuted : C.text)
                             .multilineTextAlignment(.leading)
                     } icon: {
-                        if item.kind != .text {
+                        if showsBodyIcon {
                             Image(systemName: MatrixNativeCopy.icon(for: item.kind))
                                 .foregroundStyle(C.watch)
                         }
                     }
                     .labelStyle(
-                        MatrixConditionalIconLabelStyle(showIcon: item.kind != .text)
+                        MatrixConditionalIconLabelStyle(showIcon: showsBodyIcon)
                     )
 
                     MatrixNativeLinkPreviewCard(
-                        messageBody: item.body,
+                        messageBody: visibleBodyText,
                         enabled: !roomIsEncrypted && item.kind == .text
                     )
                 }
@@ -3350,9 +3557,18 @@ private struct MatrixNativeMessageRow: View {
                     .background(C.surface.opacity(0.7), in: RoundedRectangle(cornerRadius: 10))
                 }
 
+                if matrixEnergyCount > 0 {
+                    SocialEnergyMeter(
+                        total: matrixEnergyTotal,
+                        count: matrixEnergyCount,
+                        tags: matrixEnergyTags
+                    )
+                    .padding(.top, 10)
+                }
+
                 HStack(spacing: 12) {
-                    if item.reactionCount > 0 {
-                        Label("\(item.reactionCount) Energy", systemImage: "bolt.fill")
+                    if !showsSenderHeader, item.isEdited {
+                        Text("edited")
                     }
                     if item.threadReplyCount > 0 {
                         Label("\(item.threadReplyCount) replies", systemImage: "bubble.left.and.bubble.right")
@@ -3367,111 +3583,94 @@ private struct MatrixNativeMessageRow: View {
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(C.textMuted)
 
-                HStack(spacing: 0) {
-                    MatrixNativeMessageActionButton(
-                        label: item.reactionCount > 0
-                            ? "\(item.reactionCount) Energy"
-                            : "Add Energy",
-                        systemImage: "bolt",
-                        enabled: item.actions.canAddEnergy
-                    ) {
-                        energyPresented = true
-                    }
-
-                    MatrixNativeMessageActionButton(
-                        label: "Reply",
-                        systemImage: "arrowshape.turn.up.left",
-                        enabled: item.actions.canReply
-                    ) {
-                        openDiscussion()
-                    }
-
-                    MatrixNativeMessageActionButton(
-                        label: "Echo",
-                        systemImage: "wave.3.right",
-                        enabled: canEchoToWaves
-                    ) {
-                        waveEchoPresented = true
-                    }
-
-                    ShareLink(item: item.body) {
-                        Label("Share", systemImage: "square.and.arrow.up")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(
-                                canNativeShare
-                                    ? C.textMuted
-                                    : C.textTertiary.opacity(0.45)
-                            )
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.72)
-                            .frame(minHeight: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canNativeShare)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityLabel("Share message")
-
-                    Menu {
-                        if item.actions.canEdit {
-                            Button {
-                                editPresented = true
-                            } label: {
-                                Label("Edit", systemImage: "pencil")
-                            }
-                        }
-                        if item.actions.canPin {
-                            Button {
-                                setPinned(!item.actions.isPinned)
-                            } label: {
-                                Label(
-                                    item.actions.isPinned ? "Unpin" : "Pin",
-                                    systemImage: item.actions.isPinned
-                                        ? "pin.slash"
-                                        : "pin"
-                                )
-                            }
-                        }
-                        if item.actions.canReport {
-                            Button {
-                                reportPresented = true
-                            } label: {
-                                Label("Report", systemImage: "exclamationmark.bubble")
-                            }
-                        }
-                        if canEchoToAtmo {
-                            Button {
-                                atmoEchoPresented = true
-                            } label: {
-                                Label("Echo to My Atmo", systemImage: "wave.3.right")
-                            }
-                        }
-                        if item.actions.canRedact {
-                            Button(role: .destructive) {
-                                deleteConfirmationPresented = true
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
-                    } label: {
-                        Label("More", systemImage: "ellipsis")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(C.textMuted)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.72)
-                            .frame(minHeight: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .disabled(!hasMoreActions)
-                    .accessibilityLabel("More message actions")
-                }
-                .padding(.top, 2)
             }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, C.pagePad)
-        .padding(.vertical, 9)
+        .padding(.vertical, showsSenderHeader ? 9 : 3)
         .background(item.isOwn ? C.watch.opacity(0.035) : Color.clear)
+        .contentShape(Rectangle())
+        .contextMenu {
+            if item.actions.canAddEnergy {
+                Button {
+                    energyPresented = true
+                } label: {
+                    Label(
+                        matrixEnergyCount > 0 ? "Add Energy · \(matrixEnergyCount)" : "Add Energy",
+                        systemImage: "bolt.fill"
+                    )
+                }
+            }
+
+            if item.actions.canReply {
+                Button {
+                    openDiscussion()
+                } label: {
+                    Label("Reply", systemImage: "arrowshape.turn.up.left")
+                }
+            }
+
+            if canEchoToWaves {
+                Button {
+                    waveEchoPresented = true
+                } label: {
+                    Label("Echo", systemImage: "wave.3.right")
+                }
+            }
+
+            if canNativeShare {
+                ShareLink(item: item.body) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+            }
+
+            if hasMoreActions {
+                Divider()
+            }
+
+            if item.actions.canEdit {
+                Button {
+                    editPresented = true
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+            }
+
+            if item.actions.canPin {
+                Button {
+                    setPinned(!item.actions.isPinned)
+                } label: {
+                    Label(
+                        item.actions.isPinned ? "Unpin" : "Pin",
+                        systemImage: item.actions.isPinned ? "pin.slash" : "pin"
+                    )
+                }
+            }
+
+            if item.actions.canReport {
+                Button {
+                    reportPresented = true
+                } label: {
+                    Label("Report", systemImage: "exclamationmark.bubble")
+                }
+            }
+
+            if canEchoToAtmo {
+                Button {
+                    atmoEchoPresented = true
+                } label: {
+                    Label("Echo to My Atmo", systemImage: "wave.3.right")
+                }
+            }
+
+            if item.actions.canRedact {
+                Button(role: .destructive) {
+                    deleteConfirmationPresented = true
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+        }
         .accessibilityElement(children: .contain)
         .sheet(isPresented: $energyPresented) {
             MatrixNativeEnergyPicker(
@@ -3482,7 +3681,9 @@ private struct MatrixNativeMessageRow: View {
                 },
                 cancel: { energyPresented = false }
             )
-            .presentationDetents([.medium, .large])
+            .presentationDetents([.height(610), .large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
         }
         .sheet(isPresented: $editPresented) {
             MatrixNativeEditMessageSheet(
@@ -3813,30 +4014,6 @@ private struct MatrixNativeEchoToAtmoSheet: View {
         } catch {
             errorMessage = "This Ripple cannot be shared publicly. It may be private, encrypted, removed, or disabled by the Wave."
         }
-    }
-}
-
-private struct MatrixNativeMessageActionButton: View {
-    let label: String
-    let systemImage: String
-    let enabled: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Label(label, systemImage: systemImage)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(enabled ? C.textMuted : C.textTertiary.opacity(0.45))
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityLabel(label)
-        .accessibilityHint(enabled ? "Activates this Vibe message action" : "Unavailable")
     }
 }
 
@@ -4779,12 +4956,67 @@ private struct MatrixNativeWaveRulesView: View {
     }
 }
 
+private struct MatrixNativeEnergySelection {
+    let overall: Int
+    let tags: Set<String>
+    let keys: Set<String>
+
+    init(item: MatrixTimelineItem) {
+        let selectedKeys = Set(
+            item.energy
+                .filter(\.isSelectedByCurrentUser)
+                .map(\.key)
+        )
+        let selectedIntensity = selectedKeys
+            .compactMap(MatrixNativeEnergyOption.intensityLevel(for:))
+            .max() ?? 0
+        let selectedTags = Set(
+            selectedKeys.compactMap(matrixEnergyTagLabel(for:))
+        )
+        self.overall = selectedIntensity
+        self.tags = selectedTags
+        self.keys = selectedKeys
+    }
+
+    init(overall: Int, tags: Set<String>) {
+        let normalizedOverall = min(max(overall, 1), 5)
+        self.overall = normalizedOverall
+        self.tags = tags
+        self.keys = Set(
+            [MatrixNativeEnergyOption.intensityKey(for: normalizedOverall)]
+                + tags.compactMap(matrixEnergyKey(forTag:))
+        )
+    }
+}
+
+private func matrixEnergyTagLabel(for key: String) -> String? {
+    MatrixNativeEnergyOption.all.first { $0.id == key }?.label
+}
+
+private func matrixEnergyKey(forTag tag: String) -> String? {
+    MatrixNativeEnergyOption.all.first {
+        $0.label.caseInsensitiveCompare(tag) == .orderedSame
+    }?.id
+}
+
+private func matrixNativePersonalEnergyFeeling(tags: Set<String>, overall: Int) -> String {
+    let feelings = tags.sorted()
+    guard !feelings.isEmpty else {
+        return ["", "Low key", "Warm", "Charged", "High energy", "Electric"][min(max(overall, 0), 5)]
+    }
+    return feelings.joined(separator: " · ")
+}
+
 private struct MatrixNativeEnergyPicker: View {
     let item: MatrixTimelineItem
     let save: ([String]) -> Void
     let cancel: () -> Void
 
-    @State private var selected: Set<String>
+    @State private var overall: Int
+    @State private var tags: Set<String>
+    @State private var isSaving = false
+    @State private var errorMessage: String?
+    @State private var confirmationMessage: String?
 
     init(
         item: MatrixTimelineItem,
@@ -4794,97 +5026,57 @@ private struct MatrixNativeEnergyPicker: View {
         self.item = item
         self.save = save
         self.cancel = cancel
-        _selected = State(initialValue: Set(
-            item.energy
-                .filter(\.isSelectedByCurrentUser)
-                .map(\.key)
-        ))
+        let selected = MatrixNativeEnergySelection(item: item)
+        _overall = State(initialValue: selected.overall)
+        _tags = State(initialValue: selected.tags)
     }
 
-    private var originalSelection: Set<String> {
-        Set(item.energy.filter(\.isSelectedByCurrentUser).map(\.key))
+    private var originalSelection: MatrixNativeEnergySelection {
+        MatrixNativeEnergySelection(item: item)
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 18) {
-                Text(selected.isEmpty ? "Choose your Energy" : "\(selected.count) of 3 signals")
-                    .font(.title2.bold())
-                    .foregroundStyle(C.text)
+        SocialEnergyForm(
+            contentLabel: "message",
+            isUpdate: !originalSelection.keys.isEmpty,
+            overall: $overall,
+            selectedTags: $tags,
+            isSaving: isSaving,
+            errorMessage: errorMessage,
+            confirmationMessage: confirmationMessage,
+            onClose: cancel,
+            onSubmit: submit,
+            onRemove: originalSelection.keys.isEmpty ? nil : remove
+        )
+    }
 
-                GeometryReader { proxy in
-                    Capsule()
-                        .fill(C.borderSubtle)
-                        .overlay(alignment: .leading) {
-                            Capsule()
-                                .fill(matrixNativeEnergyGradient)
-                                .frame(
-                                    width: proxy.size.width
-                                        * CGFloat(selected.count) / 3
-                                )
-                        }
-                }
-                .frame(height: 5)
-
-                LazyVGrid(
-                    columns: [GridItem(.flexible()), GridItem(.flexible())],
-                    spacing: 10
-                ) {
-                    ForEach(MatrixNativeEnergyOption.all) { option in
-                        Button {
-                            if selected.contains(option.id) {
-                                selected.remove(option.id)
-                            } else if selected.count < 3 {
-                                selected.insert(option.id)
-                            }
-                        } label: {
-                            Label(option.label, systemImage: option.systemImage)
-                                .frame(maxWidth: .infinity, minHeight: 44)
-                                .background(
-                                    selected.contains(option.id)
-                                        ? AnyShapeStyle(matrixNativeEnergyGradient)
-                                        : AnyShapeStyle(C.elevated),
-                                    in: RoundedRectangle(cornerRadius: 12)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(selected.contains(option.id) ? C.bg : C.text)
-                        .accessibilityAddTraits(
-                            selected.contains(option.id) ? .isSelected : []
-                        )
-                        .accessibilityLabel("\(option.label) Energy")
-                    }
-                }
-
-                Text("Choose up to three signals.")
-                    .font(.caption)
-                    .foregroundStyle(C.textMuted)
-
-                Spacer()
-
-                if !originalSelection.isEmpty {
-                    Button("Remove Energy", role: .destructive) {
-                        save(Array(originalSelection).sorted())
-                    }
-                }
-            }
-            .padding(C.pagePad)
-            .background(C.bg.ignoresSafeArea())
-            .navigationTitle("Add Energy")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: cancel)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        let changed = originalSelection.symmetricDifference(selected)
-                        save(Array(changed).sorted())
-                    }
-                    .disabled(selected == originalSelection)
-                }
-            }
+    private func submit() {
+        guard overall > 0 else { return }
+        isSaving = true
+        errorMessage = nil
+        let nextSelection = MatrixNativeEnergySelection(overall: overall, tags: tags)
+        let changed = originalSelection.keys.symmetricDifference(nextSelection.keys)
+        guard !changed.isEmpty else {
+            isSaving = false
+            cancel()
+            return
         }
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) {
+            confirmationMessage = matrixNativePersonalEnergyFeeling(tags: tags, overall: overall)
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1_200))
+            save(Array(changed).sorted())
+            isSaving = false
+        }
+    }
+
+    private func remove() {
+        isSaving = true
+        errorMessage = nil
+        save(Array(originalSelection.keys).sorted())
+        isSaving = false
     }
 }
 
@@ -5002,14 +5194,23 @@ private struct MatrixNativeReportMessageSheet: View {
 
 private struct MatrixNativeOptimisticMessageRow: View {
     let message: MatrixNativeWaveRoomView.OptimisticMessage
+    let showsSenderHeader: Bool
     let retry: () -> Void
     let remove: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            MatrixNativeAvatar(name: "You", size: 36)
+            if showsSenderHeader {
+                MatrixNativeAvatar(name: "You", size: 36)
+            } else {
+                Color.clear
+                    .frame(width: 36, height: 1)
+            }
+
             VStack(alignment: .leading, spacing: 5) {
-                Text("You").font(.subheadline.bold()).foregroundStyle(C.text)
+                if showsSenderHeader {
+                    Text("You").font(.subheadline.bold()).foregroundStyle(C.text)
+                }
                 Text(message.body).font(.body).foregroundStyle(C.text)
                 HStack(spacing: 10) {
                     Text(MatrixNativeCopy.label(for: message.state))
@@ -5026,7 +5227,7 @@ private struct MatrixNativeOptimisticMessageRow: View {
             Spacer()
         }
         .padding(.horizontal, C.pagePad)
-        .padding(.vertical, 9)
+        .padding(.vertical, showsSenderHeader ? 9 : 3)
         .background(C.watch.opacity(0.035))
         .accessibilityElement(children: .combine)
     }

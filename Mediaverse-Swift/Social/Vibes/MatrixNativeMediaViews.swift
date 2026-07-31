@@ -132,23 +132,24 @@ struct MatrixNativeRichComposer: View {
                     .overlay(RoundedRectangle(cornerRadius: 18).stroke(C.borderSubtle))
                     .accessibilityLabel("Message this Wave")
 
-                Button(action: commit) {
+                Button(action: primaryComposerAction) {
                     Group {
                         if isPreparing {
                             ProgressView().tint(C.bg)
                         } else {
-                            Image(systemName: "arrow.up")
+                            Image(systemName: canSend ? "arrow.up" : "mic.fill")
                                 .font(.headline.bold())
                         }
                     }
                     .foregroundStyle(C.bg)
                     .frame(width: 44, height: 44)
-                    .background(C.watch, in: Circle())
+                    .background(canSend ? C.watch : C.elevated, in: Circle())
+                    .overlay(Circle().stroke(canSend ? Color.clear : C.borderSubtle))
                 }
                 .buttonStyle(.plain)
-                .disabled(!canSend || isPreparing)
-                .opacity(canSend && !isPreparing ? 1 : 0.45)
-                .accessibilityLabel("Send message")
+                .disabled(isPreparing)
+                .opacity(isPreparing ? 0.45 : 1)
+                .accessibilityLabel(canSend ? "Send message" : "Record voice message")
             }
             .padding(.horizontal, C.pagePad)
         }
@@ -183,11 +184,12 @@ struct MatrixNativeRichComposer: View {
         .sheet(isPresented: $showVoiceRecorder) {
             MatrixNativeVoiceRecorderSheet { upload in
                 if let upload {
-                    appendSafely([upload])
+                    sendAttachments([upload], nil)
                 }
                 showVoiceRecorder = false
             }
-            .presentationDetents([.medium])
+            .presentationDetents([.height(360), .medium])
+            .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showPollComposer) {
             MatrixNativePollComposerSheet { question, options in
@@ -214,6 +216,14 @@ struct MatrixNativeRichComposer: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(errorMessage ?? "")
+        }
+    }
+
+    private func primaryComposerAction() {
+        if canSend {
+            commit()
+        } else {
+            showVoiceRecorder = true
         }
     }
 
@@ -708,14 +718,9 @@ private struct MatrixNativeDraftAttachmentChip: View {
 
     var body: some View {
         HStack(spacing: 7) {
-            Image(systemName: MatrixNativeMediaCopy.icon(for: attachment.kind))
-                .foregroundStyle(C.watch)
             VStack(alignment: .leading, spacing: 1) {
-                Text(attachment.filename).lineLimit(1)
-                Text(ByteCountFormatter.string(
-                    fromByteCount: Int64(attachment.data.count),
-                    countStyle: .file
-                ))
+                Text(MatrixNativeMediaCopy.displayTitle(for: attachment)).lineLimit(1)
+                Text(MatrixNativeMediaCopy.detail(for: attachment))
                 .font(.caption2)
                 .foregroundStyle(C.textMuted)
             }
@@ -910,11 +915,20 @@ struct MatrixNativeMediaStrip: View {
     let media: [MatrixNativeMediaDescriptor]
     @State private var selectedMedia: MatrixNativeMediaDescriptor?
 
+    private var containsInlineAudio: Bool {
+        media.contains { $0.effectiveKind == .audio || $0.effectiveKind == .voice }
+    }
+
     var body: some View {
         Group {
             if media.count == 1, let item = media.first {
-                MatrixNativeRemoteMediaThumbnail(roomID: roomID, media: item)
-                    .onTapGesture { selectedMedia = item }
+                mediaView(for: item)
+            } else if containsInlineAudio {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(media) { item in
+                        mediaView(for: item)
+                    }
+                }
             } else {
                 LazyVGrid(
                     columns: [
@@ -924,8 +938,7 @@ struct MatrixNativeMediaStrip: View {
                     spacing: 4
                 ) {
                     ForEach(media) { item in
-                        MatrixNativeRemoteMediaThumbnail(roomID: roomID, media: item)
-                            .onTapGesture { selectedMedia = item }
+                        mediaView(for: item)
                     }
                 }
             }
@@ -933,6 +946,46 @@ struct MatrixNativeMediaStrip: View {
         .sheet(item: $selectedMedia) { item in
             MatrixNativeMediaViewer(roomID: roomID, media: item)
         }
+    }
+
+    @ViewBuilder
+    private func mediaView(for item: MatrixNativeMediaDescriptor) -> some View {
+        switch item.effectiveKind {
+        case .audio, .voice:
+            MatrixNativeInlineAudioMessage(roomID: roomID, media: item)
+        case .file:
+            MatrixNativeFileAttachmentRow(media: item) {
+                selectedMedia = item
+            }
+        case .image, .video, .sticker:
+            MatrixNativeRemoteMediaThumbnail(roomID: roomID, media: item)
+                .onTapGesture { selectedMedia = item }
+        }
+    }
+}
+
+private struct MatrixNativeFileAttachmentRow: View {
+    let media: MatrixNativeMediaDescriptor
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("File")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(C.text)
+                    Text(MatrixNativeMediaCopy.detail(for: media))
+                        .font(.caption2)
+                        .foregroundStyle(C.textMuted)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 8)
+            .frame(maxWidth: 320, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("File attachment")
     }
 }
 
@@ -946,57 +999,191 @@ private struct MatrixNativeRemoteMediaThumbnail: View {
     private enum LoadState { case idle, loading, ready, unavailable }
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 12).fill(C.elevated)
+        Group {
             if let image {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
                     .clipped()
-            } else {
-                VStack(spacing: 7) {
-                    if state == .loading {
-                        ProgressView().tint(C.watch)
-                    } else {
-                        Image(systemName: MatrixNativeMediaCopy.icon(for: media.kind))
-                            .font(.title2)
-                            .foregroundStyle(state == .unavailable ? Color.red : C.watch)
-                    }
-                    Text(media.filename)
-                        .font(.caption2)
-                        .foregroundStyle(C.textMuted)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.center)
-                }
-                .padding(10)
-            }
-            if media.kind == .video {
-                Image(systemName: "play.circle.fill")
-                    .font(.largeTitle)
-                    .foregroundStyle(.white)
-                    .shadow(radius: 4)
+                    .frame(maxWidth: .infinity)
+                .frame(height: media.effectiveKind == .sticker ? 150 : 190)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .contentShape(Rectangle())
+            } else if state == .loading {
+                ProgressView().tint(C.watch)
+                    .frame(height: 44)
             }
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: media.kind == .sticker ? 150 : 190)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(C.borderSubtle))
-        .contentShape(Rectangle())
-        .accessibilityLabel("\(MatrixNativeMediaCopy.label(for: media.kind)): \(media.filename)")
+        .accessibilityLabel(MatrixNativeMediaCopy.displayTitle(for: media))
         .task(id: media.id) {
-            guard media.kind == .image || media.kind == .sticker else { return }
+            guard [.image, .sticker, .video].contains(media.effectiveKind) else { return }
             state = .loading
             do {
                 let data = try await matrixSession.mediaData(roomID: roomID, media: media)
-                guard let decoded = UIImage(data: data) else {
-                    throw MatrixNativeMediaError.invalidAttachment
+                switch media.effectiveKind {
+                case .image, .sticker:
+                    guard let decoded = UIImage(data: data) else {
+                        throw MatrixNativeMediaError.invalidAttachment
+                    }
+                    image = decoded
+                case .video:
+                    image = try await MatrixNativeMediaCopy.videoThumbnail(
+                        from: data,
+                        filename: media.filename
+                    )
+                case .audio, .voice, .file:
+                    break
                 }
-                image = decoded
                 state = .ready
             } catch {
                 state = .unavailable
             }
         }
+    }
+}
+
+private struct MatrixNativeInlineAudioMessage: View {
+    let roomID: String
+    let media: MatrixNativeMediaDescriptor
+
+    @EnvironmentObject private var matrixSession: MatrixNativeSessionController
+    @State private var player: AVPlayer?
+    @State private var localFileURL: URL?
+    @State private var timeObserver: Any?
+    @State private var isLoading = true
+    @State private var isPlaying = false
+    @State private var currentTime: TimeInterval = 0
+    @State private var duration: TimeInterval = 0
+    @State private var errorMessage: String?
+
+    private var effectiveDuration: TimeInterval {
+        max(duration, media.duration ?? 0, 1)
+    }
+
+    var body: some View {
+        HStack(spacing: 11) {
+            Button(action: togglePlayback) {
+                Group {
+                    if isLoading {
+                        ProgressView().tint(C.watch)
+                    } else {
+                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                            .font(.headline.bold())
+                    }
+                }
+                .frame(width: 40, height: 40)
+                .foregroundStyle(C.bg)
+                .background(errorMessage == nil ? C.watch : Color.red, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isLoading || errorMessage != nil)
+            .accessibilityLabel(isPlaying ? "Pause voice message" : "Play voice message")
+
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 7) {
+                    Text(MatrixNativeMediaCopy.duration(isPlaying ? currentTime : effectiveDuration))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(C.textMuted)
+                    Spacer(minLength: 0)
+                }
+
+                Slider(
+                    value: Binding(
+                        get: { min(currentTime, effectiveDuration) },
+                        set: { seek(to: $0) }
+                    ),
+                    in: 0...effectiveDuration
+                )
+                .tint(C.watch)
+                .disabled(player == nil)
+                .accessibilityLabel("Voice message progress")
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.caption2)
+                        .foregroundStyle(Color.red)
+                }
+            }
+        }
+        .padding(11)
+        .frame(maxWidth: media.effectiveKind == .voice ? 310 : 360, alignment: .leading)
+        .background(C.elevated, in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(C.borderSubtle))
+        .task(id: media.id) { await load() }
+        .onDisappear { cleanup() }
+    }
+
+    @MainActor
+    private func load() async {
+        isLoading = true
+        cleanup()
+        do {
+            let data = try await matrixSession.mediaData(roomID: roomID, media: media)
+            let safeName = MatrixNativeMediaCopy.safeFilename(media.filename)
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("matrix-audio-\(UUID().uuidString)-\(safeName)")
+            try data.write(to: url, options: [.atomic, .completeFileProtection])
+            let player = AVPlayer(url: url)
+            self.player = player
+            localFileURL = url
+            duration = media.duration ?? 0
+            if duration <= 0 {
+                duration = try await AVURLAsset(url: url).load(.duration).seconds
+            }
+            installTimeObserver(on: player)
+            errorMessage = nil
+        } catch {
+            errorMessage = MatrixNativeMediaCopy.message(for: error)
+        }
+        isLoading = false
+    }
+
+    private func togglePlayback() {
+        guard let player else { return }
+        if isPlaying {
+            player.pause()
+            isPlaying = false
+        } else {
+            if currentTime >= effectiveDuration - 0.1 {
+                seek(to: 0)
+            }
+            player.play()
+            isPlaying = true
+        }
+    }
+
+    private func seek(to seconds: TimeInterval) {
+        currentTime = seconds
+        player?.seek(
+            to: CMTime(seconds: seconds, preferredTimescale: 600),
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+        )
+    }
+
+    private func installTimeObserver(on player: AVPlayer) {
+        timeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+            queue: .main
+        ) { time in
+            currentTime = time.seconds.isFinite ? time.seconds : 0
+            if currentTime >= effectiveDuration - 0.05 {
+                isPlaying = false
+            }
+        }
+    }
+
+    private func cleanup() {
+        if let player, let timeObserver {
+            player.removeTimeObserver(timeObserver)
+        }
+        player?.pause()
+        player = nil
+        timeObserver = nil
+        isPlaying = false
+        currentTime = 0
+        if let localFileURL { try? FileManager.default.removeItem(at: localFileURL) }
+        localFileURL = nil
     }
 }
 
@@ -1028,8 +1215,8 @@ private struct MatrixNativeMediaViewer: View {
                             .resizable()
                             .scaledToFit()
                     }
-                } else if let player, media.kind == .audio || media.kind == .voice {
-                    MatrixNativeAudioPlayback(player: player, title: media.filename)
+                } else if let player, media.effectiveKind == .audio || media.effectiveKind == .voice {
+                    MatrixNativeAudioPlayback(player: player, title: MatrixNativeMediaCopy.displayTitle(for: media))
                 } else if let player {
                     VideoPlayer(player: player)
                         .onAppear { player.play() }
@@ -1039,7 +1226,7 @@ private struct MatrixNativeMediaViewer: View {
                         Image(systemName: "doc.fill")
                             .font(.system(size: 54))
                             .foregroundStyle(C.watch)
-                        Text(media.filename).foregroundStyle(C.text)
+                        Text("File").foregroundStyle(C.text)
                         ShareLink(item: localFileURL) {
                             Label("Open or share file", systemImage: "square.and.arrow.up")
                         }
@@ -1050,7 +1237,7 @@ private struct MatrixNativeMediaViewer: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(C.bg.ignoresSafeArea())
-            .navigationTitle(media.filename)
+            .navigationTitle(MatrixNativeMediaCopy.displayTitle(for: media))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -1070,7 +1257,7 @@ private struct MatrixNativeMediaViewer: View {
         isLoading = true
         do {
             let data = try await matrixSession.mediaData(roomID: roomID, media: media)
-            if media.kind == .image || media.kind == .sticker {
+            if media.effectiveKind == .image || media.effectiveKind == .sticker {
                 guard let decoded = UIImage(data: data) else {
                     throw MatrixNativeMediaError.invalidAttachment
                 }
@@ -1081,7 +1268,7 @@ private struct MatrixNativeMediaViewer: View {
                     .appendingPathComponent("matrix-\(UUID().uuidString)-\(safeName)")
                 try data.write(to: url, options: [.atomic, .completeFileProtection])
                 localFileURL = url
-                if [.audio, .voice, .video].contains(media.kind) {
+                if [.audio, .voice, .video].contains(media.effectiveKind) {
                     player = AVPlayer(url: url)
                 }
             }
@@ -1252,7 +1439,7 @@ private final class MatrixNativeVoiceRecorder: NSObject, ObservableObject, AVAud
             kind: .voice,
             data: try Data(contentsOf: fileURL, options: [.mappedIfSafe]),
             filename: "voice-message.m4a",
-            mimeType: "audio/m4a",
+            mimeType: "audio/mp4",
             duration: elapsed
         )
     }
@@ -1263,42 +1450,96 @@ private struct MatrixNativeVoiceRecorderSheet: View {
     @StateObject private var recorder = MatrixNativeVoiceRecorder()
 
     var body: some View {
-        VStack(spacing: 22) {
+        VStack(spacing: 18) {
             Capsule().fill(C.borderSubtle).frame(width: 42, height: 5)
-            Text("Voice Message").font(.title3.bold()).foregroundStyle(C.text)
-            Image(systemName: recorder.state == .recording ? "waveform.circle.fill" : "mic.circle")
-                .font(.system(size: 72))
-                .foregroundStyle(recorder.state == .recording ? Color.red : C.watch)
-                .symbolEffect(.pulse, isActive: recorder.state == .recording)
-            Text(MatrixNativeMediaCopy.duration(recorder.elapsed))
-                .font(.title2.monospacedDigit())
-                .foregroundStyle(C.text)
-            HStack(spacing: 14) {
-                Button("Cancel") {
+
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(recorder.state == .recording ? Color.red : C.watch)
+                    .frame(width: 10, height: 10)
+                    .opacity(recorder.state == .recording ? 1 : 0.55)
+                Text(statusTitle)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(C.text)
+                Spacer(minLength: 0)
+                Text(MatrixNativeMediaCopy.duration(recorder.elapsed))
+                    .font(.headline.monospacedDigit())
+                    .foregroundStyle(C.text)
+            }
+
+            HStack(spacing: 4) {
+                ForEach(0..<28, id: \.self) { index in
+                    Capsule()
+                        .fill(recorder.state == .recording ? C.watch : C.borderSubtle)
+                        .frame(
+                            width: 4,
+                            height: waveformHeight(index: index)
+                        )
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 64)
+            .padding(.vertical, 12)
+            .background(C.elevated, in: RoundedRectangle(cornerRadius: 18))
+            .overlay(RoundedRectangle(cornerRadius: 18).stroke(C.borderSubtle))
+            .symbolEffect(.pulse, isActive: recorder.state == .recording)
+
+            HStack(spacing: 16) {
+                Button(role: .destructive) {
                     recorder.discard()
                     completion(nil)
+                } label: {
+                    Image(systemName: "trash")
+                        .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.bordered)
+                .accessibilityLabel("Discard voice message")
+
                 if recorder.state == .recording {
-                    Button("Finish") { recorder.finish() }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.red)
+                    Button {
+                        recorder.finish()
+                    } label: {
+                        Image(systemName: "stop.fill")
+                            .font(.headline.bold())
+                            .frame(width: 54, height: 54)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .accessibilityLabel("Stop recording")
                 } else if recorder.state == .ready {
-                    Button("Attach") {
+                    Button {
+                        recorder.discard()
+                        Task { await recorder.start() }
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Record again")
+
+                    Button {
                         do {
                             completion(try recorder.makeUpload())
                         } catch {
                             completion(nil)
                         }
+                    } label: {
+                        Label("Send", systemImage: "paperplane.fill")
+                            .frame(minWidth: 96, minHeight: 44)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(C.watch)
                 } else {
-                    Button("Record") { Task { await recorder.start() } }
-                        .buttonStyle(.borderedProminent)
-                        .tint(C.watch)
+                    Button {
+                        Task { await recorder.start() }
+                    } label: {
+                        Label("Record", systemImage: "mic.fill")
+                            .frame(minWidth: 118, minHeight: 44)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(C.watch)
                 }
             }
+
             if recorder.state == .denied {
                 Text("Microphone access is required to record a voice message.")
                     .font(.caption)
@@ -1309,9 +1550,34 @@ private struct MatrixNativeVoiceRecorderSheet: View {
                     .foregroundStyle(.red)
             }
         }
-        .padding(24)
+        .padding(22)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(C.bg)
+        .task {
+            guard recorder.state == .idle else { return }
+            await recorder.start()
+        }
+        .onDisappear {
+            if recorder.state == .recording || recorder.state == .idle {
+                recorder.discard()
+            }
+        }
+    }
+
+    private var statusTitle: String {
+        switch recorder.state {
+        case .idle, .requesting: "Preparing voice message"
+        case .recording: "Recording voice message"
+        case .ready: "Voice message ready"
+        case .denied: "Microphone blocked"
+        case .failed: "Recording too short"
+        }
+    }
+
+    private func waveformHeight(index: Int) -> CGFloat {
+        let phase = Double(index) * 0.7 + recorder.elapsed * 7
+        let value = (sin(phase) + 1) / 2
+        return CGFloat(14 + value * 38)
     }
 }
 
@@ -1359,9 +1625,49 @@ private struct MatrixNativeVideoCapturePicker: UIViewControllerRepresentable {
 enum MatrixNativeMediaCopy {
     static func summary(for uploads: [MatrixNativeUpload]) -> String {
         if uploads.count == 1, let upload = uploads.first {
-            return "\(label(for: upload.kind)) · \(upload.filename)"
+            return "\(displayTitle(for: upload)) · \(detail(for: upload))"
         }
         return "\(uploads.count) attachments"
+    }
+
+    static func displayTitle(for upload: MatrixNativeUpload) -> String {
+        switch upload.kind {
+        case .file:
+            return upload.filename
+        case .audio, .voice, .image, .video, .sticker:
+            return label(for: upload.kind)
+        }
+    }
+
+    static func displayTitle(for media: MatrixNativeMediaDescriptor) -> String {
+        switch media.effectiveKind {
+        case .file:
+            return "File"
+        case .audio, .voice, .image, .video, .sticker:
+            return label(for: media.effectiveKind)
+        }
+    }
+
+    static func detail(for upload: MatrixNativeUpload) -> String {
+        if let duration = upload.duration,
+           upload.kind == .audio || upload.kind == .voice || upload.kind == .video {
+            return Self.duration(duration)
+        }
+        return ByteCountFormatter.string(
+            fromByteCount: Int64(upload.data.count),
+            countStyle: .file
+        )
+    }
+
+    static func detail(for media: MatrixNativeMediaDescriptor) -> String {
+        if let duration = media.duration,
+           media.effectiveKind == .audio || media.effectiveKind == .voice || media.effectiveKind == .video {
+            return Self.duration(duration)
+        }
+        if let size = media.size {
+            return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+        }
+        return label(for: media.effectiveKind)
     }
 
     static func icon(for kind: MatrixNativeAttachmentKind) -> String {
@@ -1383,6 +1689,22 @@ enum MatrixNativeMediaCopy {
         case .file: "File"
         case .sticker: "Sticker"
         }
+    }
+
+    static func videoThumbnail(from data: Data, filename: String) async throws -> UIImage {
+        let safeName = safeFilename(filename)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("matrix-video-thumb-\(UUID().uuidString)-\(safeName)")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try data.write(to: url, options: [.atomic, .completeFileProtection])
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 720, height: 720)
+        let image = try await generator.image(
+            at: CMTime(seconds: 0.25, preferredTimescale: 600)
+        ).image
+        return UIImage(cgImage: image)
     }
 
     static func message(for error: Error) -> String {
