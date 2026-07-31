@@ -2,10 +2,12 @@ import XCTest
 @testable import MediaverseSocialContracts
 
 final class AtmoV2ContractsTests: XCTestCase {
-    func testPersonalAtmoV2DefaultsOff() {
+    func testPersonalAtmoV2DefaultsOnWithKillSwitch() {
         let suite = "atmo-v2-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertTrue(SocialFeatureConfiguration.runtime(userDefaults: defaults).personalAtmoV2Enabled)
+        defaults.set(false, forKey: "social.personal-atmo-v2.enabled")
         XCTAssertFalse(SocialFeatureConfiguration.runtime(userDefaults: defaults).personalAtmoV2Enabled)
     }
 

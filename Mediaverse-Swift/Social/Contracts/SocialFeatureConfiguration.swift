@@ -20,8 +20,9 @@ public struct SocialFeatureConfiguration: Equatable, Sendable {
     /// pre-cutover builds must never override the authenticated ownership-v2
     /// bootstrap.
     public var matrixNativeVibesEnabled: Bool
-    /// Personal Atmo v2 remains a Westreem API cutover and is independent
-    /// from community Vibes/Matrix. Missing storage must remain disabled.
+    /// Personal Atmo v2 is a Westreem API cutover independent from community
+    /// Vibes/Matrix. It defaults on; an explicitly stored false remains the
+    /// device kill switch.
     public var personalAtmoV2Enabled: Bool
     public var wavePresenceEnabled: Bool
     public var directMessagesEnabled: Bool
@@ -93,7 +94,7 @@ public struct SocialFeatureConfiguration: Equatable, Sendable {
             flashesEnergyEnabled: value(for: "social.flashes-energy.enabled", in: userDefaults),
             matrixRealtimeEnabled: optInValue(for: "social.matrix-realtime.enabled", in: userDefaults),
             matrixNativeVibesEnabled: true,
-            personalAtmoV2Enabled: strictOptInValue(
+            personalAtmoV2Enabled: value(
                 for: "social.personal-atmo-v2.enabled",
                 in: userDefaults
             ),
@@ -134,8 +135,4 @@ public struct SocialFeatureConfiguration: Equatable, Sendable {
         watchPartiesEnabled
     }
 
-    private static func strictOptInValue(for key: String, in userDefaults: UserDefaults) -> Bool {
-        guard userDefaults.object(forKey: key) != nil else { return false }
-        return userDefaults.bool(forKey: key)
-    }
 }
