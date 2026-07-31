@@ -874,67 +874,87 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         let client = try await activeClient()
         let list = try await client.spaceService().spaceRoomList(spaceId: spaceID)
         try await list.paginate()
-        var summaries: [MatrixWaveSummary] = []
-        for child in await list.rooms() {
-            let base = MatrixWaveSummary(child)
-            guard let matrixRoom = client.rooms().first(where: { $0.id() == child.roomId }) else {
-                summaries.append(base)
-                continue
-            }
-            let info = try? await matrixRoom.roomInfo()
-            let activeParticipantIDs = matrixRoom.hasActiveRoomCall()
-                ? Set(matrixRoom.activeRoomCallParticipants())
-                : []
-            let intent: MatrixNativeRtcIntent?
-            switch info?.activeRoomCallConsensusIntent {
-            case .full(.audio), .partial(intent: .audio, agreeingCount: _, totalCount: _):
-                intent = .audio
-            case .full(.video), .partial(intent: .video, agreeingCount: _, totalCount: _):
-                intent = .video
-            case .some(.none), nil:
-                intent = nil
-            }
-            var activeParticipants: [MatrixNativeLoungeParticipant] = []
-            if !activeParticipantIDs.isEmpty,
-               let iterator = try? await matrixRoom.members() {
-                memberLookup: while let chunk = iterator.nextChunk(chunkSize: 100),
-                                    !chunk.isEmpty {
-                    for member in chunk where
-                        member.membership == .join
-                            && activeParticipantIDs.contains(member.userId) {
-                        activeParticipants.append(
-                            MatrixNativeLoungeParticipant(
-                                id: member.userId,
-                                displayName: MatrixNativeMemberPresentationContract
-                                    .displayName(
-                                        member.displayName,
-                                        matrixUserID: member.userId
-                                    ),
-                                avatarURL: member.avatarUrl
-                            )
-                        )
-                        if activeParticipants.count == 3 { break memberLookup }
-                    }
+        let localRooms = Dictionary(
+            client.rooms().map { ($0.id(), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let children = await list.rooms()
+        // Summaries fan out concurrently: each one awaits several SDK calls
+        // (room info, encryption, members) that would otherwise serialize.
+        return await withTaskGroup(
+            of: (Int, MatrixWaveSummary).self,
+            returning: [MatrixWaveSummary].self
+        ) { group in
+            for (index, child) in children.enumerated() {
+                let matrixRoom = localRooms[child.roomId]
+                group.addTask {
+                    (index, await Self.waveSummary(child: child, matrixRoom: matrixRoom))
                 }
             }
-            summaries.append(
-                MatrixWaveSummary(
-                    id: base.id,
-                    name: base.name,
-                    topic: base.topic,
-                    avatarURL: base.avatarURL,
-                    joinedMemberCount: base.joinedMemberCount,
-                    membership: base.membership,
-                    isNestedSpace: base.isNestedSpace,
-                    isDirect: false,
-                    isEncrypted: await matrixRoom.isEncrypted(),
-                    activeCallParticipantCount: activeParticipantIDs.count,
-                    activeCallIntent: intent,
-                    activeCallParticipants: activeParticipants
-                )
-            )
+            var indexed: [(Int, MatrixWaveSummary)] = []
+            for await entry in group {
+                indexed.append(entry)
+            }
+            return indexed.sorted { $0.0 < $1.0 }.map(\.1)
         }
-        return summaries
+    }
+
+    private static func waveSummary(
+        child: SpaceRoom,
+        matrixRoom: Room?
+    ) async -> MatrixWaveSummary {
+        let base = MatrixWaveSummary(child)
+        guard let matrixRoom else { return base }
+        let info = try? await matrixRoom.roomInfo()
+        let activeParticipantIDs = matrixRoom.hasActiveRoomCall()
+            ? Set(matrixRoom.activeRoomCallParticipants())
+            : []
+        let intent: MatrixNativeRtcIntent?
+        switch info?.activeRoomCallConsensusIntent {
+        case .full(.audio), .partial(intent: .audio, agreeingCount: _, totalCount: _):
+            intent = .audio
+        case .full(.video), .partial(intent: .video, agreeingCount: _, totalCount: _):
+            intent = .video
+        case .some(.none), nil:
+            intent = nil
+        }
+        var activeParticipants: [MatrixNativeLoungeParticipant] = []
+        if !activeParticipantIDs.isEmpty,
+           let iterator = try? await matrixRoom.members() {
+            memberLookup: while let chunk = iterator.nextChunk(chunkSize: 100),
+                                !chunk.isEmpty {
+                for member in chunk where
+                    member.membership == .join
+                        && activeParticipantIDs.contains(member.userId) {
+                    activeParticipants.append(
+                        MatrixNativeLoungeParticipant(
+                            id: member.userId,
+                            displayName: MatrixNativeMemberPresentationContract
+                                .displayName(
+                                    member.displayName,
+                                    matrixUserID: member.userId
+                                ),
+                            avatarURL: member.avatarUrl
+                        )
+                    )
+                    if activeParticipants.count == 3 { break memberLookup }
+                }
+            }
+        }
+        return MatrixWaveSummary(
+            id: base.id,
+            name: base.name,
+            topic: base.topic,
+            avatarURL: base.avatarURL,
+            joinedMemberCount: base.joinedMemberCount,
+            membership: base.membership,
+            isNestedSpace: base.isNestedSpace,
+            isDirect: false,
+            isEncrypted: await matrixRoom.isEncrypted(),
+            activeCallParticipantCount: activeParticipantIDs.count,
+            activeCallIntent: intent,
+            activeCallParticipants: activeParticipants
+        )
     }
 
     /// Refreshes lounge badges only from rooms already held by MatrixRustSDK.

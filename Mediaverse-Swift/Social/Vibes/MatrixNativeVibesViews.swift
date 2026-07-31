@@ -367,20 +367,28 @@ private struct MatrixNativeCombinedWavesView: View {
 
     @MainActor
     private func loadCommunityWaves(spaceIDs: [String]) async -> ([MatrixWaveSummary], Int) {
-        var loadedCommunityWaves: [MatrixWaveSummary] = []
-        var failures = 0
-
-        for spaceID in spaceIDs {
-            do {
-                loadedCommunityWaves.append(
-                    contentsOf: try await matrixSession.waves(spaceID: spaceID).rooms
-                )
-            } catch {
-                failures += 1
+        // Each Vibe's directory paginates against the server; loading them
+        // concurrently keeps the slowest space from serializing the rest.
+        await withTaskGroup(
+            of: [MatrixWaveSummary]?.self,
+            returning: ([MatrixWaveSummary], Int).self
+        ) { group in
+            for spaceID in spaceIDs {
+                group.addTask { @MainActor in
+                    try? await matrixSession.waves(spaceID: spaceID).rooms
+                }
             }
+            var loadedCommunityWaves: [MatrixWaveSummary] = []
+            var failures = 0
+            for await rooms in group {
+                if let rooms {
+                    loadedCommunityWaves.append(contentsOf: rooms)
+                } else {
+                    failures += 1
+                }
+            }
+            return (loadedCommunityWaves, failures)
         }
-
-        return (loadedCommunityWaves, failures)
     }
 
     @MainActor

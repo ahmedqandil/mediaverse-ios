@@ -705,6 +705,8 @@ final class MatrixNativeSessionController:
     private var cachedWaveManagement: [String: CachedValue<MatrixNativeWaveManagementSnapshot>] = [:]
     private var cachedIdentityPresentations: [String: CachedValue<WestreemMatrixIdentityPresentation>] = [:]
     private var cachedTimelines: [String: CachedValue<MatrixTimelinePage>] = [:]
+    private var cachedWaveDirectories: [String: CachedValue<MatrixWaveDirectoryPage>] = [:]
+    private var cachedDirectMessages: CachedValue<[MatrixDirectRoomSummary]>?
     private var activationTask: Task<Void, Never>?
     private var cryptoMaintenanceTask: Task<Void, Never>?
     @Published private(set) var lifecycleState: MatrixSessionLifecycleState = .disabled
@@ -799,10 +801,16 @@ final class MatrixNativeSessionController:
         cachedWaveManagement.removeAll()
         cachedIdentityPresentations.removeAll()
         cachedTimelines.removeAll()
+        cachedWaveDirectories.removeAll()
+        cachedDirectMessages = nil
     }
 
     private func invalidateWaveMetadata(roomID: String) {
         cachedWaveManagement.removeValue(forKey: roomID)
+        // Wave mutations can change what the directory lists (name, access,
+        // membership), so the short-lived directory cache resets with them.
+        cachedWaveDirectories.removeAll()
+        cachedDirectMessages = nil
     }
 
     private func invalidateTimelineCache(roomID: String) {
@@ -865,10 +873,12 @@ final class MatrixNativeSessionController:
         if draft.isEncrypted {
             _ = try await coordinator.requireCryptoReadyForEncryptedAction()
         }
-        return try await repository.createWave(
+        let created = try await repository.createWave(
             inSpaceID: spaceID,
             draft: draft
         )
+        cachedWaveDirectories.removeValue(forKey: spaceID)
+        return created
     }
 
     func registerCreatedRoom(
@@ -897,7 +907,12 @@ final class MatrixNativeSessionController:
 
     func waves(spaceID: String) async throws -> MatrixWaveDirectoryPage {
         try requireReady()
-        return try await repository.waves(spaceID: spaceID)
+        if let cached = cachedWaveDirectories[spaceID], cached.isFresh(ttl: metadataCacheTTL) {
+            return cached.value
+        }
+        let page = try await repository.waves(spaceID: spaceID)
+        cachedWaveDirectories[spaceID] = CachedValue(value: page, storedAt: Date())
+        return page
     }
 
     func refreshLocalWaveActivity(
@@ -1660,7 +1675,12 @@ final class MatrixNativeSessionController:
 
     func directMessages() async throws -> [MatrixDirectRoomSummary] {
         try requireReady()
-        return try await directNotificationProvider.directRooms()
+        if let cached = cachedDirectMessages, cached.isFresh(ttl: metadataCacheTTL) {
+            return cached.value
+        }
+        let rooms = try await directNotificationProvider.directRooms()
+        cachedDirectMessages = CachedValue(value: rooms, storedAt: Date())
+        return rooms
     }
 
     func openOrCreateDirectMessage(
@@ -1669,11 +1689,13 @@ final class MatrixNativeSessionController:
         avatarURL: String?
     ) async throws -> MatrixDirectRoomSummary {
         try requireReady()
-        return try await directNotificationProvider.openOrCreateDirectRoom(
+        let room = try await directNotificationProvider.openOrCreateDirectRoom(
             westreemUserID: westreemUserID,
             displayName: displayName,
             avatarURL: avatarURL
         )
+        cachedDirectMessages = nil
+        return room
     }
 
     func matrixNotifications() async throws -> [MatrixNotificationSummary] {
