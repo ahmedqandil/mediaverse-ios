@@ -12,8 +12,16 @@ enum MatrixNativeRoomAttachmentGalleryTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+private enum MatrixNativeRoomAttachmentGalleryLayout: String, CaseIterable, Identifiable {
+    case grid = "Grid"
+    case list = "List"
+    case timeline = "Timeline"
+    var id: String { rawValue }
+}
+
 struct MatrixNativeRoomAttachmentGalleryView: View {
     let roomID: String
+    let waveName: String
     let accountID: String
     let roomIsEncrypted: Bool
     let sections: (MatrixNativeRoomAttachmentGalleryTab) -> [MatrixNativeRoomAttachmentSection]
@@ -28,6 +36,7 @@ struct MatrixNativeRoomAttachmentGalleryView: View {
     let setStarred: ([MatrixNativeRoomAttachment], Bool) -> Void
 
     @State private var tab = MatrixNativeRoomAttachmentGalleryTab.media
+    @State private var layout = MatrixNativeRoomAttachmentGalleryLayout.grid
     @State private var deleteConfirmationPresented = false
 
     private var allItems: [MatrixNativeRoomAttachment] {
@@ -49,6 +58,15 @@ struct MatrixNativeRoomAttachmentGalleryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            HStack {
+                Text("\(waveName)'s Gallery").font(.headline).lineLimit(1)
+                Spacer()
+                if tab == .media {
+                    Picker("Gallery layout", selection: $layout) {
+                        ForEach(MatrixNativeRoomAttachmentGalleryLayout.allCases) { Text($0.rawValue).tag($0) }
+                    }.pickerStyle(.menu)
+                }
+            }.padding(.horizontal, 16).padding(.top, 8)
             Picker("Room attachments", selection: $tab) {
                 ForEach(MatrixNativeRoomAttachmentGalleryTab.allCases) { tab in
                     Text(tab.rawValue).tag(tab)
@@ -64,6 +82,7 @@ struct MatrixNativeRoomAttachmentGalleryView: View {
                     MatrixNativeRoomAttachmentMediaGrid(
                         roomID: roomID,
                         sections: sections(.media),
+                        layout: layout,
                         selection: $selection,
                         hasMore: hasMore,
                         loadMore: loadMore,
@@ -162,15 +181,13 @@ struct MatrixNativeRoomAttachmentGalleryView: View {
 private struct MatrixNativeRoomAttachmentMediaGrid: View {
     let roomID: String
     let sections: [MatrixNativeRoomAttachmentSection]
+    let layout: MatrixNativeRoomAttachmentGalleryLayout
     @Binding var selection: Set<String>
     let hasMore: Bool
     let loadMore: () -> Void
     let open: (MatrixNativeRoomAttachment) -> Void
 
-    private let columns = Array(
-        repeating: GridItem(.flexible(), spacing: 2),
-        count: 3
-    )
+    private var columns: [GridItem] { Array(repeating: GridItem(.flexible(), spacing: 2), count: layout == .grid ? 3 : 1) }
 
     var body: some View {
         ScrollView {
@@ -184,6 +201,7 @@ private struct MatrixNativeRoomAttachmentMediaGrid: View {
                                         roomID: roomID,
                                         attachment: item,
                                         media: media,
+                                        showMetadata: layout != .grid,
                                         selected: selection.contains(item.id)
                                     )
                                     .onTapGesture { open(item) }
@@ -216,16 +234,18 @@ private struct MatrixNativeRoomAttachmentMediaCell: View {
     let roomID: String
     let attachment: MatrixNativeRoomAttachment
     let media: MatrixNativeRoomMediaAttachment
+    let showMetadata: Bool
     let selected: Bool
 
     var body: some View {
         ZStack {
-            MatrixNativeRoomAttachmentThumbnail(
-                roomID: roomID,
-                descriptor: media.descriptor
-            )
-            .aspectRatio(1, contentMode: .fill)
-            .clipped()
+            if media.mediaKind == .audio || media.mediaKind == .voice {
+                LinearGradient(colors: [Color.accentColor.opacity(0.35), .purple.opacity(0.25)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                Image(systemName: "waveform").font(.largeTitle).foregroundStyle(.white)
+            } else {
+                MatrixNativeRoomAttachmentThumbnail(roomID: roomID, descriptor: media.descriptor)
+                    .aspectRatio(showMetadata ? 16 / 9 : 1, contentMode: .fill).clipped()
+            }
 
             if media.mediaKind == .video {
                 Image(systemName: "play.fill")
@@ -263,6 +283,14 @@ private struct MatrixNativeRoomAttachmentMediaCell: View {
                     }
                     Spacer()
                 }
+            }
+            if showMetadata {
+                VStack { Spacer(); HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(media.title).lineLimit(1).font(.caption.weight(.semibold))
+                        Text("Sent by \(attachment.senderID) · \(attachment.timestamp.formatted(date: .abbreviated, time: .shortened))").lineLimit(1).font(.caption2)
+                    }; Spacer()
+                }.foregroundStyle(.white).padding(8).background(.black.opacity(0.62)) }
             }
         }
         .contentShape(Rectangle())
@@ -558,6 +586,7 @@ private struct MatrixNativeRoomAttachmentViewerPage: View {
 
     @EnvironmentObject private var matrixSession: MatrixNativeSessionController
     @State private var image: UIImage?
+    @State private var poster: UIImage?
     @State private var player: AVPlayer?
     @State private var temporaryURL: URL?
     @State private var scale: CGFloat = 1
@@ -586,6 +615,13 @@ private struct MatrixNativeRoomAttachmentViewerPage: View {
                 VideoPlayer(player: player)
                     .onAppear { player.play() }
                     .onDisappear { player.pause() }
+            } else if let poster {
+                ZStack {
+                    Image(uiImage: poster).resizable().scaledToFit()
+                    Image(systemName: media.mediaKind == .video ? "play.fill" : "waveform")
+                        .font(.title2.weight(.bold)).foregroundStyle(.white)
+                        .frame(width: 52, height: 52).background(.black.opacity(0.55), in: Circle())
+                }
             } else if failed {
                 ContentUnavailableView(
                     "Attachment unavailable",
@@ -607,11 +643,15 @@ private struct MatrixNativeRoomAttachmentViewerPage: View {
     @MainActor
     private func load() async {
         do {
+            if media.mediaKind == .video,
+               let thumbnail = try? await matrixSession.mediaThumbnailData(roomID: roomID, media: media.descriptor) {
+                poster = UIImage(data: thumbnail)
+            }
             let data = try await matrixSession.mediaData(
                 roomID: roomID,
                 media: media.descriptor
             )
-            if media.mediaKind == .video {
+            if media.mediaKind == .video || media.mediaKind == .audio || media.mediaKind == .voice {
                 let url = FileManager.default.temporaryDirectory
                     .appendingPathComponent("matrix-room-gallery-\(UUID().uuidString)")
                     .appendingPathExtension("mp4")
@@ -647,10 +687,9 @@ private struct MatrixNativeRoomAttachmentThumbnail: View {
         }
         .clipped()
         .task(id: descriptor.id) {
-            if let data = try? await matrixSession.mediaThumbnailData(
-                roomID: roomID,
-                media: descriptor
-            ) {
+            if let data = try? await matrixSession.mediaThumbnailData(roomID: roomID, media: descriptor),
+               let decoded = UIImage(data: data) { image = decoded; return }
+            if let data = try? await matrixSession.mediaData(roomID: roomID, media: descriptor) {
                 image = UIImage(data: data)
             }
         }

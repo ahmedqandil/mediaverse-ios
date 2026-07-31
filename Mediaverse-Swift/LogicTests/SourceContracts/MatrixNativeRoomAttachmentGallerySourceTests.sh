@@ -46,7 +46,10 @@ grep -q 'roomIsEncrypted: roomIsEncrypted' "$gallery"
 for expected in \
   'LazyVGrid' \
   'pinnedViews:' \
-  'aspectRatio(1, contentMode: .fill)' \
+  'aspectRatio(showMetadata ? 16 / 9 : 1, contentMode: .fill)' \
+  "'s Gallery" \
+  'Sent by' \
+  'case timeline' \
   'TabView' \
   'PageTabViewStyle' \
   'MagnificationGesture' \

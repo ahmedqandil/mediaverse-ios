@@ -1440,7 +1440,6 @@ private struct MatrixNativeRoomCreatorView: View {
     @EnvironmentObject private var matrixSession: MatrixNativeSessionController
     @State private var name = ""
     @State private var topic = ""
-    @State private var canonicalAlias = ""
     @State private var visibility = MatrixNativeVibeVisibility.publicVibe
     @State private var invitationText = ""
     @State private var encryptWave = false
@@ -1462,7 +1461,7 @@ private struct MatrixNativeRoomCreatorView: View {
     private var accessFooter: String {
         switch visibility {
         case .publicVibe:
-            return "Public \(mode.noun)s require a local Matrix address and may appear in discovery."
+            return "A public address is created automatically and the \(mode.noun) may appear in discovery."
         case .privateVibe:
             return "Only invited WeStreem users can join."
         case .knock:
@@ -1533,10 +1532,8 @@ private struct MatrixNativeRoomCreatorView: View {
                     TextField("Description", text: $topic, axis: .vertical)
                         .lineLimit(3...6)
                     if visibility == .publicVibe {
-                        TextField("#address:vibes.westreem.com", text: $canonicalAlias)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .accessibilityLabel("Public Matrix address")
+                        Text("Your public address is created automatically from the \(mode.noun.lowercased()) name.")
+                            .font(.footnote).foregroundStyle(C.textMuted)
                     }
                 }
                 if mode.isWave, visibility == .privateVibe, encryptWave,
@@ -1676,7 +1673,7 @@ private struct MatrixNativeRoomCreatorView: View {
             isEncrypted: mode.isWave
                 && visibility == .privateVibe
                 && encryptWave,
-            canonicalAlias: visibility == .publicVibe ? canonicalAlias : nil,
+            canonicalAlias: visibility == .publicVibe ? automaticCanonicalAlias(for: name) : nil,
             avatar: creationAvatar
         )
         do {
@@ -1700,6 +1697,14 @@ private struct MatrixNativeRoomCreatorView: View {
         } catch {
             errorMessage = MatrixNativeCopy.message(for: error)
         }
+    }
+
+    private func automaticCanonicalAlias(for value: String) -> String {
+        let localpart = value.folding(options: [.diacriticInsensitive, .widthInsensitive], locale: .current)
+            .lowercased().replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let safe = String((localpart.isEmpty ? "wave" : localpart).prefix(40))
+        return "#\(safe)-\(UUID().uuidString.lowercased().prefix(8)):vibes.westreem.com"
     }
 
     @MainActor
@@ -2790,29 +2795,19 @@ struct MatrixNativeWaveRoomView: View {
                     Image(systemName: "magnifyingglass")
                 }
                 .accessibilityLabel("Search Wave")
-
-                Button {
-                    pinnedPresented = true
-                } label: {
-                    Image(systemName: "pin")
-                }
-                .accessibilityLabel("Pinned Ripples")
-
-                Button {
-                    threadPanelPresented = true
-                } label: {
-                    Image(systemName: "bubble.left.and.bubble.right")
-                }
-                .accessibilityLabel("Threads")
-
                 Button {
                     attachmentGalleryPresented = true
                 } label: {
                     Image(systemName: "square.grid.2x2")
                 }
                 .accessibilityLabel("Media, documents, and links")
-
                 Menu {
+                    Button { pinnedPresented = true } label: {
+                        Label("Pinned Ripples", systemImage: "pin")
+                    }
+                    Button { threadPanelPresented = true } label: {
+                        Label("Threads", systemImage: "bubble.left.and.bubble.right")
+                    }
                     if !room.isEncrypted, !room.isDirect {
                         Button {
                             startStagePresented = true
@@ -2825,32 +2820,20 @@ struct MatrixNativeWaveRoomView: View {
                             Label("Start Watch Party", systemImage: "play.tv")
                         }
                     }
-                } label: {
-                    Image(systemName: "sparkles")
-                }
-                .accessibilityLabel("Live experiences")
-
-                Button {
-                    settingsPresented = true
-                } label: {
-                    Image(systemName: "gearshape")
-                }
-                .accessibilityLabel("Wave settings")
-
-                Button {
-                    if room.isEncrypted || room.isDirect {
-                        secureCallNoticePresented = true
-                    } else {
-                        rtcPresented = true
+                    Divider()
+                    Button { settingsPresented = true } label: {
+                        Label("Wave settings", systemImage: "gearshape")
+                    }
+                    Button {
+                        if room.isEncrypted || room.isDirect { secureCallNoticePresented = true }
+                        else { rtcPresented = true }
+                    } label: {
+                        Label(room.isEncrypted ? "Secure call unavailable" : "Open live Wave", systemImage: room.isEncrypted ? "lock.shield" : "video.fill")
                     }
                 } label: {
-                    Image(systemName: room.isEncrypted ? "lock.shield" : "video.fill")
+                    Image(systemName: "ellipsis.circle")
                 }
-                .accessibilityLabel(
-                    room.isEncrypted
-                        ? "Secure call unavailable until media encryption is verified"
-                        : "Open live Wave"
-                )
+                .accessibilityLabel("Wave menu")
             }
         }
         .fullScreenCover(isPresented: $rtcPresented) {
@@ -2861,6 +2844,7 @@ struct MatrixNativeWaveRoomView: View {
             NavigationStack {
                 MatrixNativeRoomAttachmentGalleryView(
                     roomID: room.id,
+                    waveName: room.name,
                     accountID: attachmentGalleryAccountID,
                     roomIsEncrypted: room.isEncrypted,
                     sections: attachmentGallerySections,
@@ -2885,7 +2869,7 @@ struct MatrixNativeWaveRoomView: View {
                     }
                 )
                 .environmentObject(matrixSession)
-                .navigationTitle("Room attachments")
+                .navigationTitle("\(room.name)'s Gallery")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {

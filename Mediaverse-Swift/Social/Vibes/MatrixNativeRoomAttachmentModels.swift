@@ -131,7 +131,7 @@ enum MatrixNativeRoomAttachmentDerivation {
             let effectiveKind = descriptor.effectiveKind
             let payload: MatrixNativeRoomAttachmentPayload
             switch effectiveKind {
-            case .image, .video, .sticker:
+            case .image, .video, .sticker, .audio, .voice:
                 payload = .media(MatrixNativeRoomMediaAttachment(
                     descriptor: descriptor,
                     mediaKind: effectiveKind,
@@ -140,7 +140,7 @@ enum MatrixNativeRoomAttachmentDerivation {
                     width: descriptor.width,
                     height: descriptor.height
                 ))
-            case .file, .audio, .voice:
+            case .file:
                 payload = .document(MatrixNativeRoomDocumentAttachment(
                     descriptor: descriptor,
                     title: descriptor.filename,
