@@ -47,7 +47,6 @@ for expected in \
   'Offline — messages will stay queued' \
   'Message this Wave' \
   'Send message' \
-  'Load earlier messages' \
   'Read by' \
   'Invitations' \
   'Discover Vibes' \
@@ -60,5 +59,11 @@ for expected in \
     exit 1
   }
 done
+
+# Element-style history pagination is automatic when the top sentinel becomes
+# visible; it must retain loading state and an SDK-backed earlier-page request.
+grep -q 'requestEarlierMessagesFromTopSentinel' "$view"
+grep -q 'requestEarlierMessagesIfNeeded' "$view"
+grep -q 'isLoadingHistory' "$view"
 
 echo "Matrix-native Vibes UI source contract passed"

@@ -17,6 +17,46 @@ final class SocialSessionValidationTests: XCTestCase {
             .authenticated
         )
     }
+
+    func testCurrentSession401ExpiresMatchingCredential() {
+        XCTAssertTrue(
+            SessionRejectionPolicy.shouldExpireCurrentSession(
+                responseStatus: 401,
+                requestToken: "current-token",
+                currentToken: "current-token"
+            )
+        )
+    }
+
+    func testStale401CannotDeleteNewMagicLinkCredential() {
+        XCTAssertFalse(
+            SessionRejectionPolicy.shouldExpireCurrentSession(
+                responseStatus: 401,
+                requestToken: "previous-token",
+                currentToken: "new-magic-link-token"
+            )
+        )
+    }
+
+    func testAnonymous401CannotExpireAuthenticatedSession() {
+        XCTAssertFalse(
+            SessionRejectionPolicy.shouldExpireCurrentSession(
+                responseStatus: 401,
+                requestToken: nil,
+                currentToken: "current-token"
+            )
+        )
+    }
+
+    func testNon401NeverExpiresCredential() {
+        XCTAssertFalse(
+            SessionRejectionPolicy.shouldExpireCurrentSession(
+                responseStatus: 403,
+                requestToken: "current-token",
+                currentToken: "current-token"
+            )
+        )
+    }
 }
 
 final class StoryTimedMediaOverlayTests: XCTestCase {

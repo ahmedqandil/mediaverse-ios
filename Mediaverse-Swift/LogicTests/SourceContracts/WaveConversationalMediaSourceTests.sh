@@ -1,9 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-composer="Social/Ripples/RippleComposer.swift"
-upload="Social/Ripples/RippleMediaUploadCoordinator.swift"
-playback="Social/Ripples/RippleCard.swift"
+root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
+composer="$root/Social/Ripples/RippleComposer.swift"
+upload="$root/Social/Ripples/RippleMediaUploadCoordinator.swift"
+playback="$root/Social/Ripples/RippleCard.swift"
 
 grep -q "wave.allowVoiceMessages" "$composer" \
   || { echo "FAIL: Voice Ripple composer must honor the Wave setting."; exit 1; }

@@ -27,7 +27,7 @@ require 'case failed(isRecoverable: Bool)' "$repository" \
   "The Matrix timeline must represent recoverable local send failure."
 require 'try await handle.tryResend()' "$repository" \
   "Failed Matrix sends must support SDK retries."
-require 'MatrixNativeThreadView(room: room, root: threadRoot)' "$view" \
+require 'MatrixNativeThreadView(room: room, root: root)' "$view" \
   "Additional replies must open a native Matrix thread."
 require '.vibe, .vibeWave:' "$tabs" \
   "Vibe and Wave routes must hide global bottom chrome."

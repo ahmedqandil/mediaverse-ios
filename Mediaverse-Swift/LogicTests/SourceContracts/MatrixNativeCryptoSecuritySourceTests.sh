@@ -44,7 +44,8 @@ grep -q 'interactiveDismissDisabled(generatedRecoveryKey != nil)' "$VIEW"
 grep -q 'showsSecuritySetup' "$DIRECT_VIEW"
 grep -q 'autoEnableBackups(autoEnableBackups: true)' "$COORDINATOR"
 
-if grep -Eq 'URLSession|/_matrix/client|accessToken' "$CRYPTO" "$VIEW" "$DIRECT_VIEW"; then
+if sed '/^[[:space:]]*\/\//d' "$CRYPTO" "$VIEW" "$DIRECT_VIEW" \
+    | grep -Eq 'URLSession|/_matrix/client|accessToken'; then
   echo "Crypto and recovery must not implement a parallel Matrix protocol client" >&2
   exit 1
 fi

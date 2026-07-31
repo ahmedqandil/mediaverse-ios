@@ -1638,11 +1638,14 @@ private struct MatrixNativeRoomCreatorView: View {
                     Text(
                         "The Wave exists, but WeStreem has not verified it for search, curation and operations yet. Retry setup without creating another \(mode.noun.lowercased())."
                     )
-                } else {
+                } else if let failedUserIDs = partialResult?.failedInvitationUserIDs,
+                          !failedUserIDs.isEmpty {
                     Text(
                         "The \(mode.noun) is ready, but these invitations failed: "
-                            + (partialResult?.failedInvitationUserIDs.joined(separator: ", ") ?? "")
+                            + failedUserIDs.joined(separator: ", ")
                     )
+                } else {
+                    Text("The \(mode.noun) is ready. Tap Done to return and refresh your Vibes.")
                 }
             }
             .sheet(isPresented: $showsSecuritySetup) {
@@ -1687,13 +1690,10 @@ private struct MatrixNativeRoomCreatorView: View {
                     draft: draft
                 )
             }
-            if result.failedInvitationUserIDs.isEmpty
-                && !result.registrationPending {
-                await onCreated(result)
-                dismiss()
-            } else {
-                partialResult = result
-            }
+            // A complete success used to dismiss silently, making it
+            // indistinguishable from an unconfirmed tap. Confirm every created
+            // room, then refresh the caller when the user acknowledges it.
+            partialResult = result
         } catch let error as MatrixNativeCryptoSecurityError
             where error.requiresGuidedRecovery {
             showsSecuritySetup = true
@@ -2753,6 +2753,12 @@ struct MatrixNativeWaveRoomView: View {
         .navigationTitle(room.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(room.name)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+            }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
                     searchPresented = true
@@ -4275,7 +4281,7 @@ private struct MatrixNativeMessageRow: View {
                     if item.threadReplyCount > 0 {
                         Label("\(item.threadReplyCount) replies", systemImage: "bubble.left.and.bubble.right")
                     }
-                    if item.isOwn, !item.readReceiptUserIDs.isEmpty {
+                    if !item.readReceiptUserIDs.isEmpty {
                         MatrixNativeReadReceiptStrip(
                             roomID: roomID,
                             userIDs: item.readReceiptUserIDs
@@ -4284,6 +4290,57 @@ private struct MatrixNativeMessageRow: View {
                     if let state = item.localSendState {
                         Text(MatrixNativeCopy.label(for: state))
                     }
+                    Menu {
+                        if item.actions.canAddEnergy {
+                            Button("Add Energy", systemImage: "bolt.fill") {
+                                energyPresented = true
+                            }
+                        }
+                        if item.actions.canReply {
+                            Button("Reply", systemImage: "arrowshape.turn.up.left") {
+                                openDiscussion()
+                            }
+                        }
+                        if canEchoToWaves {
+                            Button("Echo", systemImage: "wave.3.right") {
+                                waveEchoPresented = true
+                            }
+                        }
+                        if canNativeShare {
+                            ShareLink(item: item.body) {
+                                Label("Share", systemImage: "square.and.arrow.up")
+                            }
+                        }
+                        if hasMoreActions { Divider() }
+                        if item.actions.canEdit {
+                            Button("Edit", systemImage: "pencil") { editPresented = true }
+                        }
+                        if item.actions.canPin {
+                            Button(
+                                item.actions.isPinned ? "Unpin" : "Pin",
+                                systemImage: item.actions.isPinned ? "pin.slash" : "pin"
+                            ) { setPinned(!item.actions.isPinned) }
+                        }
+                        if item.actions.canReport {
+                            Button("Report", systemImage: "exclamationmark.bubble") {
+                                reportPresented = true
+                            }
+                        }
+                        if canEchoToAtmo {
+                            Button("Echo to My Atmo", systemImage: "wave.3.right") {
+                                atmoEchoPresented = true
+                            }
+                        }
+                        if item.actions.canRedact {
+                            Button("Delete", systemImage: "trash", role: .destructive) {
+                                deleteConfirmationPresented = true
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .frame(minWidth: 28, minHeight: 28)
+                    }
+                    .accessibilityLabel("More message actions")
                 }
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(C.textMuted)
@@ -4441,9 +4498,10 @@ private struct MatrixNativeMessageRow: View {
     }
 }
 
-/// Element-style receipt summary for the sender's own event. The SDK tracks
-/// receipts per focused timeline event; member presentation is resolved from
-/// the room at display time so profile changes and MXC avatars stay current.
+/// Element-style receipt summary for the event each reader has reached. The
+/// SDK tracks receipts per focused timeline event, including events authored by
+/// another member; member presentation is resolved from the room at display
+/// time so profile changes and MXC avatars stay current.
 private struct MatrixNativeReadReceiptStrip: View {
     let roomID: String
     let userIDs: [String]

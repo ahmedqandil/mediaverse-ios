@@ -361,7 +361,7 @@ actor APIClient: LegacySocialTransport {
         attachAuth(&request)
         let (data, response) = try await session.data(for: request)
         do {
-            try validate(response)
+            try validate(response, requestToken: sessionTokenUsed(by: request))
         } catch {
             if let payload = try? JSONDecoder().decode(SocialAPIErrorPayload.self, from: data),
                !payload.error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -384,7 +384,7 @@ actor APIClient: LegacySocialTransport {
         request.httpBody = body
         attachAuth(&request)
         let (data, response) = try await session.data(for: request)
-        try validate(response)
+        try validate(response, requestToken: sessionTokenUsed(by: request))
         invalidateResponseCache()
         return data
     }
@@ -398,7 +398,7 @@ actor APIClient: LegacySocialTransport {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         attachAuth(&request)
         let (data, response) = try await session.data(for: request)
-        try validate(response)
+        try validate(response, requestToken: sessionTokenUsed(by: request))
         invalidateResponseCache()
         return data
     }
@@ -419,7 +419,7 @@ actor APIClient: LegacySocialTransport {
         request.httpBody = body
         attachAuth(&request)
         let (data, response) = try await session.data(for: request)
-        try validate(response)
+        try validate(response, requestToken: sessionTokenUsed(by: request))
         invalidateResponseCache()
         return data
     }
@@ -474,7 +474,7 @@ actor APIClient: LegacySocialTransport {
             let requestID = UUID()
             let task = Task<Data, Error> {
                 let (data, resp) = try await session.data(for: req)
-                try validate(resp)
+                try validate(resp, requestToken: sessionTokenUsed(by: req))
                 return data
             }
 
@@ -531,7 +531,7 @@ actor APIClient: LegacySocialTransport {
         let requestID = UUID()
         let task = Task<Data, Error> {
             let (data, resp) = try await session.data(for: req)
-            try validate(resp)
+            try validate(resp, requestToken: sessionTokenUsed(by: req))
             return data
         }
         transientInFlightGETs[key] = InFlightDataRequest(id: requestID, task: task)
@@ -576,7 +576,7 @@ actor APIClient: LegacySocialTransport {
         req.httpBody = try JSONEncoder().encode(body)
         attachAuth(&req)
         let (data, resp) = try await session.data(for: req)
-        try validate(resp)
+        try validate(resp, requestToken: sessionTokenUsed(by: req))
         if invalidatesCache {
             invalidateResponseCache()
         }
@@ -591,7 +591,7 @@ actor APIClient: LegacySocialTransport {
         req.httpMethod = "POST"
         attachAuth(&req)
         let (_, resp) = try await session.data(for: req)
-        try validate(resp)
+        try validate(resp, requestToken: sessionTokenUsed(by: req))
         invalidateResponseCache()
     }
 
@@ -606,7 +606,7 @@ actor APIClient: LegacySocialTransport {
         req.httpBody = try JSONEncoder().encode(body)
         attachAuth(&req)
         let (data, resp) = try await session.data(for: req)
-        try validate(resp)
+        try validate(resp, requestToken: sessionTokenUsed(by: req))
         invalidateResponseCache()
         return try decoder.decode(T.self, from: data)
     }
@@ -620,7 +620,7 @@ actor APIClient: LegacySocialTransport {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         attachAuth(&req)
         let (data, resp) = try await session.data(for: req)
-        try validate(resp)
+        try validate(resp, requestToken: sessionTokenUsed(by: req))
         invalidateResponseCache()
         return try decoder.decode(T.self, from: data)
     }
@@ -636,7 +636,7 @@ actor APIClient: LegacySocialTransport {
         req.httpBody = try JSONEncoder().encode(body)
         attachAuth(&req)
         let (data, resp) = try await session.data(for: req)
-        try validate(resp)
+        try validate(resp, requestToken: sessionTokenUsed(by: req))
         invalidateResponseCache()
         return try decoder.decode(T.self, from: data)
     }
@@ -649,7 +649,7 @@ actor APIClient: LegacySocialTransport {
         req.httpMethod = "DELETE"
         attachAuth(&req)
         let (_, resp) = try await session.data(for: req)
-        try validate(resp)
+        try validate(resp, requestToken: sessionTokenUsed(by: req))
         invalidateResponseCache()
     }
 
@@ -902,7 +902,7 @@ actor APIClient: LegacySocialTransport {
         req.httpBody = try JSONEncoder().encode(Body(videoId: videoId))
         attachAuth(&req)
         let (_, resp) = try await session.data(for: req)
-        try validate(resp)
+        try validate(resp, requestToken: sessionTokenUsed(by: req))
         await invalidateResponseCache { path in
             path.hasPrefix("/api/shorts")
             || path.hasPrefix("/api/feed")
@@ -1093,7 +1093,7 @@ actor APIClient: LegacySocialTransport {
         attachAuth(&req)
 
         let (data, resp) = try await session.upload(for: req, from: body)
-        try validate(resp)
+        try validate(resp, requestToken: sessionTokenUsed(by: req))
         return try decoder.decode(Response.self, from: data).url
     }
 
@@ -1147,7 +1147,7 @@ actor APIClient: LegacySocialTransport {
         attachAuth(&tokenRequest)
 
         let (tokenData, tokenResp) = try await session.data(for: tokenRequest)
-        try validate(tokenResp)
+        try validate(tokenResp, requestToken: sessionTokenUsed(by: tokenRequest))
         let clientToken = try decoder.decode(TokenResponse.self, from: tokenData).clientToken
         guard let storeId = blobStoreId(fromClientToken: clientToken), !storeId.isEmpty else {
             throw APIError.invalidResponse("Blob upload token did not include a store id.")
@@ -1228,7 +1228,7 @@ actor APIClient: LegacySocialTransport {
         attachAuth(&req)
 
         let (data, resp) = try await session.upload(for: req, from: body)
-        try validate(resp)
+        try validate(resp, requestToken: sessionTokenUsed(by: req))
         let decoded = try decoder.decode(Response.self, from: data)
         if let url = decoded.url ?? decoded.thumbnailUrl ?? decoded.imageUrl, !url.isEmpty {
             return url
@@ -1616,7 +1616,7 @@ actor APIClient: LegacySocialTransport {
         attachAuth(&req)
 
         let (data, resp) = try await session.data(for: req)
-        try validate(resp)
+        try validate(resp, requestToken: sessionTokenUsed(by: req))
         let response = try decoder.decode(SwitchContextResponse.self, from: data)
         storeSessionStateIfPresent(in: resp, data: data)
         if let canonicalContext = response.context {
@@ -2143,7 +2143,7 @@ actor APIClient: LegacySocialTransport {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         attachAuth(&req)
         let (data, resp) = try await session.data(for: req)
-        try validate(resp)
+        try validate(resp, requestToken: sessionTokenUsed(by: req))
         let _: Resp = try decoder.decode(Resp.self, from: data)
     }
 
@@ -2634,13 +2634,31 @@ actor APIClient: LegacySocialTransport {
 
     // MARK: - Private
 
-    nonisolated private func validate(_ resp: URLResponse) throws {
+    nonisolated private func sessionTokenUsed(by request: URLRequest) -> String? {
+        guard let authorization = request.value(forHTTPHeaderField: "Authorization"),
+              authorization.hasPrefix("Bearer ") else {
+            return nil
+        }
+        let token = String(authorization.dropFirst("Bearer ".count))
+        return token.isEmpty ? nil : token
+    }
+
+    nonisolated private func validate(
+        _ resp: URLResponse,
+        requestToken: String?
+    ) throws {
         guard let http = resp as? HTTPURLResponse else { return }
         if http.statusCode == 401 {
-            SessionStorage.token = nil
-            SessionStorage.activeContext = nil
-            Task { @MainActor in
-                NotificationCenter.default.post(name: .sessionExpired, object: nil)
+            if SessionRejectionPolicy.shouldExpireCurrentSession(
+                responseStatus: http.statusCode,
+                requestToken: requestToken,
+                currentToken: SessionStorage.token
+            ) {
+                SessionStorage.token = nil
+                SessionStorage.activeContext = nil
+                Task { @MainActor in
+                    NotificationCenter.default.post(name: .sessionExpired, object: nil)
+                }
             }
             throw APIError.unauthorized
         }
@@ -3031,7 +3049,7 @@ extension APIClient: AtmoV2Transport {
         attachAuth(&request)
         let (data, response) = try await session.data(for: request)
         do {
-            try validate(response)
+            try validate(response, requestToken: sessionTokenUsed(by: request))
         } catch {
             if let payload = try? JSONDecoder().decode(SocialAPIErrorPayload.self, from: data),
                !payload.error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

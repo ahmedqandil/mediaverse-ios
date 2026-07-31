@@ -17,19 +17,19 @@ require 'MatrixNativeWaveActionPolicy.replyPreviewLimit' "$view" \
   "Reply previews must use the shared Matrix-native policy."
 require '"Open discussion"' "$view" \
   "Additional replies must open a dedicated discussion."
-require 'MatrixNativeThreadView(room: room, root: threadRoot)' "$view" \
+require 'MatrixNativeThreadView(room: room, root: root)' "$view" \
   "Discussions must use canonical Matrix threads."
-require 'label: item.reactionCount > 0' "$view" \
-  "Energy must lead the Matrix message action row."
-require 'label: "Reply"' "$view" \
-  "Reply must follow Energy."
-require 'Label("More", systemImage: "ellipsis")' "$view" \
+require 'Button("Add Energy", systemImage: "bolt.fill")' "$view" \
+  "Energy must remain available from the explicit message actions menu."
+require 'Button("Reply", systemImage: "arrowshape.turn.up.left")' "$view" \
+  "Reply must remain available from the explicit message actions menu."
+require 'accessibilityLabel("More message actions")' "$view" \
   "Ownership and moderation actions must remain in More."
-require 'Label("Edit", systemImage: "pencil")' "$view" \
+require 'Button("Edit", systemImage: "pencil")' "$view" \
   "Authorized authors must retain Matrix edits."
-require 'Label("Report", systemImage: "exclamationmark.bubble")' "$view" \
+require 'Button("Report", systemImage: "exclamationmark.bubble")' "$view" \
   "Eligible messages must retain Matrix reporting."
-require 'Label("Delete", systemImage: "trash")' "$view" \
+require 'Button("Delete", systemImage: "trash", role: .destructive)' "$view" \
   "Authorized users must retain Matrix redaction."
 require 'presentation: RippleCardPresentation = .social' "$atmo_card" \
   "Westreem Atmo cards must remain independent from Matrix messages."

@@ -11,6 +11,22 @@ enum StoredSessionValidation: Equatable {
     }
 }
 
+/// Decides whether a 401 response is authoritative for the session that is
+/// currently installed. Requests started before a magic-link completion or an
+/// account switch may finish later with 401; that stale response must fail its
+/// own operation without deleting the newer account's credential.
+enum SessionRejectionPolicy {
+    static func shouldExpireCurrentSession(
+        responseStatus: Int,
+        requestToken: String?,
+        currentToken: String?
+    ) -> Bool {
+        responseStatus == 401
+            && requestToken != nil
+            && requestToken == currentToken
+    }
+}
+
 /// Manages authentication state for the entire app.
 /// Handles magic-link email flow and Google OAuth via ASWebAuthenticationSession.
 @MainActor
