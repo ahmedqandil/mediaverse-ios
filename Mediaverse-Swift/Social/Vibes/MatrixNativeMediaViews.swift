@@ -1166,6 +1166,7 @@ private struct MatrixNativeRemoteMediaThumbnail: View {
     @EnvironmentObject private var matrixSession: MatrixNativeSessionController
     @State private var image: UIImage?
     @State private var state: LoadState = .idle
+    @State private var retryGeneration = 0
 
     private enum LoadState { case idle, loading, ready, unavailable }
 
@@ -1183,10 +1184,36 @@ private struct MatrixNativeRemoteMediaThumbnail: View {
             } else if state == .loading {
                 ProgressView().tint(C.watch)
                     .frame(height: 44)
+            } else if state == .unavailable {
+                VStack(alignment: .leading, spacing: 9) {
+                    Label(
+                        media.effectiveKind == .video
+                            ? "Video unavailable"
+                            : "Image unavailable",
+                        systemImage: "photo.badge.exclamationmark"
+                    )
+                    .font(.subheadline.weight(.semibold))
+                    Text(MatrixNativeMediaCopy.displayTitle(for: media))
+                        .font(.caption)
+                        .foregroundStyle(C.textMuted)
+                        .lineLimit(2)
+                    Button("Retry") {
+                        image = nil
+                        state = .idle
+                        retryGeneration += 1
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(C.watch)
+                }
+                .foregroundStyle(C.text)
+                .padding(12)
+                .frame(maxWidth: .infinity, minHeight: 110, alignment: .leading)
+                .background(C.elevated, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(C.borderSubtle))
             }
         }
         .accessibilityLabel(MatrixNativeMediaCopy.displayTitle(for: media))
-        .task(id: media.id) {
+        .task(id: "\(media.id)::\(retryGeneration)") {
             guard [.image, .sticker, .video].contains(media.effectiveKind) else { return }
             state = .loading
             do {

@@ -3,6 +3,32 @@ import CoreImage
 import CoreMedia
 @testable import Mediaverse
 
+final class MatrixInboundMediaPolicyTests: XCTestCase {
+    func testMissingDeclaredSizeStillAcceptsBoundedDownload() throws {
+        XCTAssertNoThrow(try MatrixNativeMediaPolicy.validateDownload(
+            size: nil,
+            receivedBytes: 1_024,
+            serverMaximumBytes: 2_048
+        ))
+    }
+
+    func testMissingDeclaredSizeStillRejectsOverLimitDownload() {
+        XCTAssertThrowsError(try MatrixNativeMediaPolicy.validateDownload(
+            size: nil,
+            receivedBytes: 2_049,
+            serverMaximumBytes: 2_048
+        ))
+    }
+
+    func testEmptyInboundMediaIsRejected() {
+        XCTAssertThrowsError(try MatrixNativeMediaPolicy.validateDownload(
+            size: nil,
+            receivedBytes: 0,
+            serverMaximumBytes: 2_048
+        ))
+    }
+}
+
 final class SocialSessionValidationTests: XCTestCase {
     func testMissingSessionUserRejectsStoredCredential() {
         XCTAssertEqual(

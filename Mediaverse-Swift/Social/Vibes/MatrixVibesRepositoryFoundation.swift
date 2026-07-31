@@ -3441,16 +3441,11 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
     ) async throws -> Data {
         let client = try await activeClient()
         _ = try room(roomID, in: client)
-        guard let expectedSize else {
-            // Do not download an unbounded payload when the event omitted its
-            // declared size. The user can still see the fail-closed card.
-            throw MatrixNativeMediaError.mediaUnavailable
-        }
         let maximum = min(
             try await client.getMaxMediaUploadSize(),
             MatrixNativeMediaPolicy.maximumVideoBytes
         )
-        if expectedSize > maximum {
+        if let expectedSize, expectedSize > maximum {
             throw MatrixNativeMediaError.attachmentTooLarge(limitBytes: maximum)
         }
         // MediaSource preserves the encrypted-file descriptor from the
