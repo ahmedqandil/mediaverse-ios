@@ -47,7 +47,173 @@ public enum MatrixNativeRtcTrackIntent: String, Codable, Sendable, CaseIterable 
     case screen
 }
 
-public enum MatrixNativeRtcExperience: Sendable, Equatable {
+public enum MatrixNativeRtcContractError: Error, Equatable {
+    case invalidBinding
+    case bindingMismatch
+    case invalidRemoteTrack
+    case ineligibleRemoteSubscription
+    case invalidAuthorization
+}
+
+/// Immutable application identity for one native RTC transport. The Wave,
+/// call and device cannot be changed while the transport is alive.
+public struct MatrixNativeRtcSessionBinding: Sendable, Equatable, Hashable {
+    public let provider: MatrixNativeRtcMediaProvider
+    public let waveID: String
+    public let callID: String
+    public let deviceID: String
+
+    public init(
+        provider: MatrixNativeRtcMediaProvider,
+        waveID: String,
+        callID: String,
+        deviceID: String
+    ) throws {
+        guard Self.matches(
+            waveID,
+            pattern: "^![^:\\s]{1,255}:[A-Za-z0-9.-]+(?::[0-9]{1,5})?$"
+        ),
+              Self.matches(callID, pattern: "^[A-Za-z0-9._~-]{1,256}$"),
+              Self.matches(deviceID, pattern: "^[A-Za-z0-9._~+=/-]{1,255}$") else {
+            throw MatrixNativeRtcContractError.invalidBinding
+        }
+        self.provider = provider
+        self.waveID = waveID
+        self.callID = callID
+        self.deviceID = deviceID
+    }
+
+    private static func matches(_ value: String, pattern: String) -> Bool {
+        value.range(of: pattern, options: .regularExpression) != nil
+    }
+}
+
+public enum MatrixNativeRtcRemoteTrackKind: String, Codable, Sendable, CaseIterable {
+    case audio
+    case video
+}
+
+/// Provider-neutral source for one requested remote media track. The publisher
+/// session and provider track name are both required because a track name is
+/// not globally unique across provider sessions.
+public struct MatrixNativeRtcRemoteTrackSource: Sendable, Equatable, Hashable {
+    public let participantID: String
+    public let publisherSessionID: String
+    public let providerTrackName: String
+    public let kind: MatrixNativeRtcRemoteTrackKind
+
+    public init(
+        participantID: String,
+        publisherSessionID: String,
+        providerTrackName: String,
+        kind: MatrixNativeRtcRemoteTrackKind
+    ) throws {
+        guard Self.matches(
+            participantID,
+            pattern: "^@[^:\\s]{1,255}:[A-Za-z0-9.-]+(?::[0-9]{1,5})?$"
+        ),
+              Self.matches(
+                publisherSessionID,
+                pattern: "^[A-Za-z0-9._~-]{1,256}$"
+              ),
+              Self.matches(
+                providerTrackName,
+                pattern: "^[A-Za-z0-9._~-]{1,256}$"
+              ) else {
+            throw MatrixNativeRtcContractError.invalidRemoteTrack
+        }
+        self.participantID = participantID
+        self.publisherSessionID = publisherSessionID
+        self.providerTrackName = providerTrackName
+        self.kind = kind
+    }
+
+    private static func matches(_ value: String, pattern: String) -> Bool {
+        value.range(of: pattern, options: .regularExpression) != nil
+    }
+}
+
+public struct MatrixNativeRtcRemoteSubscription: Sendable, Equatable, Hashable {
+    public let binding: MatrixNativeRtcSessionBinding
+    public let experience: MatrixNativeRtcExperience
+    public let role: MatrixNativeRtcParticipantRole
+    public let track: MatrixNativeRtcRemoteTrackSource
+
+    public init(
+        binding: MatrixNativeRtcSessionBinding,
+        experience: MatrixNativeRtcExperience,
+        role: MatrixNativeRtcParticipantRole,
+        track: MatrixNativeRtcRemoteTrackSource
+    ) throws {
+        guard role == .interactive,
+              experience == .call || experience == .liveStage else {
+            throw MatrixNativeRtcContractError.ineligibleRemoteSubscription
+        }
+        self.binding = binding
+        self.experience = experience
+        self.role = role
+        self.track = track
+    }
+}
+
+/// Owns the desired remote-track set for exactly one transport binding.
+/// Ending the transport or removing a participant deterministically removes
+/// all corresponding subscriptions.
+public struct MatrixNativeRtcRemoteSubscriptionState: Sendable, Equatable {
+    public let binding: MatrixNativeRtcSessionBinding
+    public let experience: MatrixNativeRtcExperience
+    public let role: MatrixNativeRtcParticipantRole
+    public private(set) var subscriptions: Set<MatrixNativeRtcRemoteSubscription>
+
+    public init(
+        binding: MatrixNativeRtcSessionBinding,
+        experience: MatrixNativeRtcExperience,
+        role: MatrixNativeRtcParticipantRole
+    ) throws {
+        guard role == .interactive,
+              experience == .call || experience == .liveStage else {
+            throw MatrixNativeRtcContractError.ineligibleRemoteSubscription
+        }
+        self.binding = binding
+        self.experience = experience
+        self.role = role
+        subscriptions = []
+    }
+
+    public mutating func subscribe(_ subscription: MatrixNativeRtcRemoteSubscription) throws {
+        guard subscription.binding == binding,
+              subscription.experience == experience,
+              subscription.role == role else {
+            throw MatrixNativeRtcContractError.bindingMismatch
+        }
+        subscriptions.insert(subscription)
+    }
+
+    @discardableResult
+    public mutating func unsubscribe(
+        track: MatrixNativeRtcRemoteTrackSource
+    ) -> MatrixNativeRtcRemoteSubscription? {
+        guard let subscription = subscriptions.first(where: { $0.track == track }) else {
+            return nil
+        }
+        subscriptions.remove(subscription)
+        return subscription
+    }
+
+    @discardableResult
+    public mutating func removeParticipant(_ participantID: String)
+        -> Set<MatrixNativeRtcRemoteSubscription> {
+        let removed = subscriptions.filter { $0.track.participantID == participantID }
+        subscriptions.subtract(removed)
+        return Set(removed)
+    }
+
+    public mutating func finish() {
+        subscriptions.removeAll(keepingCapacity: false)
+    }
+}
+
+public enum MatrixNativeRtcExperience: Sendable, Equatable, Hashable {
     case call
     case liveStage
     case watchParty
@@ -58,7 +224,7 @@ public enum MatrixNativeLiveStageMode: Sendable, Equatable {
     case gaming
 }
 
-public enum MatrixNativeRtcParticipantRole: Sendable, Equatable {
+public enum MatrixNativeRtcParticipantRole: Sendable, Equatable, Hashable {
     case interactive
     case audience
 }
@@ -166,6 +332,80 @@ public protocol MatrixNativeReplayKitAuthorizationStore {
     func clearAuthorization() throws
 }
 
+public enum MatrixNativeRtcNetworkRecoveryAction: String, Codable, Sendable, CaseIterable {
+    case refreshTurn = "REFRESH_TURN"
+    case restartIce = "RESTART_ICE"
+}
+
+/// A one-use, short-lived application authorization to request fresh network
+/// recovery material from MediaVerse. It intentionally contains no ICE server
+/// URL, TURN username/password, provider credential or session description.
+public struct MatrixNativeRtcNetworkRecoveryAuthorization: Sendable, Equatable {
+    public let binding: MatrixNativeRtcSessionBinding
+    public let action: MatrixNativeRtcNetworkRecoveryAction
+    public let opaqueReference: String
+    public let issuedAtMilliseconds: Int64
+    public let expiresAtMilliseconds: Int64
+
+    public init(
+        binding: MatrixNativeRtcSessionBinding,
+        action: MatrixNativeRtcNetworkRecoveryAction,
+        opaqueReference: String,
+        issuedAtMilliseconds: Int64,
+        expiresAtMilliseconds: Int64
+    ) throws {
+        guard opaqueReference.range(
+            of: "^[A-Za-z0-9_-]{16,128}$",
+            options: .regularExpression
+        ) != nil else {
+            throw MatrixNativeRtcContractError.invalidAuthorization
+        }
+        let lifetime = expiresAtMilliseconds - issuedAtMilliseconds
+        guard issuedAtMilliseconds >= 0,
+              lifetime > 0,
+              lifetime <= MatrixNativeRtcContract
+                .maximumNetworkRecoveryAuthorizationLifetimeMilliseconds else {
+            throw MatrixNativeRtcContractError.invalidAuthorization
+        }
+        self.binding = binding
+        self.action = action
+        self.opaqueReference = opaqueReference
+        self.issuedAtMilliseconds = issuedAtMilliseconds
+        self.expiresAtMilliseconds = expiresAtMilliseconds
+    }
+}
+
+/// Consumes authorizations exactly once and fails closed on a different Wave,
+/// call, device, provider, action, or time window.
+public struct MatrixNativeRtcNetworkRecoveryAuthorizationState: Sendable, Equatable {
+    private var authorization: MatrixNativeRtcNetworkRecoveryAuthorization?
+
+    public init(authorization: MatrixNativeRtcNetworkRecoveryAuthorization? = nil) {
+        self.authorization = authorization
+    }
+
+    public mutating func takeAuthorization(
+        binding: MatrixNativeRtcSessionBinding,
+        action: MatrixNativeRtcNetworkRecoveryAction,
+        nowMilliseconds: Int64
+    ) throws -> MatrixNativeRtcNetworkRecoveryAuthorization {
+        guard let authorization,
+              authorization.binding == binding,
+              authorization.action == action,
+              nowMilliseconds >= authorization.issuedAtMilliseconds,
+              nowMilliseconds < authorization.expiresAtMilliseconds else {
+            self.authorization = nil
+            throw MatrixNativeRtcContractError.invalidAuthorization
+        }
+        self.authorization = nil
+        return authorization
+    }
+
+    public mutating func finish() {
+        authorization = nil
+    }
+}
+
 public enum MatrixNativeRtcMediaSecurity: String, Codable, Sendable {
     case standardWebRTC = "DTLS_SRTP"
 }
@@ -183,6 +423,8 @@ public enum MatrixNativeRtcContract {
         4 * 60 * 60 * 1_000
     public static let membershipRefreshMilliseconds: Int64 =
         3 * 60 * 60 * 1_000
+    public static let maximumNetworkRecoveryAuthorizationLifetimeMilliseconds: Int64 =
+        5 * 60 * 1_000
     public static let permitsNewInfrastructure = false
     public static let applicationMediaEncryptionEnabled = false
     public static let swiftBindingsExportMatrixRtcMediaKeys = false
