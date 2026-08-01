@@ -46,6 +46,62 @@ struct MatrixNativeRtcConnectionResponse: Decodable, Sendable {
 }
 
 @MainActor
+private protocol MatrixNativeRtcTransportAdapter: AnyObject {
+    var provider: MatrixNativeRtcMediaProvider { get }
+    func connect(_ connection: MatrixNativeRtcConnection) async throws
+    func setTrack(_ intent: MatrixNativeRtcTrackIntent, enabled: Bool) async throws
+    func disconnect() async
+}
+
+@MainActor
+private final class MatrixNativeLiveKitTransportAdapter:
+    MatrixNativeRtcTransportAdapter {
+    let provider = MatrixNativeRtcMediaProvider.livekit
+    let room = Room()
+
+    func connect(_ connection: MatrixNativeRtcConnection) async throws {
+        try await room.connect(url: connection.url, token: connection.token)
+    }
+
+    func setTrack(_ intent: MatrixNativeRtcTrackIntent, enabled: Bool) async throws {
+        switch intent {
+        case .microphone:
+            try await room.localParticipant.setMicrophone(enabled: enabled)
+        case .camera:
+            try await room.localParticipant.setCamera(enabled: enabled)
+        case .screen:
+            guard MatrixNativeRtcContract.permitsTrackIntent(.screen) else {
+                throw MatrixNativeRtcError.invalidService
+            }
+            throw MatrixNativeRtcError.invalidService
+        }
+    }
+
+    func disconnect() async {
+        await room.disconnect()
+    }
+}
+
+@MainActor
+private final class MatrixNativeCloudflareRealtimeTransportAdapter:
+    MatrixNativeRtcTransportAdapter {
+    let provider = MatrixNativeRtcMediaProvider.cloudflareRealtime
+
+    func connect(_ connection: MatrixNativeRtcConnection) async throws {
+        _ = connection
+        throw MatrixNativeRtcError.invalidService
+    }
+
+    func setTrack(_ intent: MatrixNativeRtcTrackIntent, enabled: Bool) async throws {
+        _ = intent
+        _ = enabled
+        throw MatrixNativeRtcError.invalidService
+    }
+
+    func disconnect() async {}
+}
+
+@MainActor
 private final class MatrixNativeRtcRoomModel: NSObject, ObservableObject, RoomDelegate {
     @Published var connection: MatrixNativeRtcConnection?
     @Published var joining = false
@@ -56,12 +112,14 @@ private final class MatrixNativeRtcRoomModel: NSObject, ObservableObject, RoomDe
     @Published var errorMessage: String?
 
     private var providerSelection: MatrixNativeRtcProviderSelection?
-
-    let liveKitRoom = Room()
+    private let liveKitTransport = MatrixNativeLiveKitTransportAdapter()
+    private let cloudflareTransport = MatrixNativeCloudflareRealtimeTransportAdapter()
+    private var activeTransport: (any MatrixNativeRtcTransportAdapter)?
+    var liveKitRoom: Room { liveKitTransport.room }
 
     override init() {
         super.init()
-        liveKitRoom.add(delegate: self)
+        liveKitTransport.room.add(delegate: self)
     }
 
     func connect(_ connection: MatrixNativeRtcConnection) async throws {
@@ -75,14 +133,24 @@ private final class MatrixNativeRtcRoomModel: NSObject, ObservableObject, RoomDe
             throw MatrixNativeRtcError.invalidService
         }
         providerSelection = selection
+        let transport: any MatrixNativeRtcTransportAdapter
+        switch selection.routingDecision {
+        case .livekit:
+            transport = liveKitTransport
+        case .cloudflareRealtime:
+            transport = cloudflareTransport
+        case .rejected:
+            throw MatrixNativeRtcError.invalidService
+        }
+        guard activeTransport == nil || activeTransport?.provider == transport.provider else {
+            throw MatrixNativeRtcError.invalidService
+        }
+        activeTransport = transport
         self.connection = connection
         var lastError: Error?
         for attempt in 0..<3 {
             do {
-                try await liveKitRoom.connect(
-                    url: connection.url,
-                    token: connection.token
-                )
+                try await transport.connect(connection)
                 connected = true
                 reconnecting = false
                 errorMessage = nil
@@ -93,7 +161,7 @@ private final class MatrixNativeRtcRoomModel: NSObject, ObservableObject, RoomDe
                 return
             } catch {
                 lastError = error
-                await liveKitRoom.disconnect()
+                await transport.disconnect()
                 guard attempt < 2 else { break }
                 try Task.checkCancellation()
                 try await Task.sleep(
@@ -103,13 +171,15 @@ private final class MatrixNativeRtcRoomModel: NSObject, ObservableObject, RoomDe
         }
         self.connection = nil
         providerSelection = nil
+        activeTransport = nil
         throw lastError ?? MatrixNativeRtcError.invalidService
     }
 
     func toggleMicrophone() async {
         guard connection?.voiceEnabled == true else { return }
         do {
-            try await liveKitRoom.localParticipant.setMicrophone(
+            try await activeTransport?.setTrack(
+                .microphone,
                 enabled: !microphoneEnabled
             )
             microphoneEnabled.toggle()
@@ -121,7 +191,8 @@ private final class MatrixNativeRtcRoomModel: NSObject, ObservableObject, RoomDe
     func toggleCamera() async {
         guard connection?.videoEnabled == true else { return }
         do {
-            try await liveKitRoom.localParticipant.setCamera(
+            try await activeTransport?.setTrack(
+                .camera,
                 enabled: !cameraEnabled
             )
             cameraEnabled.toggle()
@@ -131,13 +202,15 @@ private final class MatrixNativeRtcRoomModel: NSObject, ObservableObject, RoomDe
     }
 
     func disconnect() async {
+        let transport = activeTransport
         connection = nil
         providerSelection = nil
+        activeTransport = nil
         connected = false
         reconnecting = false
         microphoneEnabled = false
         cameraEnabled = false
-        await liveKitRoom.disconnect()
+        await transport?.disconnect()
     }
 
     nonisolated func room(

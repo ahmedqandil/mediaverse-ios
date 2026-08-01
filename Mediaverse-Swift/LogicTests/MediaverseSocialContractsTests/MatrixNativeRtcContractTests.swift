@@ -130,4 +130,49 @@ final class MatrixNativeRtcContractTests: XCTestCase {
         )
     }
 
+    func testReplayKitAuthorizationIsOpaqueBoundedAndShortLived() throws {
+        XCTAssertTrue(MatrixNativeRtcScreenShareContract.appGroupStoresOpaqueReferenceOnly)
+        XCTAssertEqual(
+            MatrixNativeRtcScreenShareContract.maximumAuthorizationLifetimeMilliseconds,
+            300_000
+        )
+        XCTAssertThrowsError(try MatrixNativeReplayKitAuthorization(
+            opaqueReference: "provider://secret",
+            issuedAtMilliseconds: 1_000,
+            expiresAtMilliseconds: 2_000
+        ))
+        XCTAssertThrowsError(try MatrixNativeReplayKitAuthorization(
+            opaqueReference: "opaque_reference_1234",
+            issuedAtMilliseconds: 1_000,
+            expiresAtMilliseconds: 301_001
+        ))
+
+        let authorization = try MatrixNativeReplayKitAuthorization(
+            opaqueReference: "opaque_reference_1234",
+            issuedAtMilliseconds: 1_000,
+            expiresAtMilliseconds: 301_000
+        )
+        var state = MatrixNativeReplayKitAuthorizationState(
+            authorization: authorization
+        )
+        XCTAssertEqual(
+            state.activeAuthorization(nowMilliseconds: 300_999),
+            authorization
+        )
+        XCTAssertNil(state.activeAuthorization(nowMilliseconds: 301_000))
+    }
+
+    func testReplayKitAuthorizationClearsOnFinish() throws {
+        let authorization = try MatrixNativeReplayKitAuthorization(
+            opaqueReference: "opaque_reference_5678",
+            issuedAtMilliseconds: 1_000,
+            expiresAtMilliseconds: 2_000
+        )
+        var state = MatrixNativeReplayKitAuthorizationState(
+            authorization: authorization
+        )
+        state.finish()
+        XCTAssertNil(state.activeAuthorization(nowMilliseconds: 1_500))
+    }
+
 }

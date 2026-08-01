@@ -96,6 +96,74 @@ public enum MatrixNativeRtcScreenShareContract {
     public static let permitsLongLivedProviderSecrets = false
     public static let requiresShortLivedAppGroupAuthorization = true
     public static let maximumBroadcastExtensionMemoryMegabytes = 45
+    public static let maximumAuthorizationLifetimeMilliseconds: Int64 = 300_000
+    public static let appGroupStoresOpaqueReferenceOnly = true
+}
+
+public enum MatrixNativeReplayKitAuthorizationError: Error, Equatable {
+    case invalidReference
+    case invalidLifetime
+}
+
+/// The broadcast extension receives only a short-lived opaque reference.
+/// Provider credentials, SDP, URLs and Matrix access tokens never cross the
+/// App Group boundary.
+public struct MatrixNativeReplayKitAuthorization: Sendable, Equatable {
+    public let opaqueReference: String
+    public let issuedAtMilliseconds: Int64
+    public let expiresAtMilliseconds: Int64
+
+    public init(
+        opaqueReference: String,
+        issuedAtMilliseconds: Int64,
+        expiresAtMilliseconds: Int64
+    ) throws {
+        guard opaqueReference.range(
+            of: "^[A-Za-z0-9_-]{16,128}$",
+            options: .regularExpression
+        ) != nil else {
+            throw MatrixNativeReplayKitAuthorizationError.invalidReference
+        }
+        let lifetime = expiresAtMilliseconds - issuedAtMilliseconds
+        guard issuedAtMilliseconds >= 0,
+              lifetime > 0,
+              lifetime <= MatrixNativeRtcScreenShareContract
+                .maximumAuthorizationLifetimeMilliseconds else {
+            throw MatrixNativeReplayKitAuthorizationError.invalidLifetime
+        }
+        self.opaqueReference = opaqueReference
+        self.issuedAtMilliseconds = issuedAtMilliseconds
+        self.expiresAtMilliseconds = expiresAtMilliseconds
+    }
+}
+
+public struct MatrixNativeReplayKitAuthorizationState: Sendable, Equatable {
+    private var authorization: MatrixNativeReplayKitAuthorization?
+
+    public init(authorization: MatrixNativeReplayKitAuthorization? = nil) {
+        self.authorization = authorization
+    }
+
+    public mutating func activeAuthorization(nowMilliseconds: Int64)
+        -> MatrixNativeReplayKitAuthorization? {
+        guard let authorization,
+              nowMilliseconds >= authorization.issuedAtMilliseconds,
+              nowMilliseconds < authorization.expiresAtMilliseconds else {
+            self.authorization = nil
+            return nil
+        }
+        return authorization
+    }
+
+    public mutating func finish() {
+        authorization = nil
+    }
+}
+
+public protocol MatrixNativeReplayKitAuthorizationStore {
+    func loadAuthorization() throws -> MatrixNativeReplayKitAuthorization?
+    func saveAuthorization(_ authorization: MatrixNativeReplayKitAuthorization) throws
+    func clearAuthorization() throws
 }
 
 public enum MatrixNativeRtcMediaSecurity: String, Codable, Sendable {
