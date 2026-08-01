@@ -55,6 +55,8 @@ private final class MatrixNativeRtcRoomModel: NSObject, ObservableObject, RoomDe
     @Published var cameraEnabled = false
     @Published var errorMessage: String?
 
+    private var providerSelection: MatrixNativeRtcProviderSelection?
+
     let liveKitRoom = Room()
 
     override init() {
@@ -63,12 +65,16 @@ private final class MatrixNativeRtcRoomModel: NSObject, ObservableObject, RoomDe
     }
 
     func connect(_ connection: MatrixNativeRtcConnection) async throws {
-        guard MatrixNativeRtcContract.acceptsProductionConnectionProvider(
-            connection.provider
-        ), connection.mediaProtection == .standardWebRTC,
+        let selection = MatrixNativeRtcProviderSelection(
+            serverProvider: connection.provider
+        )
+        guard selection.routingDecision == .livekit,
+           providerSelection == nil || providerSelection == selection,
+           connection.mediaProtection == .standardWebRTC,
            connection.applicationMediaEncryption == false else {
             throw MatrixNativeRtcError.invalidService
         }
+        providerSelection = selection
         self.connection = connection
         var lastError: Error?
         for attempt in 0..<3 {
@@ -96,6 +102,7 @@ private final class MatrixNativeRtcRoomModel: NSObject, ObservableObject, RoomDe
             }
         }
         self.connection = nil
+        providerSelection = nil
         throw lastError ?? MatrixNativeRtcError.invalidService
     }
 
@@ -125,6 +132,7 @@ private final class MatrixNativeRtcRoomModel: NSObject, ObservableObject, RoomDe
 
     func disconnect() async {
         connection = nil
+        providerSelection = nil
         connected = false
         reconnecting = false
         microphoneEnabled = false
