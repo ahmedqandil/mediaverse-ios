@@ -166,7 +166,7 @@ struct MatrixNativeRichComposer: View {
                                 .font(.headline.bold())
                         }
                     }
-                    .foregroundStyle(C.bg)
+                    .foregroundStyle(canSend ? C.bg : C.watch)
                     .frame(width: 44, height: 44)
                     .background(canSend ? C.watch : C.elevated, in: Circle())
                     .overlay(Circle().stroke(canSend ? Color.clear : C.borderSubtle))

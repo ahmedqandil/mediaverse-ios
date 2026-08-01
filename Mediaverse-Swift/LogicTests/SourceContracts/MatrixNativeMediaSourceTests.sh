@@ -90,6 +90,10 @@ grep -q 'MatrixNativeWaveformAnalyzer.samples(from: url)' "$views"
 grep -q 'static let fallbackSamples' "$views"
 grep -q 'let barWidth: CGFloat = 2' "$views"
 grep -q 'WaveformBarsView(' "$views"
+grep -Fq '.foregroundStyle(canSend ? C.bg : C.watch)' "$views" || {
+  echo "Idle record control must match the attachment control's visible accent treatment" >&2
+  exit 1
+}
 
 if grep -Eq 'LegacySocialAPIAdapter|MatrixWaveClient|URLSession[(]|/api/fan-clubs|/api/fan-club-posts' \
   "$foundation" "$views" "$repository"; then
