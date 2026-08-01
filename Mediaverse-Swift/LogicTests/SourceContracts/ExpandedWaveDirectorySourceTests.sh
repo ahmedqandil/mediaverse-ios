@@ -32,6 +32,10 @@ require '.safeAreaInset(edge: .bottom, spacing: 0)' "$view" \
   "The composer must remain available while reading the room timeline."
 require 'client.spaceService().spaceRoomList(spaceId: spaceID)' "$repository" \
   "The Wave directory must come from Matrix Space hierarchy."
+require 'spaceId: space.roomId' "$repository" \
+  "The Vibe directory must preflight joined Spaces before presenting cached state."
+require 'branch=skip_stale_top_level_space' "$repository" \
+  "Purged or revoked cached Spaces must be omitted without hiding transport failures."
 require 'eventType: "m.space.child"' "$repository" \
   "New Waves must be linked with canonical Matrix Space state."
 require 'eventType: "m.space.parent"' "$repository" \

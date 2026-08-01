@@ -1025,7 +1025,32 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
     func topLevelSpaces() async throws -> [MatrixVibeSummary] {
         let client = try await activeClient()
         let joined = await client.spaceService().topLevelJoinedSpaces()
-        var ordered = joined.map { MatrixVibeSummary($0, membership: .joined) }
+        var ordered: [MatrixVibeSummary] = []
+        for space in joined {
+            do {
+                let list = try await client.spaceService().spaceRoomList(
+                    spaceId: space.roomId
+                )
+                try await list.paginate()
+                ordered.append(MatrixVibeSummary(space, membership: .joined))
+            } catch let error as ClientError {
+                let metadata = MatrixNativeSpaceDirectoryClientErrorMetadata(error)
+                let disposition = MatrixNativeSpaceDirectoryFailureContract.disposition(
+                    matrixErrorCode: metadata.code,
+                    matrixKindIsNotFound: metadata.kindIsNotFound
+                )
+                if disposition == .ignoreStalePurgedSpace {
+                    matrixSpaceDirectoryLogger.notice(
+                        "branch=skip_stale_top_level_space domain=\(metadata.domain, privacy: .public) code=\(metadata.code, privacy: .public)"
+                    )
+                    continue
+                }
+                matrixSpaceDirectoryLogger.error(
+                    "branch=report_top_level_space_failure domain=\(metadata.domain, privacy: .public) code=\(metadata.code, privacy: .public)"
+                )
+                throw error
+            }
+        }
         let joinedIDs = Set(ordered.map(\.id))
         let invitations = client.rooms()
             .filter { $0.isSpace() && $0.membership() == .invited && !joinedIDs.contains($0.id()) }
@@ -4017,7 +4042,12 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
             ),
             joinRuleOverride: joinRule,
             historyVisibilityOverride: isPublic ? .shared : .invited,
-            canonicalAlias: creation.canonicalAlias,
+            // Matrix createRoom's room_alias_name field accepts only the
+            // localpart. Keep the validated full canonical alias in the
+            // product draft, but send the SDK the wire-format it requires.
+            canonicalAlias: MatrixNativeCreationContract.roomAliasLocalpart(
+                creation.canonicalAlias
+            ),
             isSpace: isSpace
         )
     }

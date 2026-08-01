@@ -246,6 +246,18 @@ final class MatrixNativeVibesUIContractTests: XCTestCase {
         }
     }
 
+    func testCreationConvertsCanonicalAliasToCreateRoomLocalpart() {
+        XCTAssertEqual(
+            MatrixNativeCreationContract.roomAliasLocalpart(
+                "#family-vibe-1234:vibes.westreem.com"
+            ),
+            "family-vibe-1234"
+        )
+        XCTAssertNil(MatrixNativeCreationContract.roomAliasLocalpart(nil))
+        XCTAssertNil(MatrixNativeCreationContract.roomAliasLocalpart("not-an-alias"))
+        XCTAssertNil(MatrixNativeCreationContract.roomAliasLocalpart("#:vibes.westreem.com"))
+    }
+
     func testCreationAvatarAcceptsOnlyBoundedImagePayloads() throws {
         let avatar = MatrixNativeRoomCreationAvatar(
             data: Data([0x89, 0x50, 0x4E, 0x47]),

@@ -1013,6 +1013,21 @@ public enum MatrixNativeCreationContract {
             .map(String.init)
     }
 
+    /// Matrix `createRoom.room_alias_name` is the alias localpart, even when
+    /// product state keeps the complete canonical Matrix alias.
+    public static func roomAliasLocalpart(_ canonicalAlias: String?) -> String? {
+        guard let canonicalAlias,
+              canonicalAlias.first == "#",
+              let separator = canonicalAlias.dropFirst().firstIndex(of: ":"),
+              separator > canonicalAlias.index(after: canonicalAlias.startIndex)
+        else {
+            return nil
+        }
+        return String(
+            canonicalAlias[canonicalAlias.index(after: canonicalAlias.startIndex)..<separator]
+        )
+    }
+
     public static func isStructurallyValidMatrixUserID(_ value: String) -> Bool {
         guard value.first == "@", value.utf8.count <= 255 else { return false }
         let body = value.dropFirst()
