@@ -309,7 +309,7 @@ final class MatrixNativeRtcContractTests: XCTestCase {
     }
 
     func testNetworkRecoveryAuthorizationIsOpaqueBoundedAndOneUse() throws {
-        let binding = try makeBinding()
+        let binding = try makeProviderBinding()
         XCTAssertEqual(
             MatrixNativeRtcContract.maximumNetworkRecoveryAuthorizationLifetimeMilliseconds,
             300_000
@@ -355,7 +355,7 @@ final class MatrixNativeRtcContractTests: XCTestCase {
     }
 
     func testNetworkRecoveryAuthorizationRejectsBindingActionAndExpiryMismatch() throws {
-        let binding = try makeBinding()
+        let binding = try makeProviderBinding()
         let authorization = try MatrixNativeRtcNetworkRecoveryAuthorization(
             binding: binding,
             action: .refreshTurn,
@@ -363,11 +363,16 @@ final class MatrixNativeRtcContractTests: XCTestCase {
             issuedAtMilliseconds: 10_000,
             expiresAtMilliseconds: 20_000
         )
-        let otherCall = try MatrixNativeRtcSessionBinding(
-            provider: .livekit,
-            waveID: binding.waveID,
-            callID: "CALL-B",
-            deviceID: binding.deviceID
+        let otherCall = try MatrixNativeRtcProviderSessionAuthorityBinding(
+            session: MatrixNativeRtcSessionBinding(
+                provider: .livekit,
+                waveID: binding.session.waveID,
+                callID: "CALL-B",
+                deviceID: binding.session.deviceID
+            ),
+            providerSessionID: binding.providerSessionID,
+            authorityExpiresAtMilliseconds: 301_000,
+            nowMilliseconds: 1_000
         )
 
         var wrongBinding = MatrixNativeRtcNetworkRecoveryAuthorizationState(
@@ -404,6 +409,16 @@ final class MatrixNativeRtcContractTests: XCTestCase {
             waveID: "!wave:matrix.westreem.com",
             callID: "CALL-A",
             deviceID: "DEVICE-A"
+        )
+    }
+
+    private func makeProviderBinding()
+        throws -> MatrixNativeRtcProviderSessionAuthorityBinding {
+        try MatrixNativeRtcProviderSessionAuthorityBinding(
+            session: makeBinding(),
+            providerSessionID: "provider-session-a",
+            authorityExpiresAtMilliseconds: 301_000,
+            nowMilliseconds: 1_000
         )
     }
 

@@ -118,6 +118,7 @@
 		CAA0C002301A000100000001 /* MatrixNativeDirectNotificationViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAA0C012301A000100000001 /* MatrixNativeDirectNotificationViews.swift */; };
 		CBA0C001301A000100000001 /* MatrixNativeRtcContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBA0C011301A000100000001 /* MatrixNativeRtcContract.swift */; };
 		CBA0C002301A000100000001 /* MatrixNativeRtcRoomView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBA0C012301A000100000001 /* MatrixNativeRtcRoomView.swift */; };
+		CBA0C003301A000100000001 /* MatrixNativeCloudflareRtcV1Contract.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBA0C013301A000100000001 /* MatrixNativeCloudflareRtcV1Contract.swift */; };
 		CDA0C001301A000100000001 /* MatrixCryptoSecurityContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA0C011301A000100000001 /* MatrixCryptoSecurityContract.swift */; };
 		CDA0C002301A000100000001 /* MatrixNativeCryptoFoundation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA0C012301A000100000001 /* MatrixNativeCryptoFoundation.swift */; };
 		B5D1C002301A000100000001 /* RippleMediaUploadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5D1C012301A000100000001 /* RippleMediaUploadCoordinator.swift */; };
@@ -290,6 +291,7 @@
 		CAA0C012301A000100000001 /* MatrixNativeDirectNotificationViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeDirectNotificationViews.swift; sourceTree = "<group>"; };
 		CBA0C011301A000100000001 /* MatrixNativeRtcContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeRtcContract.swift; sourceTree = "<group>"; };
 		CBA0C012301A000100000001 /* MatrixNativeRtcRoomView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeRtcRoomView.swift; sourceTree = "<group>"; };
+		CBA0C013301A000100000001 /* MatrixNativeCloudflareRtcV1Contract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeCloudflareRtcV1Contract.swift; sourceTree = "<group>"; };
 		CDA0C011301A000100000001 /* MatrixCryptoSecurityContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixCryptoSecurityContract.swift; sourceTree = "<group>"; };
 		CDA0C012301A000100000001 /* MatrixNativeCryptoFoundation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeCryptoFoundation.swift; sourceTree = "<group>"; };
 		B5D1C012301A000100000001 /* RippleMediaUploadCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleMediaUploadCoordinator.swift; sourceTree = "<group>"; };
@@ -658,6 +660,7 @@
 				F8A0C011301A000100000001 /* MatrixWatchPartyCrossClientVersion.swift */,
 				F9A0C011301A000100000001 /* MatrixInvitePinConvergenceContracts.swift */,
 				CBA0C011301A000100000001 /* MatrixNativeRtcContract.swift */,
+				CBA0C013301A000100000001 /* MatrixNativeCloudflareRtcV1Contract.swift */,
 				CDA0C011301A000100000001 /* MatrixCryptoSecurityContract.swift */,
 				C8A0C011301A000100000001 /* AtmoV2Contracts.swift */,
 				C9A0C011301A000100000001 /* UnifiedNotificationContract.swift */,
@@ -1000,6 +1003,7 @@
 				CAA0C001301A000100000001 /* MatrixNativeDirectNotificationFoundation.swift in Sources */,
 				CAA0C002301A000100000001 /* MatrixNativeDirectNotificationViews.swift in Sources */,
 				CBA0C001301A000100000001 /* MatrixNativeRtcContract.swift in Sources */,
+				CBA0C003301A000100000001 /* MatrixNativeCloudflareRtcV1Contract.swift in Sources */,
 				CBA0C002301A000100000001 /* MatrixNativeRtcRoomView.swift in Sources */,
 				CDA0C001301A000100000001 /* MatrixCryptoSecurityContract.swift in Sources */,
 				CDA0C002301A000100000001 /* MatrixNativeCryptoFoundation.swift in Sources */,

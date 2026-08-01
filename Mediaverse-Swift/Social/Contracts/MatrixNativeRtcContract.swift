@@ -88,6 +88,43 @@ public struct MatrixNativeRtcSessionBinding: Sendable, Equatable, Hashable {
     }
 }
 
+/// Extends the immutable application binding with one exact provider session
+/// and the Matrix-authorized lifetime for that session. It contains no SDP,
+/// endpoint, TURN material, token, or provider credential.
+public struct MatrixNativeRtcProviderSessionAuthorityBinding:
+    Sendable, Equatable, Hashable {
+    public let session: MatrixNativeRtcSessionBinding
+    public let providerSessionID: String
+    public let authorityExpiresAtMilliseconds: Int64
+    public let publishAllowed: Bool
+    public let subscribeAllowed: Bool
+
+    public init(
+        session: MatrixNativeRtcSessionBinding,
+        providerSessionID: String,
+        authorityExpiresAtMilliseconds: Int64,
+        nowMilliseconds: Int64,
+        publishAllowed: Bool = false,
+        subscribeAllowed: Bool = false
+    ) throws {
+        guard providerSessionID.range(
+            of: "^[A-Za-z0-9._~-]{1,256}$",
+            options: .regularExpression
+        ) != nil,
+              nowMilliseconds >= 0,
+              authorityExpiresAtMilliseconds > nowMilliseconds,
+              authorityExpiresAtMilliseconds - nowMilliseconds
+                <= MatrixNativeRtcContract.maximumProviderAuthorityLifetimeMilliseconds else {
+            throw MatrixNativeRtcContractError.invalidBinding
+        }
+        self.session = session
+        self.providerSessionID = providerSessionID
+        self.authorityExpiresAtMilliseconds = authorityExpiresAtMilliseconds
+        self.publishAllowed = publishAllowed
+        self.subscribeAllowed = subscribeAllowed
+    }
+}
+
 public enum MatrixNativeRtcRemoteTrackKind: String, Codable, Sendable, CaseIterable {
     case audio
     case video
@@ -219,7 +256,7 @@ public enum MatrixNativeRtcExperience: Sendable, Equatable, Hashable {
     case watchParty
 }
 
-public enum MatrixNativeLiveStageMode: Sendable, Equatable {
+public enum MatrixNativeLiveStageMode: String, Codable, Sendable, Equatable {
     case conversation
     case gaming
 }
@@ -341,14 +378,14 @@ public enum MatrixNativeRtcNetworkRecoveryAction: String, Codable, Sendable, Cas
 /// recovery material from MediaVerse. It intentionally contains no ICE server
 /// URL, TURN username/password, provider credential or session description.
 public struct MatrixNativeRtcNetworkRecoveryAuthorization: Sendable, Equatable {
-    public let binding: MatrixNativeRtcSessionBinding
+    public let binding: MatrixNativeRtcProviderSessionAuthorityBinding
     public let action: MatrixNativeRtcNetworkRecoveryAction
     public let opaqueReference: String
     public let issuedAtMilliseconds: Int64
     public let expiresAtMilliseconds: Int64
 
     public init(
-        binding: MatrixNativeRtcSessionBinding,
+        binding: MatrixNativeRtcProviderSessionAuthorityBinding,
         action: MatrixNativeRtcNetworkRecoveryAction,
         opaqueReference: String,
         issuedAtMilliseconds: Int64,
@@ -364,7 +401,8 @@ public struct MatrixNativeRtcNetworkRecoveryAuthorization: Sendable, Equatable {
         guard issuedAtMilliseconds >= 0,
               lifetime > 0,
               lifetime <= MatrixNativeRtcContract
-                .maximumNetworkRecoveryAuthorizationLifetimeMilliseconds else {
+                .maximumNetworkRecoveryAuthorizationLifetimeMilliseconds,
+              expiresAtMilliseconds <= binding.authorityExpiresAtMilliseconds else {
             throw MatrixNativeRtcContractError.invalidAuthorization
         }
         self.binding = binding
@@ -385,7 +423,7 @@ public struct MatrixNativeRtcNetworkRecoveryAuthorizationState: Sendable, Equata
     }
 
     public mutating func takeAuthorization(
-        binding: MatrixNativeRtcSessionBinding,
+        binding: MatrixNativeRtcProviderSessionAuthorityBinding,
         action: MatrixNativeRtcNetworkRecoveryAction,
         nowMilliseconds: Int64
     ) throws -> MatrixNativeRtcNetworkRecoveryAuthorization {
@@ -424,6 +462,8 @@ public enum MatrixNativeRtcContract {
     public static let membershipRefreshMilliseconds: Int64 =
         3 * 60 * 60 * 1_000
     public static let maximumNetworkRecoveryAuthorizationLifetimeMilliseconds: Int64 =
+        5 * 60 * 1_000
+    public static let maximumProviderAuthorityLifetimeMilliseconds: Int64 =
         5 * 60 * 1_000
     public static let permitsNewInfrastructure = false
     public static let applicationMediaEncryptionEnabled = false
