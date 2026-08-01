@@ -3,14 +3,14 @@ import MatrixRustSDK
 
 enum MatrixDirectMessageError: LocalizedError {
     case ignoredUser
-    case existingRoomIsNotSecure
+    case invalidExistingRoom
 
     var errorDescription: String? {
         switch self {
         case .ignoredUser:
             return "You cannot message an ignored user."
-        case .existingRoomIsNotSecure:
-            return "This older conversation does not meet secure WeStreem direct-message requirements."
+        case .invalidExistingRoom:
+            return "This older conversation is not a valid WeStreem direct message."
         }
     }
 }
@@ -35,7 +35,7 @@ struct MatrixDirectRoomSummary: Identifiable, Equatable, Hashable, Sendable {
             membership: membership,
             isNestedSpace: false,
             isDirect: true,
-            isEncrypted: true
+            isEncrypted: false
         )
     }
 }
@@ -100,7 +100,10 @@ actor MatrixRustSDKDirectNotificationProvider {
         var summaries: [MatrixDirectRoomSummary] = []
 
         for room in client.rooms() {
-            let info = try await room.roomInfo()
+            // A purged/left room can remain in the SDK's local room list for a
+            // sync window. Isolate that stale entry instead of failing every
+            // otherwise healthy Personal Wave.
+            guard let info = try? await room.roomInfo() else { continue }
             guard !info.isSpace, info.membership == .joined || info.membership == .invited else {
                 continue
             }
@@ -155,7 +158,6 @@ actor MatrixRustSDKDirectNotificationProvider {
 
         let creationKey = "\(currentUserID)\u{0}\(target.matrixUserID)"
         if let pending = recentlyCreatedDirectRooms[creationKey] {
-            _ = try await sessionCoordinator.requireCryptoReadyForEncryptedAction()
             return pending
         }
 
@@ -168,9 +170,8 @@ actor MatrixRustSDKDirectNotificationProvider {
                 isDirect: infoIsDirect || sdkReportsDirect,
                 peerMatrixUserID: target.matrixUserID
             ) else {
-                throw MatrixDirectMessageError.existingRoomIsNotSecure
+                throw MatrixDirectMessageError.invalidExistingRoom
             }
-            _ = try await sessionCoordinator.requireCryptoReadyForEncryptedAction()
             let summary = await directSummary(
                 room: existing,
                 info: info,
@@ -180,14 +181,10 @@ actor MatrixRustSDKDirectNotificationProvider {
             return summary
         }
 
-        // Do not create an encrypted room until this device can recover every
-        // key it is about to produce. The UI handles the typed readiness error
-        // by presenting the SDK-owned setup/recovery flow.
-        _ = try await sessionCoordinator.requireCryptoReadyForEncryptedAction()
         let roomID = try await client.createRoom(
             request: CreateRoomParameters(
                 name: nil,
-                isEncrypted: true,
+                isEncrypted: false,
                 isDirect: true,
                 visibility: .private,
                 preset: .privateChat,
@@ -198,7 +195,11 @@ actor MatrixRustSDKDirectNotificationProvider {
 
         let summary = MatrixDirectRoomSummary(
             id: roomID,
-            name: normalized(displayName) ?? "Direct message",
+            name: MatrixNativeMemberPresentationContract.directRoomName(
+                peerDisplayName: displayName,
+                roomDisplayName: nil,
+                peerMatrixUserID: target.matrixUserID
+            ),
             avatarURL: avatarURL,
             memberMatrixID: target.matrixUserID,
             membership: .joined,
@@ -323,9 +324,6 @@ actor MatrixRustSDKDirectNotificationProvider {
             throw MatrixSessionFoundationError.unavailable
         }
         let info = try await room.roomInfo()
-        if await room.isEncrypted() {
-            _ = try await sessionCoordinator.requireCryptoReadyForEncryptedAction()
-        }
         let infoIsDirect = info.isDirect || info.isDm
         let sdkReportsDirect = infoIsDirect ? false : await room.isDirect()
         guard infoIsDirect || sdkReportsDirect else {
@@ -338,7 +336,7 @@ actor MatrixRustSDKDirectNotificationProvider {
         })?.userId ?? info.inviter?.userId
         let ignoredUserIDs = Set(try await client.ignoredUsers())
         guard let peerMatrixUserID else {
-            throw MatrixDirectMessageError.existingRoomIsNotSecure
+            throw MatrixDirectMessageError.invalidExistingRoom
         }
         guard !ignoredUserIDs.contains(peerMatrixUserID) else {
             throw MatrixDirectMessageError.ignoredUser
@@ -348,7 +346,7 @@ actor MatrixRustSDKDirectNotificationProvider {
             isDirect: true,
             peerMatrixUserID: peerMatrixUserID
         ) else {
-            throw MatrixDirectMessageError.existingRoomIsNotSecure
+            throw MatrixDirectMessageError.invalidExistingRoom
         }
         return (room, info)
     }
@@ -368,15 +366,23 @@ actor MatrixRustSDKDirectNotificationProvider {
     ) async -> MatrixDirectRoomSummary {
         let hero = info.heroes.first(where: { $0.userId != currentUserID })
         let inviter = info.inviter
+        let peerMatrixUserID = hero?.userId ?? inviter?.userId
         let latest = await latestPresentation(room: room)
         return MatrixDirectRoomSummary(
             id: room.id(),
-            name: normalized(hero?.displayName)
-                ?? normalized(inviter?.displayName)
-                ?? normalized(info.displayName)
-                ?? "Direct message",
+            name: peerMatrixUserID.map {
+                MatrixNativeMemberPresentationContract.directRoomName(
+                    peerDisplayName: normalized(hero?.displayName)
+                        ?? normalized(inviter?.displayName),
+                    roomDisplayName: info.displayName,
+                    peerMatrixUserID: $0
+                )
+            } ?? MatrixNativeMemberPresentationContract.roomName(
+                info.displayName,
+                fallback: MatrixNativeMemberPresentationContract.fallbackDirectRoomName
+            ),
             avatarURL: hero?.avatarUrl ?? inviter?.avatarUrl ?? info.avatarUrl,
-            memberMatrixID: hero?.userId ?? inviter?.userId,
+            memberMatrixID: peerMatrixUserID,
             membership: matrixMembership(info.membership),
             unreadCount: max(info.numUnreadMessages, info.numUnreadNotifications),
             lastMessage: latest.message,

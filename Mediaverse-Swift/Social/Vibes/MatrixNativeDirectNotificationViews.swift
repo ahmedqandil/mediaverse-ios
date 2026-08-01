@@ -9,8 +9,6 @@ struct MatrixNativeDirectMessagesView: View {
     @State private var showsNewMessage = false
     @State private var createdRoom: MatrixDirectRoomSummary?
     @State private var pendingInvitationRoomID: String?
-    @State private var securityInviteRoom: MatrixDirectRoomSummary?
-    @State private var showsInviteSecurity = false
 
     private var filteredRooms: [MatrixDirectRoomSummary] {
         guard let query = MatrixDirectMessageContract.normalizedSearchQuery(searchText) else {
@@ -50,7 +48,7 @@ struct MatrixNativeDirectMessagesView: View {
                             } description: {
                                 Text(
                                     searchText.isEmpty
-                                        ? "Start a secure conversation with a WeStreem user."
+                                        ? "Start a conversation with a WeStreem user."
                                         : "Try another name or start a new conversation."
                                 )
                             } actions: {
@@ -121,18 +119,6 @@ struct MatrixNativeDirectMessagesView: View {
                 Task { await load() }
             }
         }
-        .sheet(isPresented: $showsInviteSecurity) {
-            MatrixNativeCryptoSecurityView(
-                requiredForAction: true,
-                onReady: {
-                    guard let room = securityInviteRoom else { return }
-                    showsInviteSecurity = false
-                    securityInviteRoom = nil
-                    Task { await respondToInvitation(room, accept: true) }
-                }
-            )
-            .environmentObject(matrixSession)
-        }
         .navigationDestination(item: $createdRoom) { room in
             MatrixNativeWaveRoomView(room: room.timelineRoom)
         }
@@ -166,13 +152,9 @@ struct MatrixNativeDirectMessagesView: View {
             }
             errorMessage = nil
             await load()
-        } catch let error as MatrixNativeCryptoSecurityError
-            where accept && error.requiresGuidedRecovery {
-            securityInviteRoom = room
-            showsInviteSecurity = true
         } catch {
             errorMessage = accept
-                ? "This secure invitation could not be accepted."
+                ? "This invitation could not be accepted."
                 : "This invitation could not be declined."
         }
         pendingInvitationRoomID = nil
@@ -202,7 +184,7 @@ struct MatrixDirectMessageRow: View {
                 }
 
                 HStack(spacing: 8) {
-                    Text(room.lastMessage ?? "Secure direct message")
+                    Text(room.lastMessage ?? "Direct message")
                         .font(.caption)
                         .foregroundStyle(room.unreadCount > 0 ? C.text : C.textMuted)
                         .lineLimit(1)
@@ -236,8 +218,6 @@ struct MatrixNativeNewDirectMessageView: View {
     @State private var isSearching = false
     @State private var creatingUserID: String?
     @State private var errorMessage: String?
-    @State private var securityTarget: SearchResultPerson?
-    @State private var showsSecuritySetup = false
 
     var body: some View {
         NavigationStack {
@@ -262,7 +242,7 @@ struct MatrixNativeNewDirectMessageView: View {
                             ContentUnavailableView {
                                 Label("Find someone", systemImage: "person.crop.circle.badge.plus")
                             } description: {
-                                Text("Search WeStreem by name or handle to start a secure direct message.")
+                                Text("Search WeStreem by name or handle to start a direct message.")
                             }
                             .foregroundStyle(C.text)
                             .padding(.top, 40)
@@ -321,18 +301,6 @@ struct MatrixNativeNewDirectMessageView: View {
                 }
             }
             .task(id: query) { await search() }
-            .sheet(isPresented: $showsSecuritySetup) {
-                MatrixNativeCryptoSecurityView(
-                    requiredForAction: true,
-                    onReady: {
-                        guard let person = securityTarget else { return }
-                        showsSecuritySetup = false
-                        securityTarget = nil
-                        Task { await create(person) }
-                    }
-                )
-                .environmentObject(matrixSession)
-            }
         }
     }
 
@@ -365,21 +333,16 @@ struct MatrixNativeNewDirectMessageView: View {
         creatingUserID = person.id
         errorMessage = nil
         do {
-            _ = try await matrixSession.prepareEncryptedConversation()
             let room = try await matrixSession.openOrCreateDirectMessage(
                 westreemUserID: person.id,
                 displayName: person.name ?? person.handle,
                 avatarURL: person.image
             )
             onCreated(room)
-        } catch let error as MatrixNativeCryptoSecurityError
-            where error.requiresGuidedRecovery {
-            securityTarget = person
-            showsSecuritySetup = true
         } catch let error as MatrixDirectMessageError {
             errorMessage = error.localizedDescription
         } catch {
-            errorMessage = "This secure conversation could not be opened."
+            errorMessage = "This conversation could not be opened."
         }
         creatingUserID = nil
     }

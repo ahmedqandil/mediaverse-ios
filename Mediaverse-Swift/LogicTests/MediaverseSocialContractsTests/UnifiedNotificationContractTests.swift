@@ -83,17 +83,17 @@ final class UnifiedNotificationContractTests: XCTestCase {
         ))
         XCTAssertEqual(MatrixDirectMessageContract.normalizedSearchQuery("  ahmed  "), "ahmed")
         XCTAssertNil(MatrixDirectMessageContract.normalizedSearchQuery("a"))
-        XCTAssertTrue(MatrixDirectMessageContract.requiresEncryptedRoom)
+        XCTAssertFalse(MatrixDirectMessageContract.requiresEncryptedRoom)
         XCTAssertTrue(MatrixDirectMessageContract.requiresMatrixIgnoredUserCheck)
-        XCTAssertFalse(MatrixDirectMessageContract.permitsUnencryptedExistingRoom)
+        XCTAssertTrue(MatrixDirectMessageContract.permitsUnencryptedExistingRoom)
         XCTAssertTrue(MatrixDirectMessageContract.mayUseExistingRoom(isEncrypted: true))
-        XCTAssertFalse(MatrixDirectMessageContract.mayUseExistingRoom(isEncrypted: false))
+        XCTAssertTrue(MatrixDirectMessageContract.mayUseExistingRoom(isEncrypted: false))
         XCTAssertTrue(MatrixDirectMessageContract.mayPresentExistingRoom(
             isEncrypted: true,
             isDirect: true,
             peerMatrixUserID: "@u_32:vibes.westreem.com"
         ))
-        XCTAssertFalse(MatrixDirectMessageContract.mayPresentExistingRoom(
+        XCTAssertTrue(MatrixDirectMessageContract.mayPresentExistingRoom(
             isEncrypted: false,
             isDirect: true,
             peerMatrixUserID: "@u_32:vibes.westreem.com"

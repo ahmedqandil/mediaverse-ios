@@ -38,10 +38,6 @@ struct MatrixNativeLiveStageView: View {
             }
         }
         .task(id: room.id) {
-            guard !room.isEncrypted else {
-                model.errorMessage = "Live Stage is unavailable in encrypted Waves until media encryption is verified."
-                return
-            }
             model.currentUserID = matrixSession.currentMatrixUserID()
             await model.begin(session: matrixSession, roomID: room.id)
         }

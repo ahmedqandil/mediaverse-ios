@@ -22,7 +22,12 @@ grep -Fq 'title: "Live lounges"' "$views"
 grep -Fq 'opensLiveLounge: true' "$views"
 grep -Fq '.accessibilityHint("Opens this live lounge")' "$views"
 grep -Fq 'case nil: return "Live lounge"' "$views"
-grep -Fq 'Secure calls are preparing' "$views"
+if grep -Fq 'Secure calls are preparing' "$views"; then
+  echo "Application-level RTC E2EE copy must not remain active" >&2
+  exit 1
+fi
+grep -Fq 'Direct calls are preparing' "$views"
+grep -Fq 'applicationMediaEncryptionEnabled = false' "$rtc"
 grep -Fq 'swiftBindingsExportMatrixRtcMediaKeys = false' "$rtc"
 grep -Fq 'C.isTrustedRtcURL(url)' "$api"
 grep -Fq '["https", "wss"].contains(scheme)' "$constants"

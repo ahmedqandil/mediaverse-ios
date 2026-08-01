@@ -99,6 +99,22 @@ final class MatrixNativeVibesUIContractTests: XCTestCase {
             ),
             "Wave"
         )
+        XCTAssertEqual(
+            MatrixNativeMemberPresentationContract.directRoomName(
+                peerDisplayName: "Ahmed Qandil",
+                roomDisplayName: "Empty Room (was u_636d727)",
+                peerMatrixUserID: "@u_636d727:vibes.westreem.com"
+            ),
+            "Ahmed Qandil"
+        )
+        XCTAssertEqual(
+            MatrixNativeMemberPresentationContract.directRoomName(
+                peerDisplayName: "u_636d727",
+                roomDisplayName: "Empty Room (was u_636d727)",
+                peerMatrixUserID: "@u_636d727:vibes.westreem.com"
+            ),
+            "Personal Wave"
+        )
     }
 
     func testNativeVibesUISliceDeclaresEveryBoundedAcceptanceSurface() {
@@ -117,6 +133,33 @@ final class MatrixNativeVibesUIContractTests: XCTestCase {
         XCTAssertTrue(MatrixNativeVibesUIContract.required.contains(.createRoomInSpace))
         XCTAssertTrue(MatrixNativeVibesUIContract.required.contains(.matrixUserInvitations))
         XCTAssertTrue(MatrixNativeVibesUIContract.required.contains(.powerLevelPermissionGates))
+    }
+
+    func testSpaceDirectoryFailureOnlyIgnoresExplicitlyInaccessibleTombstones() {
+        for errorCode in ["M_NOT_FOUND", "M_FORBIDDEN"] {
+            XCTAssertEqual(
+                MatrixNativeSpaceDirectoryFailureContract.disposition(
+                    matrixErrorCode: errorCode
+                ),
+                .ignoreStalePurgedSpace
+            )
+        }
+        XCTAssertEqual(
+            MatrixNativeSpaceDirectoryFailureContract.disposition(
+                matrixErrorCode: "M_UNKNOWN",
+                matrixKindIsNotFound: true
+            ),
+            .ignoreStalePurgedSpace
+        )
+        for errorCode in [nil, "M_UNKNOWN", "M_LIMIT_EXCEEDED"] {
+            XCTAssertEqual(
+                MatrixNativeSpaceDirectoryFailureContract.disposition(
+                    matrixErrorCode: errorCode,
+                    matrixKindIsNotFound: false
+                ),
+                .reportFailure
+            )
+        }
     }
 
     func testCreationDraftIsTrimmedAndInvitationsAreDeduplicated() throws {
@@ -611,21 +654,25 @@ final class MatrixNativeVibesUIContractTests: XCTestCase {
         XCTAssertTrue(required.contains(.videoPlayback))
         XCTAssertTrue(required.contains(.mediaViewer))
         XCTAssertTrue(required.contains(.attachmentValidationAndLimits))
-        XCTAssertTrue(required.contains(.encryptedMediaFailClosed))
+        XCTAssertTrue(required.contains(.legacyEncryptedMediaIsolation))
     }
 
     func testSecurityAndRealtimeCapabilitiesReportImplementationAndRuntimeTruth() {
         let implemented = MatrixNativeVibesUIContract.implementedAndContractQAVerified
+        XCTAssertTrue(implemented.contains(.directMessages))
+        XCTAssertTrue(
+            MatrixNativeVibesUIContract.runtimeVerificationPending
+                .contains(.directMessages)
+        )
         for capability in [
-            MatrixNativeCapability.directMessages,
-            .endToEndEncryption,
+            MatrixNativeCapability.endToEndEncryption,
             .crossSigning,
             .keyBackup,
             .keyRecovery,
             .deviceVerification,
         ] {
-            XCTAssertTrue(implemented.contains(capability))
-            XCTAssertTrue(
+            XCTAssertFalse(implemented.contains(capability))
+            XCTAssertFalse(
                 MatrixNativeVibesUIContract.runtimeVerificationPending
                     .contains(capability)
             )
@@ -635,8 +682,9 @@ final class MatrixNativeVibesUIContractTests: XCTestCase {
             MatrixNativeVibesUIContract.runtimeVerificationPending
                 .contains(.matrixRTC)
         )
-        XCTAssertTrue(MatrixNativeVibesUIContract.supportsUnencryptedWaveMatrixRTC)
-        XCTAssertFalse(MatrixNativeVibesUIContract.supportsEncryptedOrDirectMatrixRTC)
+        XCTAssertTrue(MatrixNativeVibesUIContract.supportsWaveMatrixRTC)
+        XCTAssertFalse(MatrixNativeVibesUIContract.supportsEncryptedWaveMatrixRTC)
+        XCTAssertFalse(MatrixNativeVibesUIContract.supportsDirectMatrixRTC)
     }
 
     func testVideoAndVoiceDurationMustBeKnownFinitePositiveAndBounded() {

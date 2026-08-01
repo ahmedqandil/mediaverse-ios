@@ -7,7 +7,6 @@ FILES="
 $ROOT/Views/Profile/NotificationsView.swift
 $ROOT/Social/Ripples/EchoVibeSheet.swift
 $ROOT/Social/Ripples/IncomingShareSheet.swift
-$ROOT/Social/Vibes/MatrixNativeCryptoSecurityView.swift
 $ROOT/Social/Vibes/MatrixNativeDirectNotificationViews.swift
 $ROOT/Social/Vibes/MatrixNativeMediaFoundation.swift
 $ROOT/Social/Vibes/MatrixNativeMediaViews.swift

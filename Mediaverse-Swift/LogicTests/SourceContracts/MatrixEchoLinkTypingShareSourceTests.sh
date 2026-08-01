@@ -51,10 +51,10 @@ grep -q '.frame(width: 44, height: 44)' "$media_view"
 grep -q 'record a Vibe video message or join a video lounge' "$plist"
 grep -q 'record a Vibe voice or video message' "$plist"
 
-if grep -q 'Encrypted Ripples cannot be echoed until secure cross-Wave forwarding is verified' "$view"; then
+if grep -q 'Older protected Ripples cannot be echoed through the current sharing path' "$view"; then
   :
 else
-  echo "Encrypted source Echo must fail closed with visible copy" >&2
+  echo "Legacy protected source Echo must fail closed with visible copy" >&2
   exit 1
 fi
 

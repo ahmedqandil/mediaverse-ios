@@ -118,10 +118,10 @@ public enum UnifiedNotificationSwiftCapability {
 /// authority that discovers or creates the corresponding direct room.
 public enum MatrixDirectMessageContract {
     public static let roomAuthority = "MatrixRustSDK"
-    public static let requiresEncryptedRoom = true
+    public static let requiresEncryptedRoom = false
     public static let requiresDirectFlag = true
     public static let requiresMatrixIgnoredUserCheck = true
-    public static let permitsUnencryptedExistingRoom = false
+    public static let permitsUnencryptedExistingRoom = true
     public static let permitsLegacyMessageAPI = false
 
     public static func normalizedSearchQuery(_ value: String) -> String? {
@@ -143,7 +143,9 @@ public enum MatrixDirectMessageContract {
     }
 
     public static func mayUseExistingRoom(isEncrypted: Bool) -> Bool {
-        isEncrypted || permitsUnencryptedExistingRoom
+        // Both new unencrypted rooms and isolated legacy encrypted rooms may
+        // be presented during the compatibility window. No new keys are made.
+        permitsUnencryptedExistingRoom || isEncrypted
     }
 
     public static func mayPresentExistingRoom(

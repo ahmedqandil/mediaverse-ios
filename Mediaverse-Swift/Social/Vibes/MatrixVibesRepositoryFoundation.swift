@@ -1,5 +1,11 @@
 import Foundation
 import MatrixRustSDK
+import OSLog
+
+private let matrixSpaceDirectoryLogger = Logger(
+    subsystem: "com.westreem.mediaverse",
+    category: "MatrixSpaceDirectory"
+)
 
 struct MatrixVibeDirectoryPage: Equatable, Sendable {
     let spaces: [MatrixVibeSummary]
@@ -34,6 +40,56 @@ struct MatrixNativeCreatedRoom: Equatable, Sendable {
 
 struct MatrixWaveDirectoryPage: Equatable, Sendable {
     let rooms: [MatrixWaveSummary]
+}
+
+enum MatrixNativeSpaceDirectoryError: Error, Equatable, Sendable {
+    case stalePurgedSpace
+}
+
+private struct MatrixNativeSpaceDirectoryClientErrorMetadata {
+    let domain: String
+    let code: String
+    let kindIsNotFound: Bool
+
+    init(_ error: ClientError) {
+        switch error {
+        case let .MatrixApi(kind, code, _, _):
+            domain = "matrix_api"
+            self.code = Self.safeCode(code)
+            kindIsNotFound = kind == .notFound
+        case let .Generic(_, details):
+            domain = "client_generic"
+            code = Self.safeCode(Self.errorCode(inJSONDetails: details) ?? "GENERIC")
+            kindIsNotFound = false
+        case .ContentScanner:
+            domain = "content_scanner"
+            code = "CONTENT_SCANNER"
+            kindIsNotFound = false
+        }
+    }
+
+    private static func errorCode(inJSONDetails details: String?) -> String? {
+        guard
+            let details,
+            let data = details.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+        return object["errcode"] as? String
+    }
+
+    private static func safeCode(_ value: String) -> String {
+        let normalized = value.uppercased()
+        guard
+            !normalized.isEmpty,
+            normalized.utf8.count <= 64,
+            normalized.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") })
+        else {
+            return "UNCLASSIFIED"
+        }
+        return normalized
+    }
 }
 
 struct MatrixNativeLoungeParticipant: Identifiable, Equatable, Hashable, Sendable {
@@ -1890,11 +1946,6 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         guard matrixRoom.membership() == .joined else {
             throw MatrixNativeWaveActionError.roomNotJoined
         }
-        guard !(await matrixRoom.isEncrypted()) else {
-            // Live Stage media E2EE has not been proven for the shared native
-            // LiveKit transport. Match Web's fail-closed eligibility boundary.
-            throw MatrixNativeWaveActionError.notAllowed
-        }
         let powerLevels = try await matrixRoom.getPowerLevels()
         guard powerLevels.canOwnUserSendState(
             stateEvent: stateEventTypeFromString(
@@ -3625,9 +3676,6 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         guard matrixRoom.membership() == .joined else {
             throw MatrixSessionFoundationError.unavailable
         }
-        guard !(await matrixRoom.isEncrypted()) else {
-            throw MatrixNativeRtcError.encryptedMediaNotVerified
-        }
         let powerLevels = try await matrixRoom.getPowerLevels()
         guard powerLevels.canOwnUserSendState(
             stateEvent: stateEventTypeFromString(
@@ -3947,11 +3995,8 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         return CreateRoomParameters(
             name: creation.name,
             topic: creation.topic,
-            // Spaces carry hierarchy state but no message history. Community
-            // Wave encryption is an explicit policy choice because encrypted
-            // rooms cannot participate in public discovery, bridges,
-            // moderation projections, or Lounges.
-            isEncrypted: creation.isEncrypted && !isSpace,
+            // Application-level E2EE is disabled for all new Vibes and Waves.
+            isEncrypted: false,
             visibility: isPublic ? .public : .private,
             preset: isPublic ? .publicChat : .privateChat,
             invite: [serviceUserID],
@@ -4651,7 +4696,30 @@ actor MatrixVibesRepositoryFoundation: VibesRepository {
 
     func waves(spaceID: String) async throws -> MatrixWaveDirectoryPage {
         try requireEnabled()
-        return MatrixWaveDirectoryPage(rooms: try await sdk.childRooms(spaceID: spaceID))
+        do {
+            return MatrixWaveDirectoryPage(rooms: try await sdk.childRooms(spaceID: spaceID))
+        } catch let error as ClientError {
+            let metadata = MatrixNativeSpaceDirectoryClientErrorMetadata(error)
+            let disposition = MatrixNativeSpaceDirectoryFailureContract.disposition(
+                matrixErrorCode: metadata.code,
+                matrixKindIsNotFound: metadata.kindIsNotFound
+            )
+            if disposition == .ignoreStalePurgedSpace {
+                matrixSpaceDirectoryLogger.notice(
+                    "branch=stale_purged_space domain=\(metadata.domain, privacy: .public) code=\(metadata.code, privacy: .public)"
+                )
+                throw MatrixNativeSpaceDirectoryError.stalePurgedSpace
+            }
+            matrixSpaceDirectoryLogger.error(
+                "branch=report_failure domain=\(metadata.domain, privacy: .public) code=\(metadata.code, privacy: .public)"
+            )
+            throw error
+        } catch {
+            matrixSpaceDirectoryLogger.error(
+                "branch=report_failure domain=non_client_error code=UNCLASSIFIED"
+            )
+            throw error
+        }
     }
 
     func refreshLocalWaveActivity(

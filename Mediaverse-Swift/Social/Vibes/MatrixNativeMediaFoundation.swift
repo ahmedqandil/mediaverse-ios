@@ -206,7 +206,7 @@ enum MatrixNativeMediaError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .encryptedMediaUnavailable:
-            "Encrypted media is unavailable until secure Vibe recovery is active on this device."
+            "This older protected attachment is unavailable on this device."
         case .invalidAttachment:
             "This attachment did not pass the Vibes safety checks."
         case .unsupportedAttachment:

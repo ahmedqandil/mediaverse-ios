@@ -110,7 +110,7 @@ final class MatrixInvitePinConvergenceContractsTests: XCTestCase {
         ), .deny)
     }
 
-    func testAllInvitationKindsAreAcceptedOnlyWhileLiveAndPersonalWavesRequireEncryption() {
+    func testAllInvitationKindsAreAcceptedOnlyWhileLiveWithoutApplicationE2EERequirement() {
         for kind in [MatrixInvitationKind.vibe, .wave, .personalWave] {
             let safety = MatrixInvitationSafetyContract.evaluate(
                 membershipIsInvited: true,
@@ -122,7 +122,7 @@ final class MatrixInvitePinConvergenceContractsTests: XCTestCase {
             XCTAssertTrue(safety.canAccept)
             XCTAssertTrue(safety.canDecline)
         }
-        XCTAssertFalse(MatrixInvitationSafetyContract.evaluate(
+        XCTAssertTrue(MatrixInvitationSafetyContract.evaluate(
             membershipIsInvited: true,
             kind: .personalWave,
             isEncrypted: false,

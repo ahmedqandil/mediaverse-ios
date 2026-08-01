@@ -16,6 +16,16 @@ require() {
   fi
 }
 
+forbid() {
+  pattern="$1"
+  file="$2"
+  message="$3"
+  if grep -Fq "$pattern" "$file"; then
+    echo "FAIL: $message" >&2
+    exit 1
+  fi
+}
+
 require 'PhotosPicker(selection: $avatarSelection, matching: .images)' "$view" \
   "creation must expose the native image picker"
 require 'data.count <= MatrixNativeCreationContract.maximumAvatarBytes' "$view" \
@@ -35,7 +45,9 @@ require 'avatar: avatarURI' "$repository" \
   "the validated MXC URI must be sent in native Matrix create-room parameters"
 require '(try? MediaSource.fromUrl(url: mediaURI)) != nil' "$repository" \
   "an invalid homeserver media identity must fail closed"
-require 'The Wave avatar is Matrix room profile metadata.' "$view" \
-  "encrypted creation must explain that profile metadata is not message encryption"
+forbid 'End-to-end encryption' "$view" \
+  "creation must not expose retired application-level E2EE controls or copy"
+forbid 'isEncrypted: true' "$view" \
+  "creation must not request an encrypted Vibe or Wave"
 
 echo "Matrix native creation avatar source contract passed."

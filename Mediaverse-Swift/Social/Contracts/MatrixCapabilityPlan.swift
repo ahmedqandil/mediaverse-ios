@@ -99,6 +99,8 @@ public enum MatrixCapabilityImplementationState: String, Codable, Sendable {
     /// but no user-facing parity claim is implied.
     case foundation
     case planned
+    /// Product-owner decision: application-level E2EE is disabled everywhere.
+    case retired
     /// Existing infrastructure must report ready before this can be enabled.
     case existingInfrastructureGate
 }
@@ -144,9 +146,11 @@ public enum MatrixNativeCapabilityPlan {
         for capability: MatrixNativeCapability
     ) -> MatrixCapabilityImplementationState {
         switch capability {
-        case .secureTokenStorage, .multipleDevices, .localCaching, .syncRecovery, .offlineSending,
-             .retriesAndIdempotency, .threads, .endToEndEncryption,
-             .crossSigning, .keyBackup, .keyRecovery, .deviceVerification:
+        case .endToEndEncryption, .crossSigning, .keyBackup, .keyRecovery,
+             .deviceVerification, .encryptionRecoveryManagement:
+            return .retired
+        case .secureTokenStorage, .multipleDevices, .localCaching, .syncRecovery,
+             .offlineSending, .retriesAndIdempotency, .threads:
             return .foundation
         case .matrixRTC, .voiceRooms, .videoRooms, .applicationServiceBridges,
              .controlledFederation, .pushNotifications:

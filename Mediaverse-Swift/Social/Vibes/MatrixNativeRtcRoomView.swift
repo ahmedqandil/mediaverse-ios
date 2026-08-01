@@ -5,7 +5,6 @@ import UIKit
 enum MatrixNativeRtcError: LocalizedError, Equatable {
     case invalidService
     case invalidMembership
-    case encryptedMediaNotVerified
     case adminEnablementRequired
 
     var errorDescription: String? {
@@ -14,8 +13,6 @@ enum MatrixNativeRtcError: LocalizedError, Equatable {
             "WeStreem calling is unavailable."
         case .invalidMembership:
             "WeStreem could not confirm your access to this call."
-        case .encryptedMediaNotVerified:
-            "Calls in encrypted rooms are unavailable until secure media encryption is verified."
         case .adminEnablementRequired:
             "A Vibe admin must enable calls for members in this Wave."
         }
@@ -39,6 +36,8 @@ struct MatrixNativeRtcConnection: Decodable, Equatable, Sendable {
     let videoEnabled: Bool
     let authority: String
     let membershipEventType: String
+    let mediaProtection: MatrixNativeRtcMediaSecurity
+    let applicationMediaEncryption: Bool
     let expiresInSeconds: Int
 }
 
@@ -64,6 +63,12 @@ private final class MatrixNativeRtcRoomModel: NSObject, ObservableObject, RoomDe
     }
 
     func connect(_ connection: MatrixNativeRtcConnection) async throws {
+        guard MatrixNativeRtcContract.acceptsProductionConnectionProvider(
+            connection.provider
+        ), connection.mediaProtection == .standardWebRTC,
+           connection.applicationMediaEncryption == false else {
+            throw MatrixNativeRtcError.invalidService
+        }
         self.connection = connection
         var lastError: Error?
         for attempt in 0..<3 {

@@ -28,83 +28,38 @@ extension MatrixSessionCoordinator {
         )
     }
 
-    /// Idempotent SDK-owned maintenance. This may enable an existing trusted
-    /// backup and resume uploads, but it never creates/replaces a recovery key.
-    /// First-device setup and existing-account recovery therefore remain
-    /// explicit user actions.
+    /// Retained as a hard-disabled compatibility symbol while archived clients
+    /// are migrated. It must never start backup or key lifecycle work.
     func maintainCryptoLifecycle() async throws -> MatrixNativeCryptoSnapshot {
-        guard let client = activeClient() else {
-            throw MatrixNativeCryptoSecurityError.unavailable
-        }
-        let encryption = client.encryption()
-        await encryption.waitForE2eeInitializationTasks()
-
-        if MatrixNativeRecoveryStatus(encryption.recoveryState()) == .enabled {
-            try await encryption.enableBackups()
-            try await encryption.waitForBackupUploadSteadyState(progressListener: nil)
-        }
-        return try await cryptoSnapshot()
+        throw MatrixNativeCryptoSecurityError.applicationE2eeDisabled
     }
 
     func requireCryptoReadyForEncryptedAction() async throws -> MatrixNativeCryptoSnapshot {
-        let snapshot = try await maintainCryptoLifecycle()
-        guard let action = snapshot.readinessAction else { return snapshot }
-        switch action {
-        case .setUpRecovery:
-            throw MatrixNativeCryptoSecurityError.setupRequired
-        case .recoverExistingAccount:
-            throw MatrixNativeCryptoSecurityError.existingRecoveryRequired
-        case .verifyDevice:
-            throw MatrixNativeCryptoSecurityError.deviceVerificationRequired
-        case .waitForBackup:
-            throw MatrixNativeCryptoSecurityError.backupNotReady
-        }
+        throw MatrixNativeCryptoSecurityError.applicationE2eeDisabled
     }
 
     /// Enables Matrix Recovery and key backup. The returned recovery key is
     /// shown once by the caller and is never written to Westreem storage.
     func enableCryptoRecovery(passphrase: String?) async throws -> String {
-        guard let client = activeClient() else {
-            throw MatrixNativeCryptoSecurityError.unavailable
-        }
-        let normalizedPassphrase = passphrase?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let progress = MatrixNativeRecoveryProgressObserver()
-        let recoveryKey = try await client.encryption().enableRecovery(
-            waitForBackupsToUpload: true,
-            passphrase: normalizedPassphrase?.isEmpty == false ? normalizedPassphrase : nil,
-            progressListener: progress
-        )
-        try await client.encryption().waitForBackupUploadSteadyState(progressListener: nil)
-        return recoveryKey
+        _ = passphrase
+        throw MatrixNativeCryptoSecurityError.applicationE2eeDisabled
     }
 
     func recoverCryptoIdentity(recoveryKey: String) async throws {
-        guard let client = activeClient() else {
-            throw MatrixNativeCryptoSecurityError.unavailable
-        }
-        let normalized = try MatrixNativeRecoveryKeyPolicy.normalized(recoveryKey)
-        try await client.encryption().recoverAndFixBackup(recoveryKey: normalized)
-        try await client.encryption().waitForBackupUploadSteadyState(progressListener: nil)
+        _ = recoveryKey
+        throw MatrixNativeCryptoSecurityError.applicationE2eeDisabled
     }
 
     func resetCryptoRecoveryKey(confirmation: String) async throws -> String {
-        guard let client = activeClient() else {
-            throw MatrixNativeCryptoSecurityError.unavailable
-        }
-        try MatrixNativeRecoveryResetPolicy.validate(confirmation)
-        return try await client.encryption().resetRecoveryKey()
+        _ = confirmation
+        throw MatrixNativeCryptoSecurityError.applicationE2eeDisabled
     }
 
     func makeDeviceVerificationController(
         delegate: SessionVerificationControllerDelegate
     ) async throws -> SessionVerificationController {
-        guard let client = activeClient() else {
-            throw MatrixNativeCryptoSecurityError.unavailable
-        }
-        let controller = try await client.getSessionVerificationController()
-        controller.setDelegate(delegate: delegate)
-        return controller
+        _ = delegate
+        throw MatrixNativeCryptoSecurityError.applicationE2eeDisabled
     }
 
     /// MatrixRustSDK 26.7.28 did not expose arbitrary device enumeration.
@@ -167,13 +122,8 @@ extension MatrixSessionCoordinator {
     func beginQrLogin(
         delegate: SessionVerificationControllerDelegate
     ) async throws -> SessionVerificationController {
-        guard let client = activeClient() else {
-            throw MatrixNativeCryptoSecurityError.unavailable
-        }
-        let controller = try await client.getSessionVerificationController()
-        controller.setDelegate(delegate: delegate)
-        try await controller.requestDeviceVerification()
-        return controller
+        _ = delegate
+        throw MatrixNativeCryptoSecurityError.applicationE2eeDisabled
     }
 }
 

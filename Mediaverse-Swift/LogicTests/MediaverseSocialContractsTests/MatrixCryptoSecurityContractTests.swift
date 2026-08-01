@@ -95,7 +95,7 @@ final class MatrixCryptoSecurityContractTests: XCTestCase {
             inviteUserIDs: [],
             isEncrypted: true
         )
-        XCTAssertTrue(try MatrixNativeCreationContract.validate(privateDraft).isEncrypted)
+        XCTAssertFalse(try MatrixNativeCreationContract.validate(privateDraft).isEncrypted)
     }
 
     func testRecoveryKeyValidationDoesNotPersistOrLoosenInput() throws {
@@ -118,8 +118,9 @@ final class MatrixCryptoSecurityContractTests: XCTestCase {
     }
 
     func testPinnedSDKLimitationsForbidParallelDeviceAPI() {
-        XCTAssertTrue(MatrixNativeSDKCryptoCapabilities.supportsEncryptedMedia)
-        XCTAssertTrue(MatrixNativeSDKCryptoCapabilities.supportsSASDeviceVerification)
+        XCTAssertFalse(MatrixNativeSDKCryptoCapabilities.supportsEncryptedMedia)
+        XCTAssertFalse(MatrixNativeSDKCryptoCapabilities.supportsSASDeviceVerification)
+        XCTAssertTrue(MatrixNativeSDKCryptoCapabilities.supportsLegacyEncryptedHistoryRead)
         XCTAssertFalse(MatrixNativeSDKCryptoCapabilities.supportsDeviceEnumeration)
         XCTAssertFalse(MatrixNativeSDKCryptoCapabilities.supportsDeviceRevocation)
         XCTAssertFalse(MatrixNativeSDKCryptoCapabilities.permitsHandWrittenDeviceAPI)

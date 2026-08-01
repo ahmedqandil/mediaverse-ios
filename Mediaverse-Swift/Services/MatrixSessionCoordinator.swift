@@ -729,7 +729,6 @@ final class MatrixNativeSessionController:
     private var cachedWaveDirectories: [String: CachedValue<MatrixWaveDirectoryPage>] = [:]
     private var cachedDirectMessages: CachedValue<[MatrixDirectRoomSummary]>?
     private var activationTask: Task<Void, Never>?
-    private var cryptoMaintenanceTask: Task<Void, Never>?
     @Published private(set) var lifecycleState: MatrixSessionLifecycleState = .disabled
     @Published private(set) var syncState: MatrixNativeSyncState = .disabled
     @Published private(set) var currentWestreemUserID: String?
@@ -784,8 +783,6 @@ final class MatrixNativeSessionController:
 
     func reconcile(westreemUserID: String?) async {
         activationTask?.cancel()
-        cryptoMaintenanceTask?.cancel()
-        cryptoMaintenanceTask = nil
         clearMetadataCaches()
         guard let westreemUserID else {
             currentWestreemUserID = nil
@@ -813,7 +810,6 @@ final class MatrixNativeSessionController:
         await activationTask?.value
         await publishState()
         if isReady {
-            beginCryptoMaintenance()
             PushNotificationManager.shared.matrixSessionDidBecomeReady()
         }
     }
@@ -825,28 +821,6 @@ final class MatrixNativeSessionController:
             return
         }
         await reconcile(westreemUserID: currentWestreemUserID)
-    }
-
-    private func beginCryptoMaintenance() {
-        cryptoMaintenanceTask?.cancel()
-        let coordinator = coordinator
-        cryptoMaintenanceTask = Task {
-            for attempt in 0..<6 {
-                guard !Task.isCancelled else { return }
-                do {
-                    let snapshot = try await coordinator.maintainCryptoLifecycle()
-                    // Setup/recovery/verification requires an explicit user
-                    // gesture. Automatic retries are only useful while an
-                    // already configured backup is converging.
-                    guard snapshot.readinessAction == .waitForBackup else { return }
-                } catch {
-                    // Network and sync recovery are owned by the SDK. Retry
-                    // with a bounded backoff and never log crypto material.
-                }
-                let delay = min(60, 1 << min(attempt, 5))
-                try? await Task.sleep(for: .seconds(delay))
-            }
-        }
     }
 
     private func clearMetadataCaches() {
@@ -935,9 +909,6 @@ final class MatrixNativeSessionController:
         draft: MatrixNativeRoomCreationDraft
     ) async throws -> MatrixNativeCreatedRoom {
         try requireReady()
-        if draft.isEncrypted {
-            _ = try await coordinator.requireCryptoReadyForEncryptedAction()
-        }
         let created = try await repository.createWave(
             inSpaceID: spaceID,
             draft: draft
@@ -1989,7 +1960,31 @@ final class MatrixNativeSessionController:
         if let cached = cachedDirectMessages, cached.isFresh(ttl: metadataCacheTTL) {
             return cached.value
         }
-        let rooms = try await directNotificationProvider.directRooms()
+        let sdkRooms = try await directNotificationProvider.directRooms()
+        let peerIDs = sdkRooms.compactMap(\.memberMatrixID)
+        let presentations = (try? await identityPresentations(matrixUserIDs: peerIDs)) ?? [:]
+        let rooms = sdkRooms.map { room in
+            guard
+                let peerID = room.memberMatrixID,
+                let identity = presentations[peerID]
+            else {
+                return room
+            }
+            return MatrixDirectRoomSummary(
+                id: room.id,
+                name: MatrixNativeMemberPresentationContract.directRoomName(
+                    peerDisplayName: identity.displayName,
+                    roomDisplayName: room.name,
+                    peerMatrixUserID: peerID
+                ),
+                avatarURL: identity.avatarUrl ?? room.avatarURL,
+                memberMatrixID: room.memberMatrixID,
+                membership: room.membership,
+                unreadCount: room.unreadCount,
+                lastMessage: room.lastMessage,
+                lastActivity: room.lastActivity
+            )
+        }
         cachedDirectMessages = CachedValue(value: rooms, storedAt: Date())
         return rooms
     }
@@ -2022,63 +2017,6 @@ final class MatrixNativeSessionController:
     func markMatrixNotificationRead(roomID: String) async {
         guard isReady else { return }
         try? await directNotificationProvider.markRead(roomID: roomID)
-    }
-
-    func cryptoSecuritySnapshot() async throws -> MatrixNativeCryptoSnapshot {
-        try requireReady()
-        return try await coordinator.cryptoSnapshot()
-    }
-
-    func prepareEncryptedConversation() async throws -> MatrixNativeCryptoSnapshot {
-        try requireReady()
-        return try await coordinator.requireCryptoReadyForEncryptedAction()
-    }
-
-    func enableCryptoRecovery(passphrase: String?) async throws -> String {
-        try requireReady()
-        return try await coordinator.enableCryptoRecovery(passphrase: passphrase)
-    }
-
-    func recoverCryptoIdentity(recoveryKey: String) async throws {
-        try requireReady()
-        try await coordinator.recoverCryptoIdentity(recoveryKey: recoveryKey)
-    }
-
-    func resetCryptoRecoveryKey(confirmation: String) async throws -> String {
-        try requireReady()
-        return try await coordinator.resetCryptoRecoveryKey(confirmation: confirmation)
-    }
-
-    func makeDeviceVerificationController(
-        delegate: SessionVerificationControllerDelegate
-    ) async throws -> SessionVerificationController {
-        try requireReady()
-        return try await coordinator.makeDeviceVerificationController(delegate: delegate)
-    }
-
-    /// See `MatrixSessionCoordinator.beginQrLogin(delegate:)`.
-    func makeQrLoginController(
-        delegate: SessionVerificationControllerDelegate
-    ) async throws -> SessionVerificationController {
-        try requireReady()
-        return try await coordinator.beginQrLogin(delegate: delegate)
-    }
-
-    /// Enumerate remote Matrix devices for the current user.
-    /// Throws `MatrixNativeCryptoSecurityError.deviceEnumerationUnavailable`
-    /// on SDK versions that don't expose the API yet — the UI treats that as
-    /// "device management is unavailable" and hides destructive actions.
-    func matrixDevices() async throws -> [MatrixNativeDevice] {
-        try requireReady()
-        return try await coordinator.matrixDevices()
-    }
-
-    /// Sign out (delete) another Matrix device.
-    /// Throws `MatrixNativeCryptoSecurityError.deviceRevocationUnavailable`
-    /// until the SDK exposes the API.
-    func revokeMatrixDevice(deviceID: String) async throws {
-        try requireReady()
-        try await coordinator.revokeMatrixDevice(deviceID: deviceID)
     }
 
     func refreshRuntimeState() async {

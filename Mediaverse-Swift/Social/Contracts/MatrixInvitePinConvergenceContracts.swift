@@ -79,14 +79,6 @@ public enum MatrixInvitationSafetyContract {
                 reason: "Unblock this person before accepting the invitation."
             )
         }
-        if kind == .personalWave && !isEncrypted {
-            return .init(
-                canAccept: false,
-                canDecline: true,
-                canBlock: inviterValid,
-                reason: "Unencrypted Personal Wave invitations cannot be accepted."
-            )
-        }
         if kind == .personalWave && !inviterValid {
             return .init(
                 canAccept: false,

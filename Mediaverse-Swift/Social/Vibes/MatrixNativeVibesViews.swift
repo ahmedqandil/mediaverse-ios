@@ -46,7 +46,6 @@ struct MatrixNativeVibesRootView: View {
     @State private var routedRoom: MatrixWaveSummary?
     @State private var routedEventID: String?
     @State private var showsCreateVibe = false
-    @State private var showsSecurity = false
     /// Current sort order for the joined Vibes list (persisted in AppStorage for next launch).
     @AppStorage("vibes.sortOrder") private var sortOrderRaw: String = VibeSortOrder.default.rawValue
     private var sortOrder: VibeSortOrder { VibeSortOrder(rawValue: sortOrderRaw) ?? .default }
@@ -353,9 +352,15 @@ struct MatrixNativeVibesRootView: View {
     }
 }
 
-/// Conversation-first Vibes inbox. Community Waves and secure Personal Waves
+/// Conversation-first Vibes inbox. Community Waves and Personal Waves
 /// share one activity surface while retaining Matrix as their sole authority.
 private struct MatrixNativeCombinedWavesView: View {
+    private enum CommunityWaveLoadResult: Sendable {
+        case loaded([MatrixWaveSummary])
+        case stalePurgedSpace
+        case failed
+    }
+
     let spaces: [MatrixVibeSummary]
 
     @EnvironmentObject private var matrixSession: MatrixNativeSessionController
@@ -376,7 +381,7 @@ private struct MatrixNativeCombinedWavesView: View {
                         MatrixNativeDirectoryHeader(
                             eyebrow: "YOUR CONVERSATIONS",
                             title: "Waves",
-                            message: "Community Waves and secure Personal Waves in one place."
+                            message: "Community Waves and Personal Waves in one place."
                         )
 
                         if communityWaves.isEmpty, personalWaves.isEmpty {
@@ -504,20 +509,31 @@ private struct MatrixNativeCombinedWavesView: View {
         // Each Vibe's directory paginates against the server; loading them
         // concurrently keeps the slowest space from serializing the rest.
         await withTaskGroup(
-            of: [MatrixWaveSummary]?.self,
+            of: CommunityWaveLoadResult.self,
             returning: ([MatrixWaveSummary], Int).self
         ) { group in
             for spaceID in spaceIDs {
                 group.addTask { @MainActor in
-                    try? await matrixSession.waves(spaceID: spaceID).rooms
+                    do {
+                        return .loaded(try await matrixSession.waves(spaceID: spaceID).rooms)
+                    } catch MatrixNativeSpaceDirectoryError.stalePurgedSpace {
+                        return .stalePurgedSpace
+                    } catch {
+                        return .failed
+                    }
                 }
             }
             var loadedCommunityWaves: [MatrixWaveSummary] = []
             var failures = 0
-            for await rooms in group {
-                if let rooms {
+            for await result in group {
+                switch result {
+                case let .loaded(rooms):
                     loadedCommunityWaves.append(contentsOf: rooms)
-                } else {
+                case .stalePurgedSpace:
+                    // Sliding Sync will remove the local tombstone. It is not
+                    // an actionable synchronization failure for this inbox.
+                    break
+                case .failed:
                     failures += 1
                 }
             }
@@ -1324,7 +1340,7 @@ private struct MatrixNativePublicVibePreviewView: View {
                             if let topic = preview.topic, !topic.isEmpty { Text(topic).foregroundStyle(C.textMuted) }
                             Label("\(preview.joinedMemberCount) members", systemImage: "person.2")
                                 .foregroundStyle(C.textTertiary)
-                            Label("Public Matrix Space · Not encrypted", systemImage: "globe")
+                            Label("Public Vibe", systemImage: "globe")
                                 .font(.footnote)
                                 .foregroundStyle(C.textTertiary)
                             if preview.membership == .joined {
@@ -1442,11 +1458,9 @@ private struct MatrixNativeRoomCreatorView: View {
     @State private var topic = ""
     @State private var visibility = MatrixNativeVibeVisibility.publicVibe
     @State private var invitationText = ""
-    @State private var encryptWave = false
     @State private var avatarSelection: PhotosPickerItem?
     @State private var creationAvatar: MatrixNativeRoomCreationAvatar?
     @State private var isPreparingAvatar = false
-    @State private var showsSecuritySetup = false
     @State private var isCreating = false
     @State private var errorMessage: String?
     @State private var partialResult: MatrixNativeCreatedRoom?
@@ -1536,16 +1550,6 @@ private struct MatrixNativeRoomCreatorView: View {
                             .font(.footnote).foregroundStyle(C.textMuted)
                     }
                 }
-                if mode.isWave, visibility == .privateVibe, encryptWave,
-                   creationAvatar != nil {
-                    Section {
-                        Text(
-                            "The Wave avatar is Matrix room profile metadata. It is visible to invited members but is not encrypted like Wave messages and attachments."
-                        )
-                        .font(.footnote)
-                        .foregroundStyle(C.textMuted)
-                    }
-                }
                 Section {
                     Picker("Visibility", selection: $visibility) {
                         Text("Public").tag(MatrixNativeVibeVisibility.publicVibe)
@@ -1559,15 +1563,6 @@ private struct MatrixNativeRoomCreatorView: View {
                     Text("Access")
                 } footer: {
                     Text(accessFooter)
-                }
-                if mode.isWave, visibility == .privateVibe {
-                    Section {
-                        Toggle("End-to-end encrypt this Wave", isOn: $encryptWave)
-                    } footer: {
-                        Text(
-                            "Encrypted Waves stay private and cannot use public discovery, curation, sharing bridges, moderation projections, or Lounges. This cannot be undone."
-                        )
-                    }
                 }
                 Section {
                     TextEditor(text: $invitationText)
@@ -1645,16 +1640,6 @@ private struct MatrixNativeRoomCreatorView: View {
                     Text("The \(mode.noun) is ready. Tap Done to return and refresh your Vibes.")
                 }
             }
-            .sheet(isPresented: $showsSecuritySetup) {
-                MatrixNativeCryptoSecurityView(
-                    requiredForAction: true,
-                    onReady: {
-                        showsSecuritySetup = false
-                        Task { await create() }
-                    }
-                )
-                .environmentObject(matrixSession)
-            }
         }
     }
 
@@ -1670,9 +1655,7 @@ private struct MatrixNativeRoomCreatorView: View {
             inviteUserIDs: MatrixNativeCreationContract.parseInviteUserIDs(
                 invitationText
             ),
-            isEncrypted: mode.isWave
-                && visibility == .privateVibe
-                && encryptWave,
+            isEncrypted: false,
             canonicalAlias: visibility == .publicVibe ? automaticCanonicalAlias(for: name) : nil,
             avatar: creationAvatar
         )
@@ -1691,9 +1674,6 @@ private struct MatrixNativeRoomCreatorView: View {
             // indistinguishable from an unconfirmed tap. Confirm every created
             // room, then refresh the caller when the user acknowledges it.
             partialResult = result
-        } catch let error as MatrixNativeCryptoSecurityError
-            where error.requiresGuidedRecovery {
-            showsSecuritySetup = true
         } catch {
             errorMessage = MatrixNativeCopy.message(for: error)
         }
@@ -2564,8 +2544,7 @@ struct MatrixNativeWaveRoomView: View {
     @State private var handledInitialEventID = false
     @State private var errorMessage: String?
     @State private var rtcPresented = false
-    @State private var secureCallNoticePresented = false
-    @State private var showsSecuritySetup = false
+    @State private var directCallNoticePresented = false
     @State private var handledLiveLoungeRoute = false
     @State private var settingsPresented = false
     @State private var pinnedPresented = false
@@ -2808,7 +2787,7 @@ struct MatrixNativeWaveRoomView: View {
                     Button { threadPanelPresented = true } label: {
                         Label("Threads", systemImage: "bubble.left.and.bubble.right")
                     }
-                    if !room.isEncrypted, !room.isDirect {
+                    if !room.isDirect {
                         Button {
                             startStagePresented = true
                         } label: {
@@ -2825,10 +2804,10 @@ struct MatrixNativeWaveRoomView: View {
                         Label("Wave settings", systemImage: "gearshape")
                     }
                     Button {
-                        if room.isEncrypted || room.isDirect { secureCallNoticePresented = true }
+                        if room.isDirect { directCallNoticePresented = true }
                         else { rtcPresented = true }
                     } label: {
-                        Label(room.isEncrypted ? "Secure call unavailable" : "Open live Wave", systemImage: room.isEncrypted ? "lock.shield" : "video.fill")
+                        Label("Open live Wave", systemImage: "video.fill")
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -2881,11 +2860,11 @@ struct MatrixNativeWaveRoomView: View {
         .onChange(of: attachmentGalleryPresented) { _, presented in
             if presented { restoreAttachmentGalleryLocalState() }
         }
-        .alert("Secure calls are preparing", isPresented: $secureCallNoticePresented) {
+        .alert("Direct calls are preparing", isPresented: $directCallNoticePresented) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(
-                "This conversation is encrypted. Voice and video remain unavailable until WeStreem can apply and verify encrypted media keys on both web and iPhone."
+                "Voice and video in direct conversations are not available yet. Group Wave calls remain available."
             )
         }
         .sheet(isPresented: $settingsPresented) {
@@ -2928,16 +2907,6 @@ struct MatrixNativeWaveRoomView: View {
         } message: {
             Text("Everyone in this Wave will see a live banner appear.")
         }
-        .sheet(isPresented: $showsSecuritySetup) {
-            MatrixNativeCryptoSecurityView(
-                requiredForAction: true,
-                onReady: {
-                    showsSecuritySetup = false
-                    Task { await load() }
-                }
-            )
-            .environmentObject(matrixSession)
-        }
         .sheet(item: $threadRoot) { root in
             NavigationStack {
                 MatrixNativeThreadView(room: room, root: root)
@@ -2972,7 +2941,6 @@ struct MatrixNativeWaveRoomView: View {
             await refreshLiveExperiences()
             if opensLiveLounge,
                !handledLiveLoungeRoute,
-               !room.isEncrypted,
                !room.isDirect {
                 handledLiveLoungeRoute = true
                 rtcPresented = true
@@ -3136,10 +3104,6 @@ struct MatrixNativeWaveRoomView: View {
             if !paginate {
                 await matrixSession.markRead(roomID: room.id)
             }
-        } catch let error as MatrixNativeCryptoSecurityError
-            where error.requiresGuidedRecovery {
-            errorMessage = nil
-            showsSecuritySetup = true
         } catch {
             errorMessage = MatrixNativeCopy.message(for: error)
         }
@@ -4859,8 +4823,8 @@ private struct MatrixNativeEchoToWavesSheet: View {
                             systemImage: "wave.3.right",
                             description: Text(
                                 sourceIsEncrypted
-                                    ? "Encrypted Ripples cannot be echoed."
-                                    : "Only joined, unencrypted Waves where you may post are shown."
+                                    ? "Older protected Ripples cannot be echoed."
+                                    : "Only joined Waves where you may post are shown."
                             )
                         )
                     } else {
@@ -4908,7 +4872,7 @@ private struct MatrixNativeEchoToWavesSheet: View {
                     Text("Joined Waves")
                 } footer: {
                     Text(
-                        "\(selectedRoomIDs.count) selected · up to \(MatrixNativeMatrixEchoContract.maximumDestinations). Encrypted and direct conversations are never included."
+                        "\(selectedRoomIDs.count) selected · up to \(MatrixNativeMatrixEchoContract.maximumDestinations). Older protected and direct conversations are never included."
                     )
                 }
 
@@ -4959,7 +4923,7 @@ private struct MatrixNativeEchoToWavesSheet: View {
         guard !sourceIsEncrypted else {
             waves = []
             errorMessage =
-                "Encrypted Ripples cannot be echoed until secure cross-Wave forwarding is verified."
+                "Older protected Ripples cannot be echoed through the current sharing path."
             return
         }
         do {
@@ -5256,14 +5220,7 @@ private struct MatrixNativeWaveManagementView: View {
                                 .disabled(isSaving)
                             }
 
-                            if snapshot.isEncrypted {
-                                Label(
-                                    "This Wave is encrypted. Access changes do not expose room keys or history.",
-                                    systemImage: "lock.fill"
-                                )
-                                .font(.footnote)
-                                .foregroundStyle(C.textMuted)
-                            } else if snapshot.restrictedParentSpaceID == nil {
+                            if snapshot.restrictedParentSpaceID == nil {
                                 Text("Parent Vibe members requires a verified reciprocal Space link.")
                                     .font(.footnote)
                                     .foregroundStyle(C.textMuted)
@@ -6675,10 +6632,6 @@ private struct MatrixNativeInvitationRow: View {
                 Text("This inviter is blocked. You can decline this invitation, but must unblock them before accepting.")
                     .font(.caption).foregroundStyle(C.textMuted)
                     .accessibilityLabel("Blocked inviter. Acceptance unavailable.")
-            } else if invitation.kind == .personalWave && !invitation.isEncrypted {
-                Text("Unencrypted Personal Wave invitations cannot be accepted.")
-                    .font(.caption).foregroundStyle(.orange)
-                    .accessibilityLabel("Security warning. Unencrypted Personal Wave invitation cannot be accepted.")
             } else if invitation.inviterUserID == nil {
                 Text("Inviter details are unavailable. Blocking is disabled.")
                     .font(.caption).foregroundStyle(C.textMuted)

@@ -738,7 +738,7 @@ private struct NotifRow: View {
         case "atmo_moderation":                        return "Personal Atmo Moderation"
         case "atmo_report_resolved":                   return "Report Update"
         case "matrix_vibe_activity":                   return "Vibes"
-        case "matrix_encrypted_activity":              return "Encrypted Vibes"
+        case "matrix_encrypted_activity":              return "Legacy Vibes"
         case "ripple_pinned":                          return "Pinned Ripple"
         case "ripple_unpinned":                        return "Unpinned Ripple"
         case "vibe_new_ripple":                        return "New Ripple"

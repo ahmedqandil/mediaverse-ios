@@ -28,13 +28,25 @@ final class MatrixNativeRtcContractTests: XCTestCase {
         )
     }
 
-    func testEncryptedCallsFailClosedUntilMediaE2EEIsVerified() {
-        XCTAssertFalse(
-            MatrixNativeRtcContract
-                .permitsEncryptedRoomCallsBeforeMediaE2EEVerification
+    func testApplicationMediaE2EEIsDisabledWhileTransportSecurityRemains() {
+        XCTAssertEqual(
+            MatrixNativeRtcMediaSecurity.standardWebRTC.rawValue,
+            "DTLS_SRTP"
         )
+        XCTAssertFalse(MatrixNativeRtcContract.applicationMediaEncryptionEnabled)
         XCTAssertFalse(
             MatrixNativeRtcContract.swiftBindingsExportMatrixRtcMediaKeys
+        )
+    }
+
+    func testCloudflareGroundworkCannotReceiveCalls() {
+        XCTAssertEqual(MatrixNativeRtcContract.productionMediaProvider, .livekit)
+        XCTAssertFalse(MatrixNativeRtcContract.directCloudflareRealtimeEnabled)
+        XCTAssertTrue(
+            MatrixNativeRtcContract.acceptsProductionConnectionProvider("livekit")
+        )
+        XCTAssertFalse(
+            MatrixNativeRtcContract.acceptsProductionConnectionProvider("cloudflare")
         )
     }
 

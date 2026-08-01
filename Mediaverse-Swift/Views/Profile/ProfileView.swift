@@ -10,7 +10,6 @@ struct ProfileView: View {
         case channel(String)
         case pairedDevices
         case affiliationReviews
-        case vibesSecurity
 
         var id: String {
             switch self {
@@ -19,7 +18,6 @@ struct ProfileView: View {
             case .channel(let id): "channel-\(id)"
             case .pairedDevices: "paired-devices"
             case .affiliationReviews: "affiliation-reviews"
-            case .vibesSecurity: "vibes-security"
             }
         }
     }
@@ -122,8 +120,6 @@ struct ProfileView: View {
                 PairedDevicesView()
             case .affiliationReviews:
                 AffiliationReviewView()
-            case .vibesSecurity:
-                MatrixNativeCryptoSecurityView()
             }
         }
         .task {
@@ -378,10 +374,6 @@ struct ProfileView: View {
                 rowDivider
                 accountRow(iconName: "devices", fallbackSystemName: "tv.and.mediabox", title: "Paired Devices", subtitle: "TVs and living-room apps") {
                     profileDestination = .pairedDevices
-                }
-                rowDivider
-                accountRow(iconName: "lock", fallbackSystemName: "lock.shield", title: "Vibes Security", subtitle: "Encryption, recovery and devices") {
-                    profileDestination = .vibesSecurity
                 }
                 rowDivider
                 accountRow(iconName: "network", fallbackSystemName: "link.badge.plus", title: "Affiliation Requests", subtitle: "Review Vibe connections you manage") {

@@ -31,7 +31,7 @@ public enum MatrixNativeVibesUISurface: String, CaseIterable, Sendable {
     case videoPlayback
     case mediaViewer
     case attachmentValidationAndLimits
-    case encryptedMediaFailClosed
+    case legacyEncryptedMediaIsolation
     case sdkLocalSendState
     case sdkRetry
     case readReceipts
@@ -998,7 +998,10 @@ public enum MatrixNativeCreationContract {
             topic: topic.isEmpty ? nil : topic,
             visibility: draft.visibility,
             inviteUserIDs: inviteUserIDs,
-            isEncrypted: draft.isEncrypted && draft.visibility == .privateVibe,
+            // Application-level E2EE is retired for all newly created Vibes
+            // and Waves. The input remains temporarily decodable for older
+            // callers, but cannot affect creation.
+            isEncrypted: false,
             canonicalAlias: draft.visibility == .publicVibe ? canonicalAlias : nil,
             avatar: draft.avatar
         )
@@ -1141,6 +1144,7 @@ public enum WestreemVibeContactDiscoveryContract {
 
 public enum MatrixNativeMemberPresentationContract {
     public static let fallbackDisplayName = "WeStreem member"
+    public static let fallbackDirectRoomName = "Personal Wave"
 
     private static func safeLabel(
         _ candidate: String?,
@@ -1183,6 +1187,52 @@ public enum MatrixNativeMemberPresentationContract {
     ) -> String {
         safeLabel(displayName, fallback: fallback)
     }
+
+    /// Direct rooms are presented as the peer identity, never as the SDK's
+    /// synthetic empty-room title or an internal Matrix identifier.
+    public static func directRoomName(
+        peerDisplayName: String?,
+        roomDisplayName: String?,
+        peerMatrixUserID: String
+    ) -> String {
+        let peerName = displayName(peerDisplayName, matrixUserID: peerMatrixUserID)
+        if peerName != fallbackDisplayName {
+            return peerName
+        }
+
+        let roomName = roomName(roomDisplayName, fallback: fallbackDirectRoomName)
+        let normalized = roomName.lowercased()
+        guard
+            !normalized.hasPrefix("empty room"),
+            !normalized.contains("(was u_")
+        else {
+            return fallbackDirectRoomName
+        }
+        return roomName
+    }
+}
+
+public enum MatrixNativeSpaceDirectoryFailureDisposition: Equatable, Sendable {
+    case ignoreStalePurgedSpace
+    case reportFailure
+}
+
+public enum MatrixNativeSpaceDirectoryFailureContract {
+    /// A block/purge or membership revocation can leave a Space marked joined
+    /// in the SDK store until Sliding Sync applies the tombstone. In this
+    /// joined-Space directory context, not-found and forbidden both prove that
+    /// the local entry is no longer accessible. Transport, rate-limit, session
+    /// and generic failures remain user-visible and retryable.
+    public static func disposition(
+        matrixErrorCode: String?,
+        matrixKindIsNotFound: Bool = false
+    ) -> MatrixNativeSpaceDirectoryFailureDisposition {
+        matrixKindIsNotFound
+            || matrixErrorCode == "M_NOT_FOUND"
+            || matrixErrorCode == "M_FORBIDDEN"
+            ? .ignoreStalePurgedSpace
+            : .reportFailure
+    }
 }
 
 public enum MatrixNativeVibesUIContract {
@@ -1190,35 +1240,24 @@ public enum MatrixNativeVibesUIContract {
     public static let normativeSource = MatrixNativeGoverningContract.normativeSource
     public static let required = Set(MatrixNativeVibesUISurface.allCases)
 
-    /// Implemented with executable package/source contracts. Physical
-    /// cross-device recovery remains a release verification step, not a reason
-    /// to describe these capabilities as deferred.
+    /// Application-level E2EE capabilities are intentionally absent. Legacy
+    /// crypto storage may remain isolated during the migration window only.
     public static let implementedAndContractQAVerified: Set<MatrixNativeCapability> = [
         .directMessages,
-        .endToEndEncryption,
-        .crossSigning,
-        .keyBackup,
-        .keyRecovery,
-        .deviceVerification,
     ]
 
     /// Implemented code whose production/device behavior still requires the
     /// signed physical-device and cross-client release gate.
     public static let runtimeVerificationPending: Set<MatrixNativeCapability> = [
         .directMessages,
-        .endToEndEncryption,
-        .crossSigning,
-        .keyBackup,
-        .keyRecovery,
-        .deviceVerification,
         .matrixRTC,
     ]
 
-    /// RTC currently covers unencrypted Wave Lounges only. Encrypted-room and
-    /// direct-call MatrixRTC stays fail-closed until media E2EE is implemented
-    /// and verified across web and a physical iPhone.
-    public static let supportsUnencryptedWaveMatrixRTC = true
-    public static let supportsEncryptedOrDirectMatrixRTC = false
+    /// Wave RTC uses standard WebRTC DTLS-SRTP transport protection without
+    /// application-level media E2EE. Direct-call UX remains a separate gap.
+    public static let supportsWaveMatrixRTC = true
+    public static let supportsEncryptedWaveMatrixRTC = false
+    public static let supportsDirectMatrixRTC = false
 }
 
 /// Matrix Rust SDK owns native Sliding Sync transport. This policy bounds the

@@ -12,10 +12,12 @@ grep -q 'MatrixInvitationSafetyContract.evaluate' "$repository"
 grep -q 'try await invited.join()' "$repository"
 grep -q 'try await invited.leave()' "$repository"
 grep -q 'MatrixInviteDeclineBlockContract.plan' "$repository"
-grep -q 'kind == .personalWave && !isEncrypted' "$contract"
 grep -q 'kind == .personalWave && !inviterValid' "$contract"
 grep -q 'Blocked inviter. Acceptance unavailable.' "$views"
-grep -q 'Unencrypted Personal Wave invitation cannot be accepted.' "$views"
+if grep -q 'Unencrypted Personal Wave invitation cannot be accepted.' "$views"; then
+  echo "Unencrypted Personal Waves must not be rejected" >&2
+  exit 1
+fi
 grep -q 'Decline and block .*?' "$views"
 grep -q 'guard pendingInvitationID == nil' "$views"
 grep -q 'accessibilityLabel(".* invitation to' "$views"

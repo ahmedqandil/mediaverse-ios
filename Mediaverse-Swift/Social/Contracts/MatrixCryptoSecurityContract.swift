@@ -112,6 +112,7 @@ public enum MatrixNativeCryptoReadinessAction: String, Equatable, Sendable {
 }
 
 public enum MatrixNativeCryptoSecurityError: Error, Equatable, Sendable {
+    case applicationE2eeDisabled
     case unavailable
     case recoveryKeyRequired
     case recoveryKeyInvalid
@@ -171,11 +172,12 @@ public enum MatrixNativeRecoveryKeyPolicy {
 /// limitation with a hand-written Client-Server API.
 public enum MatrixNativeSDKCryptoCapabilities {
     public static let sdkVersion = "26.7.28"
-    public static let supportsEncryptedRoomTimelines = true
-    public static let supportsEncryptedMedia = true
-    public static let supportsCrossSigning = true
-    public static let supportsRecoveryAndKeyBackup = true
-    public static let supportsSASDeviceVerification = true
+    public static let supportsEncryptedRoomTimelines = false
+    public static let supportsEncryptedMedia = false
+    public static let supportsCrossSigning = false
+    public static let supportsRecoveryAndKeyBackup = false
+    public static let supportsSASDeviceVerification = false
+    public static let supportsLegacyEncryptedHistoryRead = true
     public static let supportsDeviceEnumeration = false
     public static let supportsDeviceRevocation = false
     public static let permitsHandWrittenDeviceAPI = false

@@ -27,21 +27,24 @@ final class MatrixCapabilityPlanTests: XCTestCase {
         )
     }
 
-    func testSecurityAndRecoveryCapabilitiesAreExplicit() {
+    func testApplicationE2eeCapabilitiesAreExplicitlyRetired() {
         for capability in [
             MatrixNativeCapability.endToEndEncryption,
             .crossSigning,
             .keyBackup,
             .keyRecovery,
             .deviceVerification,
-            .multipleDevices,
-            .syncRecovery
+            .encryptionRecoveryManagement,
         ] {
             XCTAssertEqual(
                 MatrixNativeCapabilityPlan.entry(for: capability).state,
-                .foundation
+                .retired
             )
         }
+        XCTAssertEqual(
+            MatrixNativeCapabilityPlan.entry(for: .secureTokenStorage).state,
+            .foundation
+        )
     }
 
     func testExistingInfrastructureCapabilitiesRemainGated() {

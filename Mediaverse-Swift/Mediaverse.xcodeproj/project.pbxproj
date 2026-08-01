@@ -102,8 +102,6 @@
 		F0A0C001301A000100000001 /* MatrixCrossClientCompatibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A0C011301A000100000001 /* MatrixCrossClientCompatibility.swift */; };
 		F8A0C001301A000100000001 /* MatrixWatchPartyCrossClientVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8A0C011301A000100000001 /* MatrixWatchPartyCrossClientVersion.swift */; };
 		F9A0C001301A000100000001 /* MatrixInvitePinConvergenceContracts.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9A0C011301A000100000001 /* MatrixInvitePinConvergenceContracts.swift */; };
-		F1A0C001301A000100000001 /* MatrixNativeQrVerificationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A0C011301A000100000001 /* MatrixNativeQrVerificationView.swift */; };
-		F2A0C001301A000100000001 /* MatrixNativeDeviceListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A0C011301A000100000001 /* MatrixNativeDeviceListView.swift */; };
 		F3A0C001301A000100000001 /* MatrixNativeMediaCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3A0C011301A000100000001 /* MatrixNativeMediaCache.swift */; };
 		F4A0C001301A000100000001 /* MatrixNativeWatchPartyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4A0C011301A000100000001 /* MatrixNativeWatchPartyView.swift */; };
 		F5A0C001301A000100000001 /* MatrixNativeLiveStageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A0C011301A000100000001 /* MatrixNativeLiveStageView.swift */; };
@@ -122,7 +120,6 @@
 		CBA0C002301A000100000001 /* MatrixNativeRtcRoomView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBA0C012301A000100000001 /* MatrixNativeRtcRoomView.swift */; };
 		CDA0C001301A000100000001 /* MatrixCryptoSecurityContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA0C011301A000100000001 /* MatrixCryptoSecurityContract.swift */; };
 		CDA0C002301A000100000001 /* MatrixNativeCryptoFoundation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA0C012301A000100000001 /* MatrixNativeCryptoFoundation.swift */; };
-		CDA0C003301A000100000001 /* MatrixNativeCryptoSecurityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA0C013301A000100000001 /* MatrixNativeCryptoSecurityView.swift */; };
 		B5D1C002301A000100000001 /* RippleMediaUploadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5D1C012301A000100000001 /* RippleMediaUploadCoordinator.swift */; };
 		B5D1C003301A000100000001 /* RippleVoiceRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5D1C013301A000100000001 /* RippleVoiceRecorder.swift */; };
 		A4C0C003301A000100000001 /* LegacySocialAPIAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0C013301A000100000001 /* LegacySocialAPIAdapter.swift */; };
@@ -277,8 +274,6 @@
 		F0A0C011301A000100000001 /* MatrixCrossClientCompatibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixCrossClientCompatibility.swift; sourceTree = "<group>"; };
 		F8A0C011301A000100000001 /* MatrixWatchPartyCrossClientVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixWatchPartyCrossClientVersion.swift; sourceTree = "<group>"; };
 		F9A0C011301A000100000001 /* MatrixInvitePinConvergenceContracts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixInvitePinConvergenceContracts.swift; sourceTree = "<group>"; };
-		F1A0C011301A000100000001 /* MatrixNativeQrVerificationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeQrVerificationView.swift; sourceTree = "<group>"; };
-		F2A0C011301A000100000001 /* MatrixNativeDeviceListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeDeviceListView.swift; sourceTree = "<group>"; };
 		F3A0C011301A000100000001 /* MatrixNativeMediaCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeMediaCache.swift; sourceTree = "<group>"; };
 		F4A0C011301A000100000001 /* MatrixNativeWatchPartyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeWatchPartyView.swift; sourceTree = "<group>"; };
 		F5A0C011301A000100000001 /* MatrixNativeLiveStageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeLiveStageView.swift; sourceTree = "<group>"; };
@@ -297,7 +292,6 @@
 		CBA0C012301A000100000001 /* MatrixNativeRtcRoomView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeRtcRoomView.swift; sourceTree = "<group>"; };
 		CDA0C011301A000100000001 /* MatrixCryptoSecurityContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixCryptoSecurityContract.swift; sourceTree = "<group>"; };
 		CDA0C012301A000100000001 /* MatrixNativeCryptoFoundation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeCryptoFoundation.swift; sourceTree = "<group>"; };
-		CDA0C013301A000100000001 /* MatrixNativeCryptoSecurityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatrixNativeCryptoSecurityView.swift; sourceTree = "<group>"; };
 		B5D1C012301A000100000001 /* RippleMediaUploadCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleMediaUploadCoordinator.swift; sourceTree = "<group>"; };
 		B5D1C013301A000100000001 /* RippleVoiceRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleVoiceRecorder.swift; sourceTree = "<group>"; };
 		A4C0C013301A000100000001 /* LegacySocialAPIAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacySocialAPIAdapter.swift; sourceTree = "<group>"; };
@@ -727,9 +721,6 @@
 				CAA0C011301A000100000001 /* MatrixNativeDirectNotificationFoundation.swift */,
 				CAA0C012301A000100000001 /* MatrixNativeDirectNotificationViews.swift */,
 				CBA0C012301A000100000001 /* MatrixNativeRtcRoomView.swift */,
-				CDA0C013301A000100000001 /* MatrixNativeCryptoSecurityView.swift */,
-				F1A0C011301A000100000001 /* MatrixNativeQrVerificationView.swift */,
-				F2A0C011301A000100000001 /* MatrixNativeDeviceListView.swift */,
 				F3A0C011301A000100000001 /* MatrixNativeMediaCache.swift */,
 				F4A0C011301A000100000001 /* MatrixNativeWatchPartyView.swift */,
 				F5A0C011301A000100000001 /* MatrixNativeLiveStageView.swift */,
@@ -1012,9 +1003,6 @@
 				CBA0C002301A000100000001 /* MatrixNativeRtcRoomView.swift in Sources */,
 				CDA0C001301A000100000001 /* MatrixCryptoSecurityContract.swift in Sources */,
 				CDA0C002301A000100000001 /* MatrixNativeCryptoFoundation.swift in Sources */,
-				CDA0C003301A000100000001 /* MatrixNativeCryptoSecurityView.swift in Sources */,
-				F1A0C001301A000100000001 /* MatrixNativeQrVerificationView.swift in Sources */,
-				F2A0C001301A000100000001 /* MatrixNativeDeviceListView.swift in Sources */,
 				F3A0C001301A000100000001 /* MatrixNativeMediaCache.swift in Sources */,
 				F4A0C001301A000100000001 /* MatrixNativeWatchPartyView.swift in Sources */,
 				F5A0C001301A000100000001 /* MatrixNativeLiveStageView.swift in Sources */,
