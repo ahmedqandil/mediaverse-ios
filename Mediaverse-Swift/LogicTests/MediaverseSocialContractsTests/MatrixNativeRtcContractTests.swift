@@ -95,11 +95,19 @@ final class MatrixNativeRtcContractTests: XCTestCase {
     func testHighTrafficMediaPlanesDoNotFanPassiveAudiencesThroughRtc() {
         XCTAssertEqual(
             MatrixNativeRtcContract.mediaPlan(for: .liveStage, role: .interactive),
-            MatrixNativeRtcMediaPlan(deliveryPlane: .realtime, playbackAuthority: .none)
+            MatrixNativeRtcMediaPlan(
+                deliveryPlane: .realtime,
+                playbackAuthority: .none,
+                liveStageMode: .conversation
+            )
         )
         XCTAssertEqual(
             MatrixNativeRtcContract.mediaPlan(for: .liveStage, role: .audience),
-            MatrixNativeRtcMediaPlan(deliveryPlane: .stream, playbackAuthority: .none)
+            MatrixNativeRtcMediaPlan(
+                deliveryPlane: .stream,
+                playbackAuthority: .none,
+                liveStageMode: .conversation
+            )
         )
         XCTAssertEqual(
             MatrixNativeRtcContract.mediaPlan(for: .watchParty, role: .audience),
@@ -109,8 +117,16 @@ final class MatrixNativeRtcContractTests: XCTestCase {
             )
         )
         XCTAssertEqual(
-            MatrixNativeRtcContract.mediaPlan(for: .gamingBroadcast, role: .audience),
-            MatrixNativeRtcMediaPlan(deliveryPlane: .stream, playbackAuthority: .none)
+            MatrixNativeRtcContract.mediaPlan(
+                for: .liveStage,
+                role: .audience,
+                liveStageMode: .gaming
+            ),
+            MatrixNativeRtcMediaPlan(
+                deliveryPlane: .stream,
+                playbackAuthority: .none,
+                liveStageMode: .gaming
+            )
         )
     }
 

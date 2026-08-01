@@ -51,7 +51,11 @@ public enum MatrixNativeRtcExperience: Sendable, Equatable {
     case call
     case liveStage
     case watchParty
-    case gamingBroadcast
+}
+
+public enum MatrixNativeLiveStageMode: Sendable, Equatable {
+    case conversation
+    case gaming
 }
 
 public enum MatrixNativeRtcParticipantRole: Sendable, Equatable {
@@ -72,13 +76,16 @@ public enum MatrixNativeRtcPlaybackAuthority: Sendable, Equatable {
 public struct MatrixNativeRtcMediaPlan: Sendable, Equatable {
     public let deliveryPlane: MatrixNativeRtcDeliveryPlane
     public let playbackAuthority: MatrixNativeRtcPlaybackAuthority
+    public let liveStageMode: MatrixNativeLiveStageMode?
 
     public init(
         deliveryPlane: MatrixNativeRtcDeliveryPlane,
-        playbackAuthority: MatrixNativeRtcPlaybackAuthority
+        playbackAuthority: MatrixNativeRtcPlaybackAuthority,
+        liveStageMode: MatrixNativeLiveStageMode? = nil
     ) {
         self.deliveryPlane = deliveryPlane
         self.playbackAuthority = playbackAuthority
+        self.liveStageMode = liveStageMode
     }
 }
 
@@ -133,7 +140,8 @@ public enum MatrixNativeRtcContract {
     /// Watch Party playback timing remains durable Matrix room state.
     public static func mediaPlan(
         for experience: MatrixNativeRtcExperience,
-        role: MatrixNativeRtcParticipantRole
+        role: MatrixNativeRtcParticipantRole,
+        liveStageMode: MatrixNativeLiveStageMode? = nil
     ) -> MatrixNativeRtcMediaPlan {
         switch experience {
         case .call:
@@ -144,17 +152,13 @@ public enum MatrixNativeRtcContract {
         case .liveStage:
             MatrixNativeRtcMediaPlan(
                 deliveryPlane: role == .interactive ? .realtime : .stream,
-                playbackAuthority: .none
+                playbackAuthority: .none,
+                liveStageMode: liveStageMode ?? .conversation
             )
         case .watchParty:
             MatrixNativeRtcMediaPlan(
                 deliveryPlane: .stream,
                 playbackAuthority: .matrixRoomState
-            )
-        case .gamingBroadcast:
-            MatrixNativeRtcMediaPlan(
-                deliveryPlane: role == .interactive ? .realtime : .stream,
-                playbackAuthority: .none
             )
         }
     }
