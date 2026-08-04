@@ -150,6 +150,18 @@ class MediaverseAppDelegate: NSObject, UIApplicationDelegate {
                      didFailToRegisterForRemoteNotificationsWithError error: Error) {
         PushNotificationManager.shared.didFailToRegister(error: error)
     }
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        Task { @MainActor in
+            let handled = await WestreemCallKitCoordinator.shared
+                .handleNotificationCancellation(userInfo: userInfo)
+            completionHandler(handled ? .newData : .noData)
+        }
+    }
 }
 
 struct WestreemCallDescriptor: Hashable, Sendable {
@@ -177,11 +189,15 @@ extension Notification.Name {
 @MainActor
 final class WestreemCallKitCoordinator: NSObject, @preconcurrency CXProviderDelegate, PKPushRegistryDelegate {
     static let shared = WestreemCallKitCoordinator()
+    private static let cancelledCallsDefaultsKey = "westreem.rtc.cancelled-calls.v1"
+    private static let cancelledCallLifetime: TimeInterval = 4 * 60 * 60
+    private static let cancelledCallLimit = 256
 
     private let provider: CXProvider
     private let controller = CXCallController()
     private var registry: PKPushRegistry?
     private var calls: [UUID: WestreemCallDescriptor] = [:]
+    private var cancelledCallUUIDs: [UUID: Date] = [:]
     private var answeredCalls = Set<UUID>()
     private var mutedCalls = Set<UUID>()
     private var audioSessionActive = false
@@ -197,7 +213,55 @@ final class WestreemCallKitCoordinator: NSObject, @preconcurrency CXProviderDele
         configuration.supportedHandleTypes = [.generic]
         provider = CXProvider(configuration: configuration)
         super.init()
+        cancelledCallUUIDs = Self.loadCancelledCalls()
         provider.setDelegate(self, queue: nil)
+    }
+
+    private static func loadCancelledCalls(now: Date = Date()) -> [UUID: Date] {
+        let stored = UserDefaults.standard.dictionary(forKey: cancelledCallsDefaultsKey) ?? [:]
+        let valid = stored.compactMap { key, value -> (UUID, Date)? in
+            guard let uuid = UUID(uuidString: key),
+                  let seconds = (value as? NSNumber)?.doubleValue else { return nil }
+            let date = Date(timeIntervalSince1970: seconds)
+            guard now.timeIntervalSince(date) >= 0,
+                  now.timeIntervalSince(date) < cancelledCallLifetime else { return nil }
+            return (uuid, date)
+        }
+        return Dictionary(uniqueKeysWithValues: valid
+            .sorted { $0.1 > $1.1 }
+            .prefix(cancelledCallLimit))
+    }
+
+    private func persistCancelledCalls() {
+        UserDefaults.standard.set(
+            Dictionary(uniqueKeysWithValues: cancelledCallUUIDs.map {
+                ($0.key.uuidString.lowercased(), $0.value.timeIntervalSince1970)
+            }),
+            forKey: Self.cancelledCallsDefaultsKey
+        )
+    }
+
+    private func isCallCancelled(_ uuid: UUID, now: Date = Date()) -> Bool {
+        let count = cancelledCallUUIDs.count
+        cancelledCallUUIDs = cancelledCallUUIDs.filter {
+            now.timeIntervalSince($0.value) >= 0
+                && now.timeIntervalSince($0.value) < Self.cancelledCallLifetime
+        }
+        if cancelledCallUUIDs.count != count { persistCancelledCalls() }
+        return cancelledCallUUIDs[uuid] != nil
+    }
+
+    private func rememberCancelledCall(_ uuid: UUID, now: Date = Date()) {
+        cancelledCallUUIDs = cancelledCallUUIDs.filter {
+            now.timeIntervalSince($0.value) >= 0
+                && now.timeIntervalSince($0.value) < Self.cancelledCallLifetime
+        }
+        if cancelledCallUUIDs.count >= Self.cancelledCallLimit,
+           let oldest = cancelledCallUUIDs.min(by: { $0.value < $1.value })?.key {
+            cancelledCallUUIDs.removeValue(forKey: oldest)
+        }
+        cancelledCallUUIDs[uuid] = now
+        persistCancelledCalls()
     }
 
     func start() {
@@ -207,6 +271,143 @@ final class WestreemCallKitCoordinator: NSObject, @preconcurrency CXProviderDele
         registry.desiredPushTypes = [.voIP]
         self.registry = registry
         MatrixNativeRtcBreadcrumbRecorder.shared.record(.startup, reason: .started)
+    }
+
+    /// Replays PushKit's retained credential through the same owner-fenced
+    /// registration path used by its delegate callback. This repairs app
+    /// restores and reauthentication where PushKit produced the credential
+    /// before the Westreem account became authoritative.
+    func refreshVoIPRegistrationIfAvailable() {
+        guard let token = registry?.pushToken(for: .voIP), !token.isEmpty else {
+            MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                .voIPRegistryReplay,
+                reason: .unavailable
+            )
+            return
+        }
+        MatrixNativeRtcBreadcrumbRecorder.shared.record(
+            .voIPRegistryReplay,
+            reason: .available,
+            credentialByteCount: token.count
+        )
+        PushNotificationManager.shared.didRegisterVoIP(deviceToken: token)
+    }
+
+    /// Ordinary Matrix alerts are a user-driven fallback when PushKit could
+    /// not surface the call. The server supplies the same deterministic UUID
+    /// and invitation authority as the VoIP payload. Tapping the alert may
+    /// recreate CallKit, but never starts a new outgoing invitation.
+    @discardableResult
+    func presentNotificationFallback(
+        userInfo: [AnyHashable: Any]
+    ) async -> Bool {
+        guard userInfo["kind"] as? String == "matrix_call_fallback",
+              let uuidText = userInfo["callUUID"] as? String,
+              let uuid = UUID(uuidString: uuidText),
+              !isCallCancelled(uuid),
+              let roomID = userInfo["matrixRoomId"] as? String,
+              roomID.first == "!", roomID.contains(":"), roomID.utf8.count <= 513,
+              let eventID = userInfo["matrixEventId"] as? String,
+              eventID.first == "$", eventID.utf8.count <= 1_025,
+              let rawExpiry = userInfo["invitationExpiresAtMs"] as? NSNumber,
+              CFGetTypeID(rawExpiry) != CFBooleanGetTypeID(),
+              let expiry = Int64(rawExpiry.stringValue),
+              MatrixNativeRtcInvitationExpiryContract.accepts(
+                expiresAtMilliseconds: expiry,
+                nowMilliseconds: Int64(Date().timeIntervalSince1970 * 1_000)
+              ),
+              MatrixNativeIncomingCallRuntime.shared.canAcceptCalls else {
+            return false
+        }
+        if calls[uuid] != nil { return true }
+        let name = (userInfo["callerName"] as? String)?.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        let displayName = name.flatMap { value in
+            value.isEmpty ? nil : String(value.prefix(120))
+        } ?? "A Vibes member"
+        let descriptor = WestreemCallDescriptor(
+            uuid: uuid,
+            roomID: roomID,
+            eventID: eventID,
+            redemptionID: UUID(),
+            displayName: displayName,
+            hasVideo: userInfo["hasVideo"] as? Bool ?? false,
+            invitationExpiresAtMilliseconds: expiry
+        )
+        MatrixNativeLiveKitCallAudio.prepareForCallKit()
+        calls[uuid] = descriptor
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .generic, value: descriptor.displayName)
+        update.localizedCallerName = descriptor.displayName
+        update.hasVideo = descriptor.hasVideo
+        do {
+            try await provider.reportNewIncomingCall(with: uuid, update: update)
+            return true
+        } catch {
+            calls.removeValue(forKey: uuid)
+            MatrixNativeLiveKitCallAudio.releaseCallKitLifecycle()
+            return false
+        }
+    }
+
+    @discardableResult
+    func handleNotificationCancellation(
+        userInfo: [AnyHashable: Any]
+    ) async -> Bool {
+        guard userInfo["kind"] as? String == "matrix_call_cancel",
+              let uuidText = userInfo["callUUID"] as? String,
+              let uuid = UUID(uuidString: uuidText),
+              let roomID = userInfo["matrixRoomId"] as? String,
+              roomID.first == "!", roomID.contains(":"), roomID.utf8.count <= 513
+        else { return false }
+        rememberCancelledCall(uuid)
+        let center = UNUserNotificationCenter.current()
+        let delivered = await center.deliveredNotifications()
+        let fallbackIdentifiers = delivered.compactMap { notification -> String? in
+            let info = notification.request.content.userInfo
+            guard info["kind"] as? String == "matrix_call_fallback",
+                  let candidate = info["callUUID"] as? String,
+                  UUID(uuidString: candidate) == uuid else { return nil }
+            return notification.request.identifier
+        }
+        if !fallbackIdentifiers.isEmpty {
+            center.removeDeliveredNotifications(withIdentifiers: fallbackIdentifiers)
+        }
+        guard let call = calls.removeValue(forKey: uuid) else { return true }
+        guard call.roomID == roomID else {
+            calls[uuid] = call
+            return false
+        }
+        answeredCalls.remove(uuid)
+        mutedCalls.remove(uuid)
+        MatrixNativeLiveKitCallAudio.releaseCallKitLifecycle()
+        await MatrixNativeIncomingCallRuntime.shared.end(
+            uuid,
+            endCallKit: false
+        )
+        provider.reportCall(
+            with: uuid,
+            endedAt: Date(),
+            reason: .remoteEnded
+        )
+        NotificationCenter.default.post(
+            name: .westreemCallKitEnded,
+            object: call
+        )
+        return true
+    }
+
+    func shouldSuppressOrdinaryCallPresentation(
+        userInfo: [AnyHashable: Any]
+    ) -> Bool {
+        guard let kind = userInfo["kind"] as? String else { return false }
+        if kind == "matrix_call_cancel" { return true }
+        guard kind == "matrix_call_fallback",
+              let uuidText = userInfo["callUUID"] as? String,
+              let uuid = UUID(uuidString: uuidText)
+        else { return false }
+        return isCallCancelled(uuid) || calls[uuid] != nil
     }
 
     func startOutgoing(roomID: String, displayName: String, hasVideo: Bool) async throws -> UUID {
@@ -496,23 +697,7 @@ final class WestreemCallKitCoordinator: NSObject, @preconcurrency CXProviderDele
                     .pushValidation,
                     reason: .validCancellation
                 )
-                guard let call = calls.removeValue(forKey: uuid) else { return }
-                answeredCalls.remove(uuid)
-                mutedCalls.remove(uuid)
-                MatrixNativeLiveKitCallAudio.releaseCallKitLifecycle()
-                await MatrixNativeIncomingCallRuntime.shared.end(
-                    uuid,
-                    endCallKit: false
-                )
-                provider.reportCall(
-                    with: uuid,
-                    endedAt: Date(),
-                    reason: .remoteEnded
-                )
-                NotificationCenter.default.post(
-                    name: .westreemCallKitEnded,
-                    object: call
-                )
+                _ = await handleNotificationCancellation(userInfo: values)
                 return
             }
             guard let eventID = values["matrixEventId"] as? String,
@@ -635,7 +820,13 @@ final class WestreemCallKitCoordinator: NSObject, @preconcurrency CXProviderDele
 extension MediaverseAppDelegate: UNUserNotificationCenterDelegate {
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound, .badge]
+        let suppress = await MainActor.run {
+            WestreemCallKitCoordinator.shared.shouldSuppressOrdinaryCallPresentation(
+                userInfo: notification.request.content.userInfo
+            )
+        }
+        if suppress { return [] }
+        return [.banner, .list, .sound, .badge]
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter,

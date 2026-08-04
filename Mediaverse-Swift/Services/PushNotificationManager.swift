@@ -374,6 +374,7 @@ final class PushNotificationManager: ObservableObject {
     ) {
         matrixPusherManager = manager
         registrationFence.preserveAcrossReadinessChange()
+        WestreemCallKitCoordinator.shared.refreshVoIPRegistrationIfAvailable()
         Task {
             await uploadLatestTokenIfPossible()
             await uploadLatestVoIPTokenIfPossible()
@@ -410,6 +411,7 @@ final class PushNotificationManager: ObservableObject {
         pendingVoIPMatrixPusher = nil
         ordinaryPushSetupStatus = .finishingSetup
         voIPPushSetupStatus = .finishingSetup
+        WestreemCallKitCoordinator.shared.refreshVoIPRegistrationIfAvailable()
         await uploadLatestTokenIfPossible()
         await uploadLatestVoIPTokenIfPossible()
     }
@@ -430,6 +432,7 @@ final class PushNotificationManager: ObservableObject {
         registrationFence.openSession()
         await drainV3CleanupRegistries()
         await drainPushRegistrationCleanupQueue()
+        WestreemCallKitCoordinator.shared.refreshVoIPRegistrationIfAvailable()
         await uploadLatestTokenIfPossible()
         await uploadLatestVoIPTokenIfPossible()
     }
@@ -482,6 +485,7 @@ final class PushNotificationManager: ObservableObject {
         if reconcileStoredTokens,
            SessionStorage.token != nil,
            activeWestreemUserID != nil {
+            WestreemCallKitCoordinator.shared.refreshVoIPRegistrationIfAvailable()
             await uploadLatestTokenIfPossible()
             await uploadLatestVoIPTokenIfPossible()
         }
@@ -554,6 +558,23 @@ final class PushNotificationManager: ObservableObject {
     }
 
     func handleNotificationTap(userInfo: [AnyHashable: Any]) {
+        if userInfo["kind"] as? String == "matrix_call_fallback" {
+            Task { @MainActor in
+                if await WestreemCallKitCoordinator.shared
+                    .presentNotificationFallback(userInfo: userInfo) {
+                    return
+                }
+                // If the invitation expired or CallKit could not be restored,
+                // still take the user to the authoritative Personal Wave.
+                guard let matrixRoute = Self.matrixRoute(from: userInfo) else { return }
+                MatrixNativePushRouteStore.shared.stage(matrixRoute)
+                NotificationCenter.default.post(
+                    name: .matrixRoomRouteRequested,
+                    object: matrixRoute
+                )
+            }
+            return
+        }
         if let matrixRoute = Self.matrixRoute(from: userInfo) {
             MatrixNativePushRouteStore.shared.stage(matrixRoute)
             NotificationCenter.default.post(
