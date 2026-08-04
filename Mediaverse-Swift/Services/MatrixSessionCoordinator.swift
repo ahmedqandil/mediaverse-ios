@@ -608,7 +608,7 @@ actor MatrixSessionCoordinator {
                 data: HttpPusherData(
                     url: configuration.gatewayUrl,
                     format: .eventIdOnly,
-                    defaultPayload: nil
+                    defaultPayload: try configuration.defaultPayloadJSON()
                 )
             ),
             appDisplayName: configuration.appDisplayName,
@@ -628,6 +628,105 @@ actor MatrixSessionCoordinator {
                 pushkey: removal.pushKey,
                 appId: removal.appId
             )
+        )
+    }
+
+    func installOpaquePusher(
+        configuration: MatrixPushRegistrationV3Pusher,
+        deviceDisplayName: String
+    ) async throws {
+        guard let client else { throw MatrixSessionFoundationError.disabled }
+        try await client.setPusher(
+            identifiers: PusherIdentifiers(
+                pushkey: configuration.pushKey.rawValue,
+                appId: configuration.appId
+            ),
+            kind: .http(
+                data: HttpPusherData(
+                    url: configuration.gatewayUrl,
+                    format: .eventIdOnly,
+                    defaultPayload: nil
+                )
+            ),
+            appDisplayName: "Westreem Vibes",
+            deviceDisplayName: String(deviceDisplayName.prefix(120)),
+            profileTag: nil,
+            lang: Locale.current.language.languageCode?.identifier ?? "en",
+            append: false
+        )
+    }
+
+    func removePusher(pushKey: String, appID: String) async throws {
+        guard let client else { throw MatrixSessionFoundationError.disabled }
+        try await client.deletePusher(
+            identifiers: PusherIdentifiers(pushkey: pushKey, appId: appID)
+        )
+    }
+
+    func observePushers(
+        appID: String,
+        rawPushKey: String?,
+        opaquePushKey: MatrixOpaquePushKey
+    ) async throws -> MatrixPusherObservation {
+        guard let stored = sessionKeychain?.storedSession(),
+              MatrixHomeserverTrustPolicy.accepts(stored.homeserverUrl),
+              let origin = MatrixHomeserverTrustPolicy.normalizedApprovedOrigin(
+                  stored.homeserverUrl
+              ),
+              var components = URLComponents(string: origin)
+        else { throw MatrixSessionFoundationError.invalidHomeserver }
+        components.path = "/_matrix/client/v3/pushers"
+        components.query = nil
+        components.fragment = nil
+        guard let url = components.url else {
+            throw MatrixSessionFoundationError.invalidHomeserver
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.setValue(
+            "Bearer \(stored.accessToken)",
+            forHTTPHeaderField: "Authorization"
+        )
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        configuration.timeoutIntervalForRequest = 12
+        configuration.timeoutIntervalForResource = 15
+        let directSession = URLSession(
+            configuration: configuration,
+            delegate: MatrixPusherNoRedirectDelegate.shared,
+            delegateQueue: nil
+        )
+        defer { directSession.invalidateAndCancel() }
+        let (data, response) = try await directSession.data(for: request)
+        guard data.count <= 256 * 1024,
+              let http = response as? HTTPURLResponse,
+              http.url == url,
+              http.statusCode == 200
+        else { throw MatrixSessionFoundationError.unavailable }
+        let decoded = try JSONDecoder().decode(
+            MatrixPusherListResponse.self,
+            from: data
+        )
+        return try MatrixPusherObservationPolicy.observe(
+            pushers: decoded.pushers.map {
+                MatrixObservedPusher(
+                    pushKey: $0.pushKey,
+                    appID: $0.appId,
+                    kind: $0.kind,
+                    url: $0.data?.url,
+                    format: $0.data?.format
+                )
+            },
+            appID: appID,
+            rawPushKey: rawPushKey,
+            opaquePushKey: opaquePushKey
         )
     }
 
@@ -699,6 +798,50 @@ actor MatrixSessionCoordinator {
             .autoEnableCrossSigning(autoEnableCrossSigning: true)
             .autoEnableBackups(autoEnableBackups: true)
             .build()
+    }
+}
+
+private struct MatrixPusherListResponse: Decodable {
+    let pushers: [MatrixPusherListItem]
+}
+
+private struct MatrixPusherListItem: Decodable {
+    let pushKey: String
+    let appId: String
+    let kind: String?
+    let data: MatrixPusherListData?
+
+    private enum CodingKeys: String, CodingKey {
+        case pushKey = "pushkey"
+        case appId = "app_id"
+        case kind, data
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        pushKey = try values.decode(String.self, forKey: .pushKey)
+        appId = try values.decode(String.self, forKey: .appId)
+        kind = try? values.decode(String.self, forKey: .kind)
+        data = try? values.decode(MatrixPusherListData.self, forKey: .data)
+    }
+}
+
+private struct MatrixPusherListData: Decodable {
+    let url: String?
+    let format: String?
+}
+
+private final class MatrixPusherNoRedirectDelegate: NSObject, URLSessionTaskDelegate {
+    static let shared = MatrixPusherNoRedirectDelegate()
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }
 
@@ -862,6 +1005,41 @@ final class MatrixNativeSessionController:
     ) async throws {
         try requireReady()
         try await coordinator.removePusher(removal)
+    }
+
+    func installOpaqueMatrixPusher(
+        configuration: MatrixPushRegistrationV3Pusher,
+        deviceDisplayName: String
+    ) async throws {
+        try requireReady()
+        try await coordinator.installOpaquePusher(
+            configuration: configuration,
+            deviceDisplayName: deviceDisplayName
+        )
+    }
+
+    func removeOpaqueMatrixPusher(
+        pushKey: MatrixOpaquePushKey,
+        appID: String
+    ) async throws {
+        try requireReady()
+        try await coordinator.removePusher(
+            pushKey: pushKey.rawValue,
+            appID: appID
+        )
+    }
+
+    func observeMatrixPushers(
+        appID: String,
+        rawPushKey: String?,
+        opaquePushKey: MatrixOpaquePushKey
+    ) async throws -> MatrixPusherObservation {
+        try requireReady()
+        return try await coordinator.observePushers(
+            appID: appID,
+            rawPushKey: rawPushKey,
+            opaquePushKey: opaquePushKey
+        )
     }
 
     func vibes() async throws -> MatrixVibeDirectoryPage {
@@ -1226,6 +1404,94 @@ final class MatrixNativeSessionController:
             return left.displayName.localizedCaseInsensitiveCompare(
                 right.displayName
             ) == .orderedAscending
+        }
+    }
+
+    struct RtcCallInvitationReceipt: Hashable, Sendable {
+        let eventID: String
+        let inviteeUserID: String
+        let callID: String
+    }
+
+    func inviteToRtcCall(
+        roomID: String,
+        inviteeUserID: String,
+        callID: String,
+        intent: MatrixNativeRtcIntent
+    ) async throws -> RtcCallInvitationReceipt {
+        try requireReady()
+        guard callID.range(
+            of: "^[A-Za-z0-9._~-]{1,256}$",
+            options: .regularExpression
+        ) != nil else { throw MatrixNativeWaveActionError.notAllowed }
+        let members = try await waveMembers(roomID: roomID)
+        guard members.contains(where: {
+            $0.userID == inviteeUserID
+                && $0.state == .joined
+                && !$0.isCurrentUser
+                && !$0.isService
+        }) else { throw MatrixNativeWaveActionError.notAllowed }
+        let expiresAt = Int64(
+            Date().addingTimeInterval(60).timeIntervalSince1970 * 1_000
+        )
+        let requestID = UUID().uuidString.lowercased()
+        let content: [String: Any] = [
+            "schema_version": 1,
+            "client_request_id": requestID,
+            "call_id": callID,
+            "invitee": inviteeUserID,
+            "intent": intent.rawValue,
+            "expires_ts": expiresAt,
+            "m.mentions": ["user_ids": [inviteeUserID]],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: content)
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw MatrixSessionFoundationError.unavailable
+        }
+        let eventID = try await repository.sendRtcCallSignal(
+            roomID: roomID,
+            eventType: "com.westreem.call_invite.v1",
+            contentJSON: json,
+            clientRequestID: requestID
+        )
+        return RtcCallInvitationReceipt(
+            eventID: eventID,
+            inviteeUserID: inviteeUserID,
+            callID: callID
+        )
+    }
+
+    func cancelRtcCallInvitations(
+        roomID: String,
+        invitations: [RtcCallInvitationReceipt]
+    ) async throws {
+        try requireReady()
+        for invitation in invitations {
+            guard invitation.eventID.first == "$",
+                  invitation.eventID.utf8.count <= 1_025 else { continue }
+            let requestID = UUID().uuidString.lowercased()
+            let content: [String: Any] = [
+                "schema_version": 1,
+                "client_request_id": requestID,
+                "call_id": invitation.callID,
+                "invitation_event_id": invitation.eventID,
+                "invitee": invitation.inviteeUserID,
+                "m.mentions": ["user_ids": [invitation.inviteeUserID]],
+                "m.relates_to": [
+                    "rel_type": "m.reference",
+                    "event_id": invitation.eventID,
+                ],
+            ]
+            let data = try JSONSerialization.data(withJSONObject: content)
+            guard let json = String(data: data, encoding: .utf8) else {
+                throw MatrixSessionFoundationError.unavailable
+            }
+            _ = try await repository.sendRtcCallSignal(
+                roomID: roomID,
+                eventType: "com.westreem.call_invite_cancel.v1",
+                contentJSON: json,
+                clientRequestID: requestID
+            )
         }
     }
 
@@ -1939,14 +2205,16 @@ final class MatrixNativeSessionController:
 
     func beginMatrixRtcMembership(
         roomID: String,
-        intent: MatrixNativeRtcIntent
+        intent: MatrixNativeRtcIntent,
+        experience: MatrixNativeRtcExperience = .call
     ) async throws -> String {
         try requireReady()
         try await directNotificationProvider.validateRoomAccess(roomID: roomID)
         return try await repository.beginRtcMembership(
             roomID: roomID,
             intent: intent,
-            livekitServiceURL: C.baseURL + "/api/matrix/rtc"
+            livekitServiceURL: C.baseURL + "/api/matrix/rtc",
+            experience: experience
         )
     }
 

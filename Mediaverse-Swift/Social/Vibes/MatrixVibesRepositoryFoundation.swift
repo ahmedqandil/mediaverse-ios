@@ -870,6 +870,12 @@ protocol MatrixVibesSDKProviding: Sendable {
         contentJSON: String,
         clientRequestID: String
     ) async throws -> String
+    func sendRtcCallSignal(
+        roomID: String,
+        eventType: String,
+        contentJSON: String,
+        clientRequestID: String
+    ) async throws -> String
     func retrySend(transactionID: String) async throws
     func sendAttachments(
         roomID: String,
@@ -919,7 +925,8 @@ protocol MatrixVibesSDKProviding: Sendable {
     func beginRtcMembership(
         roomID: String,
         intent: MatrixNativeRtcIntent,
-        livekitServiceURL: String
+        livekitServiceURL: String,
+        experience: MatrixNativeRtcExperience
     ) async throws -> String
     func endRtcMembership(roomID: String) async throws
 
@@ -3405,6 +3412,40 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
             "com.westreem.live.stage.v1",
             "com.westreem.watch_party.v1",
         ]
+        return try await sendVerifiedRawEvent(
+            roomID: roomID,
+            eventType: eventType,
+            contentJSON: contentJSON,
+            clientRequestID: clientRequestID,
+            allowedTypes: allowedTypes
+        )
+    }
+
+    func sendRtcCallSignal(
+        roomID: String,
+        eventType: String,
+        contentJSON: String,
+        clientRequestID: String
+    ) async throws -> String {
+        try await sendVerifiedRawEvent(
+            roomID: roomID,
+            eventType: eventType,
+            contentJSON: contentJSON,
+            clientRequestID: clientRequestID,
+            allowedTypes: [
+                "com.westreem.call_invite.v1",
+                "com.westreem.call_invite_cancel.v1",
+            ]
+        )
+    }
+
+    private func sendVerifiedRawEvent(
+        roomID: String,
+        eventType: String,
+        contentJSON: String,
+        clientRequestID: String,
+        allowedTypes: [String]
+    ) async throws -> String {
         guard
             allowedTypes.contains(eventType),
             !clientRequestID.isEmpty,
@@ -3694,12 +3735,39 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
     func beginRtcMembership(
         roomID: String,
         intent: MatrixNativeRtcIntent,
-        livekitServiceURL: String
+        livekitServiceURL: String,
+        experience: MatrixNativeRtcExperience
     ) async throws -> String {
         let client = try await activeClient()
         let matrixRoom = try room(roomID, in: client)
         guard matrixRoom.membership() == .joined else {
             throw MatrixSessionFoundationError.unavailable
+        }
+        let roomKind: MatrixNativeRtcAuthorityRoomKind = matrixRoom.isSpace()
+            ? .vibeSpace
+            : .waveOrDirect
+        var activeLegacyExperience: MatrixNativeRtcExperience?
+        if roomKind == .waveOrDirect {
+            switch experience {
+            case .liveStage:
+                if try await liveStageState(roomID: roomID)?.isLive == true {
+                    activeLegacyExperience = .liveStage
+                }
+            case .watchParty:
+                if try await watchPartyState(roomID: roomID)?.isActive == true {
+                    activeLegacyExperience = .watchParty
+                }
+            case .call, .groupLounge:
+                break
+            }
+        }
+        guard MatrixNativeRtcOwnershipContract.decide(
+            experience: experience,
+            roomKind: roomKind,
+            operation: .join,
+            activeLegacyExperience: activeLegacyExperience
+        ).allowed else {
+            throw MatrixNativeWaveActionError.notAllowed
         }
         let powerLevels = try await matrixRoom.getPowerLevels()
         guard powerLevels.canOwnUserSendState(
@@ -5168,6 +5236,21 @@ actor MatrixVibesRepositoryFoundation: VibesRepository {
         )
     }
 
+    func sendRtcCallSignal(
+        roomID: String,
+        eventType: String,
+        contentJSON: String,
+        clientRequestID: String
+    ) async throws -> String {
+        try requireEnabled()
+        return try await sdk.sendRtcCallSignal(
+            roomID: roomID,
+            eventType: eventType,
+            contentJSON: contentJSON,
+            clientRequestID: clientRequestID
+        )
+    }
+
     func retry(transactionID: String) async throws {
         try requireEnabled()
         try await sdk.retrySend(transactionID: transactionID)
@@ -5312,13 +5395,15 @@ actor MatrixVibesRepositoryFoundation: VibesRepository {
     func beginRtcMembership(
         roomID: String,
         intent: MatrixNativeRtcIntent,
-        livekitServiceURL: String
+        livekitServiceURL: String,
+        experience: MatrixNativeRtcExperience
     ) async throws -> String {
         try requireEnabled()
         return try await sdk.beginRtcMembership(
             roomID: roomID,
             intent: intent,
-            livekitServiceURL: livekitServiceURL
+            livekitServiceURL: livekitServiceURL,
+            experience: experience
         )
     }
 

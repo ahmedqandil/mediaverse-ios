@@ -1,5 +1,14 @@
 import Foundation
 
+enum APIRequestReason: String, Sendable {
+    case visible
+    case warmup
+}
+
+enum APIRequestContext {
+    @TaskLocal static var reason: APIRequestReason = .visible
+}
+
 /// Thin URLSession wrapper that authenticates with the stored mobile session JWT.
 /// The JWT is stored through SessionStorage and attached to every request as both
 /// a bearer token and compatibility cookies.
@@ -16,6 +25,8 @@ actor APIClient: LegacySocialTransport {
             diskPath: "MediaverseURLCache"
         )
         cfg.requestCachePolicy = .useProtocolCachePolicy
+        cfg.httpMaximumConnectionsPerHost = 4
+        cfg.waitsForConnectivity = false
         cfg.httpCookieStorage = nil           // We manage cookies ourselves
         cfg.httpShouldSetCookies = false
         return URLSession(configuration: cfg)
@@ -99,6 +110,7 @@ actor APIClient: LegacySocialTransport {
         // Every backend request carries its app identity so platform visibility
         // cannot be bypassed by endpoints that do not use query parameters.
         req.setValue("ios", forHTTPHeaderField: "X-Westreem-Platform")
+        req.setValue(APIRequestContext.reason.rawValue, forHTTPHeaderField: "X-Westreem-Request-Reason")
         if let token = sessionToken {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -699,6 +711,7 @@ actor APIClient: LegacySocialTransport {
         let resp: Resp = try await post("/api/auth/mobile/refresh", body: EmptyBody())
         if let jwt = resp.sessionToken {
             storeSessionToken(jwt)
+            await PushNotificationManager.shared.westreemSessionDidRefresh()
         }
     }
 
@@ -1006,16 +1019,37 @@ actor APIClient: LegacySocialTransport {
         return try await get("/api/me/profile")
     }
 
-    func updateProfile(name: String?, bio: String?, image: String?, bannerUrl: String?) async throws -> ProfileResponse {
+    func updateProfile(
+        name: String?,
+        bio: String?,
+        image: String?,
+        imageFocus: String? = nil,
+        bannerUrl: String?,
+        bannerFocus: String? = nil,
+        location: String? = nil,
+        website1: String? = nil,
+        website2: String? = nil,
+        website3: String? = nil
+    ) async throws -> ProfileResponse {
         struct Body: Encodable {
             let name: String?
             let bio: String?
             let image: String?
+            let imageFocus: String?
             let bannerUrl: String?
+            let bannerFocus: String?
+            let location: String?
+            let website1: String?
+            let website2: String?
+            let website3: String?
         }
         return try await patch(
             "/api/me/profile",
-            body: Body(name: name, bio: bio, image: image, bannerUrl: bannerUrl)
+            body: Body(
+                name: name, bio: bio, image: image, imageFocus: imageFocus,
+                bannerUrl: bannerUrl, bannerFocus: bannerFocus, location: location,
+                website1: website1, website2: website2, website3: website3
+            )
         )
     }
 
@@ -1794,6 +1828,18 @@ actor APIClient: LegacySocialTransport {
         return response.contacts
     }
 
+    func fetchProfilePrivacy() async throws -> WestreemProfilePrivacy {
+        try await get("/api/me/profile-privacy")
+    }
+
+    func updateProfilePrivacy(isPrivate: Bool) async throws -> WestreemProfilePrivacy {
+        struct Body: Encodable { let isPrivate: Bool }
+        return try await patch(
+            "/api/me/profile-privacy",
+            body: Body(isPrivate: isPrivate)
+        )
+    }
+
     func createVibeContact(
         westreemUserID: String
     ) async throws -> WestreemVibeContact {
@@ -1837,6 +1883,44 @@ actor APIClient: LegacySocialTransport {
                 phoneHashes: Array(Array(Set(phoneHashes)).sorted().prefix(500))
             )
         )
+    }
+
+    func syncVibeContacts(
+        emailHashes: [String],
+        phoneHashes: [String]
+    ) async throws -> WestreemVibeContactSyncResponse {
+        struct Body: Encodable {
+            let consent: Bool
+            let emailHashes: [String]
+            let phoneHashes: [String]
+        }
+        return try await post(
+            "/api/vibes/contact-sync",
+            body: Body(
+                consent: true,
+                emailHashes: Array(Array(Set(emailHashes)).sorted().prefix(500)),
+                phoneHashes: Array(Array(Set(phoneHashes)).sorted().prefix(500))
+            )
+        )
+    }
+
+    func vibeContactSyncStatus() async throws -> WestreemVibeContactSyncStatus {
+        try await get("/api/vibes/contact-sync")
+    }
+
+    func revokeVibeContactSync() async throws {
+        struct Response: Decodable { let enabled: Bool }
+        let _: Response = try await delete("/api/vibes/contact-sync")
+    }
+
+    func createContactJoinInvite() async throws -> WestreemContactJoinInvite {
+        struct EmptyBody: Encodable {}
+        struct Response: Decodable { let invitation: WestreemContactJoinInvite }
+        let response: Response = try await post(
+            "/api/vibes/contact-invites",
+            body: EmptyBody()
+        )
+        return response.invitation
     }
 
     func createVibeInviteLink(
@@ -2171,28 +2255,332 @@ actor APIClient: LegacySocialTransport {
         token: String,
         platform: String = "ios",
         environment: String,
-        bundleId: String
-    ) async throws -> PushTokenRegistrationResponse {
+        bundleId: String,
+        registrationEpoch: String,
+        revocationCapability: String,
+        expectedRevision: String? = nil
+    ) async throws -> PushTokenRegistrationAttempt {
         struct Body: Encodable {
             let token: String
             let platform: String
             let environment: String
             let bundleId: String
+            let registrationContractVersion: Int
+            let registrationEpoch: String
+            let revocationCapability: String
+            let expectedRevision: String?
         }
-        return try await post(
-            "/api/notifications/push-token",
-            body: Body(token: token, platform: platform, environment: environment, bundleId: bundleId)
+        struct Conflict: Decodable {
+            let error: String
+            let registrationRevision: String?
+        }
+        let path = "/api/notifications/push-token"
+        guard let url = URL(string: C.baseURL + path) else {
+            throw APIError.badURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try JSONEncoder().encode(
+            Body(
+                token: token,
+                platform: platform,
+                environment: environment,
+                bundleId: bundleId,
+                registrationContractVersion: 2,
+                registrationEpoch: registrationEpoch,
+                revocationCapability: revocationCapability,
+                expectedRevision: expectedRevision
+            )
+        )
+        attachAuth(&request)
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode == 409 {
+            let conflict = try decoder.decode(Conflict.self, from: data)
+            if conflict.error == "Push registration contract upgrade required" {
+                return .contractUpgradeRequired
+            }
+            if conflict.error == "Push registration epoch revoked" {
+                return .epochRevoked
+            }
+            guard conflict.error == "Push token ownership changed",
+                  let registrationRevision = conflict.registrationRevision
+            else {
+                throw APIError.invalidResponse("Push token ownership conflict is invalid")
+            }
+            let revision = try MatrixPushRegistrationRevision(
+                rawValue: registrationRevision
+            )
+            return .ownershipConflict(registrationRevision: revision.rawValue)
+        }
+        try validate(response, requestToken: sessionTokenUsed(by: request))
+        invalidateResponseCache()
+        return .registered(
+            try decoder.decode(PushTokenRegistrationResponse.self, from: data)
         )
     }
 
     func unregisterPushToken(
-        token: String
-    ) async throws -> PushTokenRemovalResponse {
-        struct Body: Encodable { let token: String }
-        return try await delete(
-            "/api/notifications/push-token",
-            body: Body(token: token)
+        token: String,
+        bundleId: String,
+        registrationEpoch: String,
+        revocationCapability: String,
+        expectedRevision: String?
+    ) async throws -> PushTokenRemovalAttempt {
+        struct Body: Encodable {
+            let token: String
+            let bundleId: String
+            let registrationContractVersion: Int
+            let registrationEpoch: String
+            let revocationCapability: String
+            let expectedRevision: String?
+        }
+        struct Conflict: Decodable {
+            let error: String
+            let registrationRevision: String?
+        }
+        let path = "/api/notifications/push-token"
+        guard let url = URL(string: C.baseURL + path) else {
+            throw APIError.badURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try JSONEncoder().encode(
+            Body(
+                token: token,
+                bundleId: bundleId,
+                registrationContractVersion: 2,
+                registrationEpoch: registrationEpoch,
+                revocationCapability: revocationCapability,
+                expectedRevision: expectedRevision
+            )
         )
+        attachAuth(&request)
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode == 409 {
+            let conflict = try decoder.decode(Conflict.self, from: data)
+            if conflict.error == "Push registration contract upgrade required" {
+                return .contractUpgradeRequired
+            }
+            guard conflict.error == "Push token ownership changed",
+                  let registrationRevision = conflict.registrationRevision
+            else {
+                throw APIError.invalidResponse("Push token removal conflict is invalid")
+            }
+            let revision = try MatrixPushRegistrationRevision(
+                rawValue: registrationRevision
+            )
+            return .ownershipConflict(registrationRevision: revision.rawValue)
+        }
+        try validate(response, requestToken: sessionTokenUsed(by: request))
+        invalidateResponseCache()
+        return .removed(
+            try decoder.decode(PushTokenRemovalResponse.self, from: data)
+        )
+    }
+
+    func mutatePushRegistrationV3(
+        command: MatrixPushRegistrationV3Command,
+        token: String,
+        environment: String,
+        bundleId: String,
+        matrixPushKey: MatrixOpaquePushKey,
+        registrationEpoch: String,
+        revocationCapability: String,
+        expectedRevision: String?,
+        predecessorRegistrationEpoch: String? = nil,
+        predecessorRevocationCapability: String? = nil,
+        predecessorRevision: String? = nil,
+        matrixPusherObservation: MatrixPusherObservation? = nil
+    ) async throws -> MatrixPushRegistrationV3Response {
+        let body = PushRegistrationV3MutationBody(
+            registrationContractVersion: MatrixOpaquePushMigrationPolicy.contractVersion,
+            registrationCapability: MatrixOpaquePushMigrationPolicy.capability,
+            command: command,
+            token: token,
+            matrixPushKey: matrixPushKey.rawValue,
+            platform: "ios",
+            environment: environment,
+            bundleId: bundleId,
+            registrationEpoch: registrationEpoch,
+            revocationCapability: revocationCapability,
+            expectedRevision: expectedRevision,
+            predecessorRegistrationEpoch: predecessorRegistrationEpoch,
+            predecessorRevocationCapability: predecessorRevocationCapability,
+            predecessorRevision: predecessorRevision,
+            matrixPusherObservation: matrixPusherObservation
+        )
+        return try await performPushRegistrationV3Request(
+            method: "POST",
+            url: try pushRegistrationV3URL(),
+            body: try JSONEncoder().encode(body),
+            expectedAppID: bundleId,
+            expectedKey: matrixPushKey,
+            expectedRawPushKey: token
+        )
+    }
+
+    func fetchPushRegistrationV3(
+        matrixPushKey: MatrixOpaquePushKey,
+        environment: String,
+        bundleId: String,
+        expectedRawPushKey: String
+    ) async throws -> MatrixPushRegistrationV3Response {
+        let body = PushRegistrationV3StatusBody(
+            registrationContractVersion: MatrixOpaquePushMigrationPolicy.contractVersion,
+            registrationCapability: MatrixOpaquePushMigrationPolicy.capability,
+            matrixPushKey: matrixPushKey.rawValue,
+            platform: "ios",
+            environment: environment,
+            bundleId: bundleId
+        )
+        return try await performPushRegistrationV3Request(
+            method: "POST",
+            url: try pushRegistrationV3StatusURL(),
+            body: try JSONEncoder().encode(body),
+            expectedAppID: bundleId,
+            expectedKey: matrixPushKey,
+            expectedRawPushKey: expectedRawPushKey
+        )
+    }
+
+    func unregisterPushTokenV3(
+        token: String,
+        bundleId: String,
+        matrixPushKey: MatrixOpaquePushKey,
+        environment: String,
+        registrationEpoch: String,
+        revocationCapability: String,
+        expectedRevision: String
+    ) async throws -> MatrixPushRegistrationV3Response {
+        let body = PushRegistrationV3DeleteBody(
+            registrationContractVersion: MatrixOpaquePushMigrationPolicy.contractVersion,
+            registrationCapability: MatrixOpaquePushMigrationPolicy.capability,
+            token: token,
+            matrixPushKey: matrixPushKey.rawValue,
+            platform: "ios",
+            environment: environment,
+            bundleId: bundleId,
+            registrationEpoch: registrationEpoch,
+            revocationCapability: revocationCapability,
+            expectedRevision: expectedRevision
+        )
+        return try await performPushRegistrationV3Request(
+            method: "DELETE",
+            url: try pushRegistrationV3URL(),
+            body: try JSONEncoder().encode(body),
+            expectedAppID: bundleId,
+            expectedKey: matrixPushKey,
+            expectedRawPushKey: token
+        )
+    }
+
+    private func pushRegistrationV3URL() throws -> URL {
+        let path = "/api/notifications/push-token"
+        guard let url = URL(string: C.baseURL + path) else {
+            throw APIError.badURL(path)
+        }
+        return url
+    }
+
+    private func pushRegistrationV3StatusURL() throws -> URL {
+        let path = "/api/notifications/push-token/status"
+        guard let url = URL(string: C.baseURL + path) else {
+            throw APIError.badURL(path)
+        }
+        return url
+    }
+
+    private func performPushRegistrationV3Request(
+        method: String,
+        url: URL,
+        body: Data?,
+        expectedAppID: String,
+        expectedKey: MatrixOpaquePushKey,
+        expectedRawPushKey: String
+    ) async throws -> MatrixPushRegistrationV3Response {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        if let body {
+            request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        attachAuth(&request)
+        let requestToken = sessionTokenUsed(by: request)
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.invalidResponse("Push registration response is invalid")
+        }
+        switch http.statusCode {
+        case 200..<300:
+            break
+        case 400:
+            throw MatrixPushRegistrationV3TransportError.permanentContractFailure
+        case 401:
+            try validate(response, requestToken: requestToken)
+            throw MatrixPushRegistrationV3TransportError.credentialExpired
+        case 403:
+            throw MatrixPushRegistrationV3TransportError.actionRequired
+        case 409:
+            guard let conflict = try? MatrixPushRegistrationV3ConflictPolicy.decode(data)
+            else { throw MatrixPushRegistrationV3TransportError.permanentContractFailure }
+            switch conflict {
+            case let .deliveryLease(delay):
+                throw MatrixPushRegistrationV3TransportError.deliveryLeaseActive(
+                    retryAfterMilliseconds: delay
+                )
+            case let .revision(revision):
+                throw MatrixPushRegistrationV3TransportError.authoritativeRefreshRequired(
+                    registrationRevision: revision
+                )
+            }
+        case 429:
+            throw MatrixPushRegistrationV3TransportError.retryable
+        case 500...599:
+            throw MatrixPushRegistrationV3TransportError.retryable
+        default:
+            throw MatrixPushRegistrationV3TransportError.permanentContractFailure
+        }
+        try Self.validatePushRegistrationV3ResponseShape(data)
+        let decoded = try decoder.decode(MatrixPushRegistrationV3Response.self, from: data)
+        return try decoded.validated(
+            expectedAppID: expectedAppID,
+            expectedKey: expectedKey,
+            expectedRawPushKey: expectedRawPushKey
+        )
+    }
+
+    nonisolated private static func validatePushRegistrationV3ResponseShape(_ data: Data) throws {
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw APIError.invalidResponse("Push registration response is invalid")
+        }
+        let required = Set([
+            "registrationContractVersion", "registrationCapability",
+            "registrationState", "registrationRevision", "pushSetupPending",
+            "rawRetireAt", "routes", "matrixPusher",
+        ])
+        let allowed = required.union(["rawMatrixRemoval"])
+        guard required.isSubset(of: Set(root.keys)), Set(root.keys).isSubset(of: allowed),
+              let routes = root["routes"] as? [String: Any],
+              Set(routes.keys) == Set(["opaque", "raw"]),
+              let pusher = root["matrixPusher"] as? [String: Any],
+              Set(pusher.keys) == Set(["appId", "gatewayUrl", "format", "pushKey"])
+        else {
+            throw APIError.invalidResponse("Push registration response shape is invalid")
+        }
+        if let removal = root["rawMatrixRemoval"], !(removal is NSNull) {
+            guard let object = removal as? [String: Any],
+                  Set(object.keys) == Set(["authority", "pushKey", "appId"])
+            else {
+                throw APIError.invalidResponse("Push registration removal shape is invalid")
+            }
+        }
     }
 
     // MARK: - Like / Subscribe
@@ -2309,17 +2697,41 @@ actor APIClient: LegacySocialTransport {
     func joinMatrixNativeRtcRoom(
         roomID: String,
         deviceID: String,
-        intent: MatrixNativeRtcIntent
+        intent: MatrixNativeRtcIntent,
+        context: String = "call",
+        invitationEventID: String? = nil,
+        invitationRedemptionID: String? = nil
     ) async throws -> MatrixNativeRtcConnection {
-        let response: MatrixNativeRtcConnectionResponse = try await post(
-            "/api/matrix/rtc/join",
-            body: MatrixNativeRtcJoinRequest(
-                roomId: roomID,
-                deviceId: deviceID,
-                intent: intent.rawValue,
-                context: nil
-            )
+        let request = MatrixNativeRtcJoinRequest(
+            roomId: roomID,
+            deviceId: deviceID,
+            intent: intent.rawValue,
+            context: context,
+            invitationEventId: invitationEventID,
+            invitationRedemptionId: invitationRedemptionID
         )
+        let response: MatrixNativeRtcConnectionResponse = try await postMatrixRtcJoin(
+            request
+        )
+        if response.connection.provider == "CLOUDFLARE_REALTIME" {
+            guard MatrixNativeRtcContract.directCloudflareRealtimeEnabled,
+                  response.connection.authority == "MATRIX",
+                  response.connection.membershipEventType == MatrixNativeRtcContract.membershipEventType,
+                  response.connection.mediaProtection == .standardWebRTC,
+                  response.connection.applicationMediaEncryption == false,
+                  response.connection.roomId == roomID,
+                  response.connection.deviceId == deviceID,
+                  response.connection.intent == intent.rawValue,
+                  response.connection.experience == context,
+                  response.connection.callId?.range(
+                    of: "^[A-Za-z0-9._~-]{1,256}$",
+                    options: .regularExpression
+                  ) != nil,
+                  response.connection.canSubscribe,
+                  (1...300).contains(response.connection.expiresInSeconds)
+            else { throw MatrixNativeRtcError.invalidService }
+            return response.connection
+        }
         guard
             response.connection.authority == "MATRIX",
             response.connection.membershipEventType
@@ -2332,6 +2744,10 @@ actor APIClient: LegacySocialTransport {
             response.connection.token.utf8.count <= 8_192,
             !response.connection.roomName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             response.connection.roomName.utf8.count <= 255,
+            response.connection.callId?.range(
+                of: "^[A-Za-z0-9._~-]{1,256}$",
+                options: .regularExpression
+            ) != nil,
             response.connection.canPublish,
             response.connection.voiceEnabled,
             response.connection.videoEnabled == (intent == .video),
@@ -2342,10 +2758,65 @@ actor APIClient: LegacySocialTransport {
         return response.connection
     }
 
-    func joinMatrixNativeLiveStage(roomID: String, deviceID: String, expectsPublish: Bool) async throws -> MatrixNativeRtcConnection {
+    private func postMatrixRtcJoin(
+        _ body: MatrixNativeRtcJoinRequest
+    ) async throws -> MatrixNativeRtcConnectionResponse {
+        let path = "/api/matrix/rtc/join"
+        guard let url = URL(string: C.baseURL + path) else {
+            throw APIError.badURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try JSONEncoder().encode(body)
+        attachAuth(&request)
+        let (data, response) = try await session.data(for: request)
+        do {
+            try validate(
+                response,
+                requestToken: sessionTokenUsed(by: request)
+            )
+        } catch {
+            if let payload = try? JSONDecoder().decode(
+                SocialAPIErrorPayload.self,
+                from: data
+            ), !payload.error.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty {
+                if MatrixNativeRtcMembershipVisibilityResponseContract
+                    .isTransientMembershipAbsence(
+                        httpStatusCode: (response as? HTTPURLResponse)?.statusCode ?? 0,
+                        serverCode: payload.code
+                    ) {
+                    let message = String(
+                        payload.error
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .prefix(240)
+                    )
+                    throw APIError.matrixRtcMembershipNotVisible(message: message)
+                }
+                throw APIError.invalidResponse(payload.error)
+            }
+            throw error
+        }
+        invalidateResponseCache()
+        return try decoder.decode(MatrixNativeRtcConnectionResponse.self, from: data)
+    }
+
+    func joinMatrixNativeLiveStage(
+        roomID: String,
+        deviceID: String,
+        expectsPublish: Bool
+    ) async throws -> MatrixNativeRtcConnection {
         let response: MatrixNativeRtcConnectionResponse = try await post(
             "/api/matrix/rtc/join",
-            body: MatrixNativeRtcJoinRequest(roomId: roomID, deviceId: deviceID, intent: "audio", context: "stage")
+            body: MatrixNativeRtcJoinRequest(
+                roomId: roomID,
+                deviceId: deviceID,
+                intent: "audio",
+                context: "stage"
+            )
         )
         let connection = response.connection
         guard connection.authority == "MATRIX",
@@ -2928,6 +3399,10 @@ private struct WestreemVibeInviteCandidatesResponse: Decodable, Sendable {
     let results: [WestreemVibeInviteCandidate]
 }
 
+struct WestreemProfilePrivacy: Codable, Sendable, Equatable {
+    let isPrivate: Bool
+}
+
 enum WestreemVibeContactStatus: String, Codable, Sendable {
     case none = "NONE"
     case pendingIncoming = "PENDING_IN"
@@ -2999,6 +3474,26 @@ struct WestreemVibeContactMatch: Decodable, Identifiable, Hashable, Sendable {
 struct WestreemVibeContactMatchesResponse: Decodable, Sendable {
     let matches: [WestreemVibeContactMatch]
     let unsupportedKinds: [String]
+}
+
+struct WestreemVibeContactSyncResponse: Decodable, Sendable {
+    let matches: [WestreemVibeContactMatch]
+    let unsupportedKinds: [String]
+    let syncedCount: Int
+    let duplicateSafe: Bool
+    let unsupportedPhoneCount: Int
+}
+
+struct WestreemVibeContactSyncStatus: Decodable, Sendable {
+    let enabled: Bool
+    let syncedCount: Int
+    let phoneMatchingSupported: Bool
+}
+
+struct WestreemContactJoinInvite: Decodable, Sendable {
+    let id: String
+    let url: String
+    let expiresAt: String
 }
 
 enum WestreemVibeInviteLinkTarget: String, Codable, Sendable {
@@ -3093,6 +3588,7 @@ enum APIError: LocalizedError {
     case notFound
     case http(Int)
     case invalidResponse(String)
+    case matrixRtcMembershipNotVisible(message: String)
 
     var errorDescription: String? {
         switch self {
@@ -3101,10 +3597,81 @@ enum APIError: LocalizedError {
         case .notFound:       return "Not found"
         case .http(let c):    return "HTTP \(c)"
         case .invalidResponse(let message): return message
+        case .matrixRtcMembershipNotVisible(let message):
+            return message.isEmpty
+                ? MatrixNativeRtcMembershipVisibilityRetryPolicy.confirmationError
+                : message
         }
     }
 }
 
+enum MatrixPushRegistrationV3TransportError: LocalizedError, Equatable {
+    case permanentContractFailure
+    case credentialExpired
+    case actionRequired
+    case authoritativeRefreshRequired(registrationRevision: String)
+    case deliveryLeaseActive(retryAfterMilliseconds: UInt64)
+    case retryable
+
+    var errorDescription: String? {
+        switch self {
+        case .permanentContractFailure:
+            return "Push setup requires an app update"
+        case .credentialExpired:
+            return "Push setup is waiting for sign in"
+        case .actionRequired:
+            return "Push setup requires attention"
+        case .authoritativeRefreshRequired:
+            return "Push setup state changed"
+        case .deliveryLeaseActive:
+            return "Push setup is waiting for the previous delivery lease"
+        case .retryable:
+            return "Push setup will retry"
+        }
+    }
+}
+
+private struct PushRegistrationV3MutationBody: Encodable {
+    let registrationContractVersion: Int
+    let registrationCapability: String
+    let command: MatrixPushRegistrationV3Command
+    let token: String
+    let matrixPushKey: String
+    let platform: String
+    let environment: String
+    let bundleId: String
+    let registrationEpoch: String
+    let revocationCapability: String
+    let expectedRevision: String?
+    let predecessorRegistrationEpoch: String?
+    let predecessorRevocationCapability: String?
+    let predecessorRevision: String?
+    let matrixPusherObservation: MatrixPusherObservation?
+}
+
+private struct PushRegistrationV3DeleteBody: Encodable {
+    let registrationContractVersion: Int
+    let registrationCapability: String
+    let token: String
+    let matrixPushKey: String
+    let platform: String
+    let environment: String
+    let bundleId: String
+    let registrationEpoch: String
+    let revocationCapability: String
+    let expectedRevision: String
+}
+
+private struct PushRegistrationV3StatusBody: Encodable {
+    let registrationContractVersion: Int
+    let registrationCapability: String
+    let matrixPushKey: String
+    let platform: String
+    let environment: String
+    let bundleId: String
+}
+
 private struct SocialAPIErrorPayload: Decodable {
     let error: String
+    let code: String?
 }

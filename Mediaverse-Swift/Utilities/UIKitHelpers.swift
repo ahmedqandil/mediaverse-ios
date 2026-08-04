@@ -1,7 +1,124 @@
 import SwiftUI
+import Foundation
 import UIKit
 import AVKit
+import AVFoundation
+import CallKit
+import PushKit
 import UserNotifications
+
+/// A bounded, privacy-safe diagnostic surface for the system-call path. The
+/// file is intentionally readable from the app data container so a physical
+/// device test can identify the first missing boundary without privileged
+/// unified-log access or foregrounding the app.
+final class MatrixNativeRtcBreadcrumbRecorder: @unchecked Sendable {
+    static let shared = MatrixNativeRtcBreadcrumbRecorder()
+
+    private let lock = NSLock()
+    private let fileManager = FileManager.default
+    private let maximumFileBytes = 128 * 1_024
+    private var sequence: UInt64 = 0
+
+    private var directoryURL: URL? {
+        fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent("RtcDiagnostics", isDirectory: true)
+    }
+
+    private var currentURL: URL? {
+        directoryURL?.appendingPathComponent("rtc-breadcrumbs.jsonl")
+    }
+
+    private var previousURL: URL? {
+        directoryURL?.appendingPathComponent("rtc-breadcrumbs.previous.jsonl")
+    }
+
+    private init() {}
+
+    func record(
+        _ stage: MatrixNativeRtcBreadcrumbEvent,
+        reason: MatrixNativeRtcBreadcrumbReason? = nil,
+        credentialByteCount: Int? = nil,
+        tokenPresent: Bool? = nil,
+        canAcceptCalls: Bool? = nil,
+        error: Error? = nil
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let directoryURL, let currentURL, let previousURL else { return }
+
+        do {
+            try fileManager.createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: true
+            )
+            sequence &+= 1
+            let nsError = error.map { $0 as NSError }
+            let entry = MatrixNativeRtcBreadcrumb(
+                timestamp: ISO8601DateFormatter().string(from: Date()),
+                sequence: sequence,
+                build: Self.buildLabel,
+                stage: stage,
+                reason: reason,
+                credentialByteCount: credentialByteCount,
+                tokenPresent: tokenPresent,
+                canAcceptCalls: canAcceptCalls,
+                errorDomain: nsError?.domain,
+                errorCode: nsError?.code
+            )
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            var line = try encoder.encode(entry)
+            line.append(0x0A)
+            try rotateIfNeeded(
+                incomingBytes: line.count,
+                currentURL: currentURL,
+                previousURL: previousURL
+            )
+            if !fileManager.fileExists(atPath: currentURL.path) {
+                _ = fileManager.createFile(atPath: currentURL.path, contents: nil)
+                try? fileManager.setAttributes(
+                    [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                    ofItemAtPath: currentURL.path
+                )
+            }
+            let handle = try FileHandle(forWritingTo: currentURL)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: line)
+            try handle.synchronize()
+            try handle.close()
+        } catch {
+            // Diagnostics must never alter PushKit or CallKit behavior.
+        }
+    }
+
+    private func rotateIfNeeded(
+        incomingBytes: Int,
+        currentURL: URL,
+        previousURL: URL
+    ) throws {
+        let currentBytes = (
+            try? currentURL.resourceValues(forKeys: [.fileSizeKey]).fileSize
+        ) ?? 0
+        guard currentBytes + incomingBytes > maximumFileBytes else { return }
+        if fileManager.fileExists(atPath: previousURL.path) {
+            try fileManager.removeItem(at: previousURL)
+        }
+        if fileManager.fileExists(atPath: currentURL.path) {
+            try fileManager.moveItem(at: currentURL, to: previousURL)
+        }
+    }
+
+    private static var buildLabel: String {
+        let short = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "unknown"
+        let build = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleVersion"
+        ) as? String ?? "unknown"
+        return "\(short) (\(build))"
+    }
+}
 
 // MARK: - AppDelegate (orientation lock for fullscreen video)
 
@@ -15,6 +132,7 @@ class MediaverseAppDelegate: NSObject, UIApplicationDelegate {
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
         PushNotificationManager.shared.registerNotificationCategories()
+        WestreemCallKitCoordinator.shared.start()
         return true
     }
 
@@ -31,6 +149,486 @@ class MediaverseAppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFailToRegisterForRemoteNotificationsWithError error: Error) {
         PushNotificationManager.shared.didFailToRegister(error: error)
+    }
+}
+
+struct WestreemCallDescriptor: Hashable, Sendable {
+    let uuid: UUID
+    let roomID: String
+    let eventID: String?
+    let redemptionID: UUID?
+    let displayName: String
+    let hasVideo: Bool
+    let invitationExpiresAtMilliseconds: Int64?
+}
+
+extension Notification.Name {
+    static let westreemCallKitAnswered = Notification.Name("westreem.callkit.answered")
+    static let westreemCallKitEnded = Notification.Name("westreem.callkit.ended")
+    static let westreemCallKitMuteChanged = Notification.Name("westreem.callkit.mute")
+    static let westreemCallKitAudioSessionChanged = Notification.Name(
+        "westreem.callkit.audio-session"
+    )
+}
+
+/// System calling surface. Matrix call membership remains authoritative; this
+/// coordinator only owns iOS ringing, audio-session activation, and CallKit
+/// lifecycle reporting.
+@MainActor
+final class WestreemCallKitCoordinator: NSObject, @preconcurrency CXProviderDelegate, PKPushRegistryDelegate {
+    static let shared = WestreemCallKitCoordinator()
+
+    private let provider: CXProvider
+    private let controller = CXCallController()
+    private var registry: PKPushRegistry?
+    private var calls: [UUID: WestreemCallDescriptor] = [:]
+    private var answeredCalls = Set<UUID>()
+    private var mutedCalls = Set<UUID>()
+    private var audioSessionActive = false
+
+    private override init() {
+        // CallKit derives the localized provider name from the app bundle on
+        // current iOS versions; the explicit-name initializer is unsupported.
+        let configuration = CXProviderConfiguration()
+        configuration.supportsVideo = true
+        configuration.maximumCallsPerCallGroup = 1
+        configuration.maximumCallGroups = 1
+        configuration.includesCallsInRecents = true
+        configuration.supportedHandleTypes = [.generic]
+        provider = CXProvider(configuration: configuration)
+        super.init()
+        provider.setDelegate(self, queue: nil)
+    }
+
+    func start() {
+        guard registry == nil else { return }
+        let registry = PKPushRegistry(queue: .main)
+        registry.delegate = self
+        registry.desiredPushTypes = [.voIP]
+        self.registry = registry
+        MatrixNativeRtcBreadcrumbRecorder.shared.record(.startup, reason: .started)
+    }
+
+    func startOutgoing(roomID: String, displayName: String, hasVideo: Bool) async throws -> UUID {
+        let descriptor = WestreemCallDescriptor(
+            uuid: UUID(),
+            roomID: roomID,
+            eventID: nil,
+            redemptionID: nil,
+            displayName: displayName,
+            hasVideo: hasVideo,
+            invitationExpiresAtMilliseconds: nil
+        )
+        MatrixNativeLiveKitCallAudio.prepareForCallKit()
+        calls[descriptor.uuid] = descriptor
+        let handle = CXHandle(type: .generic, value: displayName)
+        let action = CXStartCallAction(call: descriptor.uuid, handle: handle)
+        action.isVideo = hasVideo
+        do {
+            try await controller.request(CXTransaction(action: action))
+            return descriptor.uuid
+        } catch {
+            calls.removeValue(forKey: descriptor.uuid)
+            MatrixNativeLiveKitCallAudio.releaseCallKitLifecycle()
+            throw error
+        }
+    }
+
+    func reportConnected(_ uuid: UUID) {
+        provider.reportOutgoingCall(with: uuid, connectedAt: Date())
+    }
+
+    var hasActiveCall: Bool {
+        !calls.isEmpty
+    }
+
+    func acceptedCallDescriptor(for roomID: String) -> WestreemCallDescriptor? {
+        calls.first(where: {
+            answeredCalls.contains($0.key) && $0.value.roomID == roomID
+        })?.value
+    }
+
+    func isMuted(_ uuid: UUID) -> Bool {
+        mutedCalls.contains(uuid)
+    }
+
+    func isActive(_ uuid: UUID) -> Bool {
+        calls[uuid] != nil
+    }
+
+    func microphonePublicationEnabled(for uuid: UUID) -> Bool {
+        audioSessionActive && !mutedCalls.contains(uuid)
+    }
+
+    func end(_ uuid: UUID) async {
+        try? await controller.request(CXTransaction(action: CXEndCallAction(call: uuid)))
+    }
+
+    func providerDidReset(_ provider: CXProvider) {
+        calls.removeAll()
+        answeredCalls.removeAll()
+        mutedCalls.removeAll()
+        audioSessionActive = false
+        MatrixNativeLiveKitCallAudio.resetCallKitLifecycles()
+        Task { @MainActor in
+            await MatrixNativeIncomingCallRuntime.shared.endAll()
+        }
+    }
+
+    func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
+        guard calls[action.callUUID] != nil else {
+            action.fail()
+            return
+        }
+        provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: Date())
+        action.fulfill()
+    }
+
+    func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
+        guard let call = calls[action.callUUID] else {
+            MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                .callKitAnswer,
+                reason: .failed
+            )
+            action.fail()
+            return
+        }
+        let tokenPresent = SessionStorage.token != nil
+        let canAcceptCalls = MatrixNativeIncomingCallRuntime.shared.canAcceptCalls
+        MatrixNativeRtcBreadcrumbRecorder.shared.record(
+            .callAcceptance,
+            reason: canAcceptCalls ? .accepted : .rejectedNoSession,
+            tokenPresent: tokenPresent,
+            canAcceptCalls: canAcceptCalls
+        )
+        guard canAcceptCalls else {
+            calls.removeValue(forKey: action.callUUID)
+            answeredCalls.remove(action.callUUID)
+            MatrixNativeLiveKitCallAudio.releaseCallKitLifecycle()
+            provider.reportCall(
+                with: action.callUUID,
+                endedAt: Date(),
+                reason: .failed
+            )
+            MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                .callKitAnswer,
+                reason: .rejectedNoSession
+            )
+            action.fail()
+            return
+        }
+        let route = MatrixNativePushRoute(roomID: call.roomID, eventID: call.eventID)
+        answeredCalls.insert(action.callUUID)
+        MatrixNativeIncomingCallRuntime.shared.prepare(
+            call,
+            muted: mutedCalls.contains(action.callUUID),
+            audioSessionActive: audioSessionActive
+        )
+        MatrixNativeIncomingCallRuntime.shared.activate(action.callUUID)
+        MatrixNativePushRouteStore.shared.stage(route)
+        NotificationCenter.default.post(name: .westreemCallKitAnswered, object: call)
+        NotificationCenter.default.post(name: .matrixRoomRouteRequested, object: route)
+        MatrixNativeRtcBreadcrumbRecorder.shared.record(
+            .callKitAnswer,
+            reason: .accepted
+        )
+        action.fulfill()
+    }
+
+    func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+        let call = calls.removeValue(forKey: action.callUUID)
+        answeredCalls.remove(action.callUUID)
+        mutedCalls.remove(action.callUUID)
+        MatrixNativeLiveKitCallAudio.releaseCallKitLifecycle()
+        Task { @MainActor in
+            await MatrixNativeIncomingCallRuntime.shared.end(
+                action.callUUID,
+                endCallKit: false
+            )
+        }
+        NotificationCenter.default.post(name: .westreemCallKitEnded, object: call)
+        action.fulfill()
+    }
+
+    func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
+        if action.isMuted {
+            mutedCalls.insert(action.callUUID)
+        } else {
+            mutedCalls.remove(action.callUUID)
+        }
+        MatrixNativeIncomingCallRuntime.shared.setMuted(
+            action.isMuted,
+            callUUID: action.callUUID
+        )
+        NotificationCenter.default.post(
+            name: .westreemCallKitMuteChanged,
+            object: calls[action.callUUID],
+            userInfo: ["muted": action.isMuted]
+        )
+        action.fulfill()
+    }
+
+    func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
+        audioSessionActive = true
+        MatrixNativeRtcBreadcrumbRecorder.shared.record(
+            .audioSession,
+            reason: .activated
+        )
+        MatrixNativeLiveKitCallAudio.activateForCallKit()
+        for uuid in answeredCalls {
+            MatrixNativeIncomingCallRuntime.shared.setAudioSessionActive(
+                true,
+                callUUID: uuid
+            )
+            MatrixNativeIncomingCallRuntime.shared.activate(uuid)
+        }
+        NotificationCenter.default.post(
+            name: .westreemCallKitAudioSessionChanged,
+            object: nil,
+            userInfo: ["active": true]
+        )
+    }
+
+    func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
+        audioSessionActive = false
+        MatrixNativeRtcBreadcrumbRecorder.shared.record(
+            .audioSession,
+            reason: .deactivated
+        )
+        for uuid in answeredCalls {
+            MatrixNativeIncomingCallRuntime.shared.setAudioSessionActive(
+                false,
+                callUUID: uuid
+            )
+        }
+        NotificationCenter.default.post(
+            name: .westreemCallKitAudioSessionChanged,
+            object: nil,
+            userInfo: ["active": false]
+        )
+        MatrixNativeLiveKitCallAudio.deactivateForCallKit()
+    }
+
+    nonisolated func pushRegistry(
+        _ registry: PKPushRegistry,
+        didUpdate pushCredentials: PKPushCredentials,
+        for type: PKPushType
+    ) {
+        guard type == .voIP else { return }
+        MatrixNativeRtcBreadcrumbRecorder.shared.record(
+            .voIPTokenCallback,
+            reason: .available,
+            credentialByteCount: pushCredentials.token.count
+        )
+        Task { @MainActor in
+            PushNotificationManager.shared.didRegisterVoIP(deviceToken: pushCredentials.token)
+        }
+    }
+
+    nonisolated func pushRegistry(
+        _ registry: PKPushRegistry,
+        didInvalidatePushTokenFor type: PKPushType
+    ) {
+        guard type == .voIP else { return }
+        MatrixNativeRtcBreadcrumbRecorder.shared.record(
+            .voIPTokenCallback,
+            reason: .unavailable
+        )
+        Task { @MainActor in
+            PushNotificationManager.shared.didInvalidateVoIPToken()
+        }
+    }
+
+    nonisolated func pushRegistry(
+        _ registry: PKPushRegistry,
+        didReceiveIncomingPushWith payload: PKPushPayload,
+        for type: PKPushType,
+        completion: @escaping () -> Void
+    ) {
+        MatrixNativeRtcBreadcrumbRecorder.shared.record(
+            .pushKitCallback,
+            reason: type == .voIP ? .voIP : .nonVoIP
+        )
+        guard type == .voIP else {
+            MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                .pushKitCompletion,
+                reason: .completed
+            )
+            completion()
+            return
+        }
+        Task { @MainActor in
+            defer {
+                MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                    .pushKitCompletion,
+                    reason: .completed
+                )
+                completion()
+            }
+            let values = payload.dictionaryPayload
+            guard let kind = values["kind"] as? String,
+                  kind == "matrix_call" || kind == "matrix_call_cancel" else {
+                MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                    .pushValidation,
+                    reason: .invalidKind
+                )
+                return
+            }
+            guard let uuidText = values["callUUID"] as? String,
+                  let uuid = UUID(uuidString: uuidText) else {
+                MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                    .pushValidation,
+                    reason: .invalidCallIdentifier
+                )
+                return
+            }
+            guard let roomID = values["matrixRoomId"] as? String,
+                  roomID.first == "!",
+                  roomID.contains(":") else {
+                MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                    .pushValidation,
+                    reason: .invalidRoomIdentifier
+                )
+                return
+            }
+            if kind == "matrix_call_cancel" {
+                MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                    .pushValidation,
+                    reason: .validCancellation
+                )
+                guard let call = calls.removeValue(forKey: uuid) else { return }
+                answeredCalls.remove(uuid)
+                mutedCalls.remove(uuid)
+                MatrixNativeLiveKitCallAudio.releaseCallKitLifecycle()
+                await MatrixNativeIncomingCallRuntime.shared.end(
+                    uuid,
+                    endCallKit: false
+                )
+                provider.reportCall(
+                    with: uuid,
+                    endedAt: Date(),
+                    reason: .remoteEnded
+                )
+                NotificationCenter.default.post(
+                    name: .westreemCallKitEnded,
+                    object: call
+                )
+                return
+            }
+            guard let eventID = values["matrixEventId"] as? String,
+                  eventID.first == "$",
+                  eventID.utf8.count <= 1_025 else {
+                MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                    .pushValidation,
+                    reason: .invalidEventIdentifier
+                )
+                return
+            }
+            let invitationExpiresAtMilliseconds: Int64?
+            if let rawExpiry = values["invitationExpiresAtMs"] {
+                let nowMilliseconds = Int64(Date().timeIntervalSince1970 * 1_000)
+                guard let number = rawExpiry as? NSNumber,
+                      CFGetTypeID(number) != CFBooleanGetTypeID(),
+                      let expiry = Int64(number.stringValue),
+                      MatrixNativeRtcInvitationExpiryContract.accepts(
+                        expiresAtMilliseconds: expiry,
+                        nowMilliseconds: nowMilliseconds
+                      ) else {
+                    MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                        .pushValidation,
+                        reason: .invalidInvitationExpiry
+                    )
+                    return
+                }
+                invitationExpiresAtMilliseconds = expiry
+            } else {
+                // Legacy m.call.invite payloads intentionally omit the modern
+                // authoritative expiry and retain their existing behavior.
+                invitationExpiresAtMilliseconds = nil
+            }
+            MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                .pushValidation,
+                reason: .validCall
+            )
+            let descriptor = WestreemCallDescriptor(
+                uuid: uuid,
+                roomID: roomID,
+                eventID: eventID,
+                redemptionID: UUID(),
+                displayName: (values["callerName"] as? String)?.prefix(120).description ?? "Vibes call",
+                hasVideo: values["hasVideo"] as? Bool ?? false,
+                invitationExpiresAtMilliseconds: invitationExpiresAtMilliseconds
+            )
+            // PushKit requires a matching CallKit report for every valid VoIP
+            // push. If the authenticated owner is absent, report and end the
+            // call immediately instead of presenting an answer action that
+            // cannot redeem Matrix membership or provider credentials.
+            let tokenPresent = SessionStorage.token != nil
+            let canAcceptCalls = MatrixNativeIncomingCallRuntime.shared.canAcceptCalls
+            MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                .callAcceptance,
+                reason: canAcceptCalls ? .accepted : .rejectedNoSession,
+                tokenPresent: tokenPresent,
+                canAcceptCalls: canAcceptCalls
+            )
+            guard canAcceptCalls else {
+                let update = CXCallUpdate()
+                update.remoteHandle = CXHandle(type: .generic, value: descriptor.displayName)
+                update.localizedCallerName = descriptor.displayName
+                update.hasVideo = descriptor.hasVideo
+                MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                    .callKitReport,
+                    reason: .begin
+                )
+                do {
+                    try await provider.reportNewIncomingCall(with: uuid, update: update)
+                    MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                        .callKitReport,
+                        reason: .success
+                    )
+                    provider.reportCall(with: uuid, endedAt: Date(), reason: .failed)
+                } catch {
+                    MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                        .callKitReport,
+                        reason: .error,
+                        error: error
+                    )
+                }
+                return
+            }
+            guard calls[uuid] == nil else {
+                MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                    .pushValidation,
+                    reason: .duplicateCall
+                )
+                return
+            }
+            MatrixNativeLiveKitCallAudio.prepareForCallKit()
+            calls[uuid] = descriptor
+            let update = CXCallUpdate()
+            update.remoteHandle = CXHandle(type: .generic, value: descriptor.displayName)
+            update.localizedCallerName = descriptor.displayName
+            update.hasVideo = descriptor.hasVideo
+            MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                .callKitReport,
+                reason: .begin
+            )
+            do {
+                try await provider.reportNewIncomingCall(with: uuid, update: update)
+                MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                    .callKitReport,
+                    reason: .success
+                )
+            } catch {
+                MatrixNativeRtcBreadcrumbRecorder.shared.record(
+                    .callKitReport,
+                    reason: .error,
+                    error: error
+                )
+                calls.removeValue(forKey: uuid)
+                MatrixNativeLiveKitCallAudio.releaseCallKitLifecycle()
+            }
+        }
     }
 }
 

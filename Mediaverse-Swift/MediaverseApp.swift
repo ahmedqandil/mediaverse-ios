@@ -7,8 +7,8 @@ import UIKit
 struct MediaverseApp: App {
     private static let processStartedAt = Date()
     @UIApplicationDelegateAdaptor(MediaverseAppDelegate.self) var appDelegate
-    @StateObject private var auth = AuthManager()
-    @StateObject private var matrixSession = MatrixNativeSessionController()
+    @StateObject private var auth: AuthManager
+    @StateObject private var matrixSession: MatrixNativeSessionController
     @StateObject private var miniPlayer = MiniPlayerManager()
     @StateObject private var platformConfig = PlatformConfigManager()
     @StateObject private var globalUploads = GlobalUploadProgressManager.shared
@@ -16,6 +16,16 @@ struct MediaverseApp: App {
     @StateObject private var incomingLinks = IncomingLinkCoordinator.shared
     @State private var isShowingBootSplash = true
     @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        let auth = AuthManager()
+        let matrixSession = MatrixNativeSessionController()
+        _auth = StateObject(wrappedValue: auth)
+        _matrixSession = StateObject(wrappedValue: matrixSession)
+        MatrixNativeIncomingCallRuntime.shared.configure(
+            matrixSession: matrixSession
+        )
+    }
 
     private static let configuredSharedURLCache: Void = {
         URLCache.shared = URLCache(
@@ -81,6 +91,7 @@ struct MediaverseApp: App {
                 incomingLinks.configure(auth: auth, inAppBrowser: inAppBrowser)
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 300_000_000)
+                    guard !WestreemCallKitCoordinator.shared.hasActiveCall else { return }
                     try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
                     try? AVAudioSession.sharedInstance().setActive(true)
                 }

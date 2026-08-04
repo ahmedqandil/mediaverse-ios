@@ -32,6 +32,11 @@ enum SessionRejectionPolicy {
 @MainActor
 final class AuthManager: ObservableObject {
 
+    private enum AuthenticatedIdentityPushContext {
+        case newSession
+        case restoredSession
+    }
+
     // MARK: - Published state
 
     @Published var isLoading       = true
@@ -52,6 +57,9 @@ final class AuthManager: ObservableObject {
     private var webAuthSession: ASWebAuthenticationSession?
     private var sessionExpiredObserver: NSObjectProtocol?
     private var refreshTask: Task<Void, Never>?
+    private var authenticatedIdentityRestoreTask: Task<Void, Never>?
+    private var authenticatedIdentityRestoreGeneration: UUID?
+    private var authenticatedIdentityPushContext: AuthenticatedIdentityPushContext?
     private var authGeneration = UUID()
 
     // MARK: - Init
@@ -78,6 +86,7 @@ final class AuthManager: ObservableObject {
             NotificationCenter.default.removeObserver(sessionExpiredObserver)
         }
         refreshTask?.cancel()
+        authenticatedIdentityRestoreTask?.cancel()
     }
 
     // MARK: - Session check
@@ -96,8 +105,10 @@ final class AuthManager: ObservableObject {
 
     private func expireSessionLocally() async {
         authGeneration = UUID()
+        cancelAuthenticatedIdentityRestore()
         refreshTask?.cancel()
         refreshTask = nil
+        await PushNotificationManager.shared.handleExpiredWestreemSession()
         currentUser = nil
         isAuthenticated = false
         isLoading = false
@@ -128,18 +139,23 @@ final class AuthManager: ObservableObject {
     /// Background user-profile refresh. Transient transport failures retain the
     /// local session, but an explicit `{ user: null }` response means the stored
     /// JWT is no longer a valid authenticated session.
-    private func refreshUser(generation: UUID) async {
+    @discardableResult
+    private func refreshUser(generation: UUID) async -> UserProfile? {
         do {
             let user = try await APIClient.shared.fetchSession()
             guard StoredSessionValidation.resolve(hasUser: user != nil) == .authenticated,
                   let user else {
-                guard authGeneration == generation else { return }
+                guard authGeneration == generation else { return nil }
                 await APIClient.shared.clearSessionToken()
                 await expireSessionLocally()
-                return
+                return nil
             }
-            guard authGeneration == generation else { return }
+            guard authGeneration == generation, !Task.isCancelled else { return nil }
             currentUser = user
+            if authGeneration == generation {
+                isLoading = false
+            }
+            return user
         } catch {
             // Stay signed in during a temporary connectivity failure. Authenticated
             // endpoints still expire the session immediately if they return 401.
@@ -147,6 +163,7 @@ final class AuthManager: ObservableObject {
         if authGeneration == generation {
             isLoading = false
         }
+        return nil
     }
 
     // MARK: - Post-login state setter
@@ -155,15 +172,19 @@ final class AuthManager: ObservableObject {
     /// Sets auth state synchronously so there's zero risk of a race condition.
     private func didAuthenticate() {
         authGeneration = UUID()
+        cancelAuthenticatedIdentityRestore()
         let generation = authGeneration
+        // A new bearer must immediately hide the previous account's profile.
+        // The root identity observer then disconnects the previous Matrix
+        // projection before this generation fetches User.id.
+        currentUser = nil
         isAuthenticated  = true
         isLoading        = false
         magicLinkPending = false
         biometricUnlockRequired = false
         enableBiometricUnlockIfAvailable()
-        // Fetch user profile in background — doesn't block the UI transition
-        Task { await refreshUser(generation: generation) }
-        Task { await PushNotificationManager.shared.retryRegistrationIfAuthorized() }
+        authenticatedIdentityPushContext = .newSession
+        beginAuthenticatedIdentityRestore(generation: generation)
     }
 
     // MARK: - Magic link
@@ -404,6 +425,7 @@ final class AuthManager: ObservableObject {
 
     func signOut() async {
         authGeneration = UUID()
+        cancelAuthenticatedIdentityRestore()
         refreshTask?.cancel()
         refreshTask = nil
         // Remove both the Westreem APNs record and the canonical Matrix HTTP
@@ -449,6 +471,7 @@ final class AuthManager: ObservableObject {
     }
 
     func useFullSignInInstead() {
+        cancelAuthenticatedIdentityRestore()
         biometricUnlockRequired = false
         biometricErrorMessage = nil
         isAuthenticated = false
@@ -457,17 +480,100 @@ final class AuthManager: ObservableObject {
 
     private func restoreStoredSession() {
         guard SessionStorage.token != nil else {
+            cancelAuthenticatedIdentityRestore()
             isAuthenticated = false
             isLoading = false
             return
         }
         authGeneration = UUID()
+        cancelAuthenticatedIdentityRestore()
         let generation = authGeneration
         isAuthenticated = true
         isLoading = false
         biometricUnlockRequired = false
-        Task { await refreshUser(generation: generation) }
-        Task { await PushNotificationManager.shared.retryRegistrationIfAuthorized() }
+        authenticatedIdentityPushContext = .restoredSession
+        beginAuthenticatedIdentityRestore(generation: generation)
+    }
+
+    /// Repairs a cold-start identity fetch that failed transiently. The retry is
+    /// deliberately narrower than bearer refresh: it runs only while the same
+    /// authenticated generation still has a token but no server-returned user.
+    func retryAuthenticatedIdentityRestoreIfNeeded() async {
+        guard isAuthenticated,
+              currentUser == nil,
+              SessionStorage.token != nil
+        else { return }
+        let generation = authGeneration
+        if let inFlight = authenticatedIdentityRestoreTask {
+            await inFlight.value
+        }
+        guard authGeneration == generation,
+              isAuthenticated,
+              currentUser == nil,
+              SessionStorage.token != nil
+        else { return }
+        beginAuthenticatedIdentityRestore(generation: generation)
+        await authenticatedIdentityRestoreTask?.value
+    }
+
+    private func beginAuthenticatedIdentityRestore(generation: UUID) {
+        guard authenticatedIdentityRestoreTask == nil,
+              authGeneration == generation,
+              isAuthenticated,
+              SessionStorage.token != nil,
+              let pushContext = authenticatedIdentityPushContext
+        else { return }
+
+        authenticatedIdentityRestoreGeneration = generation
+        authenticatedIdentityRestoreTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.authenticatedIdentityRestoreGeneration == generation {
+                    self.authenticatedIdentityRestoreTask = nil
+                    self.authenticatedIdentityRestoreGeneration = nil
+                }
+            }
+
+            guard let serverUser = await self.refreshUser(generation: generation),
+                  !Task.isCancelled,
+                  self.authGeneration == generation,
+                  self.isAuthenticated,
+                  SessionStorage.token != nil
+            else { return }
+
+            // Only the immutable User.id returned by this generation's server
+            // response may become the push owner. Never substitute cached UI,
+            // email, handle, display-name, or previous-account identity state.
+            let serverReturnedUserID = serverUser.id
+            switch pushContext {
+            case .newSession:
+                await PushNotificationManager.shared.westreemDidStartNewAuthenticatedSession(
+                    westreemUserID: serverReturnedUserID
+                )
+            case .restoredSession:
+                await PushNotificationManager.shared.westreemDidRestoreAuthenticatedSession(
+                    westreemUserID: serverReturnedUserID
+                )
+            }
+            guard !Task.isCancelled,
+                  self.authGeneration == generation,
+                  self.isAuthenticated,
+                  SessionStorage.token != nil
+            else { return }
+            await PushNotificationManager.shared.retryRegistrationIfAuthorized(
+                reconcileStoredTokens: false
+            )
+            if self.authGeneration == generation {
+                self.authenticatedIdentityPushContext = nil
+            }
+        }
+    }
+
+    private func cancelAuthenticatedIdentityRestore() {
+        authenticatedIdentityRestoreTask?.cancel()
+        authenticatedIdentityRestoreTask = nil
+        authenticatedIdentityRestoreGeneration = nil
+        authenticatedIdentityPushContext = nil
     }
 
     private func enableBiometricUnlockIfAvailable() {
