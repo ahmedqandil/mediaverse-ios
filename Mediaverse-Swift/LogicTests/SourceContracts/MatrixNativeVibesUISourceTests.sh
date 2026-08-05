@@ -62,6 +62,23 @@ grep -q 'accessibilityIdentifier("mediaverse-tab-\\(item.id)"' "$tab_strip"
 grep -q 'accessibilityLabel(item.label)' "$tab_strip"
 grep -q 'accessibilityAddTraits(isSelected(item) ? .isSelected : \[\])' "$tab_strip"
 
+# The selected-Vibe Home is intentionally Waves-first: a compact identity
+# strip is followed by one mixed Wave projection, with active live experiences
+# leading that same list. Events stay in the Events tab rather than becoming a
+# suggestion dashboard on Home.
+home_content="$(sed -n '/private var homeContent/,/private var eventsContent/p' "$view")"
+printf '%s\n' "$home_content" | grep -Fq 'MatrixNativeVibeIdentityStrip('
+printf '%s\n' "$home_content" | grep -Fq 'MatrixNativeSectionLabel(title: "Waves"'
+printf '%s\n' "$home_content" | grep -Fq 'waveRows(liveLounges: activeLounges)'
+if printf '%s\n' "$home_content" | grep -Fq 'VibeEventCardView('; then
+  echo "Vibe Home must not duplicate Event cards outside the Events tab" >&2
+  exit 1
+fi
+if printf '%s\n' "$home_content" | grep -Fq 'title: "Live lounges"'; then
+  echo "Live experiences must lead the unified Wave list on Vibe Home" >&2
+  exit 1
+fi
+
 if grep -Eq 'LegacySocialAPIAdapter|MatrixWaveClient|/api/fan-clubs|/api/fan-club-posts' "$view"; then
   echo "Matrix-native Vibes UI must not import or call the legacy community authority" >&2
   exit 1

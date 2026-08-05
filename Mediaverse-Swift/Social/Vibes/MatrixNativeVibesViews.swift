@@ -718,10 +718,11 @@ private struct MatrixNativeVibeView: View {
         }
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
-                MatrixNativeVibeHero(
-                    space: space,
-                    rooms: rooms,
-                    permissions: permissions
+                // The Home contract starts with identity, then one Wave-first
+                // projection. Events have their own tab; live experiences stay
+                // in the same list and lead it when active.
+                MatrixNativeVibeIdentityStrip(
+                    space: space
                 )
 
                 if permissions.mayCreateWave
@@ -737,34 +738,8 @@ private struct MatrixNativeVibeView: View {
                     )
                 }
 
-                if let event = events.first {
-                    MatrixNativeSectionLabel(title: "Next event", count: 1)
-                    NavigationLink(value: AppRoute.event(event.slug)) {
-                        VibeEventCardView(event: event)
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                if !activeLounges.isEmpty {
-                    MatrixNativeSectionLabel(
-                        title: "Live lounges",
-                        count: activeLounges.count
-                    )
-                    ForEach(activeLounges) { room in
-                        NavigationLink {
-                            MatrixNativeWaveRoomView(
-                                room: room,
-                                opensLiveLounge: true
-                            )
-                        } label: {
-                            MatrixNativeLiveLoungeRow(room: room)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-
                 MatrixNativeSectionLabel(title: "Waves", count: rooms.count)
-                waveRows
+                waveRows(liveLounges: activeLounges)
             }
             .padding(.horizontal, C.pagePad)
             .padding(.top, 12)
@@ -803,8 +778,9 @@ private struct MatrixNativeVibeView: View {
     }
 
     @ViewBuilder
-    private var waveRows: some View {
-        if rooms.isEmpty {
+    private func waveRows(liveLounges: [MatrixWaveSummary] = []) -> some View {
+        let liveIDs = Set(liveLounges.map(\.id))
+        if rooms.isEmpty, liveLounges.isEmpty {
             ContentUnavailableView {
                 Label("No Waves", systemImage: "wave.3.right")
             } description: {
@@ -814,23 +790,36 @@ private struct MatrixNativeVibeView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 42)
         } else {
-            ForEach(rooms) { room in
-                if room.isNestedSpace {
-                    NavigationLink {
-                        MatrixNativeNestedSpaceView(room: room)
-                    } label: {
-                        MatrixNativeWaveRow(room: room)
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    NavigationLink {
-                        MatrixNativeWaveRoomView(room: room)
-                    } label: {
-                        MatrixNativeWaveRow(room: room)
-                    }
-                    .buttonStyle(.plain)
+            ForEach(liveLounges) { room in
+                NavigationLink {
+                    MatrixNativeWaveRoomView(room: room, opensLiveLounge: true)
+                } label: {
+                    MatrixNativeLiveLoungeRow(room: room)
                 }
+                .buttonStyle(.plain)
             }
+            ForEach(rooms.filter { !liveIDs.contains($0.id) }) { room in
+                waveRow(for: room)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func waveRow(for room: MatrixWaveSummary) -> some View {
+        if room.isNestedSpace {
+            NavigationLink {
+                MatrixNativeNestedSpaceView(room: room)
+            } label: {
+                MatrixNativeWaveRow(room: room)
+            }
+            .buttonStyle(.plain)
+        } else {
+            NavigationLink {
+                MatrixNativeWaveRoomView(room: room)
+            } label: {
+                MatrixNativeWaveRow(room: room)
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -6929,101 +6918,37 @@ private struct MatrixNativeDirectoryHeader: View {
     }
 }
 
-private struct MatrixNativeVibeHero: View {
+private struct MatrixNativeVibeIdentityStrip: View {
     let space: MatrixVibeSummary
-    let rooms: [MatrixWaveSummary]
-    let permissions: MatrixNativeSpacePermissionSnapshot
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 14) {
-                MatrixNativeAvatar(
-                    name: space.name,
-                    imageURL: space.avatarURL,
-                    size: 72
-                )
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(space.name)
-                        .font(.title2.bold())
-                        .foregroundStyle(C.text)
+        HStack(spacing: 12) {
+            MatrixNativeAvatar(
+                name: space.name,
+                imageURL: space.avatarURL,
+                size: 48
+            )
+            VStack(alignment: .leading, spacing: 5) {
+                Text(space.name)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(C.text)
+                    .lineLimit(2)
+                if let topic = space.topic, !topic.isEmpty {
+                    Text(topic)
+                        .font(.subheadline)
+                        .foregroundStyle(C.textMuted)
                         .lineLimit(2)
-                    if let topic = space.topic, !topic.isEmpty {
-                        Text(topic)
-                            .font(.footnote)
-                            .foregroundStyle(C.textMuted)
-                            .lineLimit(4)
-                    } else {
-                        Text("A WeStreem community")
-                            .font(.footnote)
-                            .foregroundStyle(C.textMuted)
-                    }
-                }
-                Spacer()
-            }
-
-            HStack(spacing: 0) {
-                MatrixNativeVibeMetric(
-                    value: "\(space.joinedMemberCount)",
-                    label: "Members",
-                    systemImage: "person.2"
-                )
-                MatrixNativeVibeMetric(
-                    value: "\(rooms.filter { !$0.isNestedSpace }.count)",
-                    label: "Waves",
-                    systemImage: "wave.3.right"
-                )
-                MatrixNativeVibeMetric(
-                    value: "\(rooms.filter(\.isNestedSpace).count)",
-                    label: "Groups",
-                    systemImage: "folder"
-                )
-                MatrixNativeVibeMetric(
-                    value: "\(rooms.filter { $0.activeCallParticipantCount > 0 }.count)",
-                    label: "Live",
-                    systemImage: "waveform"
-                )
-            }
-
-            HStack(spacing: 7) {
-                Label("Verified Vibe", systemImage: "checkmark.shield")
-                if permissions.mayCreateWave {
-                    Label("Can create Waves", systemImage: "plus.bubble")
-                }
-                if permissions.mayInviteMembers {
-                    Label("Can invite", systemImage: "person.badge.plus")
+                } else {
+                    Text("Vibe community")
+                        .font(.subheadline)
+                        .foregroundStyle(C.textMuted)
                 }
             }
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(C.textMuted)
-            .lineLimit(1)
-            .minimumScaleFactor(0.75)
+            Spacer()
         }
-        .padding(16)
-        .background(C.surface, in: RoundedRectangle(cornerRadius: C.cardRadius))
-        .overlay(RoundedRectangle(cornerRadius: C.cardRadius).stroke(C.borderSubtle))
-    }
-}
-
-private struct MatrixNativeVibeMetric: View {
-    let value: String
-    let label: String
-    let systemImage: String
-
-    var body: some View {
-        VStack(spacing: 5) {
-            Image(systemName: systemImage)
-                .foregroundStyle(C.watch)
-            Text(value)
-                .font(.headline.bold().monospacedDigit())
-                .foregroundStyle(C.text)
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(C.textMuted)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-        .frame(maxWidth: .infinity, minHeight: 72)
+        .frame(minHeight: 56)
         .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(space.name), Vibe identity")
     }
 }
 
