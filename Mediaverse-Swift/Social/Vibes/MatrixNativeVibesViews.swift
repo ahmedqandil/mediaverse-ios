@@ -348,6 +348,33 @@ struct MatrixNativeVibesRootView: View {
 /// Conversation-first Vibes inbox. Community Waves and Personal Waves
 /// share one activity surface while retaining Matrix as their sole authority.
 private struct MatrixNativeCombinedWavesView: View {
+    private enum WaveInboxFilter: String, CaseIterable, Identifiable {
+        case all = "All"
+        case unread = "Unread"
+        case vibes = "Vibes"
+        case live = "Live"
+
+        var id: String { rawValue }
+
+        var emptyTitle: String {
+            switch self {
+            case .all: "No Waves yet"
+            case .unread: "No unread Waves"
+            case .vibes: "No Vibe Waves"
+            case .live: "No live Waves"
+            }
+        }
+
+        var emptyMessage: String {
+            switch self {
+            case .all: "Join a Vibe or start a Personal Wave."
+            case .unread: "Unread Waves will appear here."
+            case .vibes: "Joined community Waves will appear here."
+            case .live: "Live Vibe experiences will appear here."
+            }
+        }
+    }
+
     private enum CommunityWaveLoadResult: Sendable {
         case loaded([MatrixWaveSummary])
         case stalePurgedSpace
@@ -378,6 +405,13 @@ private struct MatrixNativeCombinedWavesView: View {
             case let .community(room): room.lastActivity
             }
         }
+
+        var unreadCount: UInt64 {
+            switch self {
+            case let .personal(room): room.unreadCount
+            case let .community(room): room.unreadCount
+            }
+        }
     }
 
     let spaces: [MatrixVibeSummary]
@@ -389,6 +423,7 @@ private struct MatrixNativeCombinedWavesView: View {
     @State private var errorMessage: String?
     @State private var showsNewMessage = false
     @State private var createdRoom: MatrixDirectRoomSummary?
+    @State private var selectedFilter: WaveInboxFilter = .all
 
     var body: some View {
         Group {
@@ -402,6 +437,8 @@ private struct MatrixNativeCombinedWavesView: View {
                             title: "Waves",
                             message: "Community Waves and Personal Waves in one place."
                         )
+
+                        waveFilterPicker
 
                         if communityWaves.isEmpty, personalWaves.isEmpty {
                             ContentUnavailableView {
@@ -417,33 +454,28 @@ private struct MatrixNativeCombinedWavesView: View {
                             .padding(.top, 50)
                         }
 
-                        if !recencySortedItems.isEmpty {
+                        if !filteredRecencySortedItems.isEmpty {
                             MatrixNativeSectionLabel(
-                                title: "Waves",
-                                count: recencySortedItems.count
+                                title: selectedFilter == .all ? "Waves" : selectedFilter.rawValue,
+                                count: filteredRecencySortedItems.count
                             )
-                            ForEach(recencySortedItems) { item in
-                                switch item {
-                                case let .personal(room):
-                                    NavigationLink {
-                                        MatrixNativeWaveRoomView(room: room.timelineRoom)
-                                    } label: {
-                                        MatrixDirectMessageRow(room: room)
-                                    }
-                                    .buttonStyle(.plain)
-                                case let .community(room):
-                                    NavigationLink {
-                                        if room.isNestedSpace {
-                                            MatrixNativeNestedSpaceView(room: room)
-                                        } else {
-                                            MatrixNativeWaveRoomView(room: room)
-                                        }
-                                    } label: {
-                                        MatrixNativeWaveRow(room: room)
-                                    }
-                                    .buttonStyle(.plain)
+                            ForEach(filteredRecencySortedItems) { item in
+                                NavigationLink {
+                                    destination(for: item)
+                                } label: {
+                                    UnifiedWaveRow(item: item)
                                 }
+                                .buttonStyle(.plain)
                             }
+                        } else if !communityWaves.isEmpty || !personalWaves.isEmpty {
+                            ContentUnavailableView {
+                                Label(selectedFilter.emptyTitle, systemImage: "line.3.horizontal.decrease.circle")
+                            } description: {
+                                Text(selectedFilter.emptyMessage)
+                            }
+                            .foregroundStyle(C.text)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 42)
                         }
 
                         if let errorMessage {
@@ -507,7 +539,7 @@ private struct MatrixNativeCombinedWavesView: View {
                 loadedCommunityWaves.map { ($0.id, $0) },
                 uniquingKeysWith: { first, _ in first }
             ).values
-        )
+        ).filter { !$0.isNestedSpace }
         let failures = communityFailures + loadedPersonalWaves.failures
         errorMessage = failures > 0
             ? "Some Waves could not synchronize. Pull to retry."
@@ -519,7 +551,7 @@ private struct MatrixNativeCombinedWavesView: View {
         let personalIDs = Set(personalWaves.map(\.id))
         let items = personalWaves.map(WaveInboxItem.personal)
             + communityWaves
-                .filter { !personalIDs.contains($0.id) }
+                .filter { !$0.isNestedSpace && !personalIDs.contains($0.id) }
                 .map(WaveInboxItem.community)
         return items.sorted { left, right in
             let leftDate = left.lastActivity ?? .distantPast
@@ -527,11 +559,171 @@ private struct MatrixNativeCombinedWavesView: View {
             if leftDate != rightDate {
                 return leftDate > rightDate
             }
-            let nameOrder = left.name.localizedCaseInsensitiveCompare(right.name)
-            if nameOrder != .orderedSame {
-                return nameOrder == .orderedAscending
-            }
             return left.id < right.id
+        }
+    }
+
+    private var filteredRecencySortedItems: [WaveInboxItem] {
+        recencySortedItems.filter { item in
+            switch selectedFilter {
+            case .all:
+                true
+            case .unread:
+                item.unreadCount > 0
+            case .vibes:
+                if case .community = item { true } else { false }
+            case .live:
+                if case let .community(room) = item {
+                    room.activeCallParticipantCount > 0
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    private var waveFilterPicker: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(WaveInboxFilter.allCases) { filter in
+                    Button {
+                        guard selectedFilter != filter else { return }
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        selectedFilter = filter
+                    } label: {
+                        Text(filter.rawValue)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(selectedFilter == filter ? C.watch : C.textMuted)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(
+                                selectedFilter == filter ? C.watch.opacity(0.15) : C.surface,
+                                in: Capsule()
+                            )
+                            .overlay(Capsule().stroke(
+                                selectedFilter == filter ? C.watch.opacity(0.55) : C.borderSubtle
+                            ))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(selectedFilter == filter ? [.isSelected] : [])
+                }
+            }
+            .padding(.vertical, 2)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Filter Waves")
+    }
+
+    @ViewBuilder
+    private func destination(for item: WaveInboxItem) -> some View {
+        switch item {
+        case let .personal(room):
+            MatrixNativeWaveRoomView(room: room.timelineRoom)
+        case let .community(room):
+            MatrixNativeWaveRoomView(room: room)
+        }
+    }
+
+    private struct UnifiedWaveRow: View {
+        let item: WaveInboxItem
+
+        private var name: String {
+            switch item {
+            case let .personal(room): room.name
+            case let .community(room): room.name
+            }
+        }
+
+        private var avatarURL: String? {
+            switch item {
+            case let .personal(room): room.avatarURL
+            case let .community(room): room.avatarURL
+            }
+        }
+
+        private var preview: String {
+            switch item {
+            case let .personal(room): room.lastMessage ?? "Direct message"
+            case let .community(room): room.topic?.isEmpty == false ? room.topic! : "Wave room"
+            }
+        }
+
+        private var unreadCount: UInt64 {
+            switch item {
+            case let .personal(room): room.unreadCount
+            case let .community(room): room.unreadCount
+            }
+        }
+
+        private var activity: Date? { item.lastActivity }
+
+        private var isLive: Bool {
+            if case let .community(room) = item {
+                return room.activeCallParticipantCount > 0
+            }
+            return false
+        }
+
+        private var kindLabel: String {
+            if case .personal = item { return "Personal" }
+            return "Vibe"
+        }
+
+        var body: some View {
+            HStack(spacing: 13) {
+                MatrixNativeAvatar(name: name, imageURL: avatarURL, size: 46)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 7) {
+                        Text(name)
+                            .font(.subheadline.weight(unreadCount > 0 ? .bold : .semibold))
+                            .foregroundStyle(C.text)
+                            .lineLimit(1)
+                        Text(kindLabel)
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundStyle(C.textMuted)
+                            .textCase(.uppercase)
+                        Spacer(minLength: 0)
+                    }
+                    Text(preview)
+                        .font(.caption)
+                        .foregroundStyle(unreadCount > 0 ? C.text : C.textMuted)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                VStack(alignment: .trailing, spacing: 5) {
+                    if let activity {
+                        Text(activity, style: .relative)
+                            .font(.system(size: 10, weight: .regular, design: .monospaced))
+                            .foregroundStyle(unreadCount > 0 ? C.watch : C.textMuted)
+                            .lineLimit(1)
+                    }
+                    if isLive {
+                        Text("Live")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(C.watch)
+                    } else if unreadCount > 0 {
+                        Text(unreadCount > 99 ? "99+" : "\(unreadCount)")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(C.bg)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(C.danger, in: Capsule())
+                    }
+                }
+            }
+            .padding(.horizontal, 2)
+            .padding(.vertical, 13)
+            .background(C.surface)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(C.borderSubtle).frame(height: 1)
+            }
+            .contentShape(Rectangle())
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "\(name), \(kindLabel) Wave"
+                    + (unreadCount > 0 ? ", \(unreadCount) unread" : "")
+                    + (isLive ? ", live" : "")
+            )
         }
     }
 
@@ -881,6 +1073,7 @@ private struct MatrixNativeVibeView: View {
         isLoading = true
         do {
             rooms = try await matrixSession.waves(spaceID: space.id).rooms
+            rooms = rooms.filter { !$0.isNestedSpace }
             permissions = try await matrixSession.spacePermissions(spaceID: space.id)
             events = (try? await APIClient.shared.fetchVibeEvents(
                 scope: "my-vibes",

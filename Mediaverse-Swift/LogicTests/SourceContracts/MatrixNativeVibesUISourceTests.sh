@@ -83,17 +83,28 @@ fi
 # community entries keep their existing destinations while sharing ordering.
 combined_content="$(sed -n '/private struct MatrixNativeCombinedWavesView/,/private struct MatrixNativeVibeView/p' "$view")"
 printf '%s\n' "$combined_content" | grep -Fq 'private enum WaveInboxItem'
+printf '%s\n' "$combined_content" | grep -Fq 'private enum WaveInboxFilter'
+for filter in 'case all = "All"' 'case unread = "Unread"' 'case vibes = "Vibes"' 'case live = "Live"'; do
+  printf '%s\n' "$combined_content" | grep -Fq -- "$filter" || {
+    echo "Missing canonical Wave inbox filter: $filter" >&2
+    exit 1
+  }
+done
 printf '%s\n' "$combined_content" | grep -Fq 'case personal(MatrixDirectRoomSummary)'
 printf '%s\n' "$combined_content" | grep -Fq 'case community(MatrixWaveSummary)'
+printf '%s\n' "$combined_content" | grep -Fq 'private struct UnifiedWaveRow'
 printf '%s\n' "$combined_content" | grep -Fq 'MatrixNativeSectionLabel('
-printf '%s\n' "$combined_content" | grep -Fq 'title: "Waves"'
-printf '%s\n' "$combined_content" | grep -Fq 'count: recencySortedItems.count'
+printf '%s\n' "$combined_content" | grep -Fq 'selectedFilter == .all ? "Waves" : selectedFilter.rawValue'
+printf '%s\n' "$combined_content" | grep -Fq 'count: filteredRecencySortedItems.count'
 printf '%s\n' "$combined_content" | grep -Fq 'private var recencySortedItems'
+printf '%s\n' "$combined_content" | grep -Fq 'private var filteredRecencySortedItems'
 printf '%s\n' "$combined_content" | grep -Fq 'left.lastActivity ?? .distantPast'
 printf '%s\n' "$combined_content" | grep -Fq 'return left.id < right.id'
+printf '%s\n' "$combined_content" | grep -Fq 'communityWaves = Array('
+printf '%s\n' "$combined_content" | grep -Fq '.filter { !$0.isNestedSpace }'
 printf '%s\n' "$combined_content" | grep -Fq 'MatrixNativeWaveRoomView(room: room.timelineRoom)'
-printf '%s\n' "$combined_content" | grep -Fq 'MatrixNativeNestedSpaceView(room: room)'
 printf '%s\n' "$combined_content" | grep -Fq 'MatrixNativeWaveRoomView(room: room)'
+printf '%s\n' "$combined_content" | grep -Fq 'kindLabel'
 grep -Fq 'let lastActivity: Date?' "$repository"
 grep -Fq 'private static func latestActivityDate(room: Room)' "$repository"
 grep -Fq 'let lastActivity = await latestActivityDate(room: matrixRoom)' "$repository"
