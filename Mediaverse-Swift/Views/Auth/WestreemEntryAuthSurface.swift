@@ -10,6 +10,89 @@ struct WestreemEntryAuthChallenge: Equatable, Sendable {
     let resendAfter: TimeInterval
 }
 
+/// Exact Design System 24-A browse-first entry state.
+///
+/// Browse routing, sign-in routing and the live preview are injected so this
+/// presentation cannot invent a destination or become a second feed authority.
+struct WestreemBrowseFirstSurface<LivePreview: View>: View {
+    let browse: @MainActor () -> Void
+    let signIn: @MainActor () -> Void
+    @ViewBuilder let livePreview: () -> LivePreview
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 18) {
+                Spacer(minLength: WestreemTokens.Spacing.xl)
+                Image("westreem-mark")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 72, height: 72)
+                    .clipShape(RoundedRectangle(cornerRadius: 21, style: .continuous))
+                    .accessibilityHidden(true)
+
+                VStack(spacing: WestreemTokens.Spacing.s) {
+                    Text("WeStreem")
+                        .font(.custom(WestreemTokens.FontFamily.bodyBold, size: 28, relativeTo: .title))
+                        .tracking(-0.56)
+                    Text("Communities, live voice and video\nin one place.")
+                        .font(WestreemTokens.Typography.caption)
+                        .foregroundStyle(WestreemTokens.Palette.muted)
+                        .multilineTextAlignment(.center)
+                }
+
+                livePreview()
+                    .frame(maxWidth: .infinity, minHeight: 150, alignment: .bottomLeading)
+                    .padding(WestreemTokens.Spacing.m)
+                    .background(WestreemTokens.Palette.surfaceSelected)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: WestreemTokens.Radius.panel, style: .continuous)
+                            .stroke(WestreemTokens.Palette.lineEdge)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: WestreemTokens.Radius.panel, style: .continuous))
+                Spacer(minLength: WestreemTokens.Spacing.xl)
+            }
+
+            VStack(spacing: 10) {
+                Button("Look around first", action: browse)
+                    .font(WestreemTokens.Typography.bodyEmphasized)
+                    .foregroundStyle(WestreemTokens.Palette.greenOn)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .background(WestreemTokens.Palette.green)
+                    .clipShape(Capsule())
+                    .buttonStyle(.plain)
+
+                Button("Sign in", action: signIn)
+                    .font(WestreemTokens.Typography.bodyEmphasized)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .background(
+                        LinearGradient(
+                            colors: [WestreemTokens.Palette.ink700, WestreemTokens.Palette.surfaceRaisedEnd],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .overlay(Capsule().stroke(WestreemTokens.Palette.lineHard))
+                    .clipShape(Capsule())
+                    .buttonStyle(.plain)
+
+                Text("YOU CAN WATCH, BROWSE AND SEARCH SIGNED OUT\nSIGNING IN HAPPENS WHEN YOU ACT")
+                    .font(WestreemTokens.Typography.monoSmall)
+                    .foregroundStyle(WestreemTokens.Palette.textFaint)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(3)
+                    .padding(.top, 4)
+            }
+        }
+        .frame(maxWidth: 340)
+        .padding(.horizontal, 22)
+        .padding(.bottom, 26)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(WestreemTokens.Palette.ink950.ignoresSafeArea())
+        .foregroundStyle(WestreemTokens.Palette.text)
+        .accessibilityIdentifier("westreem-browse-first-24-a")
+    }
+}
+
 struct WestreemEntryAuthSurface: View {
     let reason: String?
     let continueWithApple: @MainActor () async throws -> Void
