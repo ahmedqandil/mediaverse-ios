@@ -53,6 +53,7 @@
 		F20208050000000000000005 /* PulseOtherProfileSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20208050000000000000006 /* PulseOtherProfileSurface.swift */; };
 		F20208050000000000000007 /* WestreemAccountHubSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20208050000000000000008 /* WestreemAccountHubSurface.swift */; };
 		F20208050000000000000009 /* WestreemIrreversibleConfirmation.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2020805000000000000000A /* WestreemIrreversibleConfirmation.swift */; };
+		F2020805000000000000000B /* WestreemProfilePrivacySurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2020805000000000000000C /* WestreemProfilePrivacySurface.swift */; };
 		0465594F090062B86606BD71 /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 244896868E339180BDFCBB1F /* ProfileView.swift */; };
 		074934FE7811BA935B449923 /* EpisodeWatchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A90D9B1C22E7B0B62BDCD3C6 /* EpisodeWatchView.swift */; };
 		080888BB0248C4C96764B4AA /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 347AEE7FBFC318EB5B2B800E /* Foundation.framework */; };
@@ -235,6 +236,7 @@
 		244896868E339180BDFCBB1F /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileView.swift; sourceTree = "<group>"; };
 		F20208050000000000000008 /* WestreemAccountHubSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WestreemAccountHubSurface.swift; sourceTree = "<group>"; };
 		F2020805000000000000000A /* WestreemIrreversibleConfirmation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WestreemIrreversibleConfirmation.swift; sourceTree = "<group>"; };
+		F2020805000000000000000C /* WestreemProfilePrivacySurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WestreemProfilePrivacySurface.swift; sourceTree = "<group>"; };
 		25BF1A786BBBB58C59AFF35C /* MediaverseTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MediaverseTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3029CD1181A4288D29FA2F38 /* NotificationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationsView.swift; sourceTree = "<group>"; };
 		31ED9554BF69E2045799C727 /* Constants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Constants.swift; sourceTree = "<group>"; };
@@ -449,6 +451,7 @@
 				244896868E339180BDFCBB1F /* ProfileView.swift */,
 				F20208050000000000000008 /* WestreemAccountHubSurface.swift */,
 				F2020805000000000000000A /* WestreemIrreversibleConfirmation.swift */,
+				F2020805000000000000000C /* WestreemProfilePrivacySurface.swift */,
 				84FC77F12FFA59E800681F7A /* UploadView.swift */,
 				846789152FFD7E1200DED05E /* ChannelSettingsView.swift */,
 				84366B0530061FA3009977FA /* DevicePairingViews.swift */,
@@ -1120,6 +1123,7 @@
 				0465594F090062B86606BD71 /* ProfileView.swift in Sources */,
 				F20208050000000000000007 /* WestreemAccountHubSurface.swift in Sources */,
 				F20208050000000000000009 /* WestreemIrreversibleConfirmation.swift in Sources */,
+				F2020805000000000000000B /* WestreemProfilePrivacySurface.swift in Sources */,
 				D3318F3816131A00E9B0AFE5 /* SearchView.swift in Sources */,
 				843AC7153012120A004FB5C3 /* HandoffResolverView.swift in Sources */,
 				843AC712301211BE004FB5C3 /* IncomingLinkCoordinator.swift in Sources */,
