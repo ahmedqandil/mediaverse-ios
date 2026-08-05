@@ -228,7 +228,7 @@ enum MatrixNativeWaveHistory: String, CaseIterable, Equatable, Sendable {
     case worldReadable
 }
 
-enum MatrixNativeWaveNotificationMode: String, CaseIterable, Equatable, Sendable {
+enum MatrixNativeWaveNotificationMode: String, CaseIterable, Equatable, Hashable, Sendable {
     case allMessages
     case mentionsOnly
     case muted

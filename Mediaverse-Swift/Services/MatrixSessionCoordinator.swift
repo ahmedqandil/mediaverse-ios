@@ -1360,6 +1360,31 @@ final class MatrixNativeSessionController:
         invalidateTimelineCache(roomID: roomID)
     }
 
+    func setWaveUnread(roomID: String, unread: Bool) async throws {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        try await repository.setWaveUnread(roomID: roomID, unread: unread)
+        invalidateWaveMetadata(roomID: roomID)
+        cachedDirectMessages = nil
+    }
+
+    func setWaveFavourite(roomID: String, favourite: Bool) async throws {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        try await repository.setWaveFavourite(roomID: roomID, favourite: favourite)
+        invalidateWaveMetadata(roomID: roomID)
+        cachedDirectMessages = nil
+    }
+
+    func hidePersonalWave(roomID: String) async throws {
+        try requireReady()
+        try await directNotificationProvider.validateRoomAccess(roomID: roomID)
+        try await repository.hidePersonalWave(roomID: roomID)
+        invalidateWaveMetadata(roomID: roomID)
+        invalidateTimelineCache(roomID: roomID)
+        cachedDirectMessages = nil
+    }
+
     func waveMembers(roomID: String) async throws -> [MatrixNativeWaveMember] {
         try requireReady()
         try await directNotificationProvider.validateRoomAccess(roomID: roomID)
@@ -1660,6 +1685,7 @@ final class MatrixNativeSessionController:
         try await directNotificationProvider.validateRoomAccess(roomID: roomID)
         try await repository.updateWaveNotification(roomID: roomID, mode: mode)
         invalidateWaveMetadata(roomID: roomID)
+        cachedDirectMessages = nil
     }
 
     func searchWave(
@@ -2249,6 +2275,9 @@ final class MatrixNativeSessionController:
                 memberMatrixID: room.memberMatrixID,
                 membership: room.membership,
                 unreadCount: room.unreadCount,
+                isFavourite: room.isFavourite,
+                isMarkedUnread: room.isMarkedUnread,
+                notificationMode: room.notificationMode,
                 lastMessage: room.lastMessage,
                 lastActivity: room.lastActivity
             )

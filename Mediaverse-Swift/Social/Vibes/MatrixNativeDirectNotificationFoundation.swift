@@ -22,8 +22,37 @@ struct MatrixDirectRoomSummary: Identifiable, Equatable, Hashable, Sendable {
     let memberMatrixID: String?
     let membership: MatrixNativeMembership
     let unreadCount: UInt64
+    let isFavourite: Bool
+    let isMarkedUnread: Bool
+    let notificationMode: MatrixNativeWaveNotificationMode
     let lastMessage: String?
     let lastActivity: Date?
+
+    init(
+        id: String,
+        name: String,
+        avatarURL: String?,
+        memberMatrixID: String?,
+        membership: MatrixNativeMembership,
+        unreadCount: UInt64,
+        isFavourite: Bool = false,
+        isMarkedUnread: Bool = false,
+        notificationMode: MatrixNativeWaveNotificationMode = .mentionsOnly,
+        lastMessage: String?,
+        lastActivity: Date?
+    ) {
+        self.id = id
+        self.name = name
+        self.avatarURL = avatarURL
+        self.memberMatrixID = memberMatrixID
+        self.membership = membership
+        self.unreadCount = unreadCount
+        self.isFavourite = isFavourite
+        self.isMarkedUnread = isMarkedUnread
+        self.notificationMode = notificationMode
+        self.lastMessage = lastMessage
+        self.lastActivity = lastActivity
+    }
 
     var timelineRoom: MatrixWaveSummary {
         MatrixWaveSummary(
@@ -37,6 +66,9 @@ struct MatrixDirectRoomSummary: Identifiable, Equatable, Hashable, Sendable {
             isDirect: true,
             isEncrypted: false,
             unreadCount: unreadCount,
+            isFavourite: isFavourite,
+            isMarkedUnread: isMarkedUnread,
+            notificationMode: notificationMode,
             lastActivity: lastActivity
         )
     }
@@ -106,7 +138,10 @@ actor MatrixRustSDKDirectNotificationProvider {
             // sync window. Isolate that stale entry instead of failing every
             // otherwise healthy Personal Wave.
             guard let info = try? await room.roomInfo() else { continue }
-            guard !info.isSpace, info.membership == .joined || info.membership == .invited else {
+            guard !info.isSpace,
+                  !info.isLowPriority,
+                  info.membership == .joined || info.membership == .invited
+            else {
                 continue
             }
             let isDirectRoom = info.isDirect || info.isDm
@@ -387,9 +422,22 @@ actor MatrixRustSDKDirectNotificationProvider {
             memberMatrixID: peerMatrixUserID,
             membership: matrixMembership(info.membership),
             unreadCount: max(info.numUnreadMessages, info.numUnreadNotifications),
+            isFavourite: info.isFavourite,
+            isMarkedUnread: info.isMarkedUnread,
+            notificationMode: notificationMode(info.cachedUserDefinedNotificationMode),
             lastMessage: latest.message,
             lastActivity: latest.createdAt == .distantPast ? nil : latest.createdAt
         )
+    }
+
+    private func notificationMode(
+        _ mode: RoomNotificationMode?
+    ) -> MatrixNativeWaveNotificationMode {
+        switch mode {
+        case .allMessages: .allMessages
+        case .mute: .muted
+        case .mentionsAndKeywordsOnly, .none: .mentionsOnly
+        }
     }
 
     private func latestPresentation(room: Room) async -> (

@@ -177,7 +177,10 @@ struct MatrixNativeVibesRootView: View {
         case .vibes:
             vibesContent
         case .waves:
-            MatrixNativeCombinedWavesView(spaces: spaces)
+            MatrixNativeCombinedWavesView(
+                spaces: spaces,
+                invitations: invitations.filter { $0.kind != .vibe }
+            )
         }
     }
 
@@ -214,9 +217,10 @@ struct MatrixNativeVibesRootView: View {
                             message: "Your joined communities and pending invitations."
                         )
 
-                        if !invitations.isEmpty {
-                            MatrixNativeSectionLabel(title: "Invitations", count: invitations.count)
-                            ForEach(invitations) { invitation in
+                        let vibeInvitations = invitations.filter { $0.kind == .vibe }
+                        if !vibeInvitations.isEmpty {
+                            MatrixNativeSectionLabel(title: "Invitations", count: vibeInvitations.count)
+                            ForEach(vibeInvitations) { invitation in
                                 MatrixNativeInvitationRow(
                                     invitation: invitation,
                                     isBusy: pendingInvitationID == invitation.id,
@@ -412,9 +416,58 @@ private struct MatrixNativeCombinedWavesView: View {
             case let .community(room): room.unreadCount
             }
         }
+
+        var isFavourite: Bool {
+            switch self {
+            case let .personal(room): room.isFavourite
+            case let .community(room): room.isFavourite
+            }
+        }
+
+        var isMarkedUnread: Bool {
+            switch self {
+            case let .personal(room): room.isMarkedUnread
+            case let .community(room): room.isMarkedUnread
+            }
+        }
+
+        var notificationMode: MatrixNativeWaveNotificationMode {
+            switch self {
+            case let .personal(room): room.notificationMode
+            case let .community(room): room.notificationMode
+            }
+        }
+
+        var isPersonal: Bool {
+            if case .personal = self { return true }
+            return false
+        }
+    }
+
+    /// Design System 04-L: joined Waves and pending Wave requests are one
+    /// chronological stream. Requests remain a separate case so they can
+    /// never inherit read, notification, pin, navigation or leave actions.
+    private enum ChatInboxRow: Identifiable {
+        case wave(WaveInboxItem)
+        case request(MatrixNativeInvitationSummary)
+
+        var id: String {
+            switch self {
+            case let .wave(item): "wave:\(item.id)"
+            case let .request(invitation): "request:\(invitation.id)"
+            }
+        }
+
+        var activity: Date? {
+            switch self {
+            case let .wave(item): item.lastActivity
+            case let .request(invitation): invitation.receivedAt
+            }
+        }
     }
 
     let spaces: [MatrixVibeSummary]
+    let invitations: [MatrixNativeInvitationSummary]
 
     @EnvironmentObject private var matrixSession: MatrixNativeSessionController
     @State private var communityWaves: [MatrixWaveSummary] = []
@@ -424,10 +477,19 @@ private struct MatrixNativeCombinedWavesView: View {
     @State private var showsNewMessage = false
     @State private var createdRoom: MatrixDirectRoomSummary?
     @State private var selectedFilter: WaveInboxFilter = .all
+    @State private var favouriteOverrides: [String: Bool] = [:]
+    @State private var unreadOverrides: [String: Bool] = [:]
+    @State private var notificationOverrides: [String: MatrixNativeWaveNotificationMode] = [:]
+    @State private var hiddenRoomIDs: Set<String> = []
+    @State private var pendingCommunityLeave: WaveInboxItem?
+    @State private var pendingRequestID: String?
+    @State private var undoMessage: String?
+    @State private var undoAction: (() -> Void)?
+    @State private var undoTask: Task<Void, Never>?
 
     var body: some View {
         Group {
-            if isLoading, communityWaves.isEmpty, personalWaves.isEmpty {
+            if isLoading, communityWaves.isEmpty, personalWaves.isEmpty, invitations.isEmpty {
                 MatrixNativeLoadingView(title: "Loading Waves")
             } else {
                 ScrollView {
@@ -440,7 +502,7 @@ private struct MatrixNativeCombinedWavesView: View {
 
                         waveFilterPicker
 
-                        if communityWaves.isEmpty, personalWaves.isEmpty {
+                        if communityWaves.isEmpty, personalWaves.isEmpty, invitations.isEmpty {
                             ContentUnavailableView {
                                 Label("No Waves yet", systemImage: "wave.3.right")
                             } description: {
@@ -454,20 +516,25 @@ private struct MatrixNativeCombinedWavesView: View {
                             .padding(.top, 50)
                         }
 
-                        if !filteredRecencySortedItems.isEmpty {
+                        if !filteredRecencySortedRows.isEmpty {
                             MatrixNativeSectionLabel(
-                                title: selectedFilter == .all ? "Waves" : selectedFilter.rawValue,
-                                count: filteredRecencySortedItems.count
+                                title: selectedFilter == .all ? "Chats" : selectedFilter.rawValue,
+                                count: filteredRecencySortedRows.count
                             )
-                            ForEach(filteredRecencySortedItems) { item in
-                                NavigationLink {
-                                    destination(for: item)
-                                } label: {
-                                    UnifiedWaveRow(item: item)
+                            ForEach(filteredRecencySortedRows) { row in
+                                switch row {
+                                case let .wave(item):
+                                    waveRow(for: item)
+                                case let .request(invitation):
+                                    WaveRequestRow(
+                                        invitation: invitation,
+                                        isBusy: pendingRequestID == invitation.id,
+                                        accept: { respond(to: invitation, accept: true) },
+                                        decline: { respond(to: invitation, accept: false) }
+                                    )
                                 }
-                                .buttonStyle(.plain)
                             }
-                        } else if !communityWaves.isEmpty || !personalWaves.isEmpty {
+                        } else if !communityWaves.isEmpty || !personalWaves.isEmpty || !invitations.isEmpty {
                             ContentUnavailableView {
                                 Label(selectedFilter.emptyTitle, systemImage: "line.3.horizontal.decrease.circle")
                             } description: {
@@ -512,7 +579,42 @@ private struct MatrixNativeCombinedWavesView: View {
         .navigationDestination(item: $createdRoom) { room in
             MatrixNativeWaveRoomView(room: room.timelineRoom)
         }
+        .confirmationDialog(
+            pendingCommunityLeave.map { "Leave \($0.name)?" } ?? "Leave Wave?",
+            isPresented: Binding(
+                get: { pendingCommunityLeave != nil },
+                set: { if !$0 { pendingCommunityLeave = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Leave Wave", role: .destructive) {
+                guard let item = pendingCommunityLeave else { return }
+                pendingCommunityLeave = nil
+                performCommunityLeave(item)
+            }
+            Button("Cancel", role: .cancel) { pendingCommunityLeave = nil }
+        } message: {
+            Text("You will stop receiving Ripples from this Vibe Wave.")
+        }
+        .overlay(alignment: .bottom) {
+            if let undoMessage, let undoAction {
+                HStack(spacing: 16) {
+                    Text(undoMessage).font(.subheadline)
+                    Button("Undo", action: undoAction)
+                        .font(.subheadline.bold())
+                        .foregroundStyle(C.watch)
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
+                .background(WestreemTokens.Palette.ink700, in: Capsule())
+                .overlay(Capsule().stroke(C.borderSubtle))
+                .shadow(radius: 14)
+                .padding(.bottom, 86)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
         .task(id: joinedSpaceIDs) { await load() }
+        .onDisappear { undoTask?.cancel() }
     }
 
     private var joinedSpaceIDs: [String] {
@@ -520,6 +622,253 @@ private struct MatrixNativeCombinedWavesView: View {
             .filter { $0.membership == .joined }
             .map(\.id)
             .sorted()
+    }
+
+    @ViewBuilder
+    private func waveRow(for item: WaveInboxItem) -> some View {
+        let favourite = isFavourite(item)
+        let unread = isUnread(item)
+        let mode = notificationMode(item)
+
+        DesignSystemWaveSwipeContainer(
+            isFavourite: favourite,
+            isMuted: mode == .muted,
+            isUnread: unread,
+            isPersonal: item.isPersonal,
+            pin: { setFavourite(item, !favourite) },
+            mute: { setMuted(item, mode != .muted) },
+            read: { setUnread(item, !unread) },
+            leave: { leaveOrHide(item) }
+        ) {
+            NavigationLink {
+                destination(for: item)
+            } label: {
+                UnifiedWaveRow(
+                    item: item,
+                    isFavourite: favourite,
+                    isMarkedUnread: unread,
+                    notificationMode: mode
+                )
+            }
+            .buttonStyle(.plain)
+        }
+        .contextMenu {
+            Button {
+                setFavourite(item, !favourite)
+            } label: {
+                Label(
+                    favourite ? "Unpin from the top" : "Pin to the top",
+                    systemImage: favourite ? "pin.slash" : "pin"
+                )
+            }
+            Button {
+                setMuted(item, mode != .muted)
+            } label: {
+                Label(
+                    mode == .muted ? "Unmute this Wave" : "Mute this Wave",
+                    systemImage: mode == .muted ? "bell" : "bell.slash"
+                )
+            }
+            Button {
+                setUnread(item, !unread)
+            } label: {
+                Label(
+                    unread ? "Mark as read" : "Mark as unread",
+                    systemImage: unread ? "envelope.open" : "envelope.badge"
+                )
+            }
+            Button {
+                setNotificationMode(item, .allMessages)
+            } label: {
+                Label("Notify for every Ripple", systemImage: "bell.badge")
+            }
+            Button(role: item.isPersonal ? nil : .destructive) {
+                leaveOrHide(item)
+            } label: {
+                Label(
+                    item.isPersonal ? "Hide Personal Wave" : "Leave Wave",
+                    systemImage: item.isPersonal
+                        ? "eye.slash"
+                        : "rectangle.portrait.and.arrow.right"
+                )
+            }
+        }
+        .accessibilityAction(named: favourite ? "Unpin Wave" : "Pin Wave") {
+            setFavourite(item, !favourite)
+        }
+        .accessibilityAction(named: mode == .muted ? "Unmute Wave" : "Mute Wave") {
+            setMuted(item, mode != .muted)
+        }
+        .accessibilityAction(named: unread ? "Mark Wave as read" : "Mark Wave as unread") {
+            setUnread(item, !unread)
+        }
+    }
+
+    private func isFavourite(_ item: WaveInboxItem) -> Bool {
+        favouriteOverrides[item.id] ?? item.isFavourite
+    }
+
+    private func isUnread(_ item: WaveInboxItem) -> Bool {
+        unreadOverrides[item.id] ?? (item.isMarkedUnread || item.unreadCount > 0)
+    }
+
+    private func notificationMode(
+        _ item: WaveInboxItem
+    ) -> MatrixNativeWaveNotificationMode {
+        notificationOverrides[item.id] ?? item.notificationMode
+    }
+
+    @MainActor
+    private func showUndo(_ message: String, action: @escaping () -> Void) {
+        undoTask?.cancel()
+        withAnimation(WestreemTokens.Easing.standard) {
+            undoMessage = message
+            undoAction = action
+        }
+        undoTask = Task {
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            withAnimation(WestreemTokens.Easing.standard) {
+                undoMessage = nil
+                undoAction = nil
+            }
+        }
+    }
+
+    private func setFavourite(
+        _ item: WaveInboxItem,
+        _ favourite: Bool,
+        offerUndo: Bool = true
+    ) {
+        favouriteOverrides[item.id] = favourite
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Task { @MainActor in
+            do {
+                try await matrixSession.setWaveFavourite(
+                    roomID: item.id,
+                    favourite: favourite
+                )
+                if offerUndo {
+                    showUndo(favourite ? "Wave pinned" : "Wave unpinned") {
+                        setFavourite(item, !favourite, offerUndo: false)
+                    }
+                }
+                await load()
+            } catch {
+                favouriteOverrides[item.id] = !favourite
+                errorMessage = "Pin could not be updated. Pull to retry."
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+            }
+        }
+    }
+
+    private func setMuted(
+        _ item: WaveInboxItem,
+        _ muted: Bool,
+        offerUndo: Bool = true
+    ) {
+        let previous = notificationMode(item)
+        let next: MatrixNativeWaveNotificationMode = muted ? .muted : .mentionsOnly
+        notificationOverrides[item.id] = next
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Task { @MainActor in
+            do {
+                try await matrixSession.updateWaveNotification(roomID: item.id, mode: next)
+                if offerUndo {
+                    showUndo(muted ? "Wave muted" : "Wave unmuted") {
+                        setNotificationMode(item, previous, offerUndo: false)
+                    }
+                }
+                await load()
+            } catch {
+                notificationOverrides[item.id] = previous
+                errorMessage = "Mute could not be updated. Pull to retry."
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+            }
+        }
+    }
+
+    private func setNotificationMode(
+        _ item: WaveInboxItem,
+        _ mode: MatrixNativeWaveNotificationMode,
+        offerUndo: Bool = false
+    ) {
+        let previous = notificationMode(item)
+        notificationOverrides[item.id] = mode
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Task { @MainActor in
+            do {
+                try await matrixSession.updateWaveNotification(roomID: item.id, mode: mode)
+                if offerUndo {
+                    showUndo("Wave notification level updated") {
+                        setNotificationMode(item, previous, offerUndo: false)
+                    }
+                }
+                await load()
+            } catch {
+                notificationOverrides[item.id] = previous
+                errorMessage = "Notification level could not be updated. Pull to retry."
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+            }
+        }
+    }
+
+    private func setUnread(
+        _ item: WaveInboxItem,
+        _ unread: Bool,
+        offerUndo: Bool = true
+    ) {
+        unreadOverrides[item.id] = unread
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Task { @MainActor in
+            do {
+                try await matrixSession.setWaveUnread(roomID: item.id, unread: unread)
+                if offerUndo {
+                    showUndo(unread ? "Wave marked unread" : "Wave marked read") {
+                        setUnread(item, !unread, offerUndo: false)
+                    }
+                }
+                await load()
+            } catch {
+                unreadOverrides[item.id] = !unread
+                errorMessage = "Read state could not be updated. Pull to retry."
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+            }
+        }
+    }
+
+    private func leaveOrHide(_ item: WaveInboxItem) {
+        if item.isPersonal {
+            hiddenRoomIDs.insert(item.id)
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            Task { @MainActor in
+                do {
+                    try await matrixSession.hidePersonalWave(roomID: item.id)
+                    await load()
+                } catch {
+                    hiddenRoomIDs.remove(item.id)
+                    errorMessage = "Personal Wave could not be hidden. Pull to retry."
+                    UINotificationFeedbackGenerator().notificationOccurred(.error)
+                }
+            }
+        } else {
+            pendingCommunityLeave = item
+        }
+    }
+
+    private func performCommunityLeave(_ item: WaveInboxItem) {
+        hiddenRoomIDs.insert(item.id)
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        Task { @MainActor in
+            do {
+                try await matrixSession.leaveWave(roomID: item.id)
+                await load()
+            } catch {
+                hiddenRoomIDs.remove(item.id)
+                errorMessage = "Wave could not be left. Pull to retry."
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+            }
+        }
     }
 
     @MainActor
@@ -540,6 +889,26 @@ private struct MatrixNativeCombinedWavesView: View {
                 uniquingKeysWith: { first, _ in first }
             ).values
         ).filter { !$0.isNestedSpace }
+        let authoritativeItems = personalWaves.map(WaveInboxItem.personal)
+            + communityWaves.map(WaveInboxItem.community)
+        let authoritativeByID = Dictionary(
+            authoritativeItems.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        for (roomID, value) in Array(favouriteOverrides) where
+            authoritativeByID[roomID]?.isFavourite == value {
+            favouriteOverrides.removeValue(forKey: roomID)
+        }
+        for (roomID, value) in Array(unreadOverrides) where
+            (authoritativeByID[roomID].map {
+                $0.isMarkedUnread || $0.unreadCount > 0
+            } == value) {
+            unreadOverrides.removeValue(forKey: roomID)
+        }
+        for (roomID, value) in Array(notificationOverrides) where
+            authoritativeByID[roomID]?.notificationMode == value {
+            notificationOverrides.removeValue(forKey: roomID)
+        }
         let failures = communityFailures + loadedPersonalWaves.failures
         errorMessage = failures > 0
             ? "Some Waves could not synchronize. Pull to retry."
@@ -548,12 +917,22 @@ private struct MatrixNativeCombinedWavesView: View {
     }
 
     private var recencySortedItems: [WaveInboxItem] {
-        let personalIDs = Set(personalWaves.map(\.id))
-        let items = personalWaves.map(WaveInboxItem.personal)
+        let joinedPersonalWaves = personalWaves.filter { $0.membership == .joined }
+        let personalIDs = Set(joinedPersonalWaves.map(\.id))
+        let items = joinedPersonalWaves
+            .filter { !hiddenRoomIDs.contains($0.id) }
+            .map(WaveInboxItem.personal)
             + communityWaves
-                .filter { !$0.isNestedSpace && !personalIDs.contains($0.id) }
+                .filter {
+                    !$0.isNestedSpace
+                        && !personalIDs.contains($0.id)
+                        && !hiddenRoomIDs.contains($0.id)
+                }
                 .map(WaveInboxItem.community)
         return items.sorted { left, right in
+            if isFavourite(left) != isFavourite(right) {
+                return isFavourite(left)
+            }
             let leftDate = left.lastActivity ?? .distantPast
             let rightDate = right.lastActivity ?? .distantPast
             if leftDate != rightDate {
@@ -569,7 +948,7 @@ private struct MatrixNativeCombinedWavesView: View {
             case .all:
                 true
             case .unread:
-                item.unreadCount > 0
+                isUnread(item)
             case .vibes:
                 if case .community = item { true } else { false }
             case .live:
@@ -580,6 +959,28 @@ private struct MatrixNativeCombinedWavesView: View {
                 }
             }
         }
+    }
+
+    private var filteredRecencySortedRows: [ChatInboxRow] {
+        let waveRows = filteredRecencySortedItems.map(ChatInboxRow.wave)
+        guard selectedFilter == .all else { return waveRows }
+        let requestRows = invitations.map(ChatInboxRow.request)
+        return (waveRows + requestRows).sorted { left, right in
+            let leftPinned = rowIsPinned(left)
+            let rightPinned = rowIsPinned(right)
+            if leftPinned != rightPinned { return leftPinned }
+            let leftDate = left.activity ?? .distantPast
+            let rightDate = right.activity ?? .distantPast
+            if leftDate != rightDate { return leftDate > rightDate }
+            return left.id < right.id
+        }
+    }
+
+    /// Pinning is the only ordering override. Requests, Personal Waves and
+    /// Vibe Waves otherwise share strict Matrix-derived recency.
+    private func rowIsPinned(_ row: ChatInboxRow) -> Bool {
+        guard case let .wave(item) = row else { return false }
+        return isFavourite(item)
     }
 
     private var waveFilterPicker: some View {
@@ -616,8 +1017,201 @@ private struct MatrixNativeCombinedWavesView: View {
         }
     }
 
+    /// Design System 04-H…J. SwiftUI's native `swipeActions` intentionally is
+    /// not used: its widths, destructive placement and spring differ from the
+    /// approved WeStreem specimens.
+    private struct DesignSystemWaveSwipeContainer<Content: View>: View {
+        private enum Reveal {
+            static var leading: CGFloat { 88 }
+            static var shortTrailing: CGFloat { 88 }
+            static var fullTrailing: CGFloat { 174 }
+            static var leadingThreshold: CGFloat { 44 }
+            static var shortThreshold: CGFloat { -44 }
+            static var fullThreshold: CGFloat { -116 }
+        }
+
+        let isFavourite: Bool
+        let isMuted: Bool
+        let isUnread: Bool
+        let isPersonal: Bool
+        let pin: () -> Void
+        let mute: () -> Void
+        let read: () -> Void
+        let leave: () -> Void
+        let content: Content
+
+        @State private var offset: CGFloat = 0
+        @State private var dragOrigin: CGFloat = 0
+        @State private var isDragging = false
+        @State private var feedbackBand = 0
+
+        init(
+            isFavourite: Bool,
+            isMuted: Bool,
+            isUnread: Bool,
+            isPersonal: Bool,
+            pin: @escaping () -> Void,
+            mute: @escaping () -> Void,
+            read: @escaping () -> Void,
+            leave: @escaping () -> Void,
+            @ViewBuilder content: () -> Content
+        ) {
+            self.isFavourite = isFavourite
+            self.isMuted = isMuted
+            self.isUnread = isUnread
+            self.isPersonal = isPersonal
+            self.pin = pin
+            self.mute = mute
+            self.read = read
+            self.leave = leave
+            self.content = content()
+        }
+
+        private var showsFullTrailingActions: Bool {
+            offset <= Reveal.fullThreshold
+        }
+
+        var body: some View {
+            ZStack {
+                HStack(spacing: 0) {
+                    action(
+                        width: Reveal.leading,
+                        background: WestreemTokens.Palette.lavenderDim,
+                        foreground: WestreemTokens.Palette.lavender,
+                        icon: isFavourite ? "pin.slash" : "pin",
+                        label: isFavourite ? "Unpin" : "Pin",
+                        perform: pin
+                    )
+                    Spacer(minLength: 0)
+                    if showsFullTrailingActions {
+                        action(
+                            width: 60,
+                            background: WestreemTokens.Palette.lavenderDim,
+                            foreground: WestreemTokens.Palette.lavender,
+                            icon: isMuted ? "bell" : "bell.slash",
+                            label: isMuted ? "Unmute" : "Mute",
+                            perform: mute
+                        )
+                        action(
+                            width: 58,
+                            background: WestreemTokens.Palette.surfaceSelected,
+                            foreground: Color(hex: "#C2D0CB"),
+                            icon: "checkmark",
+                            label: isUnread ? "Read" : "Unread",
+                            perform: read
+                        )
+                        action(
+                            width: 56,
+                            background: WestreemTokens.Palette.pinkDim,
+                            foreground: WestreemTokens.Palette.pink,
+                            icon: "xmark",
+                            label: isPersonal ? "Hide" : "Leave",
+                            perform: leave
+                        )
+                    } else {
+                        action(
+                            width: Reveal.shortTrailing,
+                            background: WestreemTokens.Palette.lavenderDim,
+                            foreground: WestreemTokens.Palette.lavender,
+                            icon: isMuted ? "bell" : "bell.slash",
+                            label: isMuted ? "Unmute" : "Mute",
+                            perform: mute
+                        )
+                    }
+                }
+
+                content
+                    .background(C.bg)
+                    .offset(x: offset)
+                    .contentShape(Rectangle())
+                    .gesture(dragGesture)
+            }
+            .frame(minHeight: 72)
+            .clipped()
+        }
+
+        private var dragGesture: some Gesture {
+            DragGesture(minimumDistance: 10)
+                .onChanged { value in
+                    guard isDragging
+                        || abs(value.translation.width) > abs(value.translation.height)
+                    else { return }
+                    if !isDragging {
+                        isDragging = true
+                        dragOrigin = offset
+                    }
+                    let proposed = dragOrigin + value.translation.width
+                    offset = min(Reveal.leading, max(-Reveal.fullTrailing, proposed))
+                    let band: Int
+                    if offset >= Reveal.leadingThreshold {
+                        band = 1
+                    } else if offset <= Reveal.fullThreshold {
+                        band = -2
+                    } else if offset <= Reveal.shortThreshold {
+                        band = -1
+                    } else {
+                        band = 0
+                    }
+                    if band != 0, band != feedbackBand {
+                        UISelectionFeedbackGenerator().selectionChanged()
+                    }
+                    feedbackBand = band
+                }
+                .onEnded { _ in
+                    isDragging = false
+                    feedbackBand = 0
+                    let target: CGFloat
+                    if offset >= Reveal.leadingThreshold {
+                        target = Reveal.leading
+                    } else if offset <= Reveal.fullThreshold {
+                        target = -Reveal.fullTrailing
+                    } else if offset <= Reveal.shortThreshold {
+                        target = -Reveal.shortTrailing
+                    } else {
+                        target = 0
+                    }
+                    withAnimation(WestreemTokens.Easing.spring) {
+                        offset = target
+                    }
+                }
+        }
+
+        private func action(
+            width: CGFloat,
+            background: Color,
+            foreground: Color,
+            icon: String,
+            label: String,
+            perform: @escaping () -> Void
+        ) -> some View {
+            Button {
+                withAnimation(WestreemTokens.Easing.spring) { offset = 0 }
+                perform()
+            } label: {
+                VStack(spacing: 5) {
+                    Image(systemName: icon)
+                        .font(.system(size: 17))
+                    Text(label)
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .textCase(.uppercase)
+                }
+                .foregroundStyle(foreground)
+                .frame(width: width)
+                .frame(maxHeight: .infinity)
+                .background(background)
+            }
+            .buttonStyle(.plain)
+            .frame(width: width)
+            .frame(maxHeight: .infinity)
+            .accessibilityLabel(label)
+        }
+    }
+
     private struct UnifiedWaveRow: View {
         let item: WaveInboxItem
+        let isFavourite: Bool
+        let isMarkedUnread: Bool
+        let notificationMode: MatrixNativeWaveNotificationMode
 
         private var name: String {
             switch item {
@@ -640,12 +1234,7 @@ private struct MatrixNativeCombinedWavesView: View {
             }
         }
 
-        private var unreadCount: UInt64 {
-            switch item {
-            case let .personal(room): room.unreadCount
-            case let .community(room): room.unreadCount
-            }
-        }
+        private var unreadCount: UInt64 { isMarkedUnread ? max(1, item.unreadCount) : item.unreadCount }
 
         private var activity: Date? { item.lastActivity }
 
@@ -661,6 +1250,15 @@ private struct MatrixNativeCombinedWavesView: View {
             return "Vibe"
         }
 
+        private var accessibilitySummary: String {
+            var parts = ["\(name), \(kindLabel) Wave"]
+            if unreadCount > 0 { parts.append("\(unreadCount) unread") }
+            if isFavourite { parts.append("pinned") }
+            if notificationMode == .muted { parts.append("muted") }
+            if isLive { parts.append("live") }
+            return parts.joined(separator: ", ")
+        }
+
         var body: some View {
             HStack(spacing: 13) {
                 MatrixNativeAvatar(name: name, imageURL: avatarURL, size: 46)
@@ -674,6 +1272,18 @@ private struct MatrixNativeCombinedWavesView: View {
                             .font(.system(size: 9, weight: .medium, design: .monospaced))
                             .foregroundStyle(C.textMuted)
                             .textCase(.uppercase)
+                        if isFavourite {
+                            Image(systemName: "pin.fill")
+                                .font(.system(size: 10))
+                                .foregroundStyle(WestreemTokens.Palette.lavender)
+                                .accessibilityLabel("Pinned")
+                        }
+                        if notificationMode == .muted {
+                            Image(systemName: "bell.slash.fill")
+                                .font(.system(size: 10))
+                                .foregroundStyle(C.textMuted)
+                                .accessibilityLabel("Muted")
+                        }
                         Spacer(minLength: 0)
                     }
                     Text(preview)
@@ -711,11 +1321,118 @@ private struct MatrixNativeCombinedWavesView: View {
             }
             .contentShape(Rectangle())
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(
-                "\(name), \(kindLabel) Wave"
-                    + (unreadCount > 0 ? ", \(unreadCount) unread" : "")
-                    + (isLive ? ", live" : "")
-            )
+            .accessibilityLabel(accessibilitySummary)
+        }
+    }
+
+    /// Exact compact request state from Design System 04-L. The preview stays
+    /// visually and semantically hidden until Matrix confirms membership.
+    private struct WaveRequestRow: View {
+        let invitation: MatrixNativeInvitationSummary
+        let isBusy: Bool
+        let accept: () -> Void
+        let decline: () -> Void
+
+        var body: some View {
+            HStack(spacing: 13) {
+                MatrixNativeAvatar(
+                    name: invitation.name,
+                    imageURL: invitation.avatarURL,
+                    size: 46
+                )
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 7) {
+                        Text(invitation.name)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(WestreemTokens.Palette.muted)
+                            .lineLimit(1)
+                        Text("Request")
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundStyle(WestreemTokens.Palette.lavender)
+                            .textCase(.uppercase)
+                        Spacer(minLength: 0)
+                    }
+                    Text("wants to start a Wave with you")
+                        .font(.caption)
+                        .foregroundStyle(WestreemTokens.Palette.textFaint)
+                        .lineLimit(1)
+                        .blur(radius: 2.6)
+                        .accessibilityHidden(true)
+                }
+                Spacer(minLength: 4)
+                if let receivedAt = invitation.receivedAt {
+                    Text(receivedAt, style: .relative)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(WestreemTokens.Palette.textFaint)
+                        .lineLimit(1)
+                }
+                Button(action: accept) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .black))
+                        .foregroundStyle(WestreemTokens.Palette.greenOn)
+                        .frame(width: 34, height: 34)
+                        .background(WestreemTokens.Palette.green, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isBusy || !invitation.canAccept)
+                .accessibilityLabel("Accept Wave request from \(invitation.name)")
+
+                Button(action: decline) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(WestreemTokens.Palette.muted)
+                        .frame(width: 34, height: 34)
+                        .background(
+                            LinearGradient(
+                                colors: [
+                                    WestreemTokens.Palette.ink700,
+                                    WestreemTokens.Palette.surfaceRaisedEnd,
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            in: Circle()
+                        )
+                        .overlay(Circle().stroke(WestreemTokens.Palette.lineHard))
+                }
+                .buttonStyle(.plain)
+                .disabled(isBusy)
+                .accessibilityLabel("Decline Wave request from \(invitation.name)")
+            }
+            .padding(.horizontal, 2)
+            .padding(.vertical, 13)
+            .background(WestreemTokens.Palette.ink800)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(WestreemTokens.Palette.lineSoft).frame(height: 1)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("\(invitation.name), Wave request. Message preview hidden until accepted.")
+        }
+    }
+
+    private func respond(
+        to invitation: MatrixNativeInvitationSummary,
+        accept: Bool
+    ) {
+        guard pendingRequestID == nil else { return }
+        pendingRequestID = invitation.id
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Task { @MainActor in
+            do {
+                if accept {
+                    guard invitation.canAccept else {
+                        throw MatrixSessionFoundationError.unavailable
+                    }
+                    try await matrixSession.acceptInvite(roomID: invitation.id)
+                } else {
+                    try await matrixSession.declineInvite(roomID: invitation.id)
+                }
+                await load()
+            } catch {
+                errorMessage = MatrixNativeCopy.message(for: error)
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+            }
+            pendingRequestID = nil
         }
     }
 

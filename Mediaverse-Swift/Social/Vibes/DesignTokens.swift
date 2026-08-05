@@ -70,9 +70,9 @@ enum WestreemTokens {
     // MARK: - Motion tokens
 
     enum Duration {
-        static let fast: Double = 0.15
-        static let standard: Double = 0.25
-        static let slow: Double = 0.4
+        static let fast: Double = 0.12
+        static let standard: Double = 0.20
+        static let slow: Double = 0.24
     }
 
     /// Reusable `Animation` presets so callers can write

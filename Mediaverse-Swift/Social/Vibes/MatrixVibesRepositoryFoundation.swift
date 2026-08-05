@@ -579,6 +579,35 @@ struct MatrixNativeInvitationSummary: Identifiable, Equatable, Sendable {
     let inviterName: String
     let inviterAvatarURL: String?
     let inviterIsBlocked: Bool
+    /// Matrix-Rust's latest cached invite event timestamp. It is presentation
+    /// data only; membership is reread by the mutation before accept/decline.
+    let receivedAt: Date?
+
+    init(
+        id: String,
+        name: String,
+        topic: String?,
+        avatarURL: String?,
+        kind: MatrixNativeInvitationKind,
+        isEncrypted: Bool,
+        inviterUserID: String?,
+        inviterName: String,
+        inviterAvatarURL: String?,
+        inviterIsBlocked: Bool,
+        receivedAt: Date? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.topic = topic
+        self.avatarURL = avatarURL
+        self.kind = kind
+        self.isEncrypted = isEncrypted
+        self.inviterUserID = inviterUserID
+        self.inviterName = inviterName
+        self.inviterAvatarURL = inviterAvatarURL
+        self.inviterIsBlocked = inviterIsBlocked
+        self.receivedAt = receivedAt
+    }
 
     var canAccept: Bool {
         MatrixInvitationSafetyContract.evaluate(
@@ -602,6 +631,9 @@ struct MatrixWaveSummary: Identifiable, Equatable, Hashable, Sendable {
     let isDirect: Bool
     let isEncrypted: Bool
     let unreadCount: UInt64
+    let isFavourite: Bool
+    let isMarkedUnread: Bool
+    let notificationMode: MatrixNativeWaveNotificationMode
     /// Matrix-Rust's latest cached event timestamp, used only for inbox ordering.
     /// Nil means the SDK has no locally available activity for this room yet.
     let lastActivity: Date?
@@ -620,6 +652,9 @@ struct MatrixWaveSummary: Identifiable, Equatable, Hashable, Sendable {
         isDirect: Bool = false,
         isEncrypted: Bool = false,
         unreadCount: UInt64 = 0,
+        isFavourite: Bool = false,
+        isMarkedUnread: Bool = false,
+        notificationMode: MatrixNativeWaveNotificationMode = .mentionsOnly,
         lastActivity: Date? = nil,
         activeCallParticipantCount: Int = 0,
         activeCallIntent: MatrixNativeRtcIntent? = nil,
@@ -635,6 +670,9 @@ struct MatrixWaveSummary: Identifiable, Equatable, Hashable, Sendable {
         self.isDirect = isDirect
         self.isEncrypted = isEncrypted
         self.unreadCount = unreadCount
+        self.isFavourite = isFavourite
+        self.isMarkedUnread = isMarkedUnread
+        self.notificationMode = notificationMode
         self.lastActivity = lastActivity
         self.activeCallParticipantCount = max(0, activeCallParticipantCount)
         self.activeCallIntent = activeCallIntent
@@ -808,6 +846,9 @@ protocol MatrixVibesSDKProviding: Sendable {
         restrictedParentSpaceID: String?
     ) async throws
     func leaveWave(roomID: String) async throws
+    func setWaveUnread(roomID: String, unread: Bool) async throws
+    func setWaveFavourite(roomID: String, favourite: Bool) async throws
+    func hidePersonalWave(roomID: String) async throws
     func waveMembers(roomID: String) async throws -> [MatrixNativeWaveMember]
     func joinedWaveDestinations(excludingRoomID: String) async throws
         -> [MatrixWaveSummary]
@@ -1165,7 +1206,8 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
                         : displayName
                 }(),
                 inviterAvatarURL: info?.inviter?.avatarUrl,
-                inviterIsBlocked: validInviter.map(ignored.contains) ?? false
+                inviterIsBlocked: validInviter.map(ignored.contains) ?? false,
+                receivedAt: await Self.latestActivityDate(room: room)
             ))
         }
         return result.sorted {
@@ -1638,6 +1680,12 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
             isDirect: false,
             isEncrypted: await matrixRoom.isEncrypted(),
             unreadCount: info?.numUnreadNotifications ?? 0,
+            isFavourite: info?.isFavourite ?? false,
+            isMarkedUnread: info?.isMarkedUnread ?? false,
+            notificationMode: Self.notificationMode(
+                info?.cachedUserDefinedNotificationMode
+                    ?? .mentionsAndKeywordsOnly
+            ),
             lastActivity: lastActivity,
             activeCallParticipantCount: activeParticipantIDs.count,
             activeCallIntent: intent,
@@ -1720,6 +1768,10 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
                     isNestedSpace: base.isNestedSpace,
                     isDirect: base.isDirect,
                     isEncrypted: base.isEncrypted,
+                    unreadCount: base.unreadCount,
+                    isFavourite: base.isFavourite,
+                    isMarkedUnread: base.isMarkedUnread,
+                    notificationMode: base.notificationMode,
                     lastActivity: base.lastActivity,
                     activeCallParticipantCount: activeParticipantIDs.count,
                     activeCallIntent: intent,
@@ -2516,6 +2568,48 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
             throw MatrixNativeWaveActionError.roomNotJoined
         }
         try await matrixRoom.leave()
+    }
+
+    func setWaveUnread(roomID: String, unread: Bool) async throws {
+        let client = try await activeClient()
+        let matrixRoom = try room(roomID, in: client)
+        guard matrixRoom.membership() == .joined, !matrixRoom.isSpace() else {
+            throw MatrixNativeWaveActionError.roomNotJoined
+        }
+        if !unread {
+            // Element parity: marking read advances the authoritative Matrix
+            // receipt first. The manual unread flag is cleared only after that
+            // receipt succeeds, so a failure cannot falsely hide unread state.
+            let timeline = try await matrixRoom.timeline()
+            try await timeline.markAsRead(receiptType: .read)
+        }
+        try await matrixRoom.setUnreadFlag(newValue: unread)
+    }
+
+    func setWaveFavourite(roomID: String, favourite: Bool) async throws {
+        let client = try await activeClient()
+        let matrixRoom = try room(roomID, in: client)
+        guard matrixRoom.membership() == .joined, !matrixRoom.isSpace() else {
+            throw MatrixNativeWaveActionError.roomNotJoined
+        }
+        try await matrixRoom.setIsFavourite(
+            isFavourite: favourite,
+            tagOrder: favourite ? 0.5 : nil
+        )
+    }
+
+    func hidePersonalWave(roomID: String) async throws {
+        let client = try await activeClient()
+        let matrixRoom = try room(roomID, in: client)
+        let info = try await matrixRoom.roomInfo()
+        let sdkReportsDirect = info.isDirect || info.isDm
+            ? false
+            : await matrixRoom.isDirect()
+        guard matrixRoom.membership() == .joined,
+              !info.isSpace,
+              info.isDirect || info.isDm || sdkReportsDirect
+        else { throw MatrixNativeWaveActionError.notAllowed }
+        try await matrixRoom.setIsLowPriority(isLowPriority: true, tagOrder: 0.9)
     }
 
     func waveMembers(roomID: String) async throws -> [MatrixNativeWaveMember] {
@@ -5225,6 +5319,21 @@ actor MatrixVibesRepositoryFoundation: VibesRepository {
     func leaveWave(roomID: String) async throws {
         try requireEnabled()
         try await sdk.leaveWave(roomID: roomID)
+    }
+
+    func setWaveUnread(roomID: String, unread: Bool) async throws {
+        try requireEnabled()
+        try await sdk.setWaveUnread(roomID: roomID, unread: unread)
+    }
+
+    func setWaveFavourite(roomID: String, favourite: Bool) async throws {
+        try requireEnabled()
+        try await sdk.setWaveFavourite(roomID: roomID, favourite: favourite)
+    }
+
+    func hidePersonalWave(roomID: String) async throws {
+        try requireEnabled()
+        try await sdk.hidePersonalWave(roomID: roomID)
     }
 
     func waveMembers(roomID: String) async throws -> [MatrixNativeWaveMember] {
