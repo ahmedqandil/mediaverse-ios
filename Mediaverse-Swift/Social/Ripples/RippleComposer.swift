@@ -86,49 +86,95 @@ struct RippleComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
                 SocialIdentityAvatar(
                     image: auth.currentUser?.image,
                     name: auth.currentUser?.name,
-                    size: 42
+                    size: 34
                 )
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(auth.currentUser?.name ?? "Your Atmo")
-                        .font(.subheadline.weight(.semibold))
+                VStack(alignment: .leading, spacing: 12) {
+                    TextField(placeholder, text: $bodyText, axis: .vertical)
+                        .lineLimit(1...8)
+                        .focused($isBodyFocused)
+                        .textInputAutocapitalization(.sentences)
                         .foregroundStyle(C.text)
-                    Label(destinationLabel, systemImage: destinationIcon)
-                        .font(.caption)
-                        .foregroundStyle(C.textMuted)
-                }
-                Spacer()
-                if isUploadingPhotos {
-                    ProgressView()
                         .tint(C.watch)
+                        .font(.system(size: 13))
+                        .frame(minHeight: 34, alignment: .topLeading)
+                        .onChange(of: bodyText) { _, value in
+                            resolvePastedLinkIfNeeded(in: value)
+                        }
+                    MentionAutocompletePanel(text: $bodyText)
+                        .zIndex(20)
+
+                    HStack(spacing: 8) {
+                        Button {
+                            isBodyFocused = false
+                            showsPhotoSourceChooser = true
+                        } label: {
+                            Image(systemName: "photo")
+                                .font(.system(size: 15))
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(C.textTertiary)
+                        .disabled(isUploadingPhotos || photos.count >= 10)
+                        .accessibilityLabel("Add photos")
+
+                        if voiceRipplesEnabled {
+                            Button {
+                                isBodyFocused = false
+                                Task { await voiceRecorder.start() }
+                            } label: {
+                                Image(systemName: "paperclip")
+                                    .font(.system(size: 15))
+                                    .frame(width: 32, height: 32)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(voiceRecorder.state == .idle ? C.textTertiary : C.danger)
+                            .disabled(selectedMediaJobID != nil || voiceRecorder.state != .idle)
+                            .accessibilityLabel("Record voice message")
+                        }
+
+                        if videoRipplesEnabled {
+                            Button {
+                                isBodyFocused = false
+                                showsVideoLibrary = true
+                            } label: {
+                                Image(systemName: "video")
+                                    .font(.system(size: 15))
+                                    .frame(width: 32, height: 32)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(C.textTertiary)
+                            .disabled(selectedMediaJobID != nil || voiceRecorder.state != .idle)
+                            .accessibilityLabel("Add video")
+                        }
+
+                        Spacer(minLength: 4)
+                        if !isCompactWidth {
+                            Text("⏎ TO POST")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(C.textTertiary)
+                        }
+                        Button {
+                            isBodyFocused = false
+                            Task { await publish() }
+                        } label: {
+                            if isPublishing {
+                                ProgressView().tint(WestreemTokens.Palette.greenOn)
+                            } else {
+                                Text("Post")
+                            }
+                        }
+                        .buttonStyle(WestreemPillButtonStyle(tone: .primary))
+                        .disabled(
+                            !canPublish || isPublishing || isResolving || isUploadingPhotos
+                                || mediaJobIsBusy
+                        )
+                    }
                 }
             }
-
-            VStack(alignment: .leading, spacing: 6) {
-                TextField(placeholder, text: $bodyText, axis: .vertical)
-                    .lineLimit(5...12)
-                    .focused($isBodyFocused)
-                    .textInputAutocapitalization(.sentences)
-                    .foregroundStyle(C.text)
-                    .tint(C.watch)
-                    .font(.body)
-                    .frame(minHeight: isCompactWidth ? 112 : 132, alignment: .topLeading)
-                    .onChange(of: bodyText) { _, value in
-                        resolvePastedLinkIfNeeded(in: value)
-                    }
-                MentionAutocompletePanel(text: $bodyText)
-                    .zIndex(20)
-            }
-            .padding(12)
-            .background(C.elevated.opacity(0.72))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .stroke(isBodyFocused ? C.watch.opacity(0.75) : C.borderSubtle, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 14))
             .zIndex(10)
 
             if isResourceWave {
@@ -178,26 +224,9 @@ struct RippleComposer: View {
 
             if initialTool == nil {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Add to your Ripple")
+                Text("More Ripple options")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(C.textMuted)
-
-                LazyVGrid(
-                    columns: [GridItem(.flexible()), GridItem(.flexible())],
-                    spacing: 10
-                ) {
-                Button {
-                    isBodyFocused = false
-                    showsPhotoSourceChooser = true
-                } label: {
-                    composerToolLabel(
-                        "Photo",
-                        systemImage: "photo.on.rectangle.angled",
-                        selected: !photos.isEmpty
-                    )
-                }
-                .buttonStyle(.plain)
-                .disabled(isUploadingPhotos || photos.count >= 10)
                 Button {
                     pollOpen.toggle()
                     if !pollOpen {
@@ -211,35 +240,7 @@ struct RippleComposer: View {
                         selected: pollOpen
                     )
                 }
-                if voiceRipplesEnabled {
-                    Button {
-                        isBodyFocused = false
-                        Task { await voiceRecorder.start() }
-                    } label: {
-                        composerToolLabel(
-                            "Voice",
-                            systemImage: "waveform",
-                            selected: voiceRecorder.state != .idle
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(selectedMediaJobID != nil || voiceRecorder.state != .idle)
-                }
-                if videoRipplesEnabled {
-                    Button {
-                        isBodyFocused = false
-                        showsVideoLibrary = true
-                    } label: {
-                        composerToolLabel(
-                            "Video",
-                            systemImage: "video",
-                            selected: mediaJob?.kind == .video
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(selectedMediaJobID != nil || voiceRecorder.state != .idle)
-                }
-                }
+                .buttonStyle(.plain)
             }
             }
 
@@ -270,33 +271,10 @@ struct RippleComposer: View {
                     .foregroundStyle(C.watch)
             }
 
-            Button {
-                isBodyFocused = false
-                Task { await publish() }
-            } label: {
-                HStack {
-                    Spacer()
-                    if isPublishing {
-                        ProgressView().tint(.black)
-                    } else {
-                        Image(systemName: "wave.3.right")
-                        Text("Publish Ripple")
-                    }
-                    Spacer()
-                }
-                .font(.headline)
-                .frame(minHeight: 48)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(C.watch)
-            .disabled(
-                !canPublish || isPublishing || isResolving || isUploadingPhotos
-                    || mediaJobIsBusy
-            )
         }
-        .padding(isCompactWidth ? 14 : 18)
+        .padding(14)
         .background(C.surface)
-        .overlay(RoundedRectangle(cornerRadius: C.cardRadius).stroke(C.borderSubtle))
+        .overlay(RoundedRectangle(cornerRadius: C.cardRadius).stroke(C.borderEdge))
         .clipShape(RoundedRectangle(cornerRadius: C.cardRadius))
         .confirmationDialog(
             "Add a photo",
@@ -400,7 +378,7 @@ struct RippleComposer: View {
     private var destinationLabel: String {
         switch destination {
         case .personal:
-            "Posting to My Atmo"
+            "Posting to My Pulse"
         case .vibe(_, let name):
             "Posting to \(name)"
         case .wave(_, let vibeName, let wave):
@@ -419,11 +397,11 @@ struct RippleComposer: View {
     private var placeholder: String {
         switch destination {
         case .personal:
-            "Create a Ripple on My Atmo…"
+            "Say something to your Pulse…"
         case .vibe(_, let name):
-            "Create a Ripple in \(name)…"
+            "Say something to \(name)…"
         case .wave(_, _, let wave):
-            "Create a Ripple in \(wave.name)…"
+            "Say something to \(wave.name)…"
         }
     }
 
