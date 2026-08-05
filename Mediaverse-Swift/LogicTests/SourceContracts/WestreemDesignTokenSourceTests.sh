@@ -35,7 +35,7 @@ for token in \
   'text = Color(hex: "#E7EFEB")' \
   'textBody = Color(hex: "#D6E2DD")' \
   'muted = Color(hex: "#A9B8B2")' \
-  'textFaint = Color(hex: "#5F6E69")'; do
+  'textFaint = Color(hex: "#7A8A84")'; do
   require "$token" "$tokens" "missing Design System palette token: $token"
 done
 

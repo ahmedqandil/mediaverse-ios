@@ -43,7 +43,7 @@ enum WestreemTokens {
         static let text = Color(hex: "#E7EFEB")
         static let textBody = Color(hex: "#D6E2DD")
         static let muted = Color(hex: "#A9B8B2")
-        static let textFaint = Color(hex: "#5F6E69")
+        static let textFaint = Color(hex: "#7A8A84")
     }
 
     // Approved Design System fonts are bundled in Resources/Fonts under the
