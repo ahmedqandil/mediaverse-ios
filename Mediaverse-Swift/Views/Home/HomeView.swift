@@ -2432,7 +2432,7 @@ struct HomeVideoCard: View {
     let onPreviewPaused: () -> Void
     let openMediaAction: () -> Void
     let replaceMediaAction: ((CGRect?) -> Void)?
-    var horizontalContentInset: CGFloat = 0
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var thumbnailGlobalFrame: CGRect?
     @State private var previewScrubTime: Double?
     @State private var showPreviewVideo = false
@@ -2447,62 +2447,60 @@ struct HomeVideoCard: View {
         isPreviewActive && previewManager.isReady
     }
 
-    private var feedMetaText: String {
-        ["\(fmtViews(video.views)) views", publishedTimeText].compactMap { $0 }.joined(separator: " • ")
+    private var ownerName: String? {
+        video.channel?.name ?? video.show?.title
     }
 
-    private var publishedTimeText: String? {
-        let publishedAt = video.publishedAt?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let createdAt = video.createdAt.trimmingCharacters(in: .whitespacesAndNewlines)
-        let timestamp = publishedAt?.isEmpty == false ? publishedAt : (createdAt.isEmpty ? nil : createdAt)
-        guard let timestamp else { return nil }
-        return relativePublishedTime(from: timestamp)
+    private var mediaMetaItems: [String] {
+        let values: [String?] = [
+            ownerName,
+            "\(fmtViews(video.views)) views",
+            video.duration.map(fmtDur)
+        ]
+        return values
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             thumbnailMediaTarget
-            // ── Avatar + text row ─────────────────────────────────────────────
-            HStack(alignment: .top, spacing: 10) {
-                sourceTarget {
-                    avatarView
-                        .frame(width: 36, height: 36)
-                        .clipShape(Circle())
+            VStack(alignment: .leading, spacing: 5) {
+                mediaTarget {
+                    Text(video.title)
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(C.text)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                VStack(alignment: .leading, spacing: 3) {
-                    mediaTarget {
-                        Text(video.title)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .lineLimit(2)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    if let ch = video.channel {
+                HStack(spacing: 0) {
+                    if let ownerName {
                         sourceTarget {
-                            Text(ch.name)
-                                .font(.system(size: 12))
-                                .foregroundStyle(C.textMuted)
-                                .lineLimit(1)
+                            Text(ownerName.uppercased())
                         }
-                    } else if let show = video.show {
-                        sourceTarget {
-                            Text(show.title)
-                                .font(.system(size: 12))
-                                .foregroundStyle(C.textMuted)
-                                .lineLimit(1)
-                        }
+                        Text(" · ")
                     }
-
-                    Text(feedMetaText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.white.opacity(0.35))
+                    Text(mediaMetaItems.dropFirst(ownerName == nil ? 0 : 1).joined(separator: " · ").uppercased())
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .font(.system(size: 9))
+                .fontDesign(.monospaced)
+                .tracking(0.72)
+                .foregroundStyle(Color(hex: "#7E8F89"))
+                .lineLimit(1)
             }
-            .padding(.horizontal, horizontalContentInset > 0 ? horizontalContentInset : C.pagePad)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 11)
         }
+        .background(C.surface)
+        .clipShape(RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: C.cardRadius, style: .continuous)
+                .stroke(C.borderEdge, lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.70), radius: 30, x: 0, y: 20)
+        .shadow(color: Color.black.opacity(0.45), radius: 7, x: 0, y: 3)
+        .padding(.horizontal, horizontalSizeClass == .compact ? 0 : 12)
         .contentShape(Rectangle())
         .background {
             GeometryReader { proxy in
@@ -2544,6 +2542,12 @@ struct HomeVideoCard: View {
                 feedPreviewSeekBar
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                     .zIndex(2)
+            } else {
+                Rectangle()
+                    .fill(Color.white.opacity(0.12))
+                    .frame(height: 3)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .allowsHitTesting(false)
             }
         }
     }
@@ -2685,20 +2689,9 @@ struct HomeVideoCard: View {
                 .allowsHitTesting(false)
             }
 
-            if let dur = video.duration {
-                Text(fmtDur(dur))
-                    .font(.system(size: 10, weight: .semibold))
-                    .fontDesign(.monospaced)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 5).padding(.vertical, 2)
-                    .background(Color.black.opacity(0.80))
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                    .padding(6)
-            }
         }
-        .frame(height: video.homeFeedCardHeight(for: UIScreen.main.bounds.width))
+        .aspectRatio(16 / 9, contentMode: .fit)
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, horizontalContentInset)
         .clipped()
         .onDisappear {
             let wasActive = activePreviewVideoId == video.id || previewManager.activeVideoId == video.id
@@ -2764,39 +2757,6 @@ struct HomeVideoCard: View {
         }
     }
 
-    // Computed outside @ViewBuilder to avoid iOS 26 instability with `let` bindings
-    // inside ViewBuilder closures (local `let` inside @ViewBuilder can confuse the
-    // compiler's result-builder rewrite in Swift 6 / Xcode 26).
-    private var avatarInitial: String {
-        (video.channel?.name.first ?? video.show?.title.first).map(String.init) ?? "?"
-    }
-
-    @ViewBuilder
-    private var avatarView: some View {
-        if let url = C.mediaURL(video.channel?.avatarUrl ?? video.show?.coverUrl) {
-            CachedRemoteImage(
-                url: url,
-                targetSize: CGSize(width: 34, height: 34)
-            ) { img in
-                img.resizable().scaledToFill()
-            } placeholder: {
-                initialsCircle(avatarInitial)
-            }
-        } else {
-            initialsCircle(avatarInitial)
-        }
-    }
-
-    private func initialsCircle(_ initial: String) -> some View {
-        Circle()
-            .fill(Color.white.opacity(0.1))
-            .overlay {
-                Text(initial.uppercased())
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Color.white.opacity(0.4))
-            }
-    }
-
     private func fmtDur(_ s: Double) -> String {
         guard s.isFinite, s >= 0 else { return "0:00" }
         let m = Int(s) / 60; let sec = Int(s) % 60
@@ -2809,30 +2769,6 @@ struct HomeVideoCard: View {
         return String(n)
     }
 
-    private func relativePublishedTime(from isoString: String) -> String? {
-        guard let date = Self.feedFractionalDateFormatter.date(from: isoString)
-            ?? Self.feedDateFormatter.date(from: isoString) else { return nil }
-        let seconds = max(Int(Date().timeIntervalSince(date)), 0)
-        if seconds < 60 { return "now" }
-        if seconds < 3_600 { return "\(seconds / 60)m ago" }
-        if seconds < 86_400 { return "\(seconds / 3_600)h ago" }
-        if seconds < 604_800 { return "\(seconds / 86_400)d ago" }
-        if seconds < 2_592_000 { return "\(seconds / 604_800)w ago" }
-        if seconds < 31_536_000 { return "\(seconds / 2_592_000)mo ago" }
-        return "\(seconds / 31_536_000)y ago"
-    }
-
-    private static let feedFractionalDateFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
-
-    private static let feedDateFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }()
 }
 
 // MARK: - Continue watching card

@@ -471,8 +471,7 @@ struct AtmosphereView: View {
                 },
                 replaceMediaAction: canHandoff(feedVideo) ? { sourceFrame in
                     handoffToWatch(feedVideo, sourceFrame: sourceFrame)
-                } : nil,
-                horizontalContentInset: 0
+                } : nil
             )
         }
     }
