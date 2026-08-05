@@ -159,6 +159,40 @@ extension C {
     static let offlineBanner: Color = Color(hex: "#F2B341")
 }
 
+// MARK: - Adaptive presentation
+
+/// Design System 04-D / CORE-09 native sheet chrome. The keyed consumer owns
+/// its detents and content; this modifier owns only the shared presentation
+/// treatment and dismissal policy. Requiring detents prevents the primitive
+/// from inventing feature-specific compact or half heights.
+private struct WestreemAdaptiveSheetModifier: ViewModifier {
+    let detents: Set<PresentationDetent>
+    let dismissible: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .presentationDetents(detents)
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(WestreemTokens.Radius.sheet)
+            .presentationBackground(WestreemTokens.Palette.ink900)
+            .interactiveDismissDisabled(!dismissible)
+    }
+}
+
+extension View {
+    /// Applies the exact WeStreem mobile sheet surface while preserving native
+    /// iOS detents, rubber-band interaction, accessibility and keyboard flow.
+    func westreemAdaptiveSheet(
+        detents: Set<PresentationDetent>,
+        dismissible: Bool = true
+    ) -> some View {
+        modifier(WestreemAdaptiveSheetModifier(
+            detents: detents,
+            dismissible: dismissible
+        ))
+    }
+}
+
 // MARK: - View helpers
 //
 // Callers should use `.animation(WestreemTokens.Easing.standard, value: state)`

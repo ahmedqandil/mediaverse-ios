@@ -78,6 +78,17 @@ require 'JetBrainsMono-Variable.ttf in Resources' "$project" "app target must bu
 require 'Manrope-OFL.txt in Resources' "$project" "app target must bundle the Manrope license"
 require 'JetBrainsMono-OFL.txt in Resources' "$project" "app target must bundle the JetBrains Mono license"
 
+for sheet_contract in \
+  'func westreemAdaptiveSheet(' \
+  'detents: Set<PresentationDetent>' \
+  '.presentationDetents(detents)' \
+  '.presentationDragIndicator(.visible)' \
+  '.presentationCornerRadius(WestreemTokens.Radius.sheet)' \
+  '.presentationBackground(WestreemTokens.Palette.ink900)' \
+  '.interactiveDismissDisabled(!dismissible)'; do
+  require "$sheet_contract" "$tokens" "missing Design System 04-D sheet contract: $sheet_contract"
+done
+
 test "$(shasum -a 256 "$manrope" | awk '{print $1}')" = "d0639be45d0af36e798172419d7bd173c4bd4f29e2b76cbb69db1d11bf8b0a40" || {
   echo "FAIL: bundled Manrope asset differs from the approved source" >&2
   exit 1
