@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Machine-checkable acceptance boundary for the first production-native
@@ -1491,5 +1492,379 @@ public enum MatrixNativeRetryContract {
         hasLiveSendHandle: Bool
     ) -> Bool {
         kind == .text && hasLiveSendHandle
+    }
+}
+
+public struct MatrixWaveEstablishmentManifest: Codable, Equatable, Sendable {
+    public let version: Int
+    public let hashAlgorithm: String
+    public let manifestHash: String
+    public let roomID: String
+    public let parentSpaceID: String
+    public let bootstrapEventIDs: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case version
+        case hashAlgorithm = "hash_algorithm"
+        case manifestHash = "manifest_hash"
+        case roomID = "room_id"
+        case parentSpaceID = "parent_space_id"
+        case bootstrapEventIDs = "bootstrap_event_ids"
+    }
+}
+
+/// Full-fidelity current-state evidence returned by the authenticated
+/// Westreem projection boundary. Content remains JSON so newer Matrix state
+/// fields are not silently discarded by the native client.
+public struct MatrixWaveAuthoritativeStateEvent: Codable, Equatable, Sendable {
+    public let roomID: String
+    public let eventID: String
+    public let sender: String
+    public let type: String
+    public let stateKey: String
+    public let contentJSON: String
+
+    public init(
+        roomID: String,
+        eventID: String,
+        sender: String,
+        type: String,
+        stateKey: String,
+        contentJSON: String
+    ) {
+        self.roomID = roomID
+        self.eventID = eventID
+        self.sender = sender
+        self.type = type
+        self.stateKey = stateKey
+        self.contentJSON = contentJSON
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case roomID = "room_id"
+        case eventID = "event_id"
+        case sender
+        case type
+        case stateKey = "state_key"
+        case contentJSON = "content_json"
+    }
+}
+
+public struct MatrixWaveAuthoritativeParent: Codable, Equatable, Sendable {
+    public let spaceRoomID: String
+    public let parentEvent: MatrixWaveAuthoritativeStateEvent
+    public let childEvent: MatrixWaveAuthoritativeStateEvent
+
+    enum CodingKeys: String, CodingKey {
+        case spaceRoomID = "space_room_id"
+        case parentEvent = "parent_event"
+        case childEvent = "child_event"
+    }
+}
+
+public struct MatrixWaveAuthoritativeState: Codable, Equatable, Sendable {
+    public let roomID: String
+    public let marker: MatrixWaveAuthoritativeStateEvent?
+    public let parents: [MatrixWaveAuthoritativeParent]
+
+    enum CodingKeys: String, CodingKey {
+        case roomID = "room_id"
+        case marker
+        case parents
+    }
+}
+
+public struct MatrixWaveEstablishmentProjection: Equatable, Sendable {
+    public let markerEventID: String
+    public let manifest: MatrixWaveEstablishmentManifest
+
+    public var suppressedEventIDs: Set<String> {
+        Set(manifest.bootstrapEventIDs).union([markerEventID])
+    }
+
+    public var cacheKey: String {
+        MatrixWaveEstablishmentContract.cacheKey(
+            roomID: manifest.roomID,
+            manifestHash: manifest.manifestHash
+        )
+    }
+
+    public func permitsProjection(of eventID: String) -> Bool {
+        !suppressedEventIDs.contains(eventID)
+    }
+}
+
+public enum MatrixWaveProjectionEventClass: Equatable, Sendable {
+    case messageLike
+    case recognizedRoomState
+    case establishmentOrBootstrap
+    case unsupportedOrProtocolMetadata
+}
+
+/// Cross-client projection flags frozen by VAC-002. This policy classifies
+/// presentation and derived state only; MatrixRustSDK retains every raw event.
+public struct MatrixWaveEventEligibility: Equatable, Sendable {
+    public let displayInTimeline: Bool
+    public let displayAsCompactRoomEvent: Bool
+    public let updatesPreview: Bool
+    public let updatesRecency: Bool
+    public let countsUnread: Bool
+    public let eligibleForPush: Bool
+    public let eligibleForSearch: Bool
+
+    public static func policy(
+        for eventClass: MatrixWaveProjectionEventClass
+    ) -> MatrixWaveEventEligibility {
+        switch eventClass {
+        case .messageLike:
+            MatrixWaveEventEligibility(
+                displayInTimeline: true,
+                displayAsCompactRoomEvent: false,
+                updatesPreview: true,
+                updatesRecency: true,
+                countsUnread: true,
+                eligibleForPush: true,
+                eligibleForSearch: true
+            )
+        case .recognizedRoomState:
+            MatrixWaveEventEligibility(
+                displayInTimeline: true,
+                displayAsCompactRoomEvent: true,
+                updatesPreview: false,
+                updatesRecency: false,
+                countsUnread: false,
+                eligibleForPush: false,
+                eligibleForSearch: false
+            )
+        case .establishmentOrBootstrap, .unsupportedOrProtocolMetadata:
+            MatrixWaveEventEligibility(
+                displayInTimeline: false,
+                displayAsCompactRoomEvent: false,
+                updatesPreview: false,
+                updatesRecency: false,
+                countsUnread: false,
+                eligibleForPush: false,
+                eligibleForSearch: false
+            )
+        }
+    }
+}
+
+/// Exact consumer contract for the trusted, service-authored Wave bootstrap
+/// marker. Invalid or absent markers deliberately fail open: raw Matrix
+/// history stays owned by MatrixRustSDK and no event is hidden.
+public enum MatrixWaveEstablishmentContract {
+    public static let eventType = "com.westreem.wave.establishment.v1"
+    /// Single-homeserver production authority. Never derive this identity
+    /// from the viewing user; a non-production/federated sender mismatch must
+    /// fail open until the authenticated bootstrap supplies an explicit value.
+    public static let trustedProductionServiceUserID =
+        "@westreem_service:vibes.westreem.com"
+    public static let version = 1
+    public static let hashAlgorithm = "sha256"
+    public static let maximumBootstrapEvents = 64
+    public static let cacheProjectionVersion = 4
+
+    private static let exactKeys: Set<String> = [
+        "version",
+        "hash_algorithm",
+        "manifest_hash",
+        "room_id",
+        "parent_space_id",
+        "bootstrap_event_ids",
+    ]
+
+    public static func verify(
+        contentJSON: String,
+        markerEventID: String,
+        stateKey: String,
+        senderID: String,
+        trustedServiceUserID: String,
+        roomID: String,
+        canonicalParentSpaceIDs: Set<String>,
+        hasCanonicalReciprocalParentEdge: (String) -> Bool
+    ) -> MatrixWaveEstablishmentProjection? {
+        guard
+            stateKey.isEmpty,
+            senderID == trustedServiceUserID,
+            validMatrixID(markerEventID, sigil: "$"),
+            let data = contentJSON.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data),
+            let dictionary = object as? [String: Any],
+            Set(dictionary.keys) == exactKeys,
+            let manifest = try? JSONDecoder().decode(
+                MatrixWaveEstablishmentManifest.self,
+                from: data
+            ),
+            manifest.version == version,
+            manifest.hashAlgorithm == hashAlgorithm,
+            manifest.roomID == roomID,
+            validMatrixID(manifest.roomID, sigil: "!"),
+            validMatrixID(manifest.parentSpaceID, sigil: "!"),
+            canonicalParentSpaceIDs.contains(manifest.parentSpaceID),
+            hasCanonicalReciprocalParentEdge(manifest.parentSpaceID),
+            (1...maximumBootstrapEvents).contains(
+                manifest.bootstrapEventIDs.count
+            ),
+            Set(manifest.bootstrapEventIDs).count
+                == manifest.bootstrapEventIDs.count,
+            manifest.bootstrapEventIDs.allSatisfy({
+                validMatrixID($0, sigil: "$")
+            }),
+            manifest.manifestHash.count == 64,
+            manifest.manifestHash.range(
+                of: "^[a-f0-9]{64}$",
+                options: .regularExpression
+            ) != nil,
+            manifest.manifestHash == sha256Hex(canonical(manifest))
+        else {
+            return nil
+        }
+
+        return MatrixWaveEstablishmentProjection(
+            markerEventID: markerEventID,
+            manifest: MatrixWaveEstablishmentManifest(
+                version: manifest.version,
+                hashAlgorithm: manifest.hashAlgorithm,
+                manifestHash: manifest.manifestHash,
+                roomID: manifest.roomID,
+                parentSpaceID: manifest.parentSpaceID,
+                bootstrapEventIDs: manifest.bootstrapEventIDs.sorted(by: utf8Less)
+            )
+        )
+    }
+
+    /// Verifies the server-authoritative current-state projection used when
+    /// the Rust SDK timeline window does not contain the marker or hierarchy.
+    /// The server has already proved actor membership and reciprocal edges;
+    /// this client still validates event identity, state keys, event types,
+    /// and the exact marker bytes before suppressing anything.
+    public static func verify(
+        authoritative state: MatrixWaveAuthoritativeState,
+        roomID: String,
+        trustedServiceUserID: String
+    ) -> MatrixWaveEstablishmentProjection? {
+        guard
+            state.roomID == roomID,
+            let marker = state.marker,
+            marker.roomID == roomID,
+            marker.type == eventType,
+            marker.stateKey.isEmpty,
+            !state.parents.isEmpty
+        else { return nil }
+
+        var parentIDs = Set<String>()
+        var parentEdges = [String: MatrixWaveAuthoritativeParent]()
+        for relation in state.parents {
+            guard
+                relation.parentEvent.roomID == roomID,
+                relation.childEvent.roomID == relation.spaceRoomID,
+                relation.parentEvent.type == "m.space.parent",
+                relation.parentEvent.stateKey == relation.spaceRoomID,
+                relation.childEvent.type == "m.space.child",
+                relation.childEvent.stateKey == roomID,
+                relation.parentEvent.sender == relation.childEvent.sender,
+                isCanonicalParentContent(relation.parentEvent.contentJSON),
+                isCanonicalChildContent(relation.childEvent.contentJSON)
+            else { return nil }
+            parentIDs.insert(relation.spaceRoomID)
+            parentEdges[relation.spaceRoomID] = relation
+        }
+
+        return verify(
+            contentJSON: marker.contentJSON,
+            markerEventID: marker.eventID,
+            stateKey: marker.stateKey,
+            senderID: marker.sender,
+            trustedServiceUserID: trustedServiceUserID,
+            roomID: roomID,
+            canonicalParentSpaceIDs: parentIDs,
+            hasCanonicalReciprocalParentEdge: { parentID in
+                guard let relation = parentEdges[parentID] else { return false }
+                return isCanonicalChildContent(relation.childEvent.contentJSON)
+            }
+        )
+    }
+
+    public static func canonical(
+        _ manifest: MatrixWaveEstablishmentManifest
+    ) -> String {
+        ([
+            "westreem-wave-establishment",
+            String(manifest.version),
+            manifest.roomID,
+            manifest.parentSpaceID,
+        ] + Array(Set(manifest.bootstrapEventIDs)).sorted(by: utf8Less))
+            .joined(separator: "\n")
+    }
+
+    private static func utf8Less(_ left: String, _ right: String) -> Bool {
+        let a = Array(left.utf8)
+        let b = Array(right.utf8)
+        for (leftByte, rightByte) in zip(a, b) where leftByte != rightByte {
+            return leftByte < rightByte
+        }
+        return a.count < b.count
+    }
+
+    public static func sha256Hex(_ value: String) -> String {
+        SHA256.hash(data: Data(value.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    public static func cacheKey(
+        roomID: String,
+        manifestHash: String?
+    ) -> String {
+        let encoded = roomID.addingPercentEncoding(
+            withAllowedCharacters: .alphanumerics
+        ) ?? roomID
+        return "wave-projection:v\(cacheProjectionVersion):\(encoded):\(manifestHash ?? "legacy")"
+    }
+
+    public static func isCanonicalParentContent(
+        _ contentJSON: String
+    ) -> Bool {
+        guard
+            let data = contentJSON.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data),
+            let content = object as? [String: Any],
+            content["canonical"] as? Bool == true,
+            let via = content["via"] as? [Any],
+            !via.isEmpty,
+            via.allSatisfy({ value in
+                guard let string = value as? String else { return false }
+                return !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            })
+        else {
+            return false
+        }
+        return true
+    }
+
+    private static func isCanonicalChildContent(
+        _ contentJSON: String
+    ) -> Bool {
+        guard
+            let data = contentJSON.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data),
+            let content = object as? [String: Any],
+            let via = content["via"] as? [Any]
+        else { return false }
+        return !via.isEmpty && via.allSatisfy { value in
+            guard let string = value as? String else { return false }
+            return !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    private static func validMatrixID(
+        _ value: String,
+        sigil: Character
+    ) -> Bool {
+        value.count > 1
+            && value.first == sigil
+            && value.utf8.count <= 255
+            && !value.contains(where: { $0.isWhitespace })
     }
 }

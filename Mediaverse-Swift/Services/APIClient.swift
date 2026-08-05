@@ -361,6 +361,33 @@ actor APIClient: LegacySocialTransport {
         }
     }
 
+    /// Fetches the bounded server-authoritative current Matrix state needed
+    /// to project a Wave when the Rust SDK timeline window is cold or partial.
+    /// The backend validates the signed-in identity and Matrix membership;
+    /// this method never calls Matrix directly or accepts a caller-supplied
+    /// Matrix user ID.
+    func fetchMatrixWaveEstablishmentState(
+        roomID: String
+    ) async throws -> MatrixWaveAuthoritativeState {
+        guard
+            roomID.first == "!",
+            roomID.count > 1,
+            roomID.utf8.count <= 255,
+            !roomID.contains(where: { $0.isWhitespace }),
+            let encodedRoomID = roomID.addingPercentEncoding(
+                withAllowedCharacters: .alphanumerics
+                    .union(CharacterSet(charactersIn: "-._~"))
+            )
+        else { throw APIError.badURL("/api/matrix/waves/establishment-state") }
+        let data = try await socialData(
+            path: "/api/matrix/waves/establishment-state?roomId=\(encodedRoomID)"
+        )
+        return try JSONDecoder().decode(
+            MatrixWaveAuthoritativeState.self,
+            from: data
+        )
+    }
+
     func socialPostData(path: String, body: Data) async throws -> Data {
         guard let url = URL(string: C.baseURL + path) else {
             throw APIError.badURL(path)

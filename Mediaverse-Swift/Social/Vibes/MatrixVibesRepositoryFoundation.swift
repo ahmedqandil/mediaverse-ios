@@ -102,11 +102,33 @@ struct MatrixTimelinePage: Codable, Equatable, Sendable {
     let roomID: String
     let items: [MatrixTimelineItem]
     let nextToken: String?
+    let projectionCacheKey: String
+    let suppressedEventIDs: Set<String>
+
+    init(
+        roomID: String,
+        items: [MatrixTimelineItem],
+        nextToken: String?,
+        projectionCacheKey: String? = nil,
+        suppressedEventIDs: Set<String> = []
+    ) {
+        self.roomID = roomID
+        self.items = items
+        self.nextToken = nextToken
+        self.projectionCacheKey = projectionCacheKey
+            ?? MatrixWaveEstablishmentContract.cacheKey(
+                roomID: roomID,
+                manifestHash: nil
+            )
+        self.suppressedEventIDs = suppressedEventIDs
+    }
 }
 
 struct MatrixNativeTimelineSnapshot: Sendable {
     let items: [MatrixTimelineItem]
     let hasMore: Bool
+    let projectionCacheKey: String
+    let suppressedEventIDs: Set<String>
 }
 
 /// Summary of a single thread inside a Wave, sourced from the Matrix Rust
@@ -997,6 +1019,13 @@ private struct MatrixNativeTimelineContext: Sendable {
     let mayPin: Bool
 }
 
+private struct MatrixWaveEstablishmentRawCandidate: Sendable {
+    let markerEventID: String
+    let stateKey: String
+    let senderID: String
+    let contentJSON: String
+}
+
 private enum MatrixNativeWaveRulesInspection {
     case missing
     case malformed
@@ -1024,6 +1053,16 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
     private var submittedReportFingerprints = Set<String>()
     private var submittedReportOrder: [String] = []
     private var observedLiveStages: [String: MatrixNativeLiveStageState] = [:]
+    /// Parent-side `m.space.child` evidence observed through MatrixRustSDK's
+    /// Space service. The child-side canonical `m.space.parent` state is
+    /// independently required by the establishment projection below.
+    private var canonicalParentSpaceIDsByRoomID: [String: Set<String>] = [:]
+    private var establishmentProjections: [
+        String: MatrixWaveEstablishmentProjection
+    ] = [:]
+    private var authoritativeEstablishmentProjectionReads: [
+        String: (fetchedAt: Date, projection: MatrixWaveEstablishmentProjection?)
+    ] = [:]
 
     init(sessionCoordinator: MatrixSessionCoordinator) {
         self.sessionCoordinator = sessionCoordinator
@@ -1508,6 +1547,18 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
             uniquingKeysWith: { first, _ in first }
         )
         let children = await list.rooms()
+        let currentChildRoomIDs = Set(children.map(\.roomId))
+        for roomID in Array(canonicalParentSpaceIDsByRoomID.keys) {
+            canonicalParentSpaceIDsByRoomID[roomID]?.remove(spaceID)
+            if canonicalParentSpaceIDsByRoomID[roomID]?.isEmpty == true {
+                canonicalParentSpaceIDsByRoomID.removeValue(forKey: roomID)
+                establishmentProjections.removeValue(forKey: roomID)
+            }
+        }
+        for roomID in currentChildRoomIDs {
+            canonicalParentSpaceIDsByRoomID[roomID, default: []].insert(spaceID)
+            establishmentProjections.removeValue(forKey: roomID)
+        }
         // Summaries fan out concurrently: each one awaits several SDK calls
         // (room info, encryption, members) that would otherwise serialize.
         return await withTaskGroup(
@@ -2229,8 +2280,13 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
     /// used for `com.westreem.room.rules.v1` (see `recoverWaveRules`).
     ///
     /// Returns tuples of (contentJSON, stateKey) with newest events first.
-    // TODO: verify against SDK — replace with a direct `roomStateEvent`
-    // reader when matrix-rust-components-swift exposes one.
+    ///
+    /// This is deliberately not used as authoritative input for the Wave
+    /// establishment marker: timeline pagination cannot prove the current
+    /// sender/event ID after a state replacement, and the pinned Rust FFI has
+    /// no authenticated current-state getter. A future binding must expose
+    /// full raw state events (type, state key, sender, event ID and content)
+    /// before this recovery path can participate in establishment projection.
     private func latestCustomStateEvent(
         room matrixRoom: Room,
         client: Client,
@@ -2701,7 +2757,13 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         let offsets = MatrixNativeWaveManagementContract.uniqueSearchResultOffsets(
             accumulated.map { ($0.roomID, $0.eventID) }
         )
-        return offsets.prefix(100).map { accumulated[$0] }
+        return offsets.prefix(100)
+            .map { accumulated[$0] }
+            .filter {
+                establishmentProjections[roomID]?.permitsProjection(
+                    of: $0.eventID
+                ) != false
+            }
     }
 
     private static func access(
@@ -2847,11 +2909,11 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
 
     func timelineItems(roomID: String, paginateBackwards: Bool) async throws
         -> MatrixNativeTimelineSnapshot {
+        let client = try await activeClient()
         let session: MatrixFocusedTimelineSession
         if let existing = focusedTimelines[roomID] {
             session = existing
         } else {
-            let client = try await activeClient()
             let matrixRoom = try room(roomID, in: client)
             let context = try await timelineContext(room: matrixRoom, client: client)
             let timeline = try await matrixRoom.timelineWithConfiguration(
@@ -2880,14 +2942,64 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
             // Yield once so the listener can publish that batch before snapshotting.
             await Task.yield()
         }
+        let authoritativeProjection = await authoritativeEstablishmentProjection(
+            roomID: roomID
+        )
+        let projected = session.accumulator.projectedTimelineItems(
+            roomID: roomID,
+            trustedServiceUserID: MatrixWaveEstablishmentContract
+                .trustedProductionServiceUserID,
+            canonicalParentSpaceIDs: canonicalParentSpaceIDsByRoomID[roomID]
+                ?? [],
+            authoritativeProjection: authoritativeProjection
+        )
+        if let projection = projected.projection {
+            establishmentProjections[roomID] = projection
+        } else {
+            establishmentProjections.removeValue(forKey: roomID)
+        }
         return MatrixNativeTimelineSnapshot(
-            items: session.accumulator.timelineItems,
-            hasMore: !session.hitTimelineStart
+            items: projected.items,
+            hasMore: !session.hitTimelineStart,
+            projectionCacheKey: projected.projection?.cacheKey
+                ?? MatrixWaveEstablishmentContract.cacheKey(
+                    roomID: roomID,
+                    manifestHash: nil
+                ),
+            suppressedEventIDs: projected.projection?.suppressedEventIDs ?? []
         )
     }
 
     func releaseTimeline(roomID: String) async {
         focusedTimelines.removeValue(forKey: roomID)?.taskHandle.cancel()
+        authoritativeEstablishmentProjectionReads.removeValue(forKey: roomID)
+    }
+
+    private func authoritativeEstablishmentProjection(
+        roomID: String
+    ) async -> MatrixWaveEstablishmentProjection? {
+        if let cached = authoritativeEstablishmentProjectionReads[roomID],
+           Date().timeIntervalSince(cached.fetchedAt) < 10 {
+            return cached.projection
+        }
+        let projection: MatrixWaveEstablishmentProjection?
+        do {
+            let state = try await APIClient.shared
+                .fetchMatrixWaveEstablishmentState(roomID: roomID)
+            projection = MatrixWaveEstablishmentContract.verify(
+                authoritative: state,
+                roomID: roomID,
+                trustedServiceUserID: MatrixWaveEstablishmentContract
+                    .trustedProductionServiceUserID
+            )
+        } catch {
+            projection = nil
+        }
+        authoritativeEstablishmentProjectionReads[roomID] = (
+            fetchedAt: Date(),
+            projection: projection ?? nil
+        )
+        return projection ?? nil
     }
 
     func releaseThreadTimeline(roomID: String, rootEventID: String) async {
@@ -2897,6 +3009,11 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
     }
 
     func eventItem(roomID: String, eventID: String) async throws -> MatrixTimelineItem {
+        guard establishmentProjections[roomID]?.permitsProjection(of: eventID)
+            != false
+        else {
+            throw MatrixNativeWaveActionError.unavailable
+        }
         let client = try await activeClient()
         let matrixRoom = try room(roomID, in: client)
         let context = try await timelineContext(room: matrixRoom, client: client)
@@ -2967,7 +3084,10 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         let context = try await timelineContext(room: matrixRoom, client: client)
         let pinnedEventIDs = Array(
             (try await matrixRoom.roomInfo()).pinnedEventIds.prefix(100)
-        )
+        ).filter {
+            establishmentProjections[roomID]?.permitsProjection(of: $0)
+                != false
+        }
         guard !pinnedEventIDs.isEmpty else { return [] }
         let timeline = try await matrixRoom.timeline()
         var valuesByID: [String: MatrixTimelineItem] = [:]
@@ -4521,6 +4641,119 @@ private final class MatrixTimelineAccumulator: TimelineListener, @unchecked Send
         }
     }
 
+    func projectedTimelineItems(
+        roomID: String,
+        trustedServiceUserID: String,
+        canonicalParentSpaceIDs: Set<String>,
+        authoritativeProjection: MatrixWaveEstablishmentProjection? = nil
+    ) -> (
+        items: [MatrixTimelineItem],
+        projection: MatrixWaveEstablishmentProjection?
+    ) {
+        lock.withLock {
+            let projection = authoritativeProjection ?? Self.establishmentProjection(
+                    in: items,
+                    roomID: roomID,
+                    trustedServiceUserID: trustedServiceUserID,
+                    canonicalParentSpaceIDs: canonicalParentSpaceIDs
+                )
+            let suppressedEventIDs = projection?.suppressedEventIDs ?? []
+            let projected = items.compactMap { item -> MatrixTimelineItem? in
+                guard let event = item.asEvent() else { return nil }
+                guard !context.ignoredUserIDs.contains(event.sender) else {
+                    return nil
+                }
+                if case let .eventId(eventID) = event.eventOrTransactionId,
+                   suppressedEventIDs.contains(eventID) {
+                    return nil
+                }
+                return MatrixTimelineItem(event, context: context)
+            }
+            return (projected, projection)
+        }
+    }
+
+    func waveEstablishmentProjection(
+        roomID: String,
+        trustedServiceUserID: String,
+        canonicalParentSpaceIDs: Set<String>
+    ) -> MatrixWaveEstablishmentProjection? {
+        lock.withLock {
+            Self.establishmentProjection(
+                in: items,
+                roomID: roomID,
+                trustedServiceUserID: trustedServiceUserID,
+                canonicalParentSpaceIDs: canonicalParentSpaceIDs
+            )
+        }
+    }
+
+    private static func establishmentProjection(
+        in items: [TimelineItem],
+        roomID: String,
+        trustedServiceUserID: String,
+        canonicalParentSpaceIDs: Set<String>
+    ) -> MatrixWaveEstablishmentProjection? {
+        guard !canonicalParentSpaceIDs.isEmpty else { return nil }
+
+        var candidate: MatrixWaveEstablishmentRawCandidate?
+        for item in items.reversed() {
+            guard
+                let event = item.asEvent(),
+                event.eventTypeRaw == MatrixWaveEstablishmentContract.eventType
+            else {
+                continue
+            }
+            // The newest marker is authoritative. A malformed replacement
+            // invalidates projection suppression instead of resurrecting an
+            // older valid marker.
+            guard
+                case let .eventId(eventID) = event.eventOrTransactionId,
+                let (contentJSON, stateKey) =
+                    MatrixNativeRawEvent.contentAndStateKey(event)
+            else {
+                return nil
+            }
+            candidate = MatrixWaveEstablishmentRawCandidate(
+                markerEventID: eventID,
+                stateKey: stateKey,
+                senderID: event.sender,
+                contentJSON: contentJSON
+            )
+            break
+        }
+        guard let candidate else { return nil }
+
+        return MatrixWaveEstablishmentContract.verify(
+            contentJSON: candidate.contentJSON,
+            markerEventID: candidate.markerEventID,
+            stateKey: candidate.stateKey,
+            senderID: candidate.senderID,
+            trustedServiceUserID: trustedServiceUserID,
+            roomID: roomID,
+            canonicalParentSpaceIDs: canonicalParentSpaceIDs,
+            hasCanonicalReciprocalParentEdge: { parentSpaceID in
+                for item in items.reversed() {
+                    guard
+                        let event = item.asEvent(),
+                        event.eventTypeRaw == "m.space.parent",
+                        let (contentJSON, stateKey) =
+                            MatrixNativeRawEvent.contentAndStateKey(event),
+                        stateKey == parentSpaceID
+                    else {
+                        continue
+                    }
+                    // The newest write for this state key is authoritative;
+                    // an empty/tombstoned or non-canonical edge must not fall
+                    // back to an older valid write.
+                    return MatrixWaveEstablishmentContract
+                        .isCanonicalParentContent(contentJSON)
+                }
+                return false
+            }
+        )
+    }
+
     var waveRulesInspection: MatrixNativeWaveRulesInspection {
         lock.withLock {
             for item in items.reversed() {
@@ -5047,7 +5280,9 @@ actor MatrixVibesRepositoryFoundation: VibesRepository {
         return MatrixTimelinePage(
             roomID: roomID,
             items: snapshot.items,
-            nextToken: snapshot.hasMore ? "previous" : nil
+            nextToken: snapshot.hasMore ? "previous" : nil,
+            projectionCacheKey: snapshot.projectionCacheKey,
+            suppressedEventIDs: snapshot.suppressedEventIDs
         )
     }
 
@@ -6031,10 +6266,15 @@ private struct MatrixNativeRoomActivityPresentation {
                     return nil
                 }
             }
-        case let .failedToParseMessageLike(eventType, _):
-            body = "Unsupported message activity: \(eventType)"
-        case let .failedToParseState(eventType, _, _):
-            body = "Unsupported room activity: \(eventType)"
+        case .failedToParseMessageLike:
+            // The Rust timeline remains the raw authority, but unsupported
+            // protocol events have every VAC-002 projection flag off.
+            return nil
+        case .failedToParseState:
+            // The Rust timeline remains the raw authority, but unsupported
+            // protocol/state events have every VAC-002 projection flag off.
+            // Feature-specific readers may still inspect them separately.
+            return nil
         }
     }
 }
