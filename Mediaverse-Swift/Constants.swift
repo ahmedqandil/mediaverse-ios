@@ -103,24 +103,28 @@ enum C {
     // Background depth hierarchy
     static let bg          = WestreemTokens.Palette.ink950   // ink/950
     static let surface     = WestreemTokens.Palette.ink900   // ink/900
-    static let elevated    = WestreemTokens.Palette.ink800   // ink/800
-    static let overlay     = WestreemTokens.Palette.ink700   // ink/700
+    static let elevated    = WestreemTokens.Palette.ink800   // surface/card
+    static let overlay     = WestreemTokens.Palette.ink700   // surface/raised
+    static let sunken      = WestreemTokens.Palette.surfaceSunken
+    static let selected    = WestreemTokens.Palette.surfaceSelected
     // Legacy alias so existing code using surfaceAlt keeps compiling
     static let surfaceAlt  = Color(hex: "#161824")   // → elevated
 
     // Text hierarchy
     static let text         = WestreemTokens.Palette.text                              // text
-    static let textMuted    = WestreemTokens.Palette.muted                            // muted
-    static let textTertiary = Color(red: 240/255, green: 240/255, blue: 245/255).opacity(0.48)  // --text-tertiary
+    static let textMuted    = WestreemTokens.Palette.muted                            // text/secondary
+    static let textTertiary = WestreemTokens.Palette.textFaint                       // text/faint
 
     // Borders
     static let borderSubtle  = WestreemTokens.Palette.lineSoft   // line/soft
+    static let borderFrame   = WestreemTokens.Palette.lineFrame
+    static let borderEdge    = WestreemTokens.Palette.lineEdge
     static let border        = WestreemTokens.Palette.lineHard   // line/hard
     static let borderStrong  = Color.white.opacity(0.22)   // --border-strong
 
     // Accent colours — super-app palette
     static let watch     = WestreemTokens.Palette.green   // green
-    static let watchDim  = Color(hex: "#00C853")   // --watch-dim
+    static let watchDim  = WestreemTokens.Palette.greenDim
     static let listen    = Color(hex: "#C77DFF")   // --listen (purple, microdramas)
     static let listenDim = Color(hex: "#9C4DCC")   // --listen-dim
     static let play      = Color(hex: "#40C4FF")   // --play   (light blue)

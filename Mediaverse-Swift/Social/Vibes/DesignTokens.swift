@@ -18,17 +18,31 @@ enum WestreemTokens {
     // semantic aliases in Constants.swift pointed here so platform surfaces
     // cannot drift by retyping hex values at call sites.
     enum Palette {
-        static let ink950 = Color(hex: "#070A09")
+        static let ink950 = Color(hex: "#06090B")
         static let ink900 = Color(hex: "#0B0F0E")
-        static let ink800 = Color(hex: "#0E1211")
-        static let ink700 = Color(hex: "#151A18")
-        static let lineSoft = Color(hex: "#1B2320")
-        static let lineHard = Color(hex: "#2A332F")
+        static let ink800 = Color(hex: "#0E1312")
+        static let ink700 = Color(hex: "#1A201E")
+        static let surfaceSunken = Color(hex: "#0C110F")
+        static let surfaceSelected = Color(hex: "#101614")
+        static let surfaceRaisedEnd = Color(hex: "#121716")
+        static let lineSoft = Color(hex: "#131917")
+        static let lineFrame = Color(hex: "#1E2724")
+        static let lineEdge = Color(hex: "#232B29")
+        static let lineHard = Color(hex: "#2C3531")
         static let green = Color(hex: "#00E676")
+        static let greenOn = Color(hex: "#04150C")
+        static let greenDim = Color(hex: "#0E2A1D")
+        static let actRow = Color(hex: "#0A1711")
         static let pink = Color(hex: "#FF3D8A")
+        static let pinkOn = Color(hex: "#1C0410")
+        static let pinkDim = Color(hex: "#2A0C1B")
         static let lavender = Color(hex: "#B388FF")
+        static let lavenderOn = Color(hex: "#150B26")
+        static let lavenderDim = Color(hex: "#1B1430")
         static let text = Color(hex: "#E7EFEB")
-        static let muted = Color(hex: "#7E8F89")
+        static let textBody = Color(hex: "#D6E2DD")
+        static let muted = Color(hex: "#A9B8B2")
+        static let textFaint = Color(hex: "#5F6E69")
     }
 
     // Font files are not bundled in this checkout yet. These names are kept
@@ -90,17 +104,21 @@ enum WestreemTokens {
     // MARK: - Corner radii
 
     enum Radius {
-        static let small: CGFloat = 8
-        static let control: CGFloat = 10
-        static let large: CGFloat = 14
-        static let full: CGFloat = 999
+        static let chip: CGFloat = 12
+        static let row: CGFloat = 14
+        static let card: CGFloat = 16
+        static let panel: CGFloat = 18
+        static let sheet: CGFloat = 26
+        static let control: CGFloat = 999
+
+        // Compatibility aliases for existing Vibes callers.
+        static let small: CGFloat = chip
+        static let large: CGFloat = card
+        static let full: CGFloat = control
 
         /// Design System large radius for content cards.
-        static let card: CGFloat = large
-        /// Compound `borderRadius400`. Used by sheets & prominent surfaces.
-        static let sheet: CGFloat = 16
-        /// Compound `borderRadius600` — full pill for chips & QR frame.
-        static let pill: CGFloat = 999
+        /// Full pill for chips and control surfaces.
+        static let pill: CGFloat = control
     }
 }
 
