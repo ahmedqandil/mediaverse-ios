@@ -22,7 +22,6 @@ struct MatrixNativeVibesRootView: View {
     private enum VibesSection: String, CaseIterable, Identifiable {
         case waves
         case vibes
-        case explore
 
         var id: String { rawValue }
 
@@ -30,7 +29,6 @@ struct MatrixNativeVibesRootView: View {
             switch self {
             case .waves: "Waves"
             case .vibes: "Vibes"
-            case .explore: "Explore"
             }
         }
     }
@@ -178,10 +176,6 @@ struct MatrixNativeVibesRootView: View {
         switch selectedSection {
         case .vibes:
             vibesContent
-        case .explore:
-            MatrixNativePublicVibeDirectoryView {
-                Task { await load() }
-            }
         case .waves:
             MatrixNativeCombinedWavesView(spaces: spaces)
         }
@@ -191,7 +185,6 @@ struct MatrixNativeVibesRootView: View {
         switch section {
         case .waves: "wave.3.right"
         case .vibes: "person.3.sequence"
-        case .explore: "safari"
         }
     }
 
