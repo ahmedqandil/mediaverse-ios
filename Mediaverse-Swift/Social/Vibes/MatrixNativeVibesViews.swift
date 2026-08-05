@@ -1044,6 +1044,10 @@ private struct MatrixNativeVibeInfoTab: View {
     let permissions: MatrixNativeSpacePermissionSnapshot
     let openAffiliations: () -> Void
 
+    @State private var approvedAffiliations: [MatrixVibeApprovedAffiliation] = []
+    @State private var affiliationsLoading = true
+    @State private var affiliationsError: String?
+
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
@@ -1113,10 +1117,84 @@ private struct MatrixNativeVibeInfoTab: View {
                     }
                     .buttonStyle(.plain)
                 }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Approved affiliations")
+                            .font(.headline)
+                            .foregroundStyle(C.text)
+                        Spacer()
+                        Text("\(approvedAffiliations.count)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(C.textMuted)
+                    }
+
+                    if affiliationsLoading {
+                        ProgressView("Loading…")
+                            .tint(C.watch)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else if affiliationsError != nil {
+                        Text("Approved affiliations are temporarily unavailable.")
+                            .font(.subheadline)
+                            .foregroundStyle(C.textMuted)
+                    } else if approvedAffiliations.isEmpty {
+                        Text("No approved Show or Channel affiliations.")
+                            .font(.subheadline)
+                            .foregroundStyle(C.textMuted)
+                    } else {
+                        ForEach(approvedAffiliations) { affiliation in
+                            HStack(spacing: 10) {
+                                Text(affiliation.entityType == .show ? "S" : "C")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(C.watch)
+                                    .frame(width: 34, height: 34)
+                                    .background(C.watch.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(affiliation.name)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(C.text)
+                                        .lineLimit(1)
+                                    Text((affiliation.entityType == .show ? "Show" : "Channel") + (affiliation.handle.map { " · @\($0)" } ?? ""))
+                                        .font(.caption)
+                                        .foregroundStyle(C.textMuted)
+                                }
+                                Spacer()
+                                if affiliation.relationshipType == "OFFICIAL" {
+                                    Text("Official")
+                                        .font(.caption2.weight(.bold))
+                                        .foregroundStyle(C.watch)
+                                }
+                            }
+                            .padding(.vertical, 3)
+                        }
+                    }
+                }
+                .padding(16)
+                .background(C.surface, in: RoundedRectangle(cornerRadius: C.cardRadius))
+                .overlay(
+                    RoundedRectangle(cornerRadius: C.cardRadius)
+                        .stroke(C.borderSubtle)
+                )
             }
             .padding(.horizontal, C.pagePad)
             .padding(.top, 12)
             .padding(.bottom, 110)
+        }
+        .task(id: space.id) { await loadApprovedAffiliations() }
+    }
+
+    @MainActor
+    private func loadApprovedAffiliations() async {
+        affiliationsLoading = true
+        defer { affiliationsLoading = false }
+        do {
+            approvedAffiliations = try await APIClient.shared.matrixVibeApprovedAffiliations(
+                matrixSpaceID: space.id
+            )
+            affiliationsError = nil
+        } catch {
+            approvedAffiliations = []
+            affiliationsError = MatrixNativeCopy.message(for: error)
         }
     }
 }

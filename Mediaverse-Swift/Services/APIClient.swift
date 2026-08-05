@@ -3324,7 +3324,40 @@ struct MatrixVibeAffiliationRecord: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+struct MatrixVibeApprovedAffiliation: Identifiable, Codable, Equatable, Sendable {
+    let id: String
+    let matrixSpaceId: String
+    let entityType: MatrixVibeAffiliationEntityType
+    let relationshipType: String
+    let name: String
+    let handle: String?
+    let imageUrl: String?
+}
+
 extension APIClient {
+    /// Viewer-safe Info projection. It intentionally has no request, reviewer,
+    /// or rejected/revoked workflow fields.
+    func matrixVibeApprovedAffiliations(
+        matrixSpaceID: String
+    ) async throws -> [MatrixVibeApprovedAffiliation] {
+        struct Response: Decodable {
+            let affiliations: [MatrixVibeApprovedAffiliation]
+        }
+        var components = URLComponents()
+        components.path = "/api/matrix/vibe-affiliations"
+        components.queryItems = [
+            URLQueryItem(name: "mode", value: "approved"),
+            URLQueryItem(name: "matrixSpaceId", value: matrixSpaceID),
+        ]
+        guard let path = components.string else {
+            throw APIError.badURL("/api/matrix/vibe-affiliations")
+        }
+        return try JSONDecoder().decode(
+            Response.self,
+            from: try await socialData(path: path)
+        ).affiliations
+    }
+
     func matrixVibeAffiliations(
         matrixSpaceID: String
     ) async throws -> [MatrixVibeAffiliationRecord] {
