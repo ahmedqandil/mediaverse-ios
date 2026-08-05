@@ -552,10 +552,20 @@ private struct MatrixNativeCombinedWavesView: View {
 }
 
 private struct MatrixNativeVibeView: View {
+    private enum Section: String, CaseIterable, Identifiable {
+        case home = "Home"
+        case events = "Events"
+        case members = "Members"
+        case info = "Info"
+
+        var id: String { rawValue }
+    }
+
     let space: MatrixVibeSummary
 
     @EnvironmentObject private var matrixSession: MatrixNativeSessionController
     @Environment(\.scenePhase) private var scenePhase
+    @State private var selectedSection: Section = .home
     @State private var rooms: [MatrixWaveSummary] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
@@ -564,92 +574,40 @@ private struct MatrixNativeVibeView: View {
     @State private var showsCreateEvent = false
     @State private var showsInvitations = false
     @State private var showsAffiliations = false
+    @State private var showsSettings = false
     @State private var events: [VibeEventCardModel] = []
 
     var body: some View {
-        let activeLounges = rooms.filter {
-            !$0.isNestedSpace && $0.activeCallParticipantCount > 0
-        }
-        Group {
-            if isLoading, rooms.isEmpty {
-                MatrixNativeLoadingView(title: "Loading Waves")
-            } else if let errorMessage, rooms.isEmpty {
-                MatrixNativeUnavailableView(
-                    title: "Waves unavailable",
-                    message: errorMessage,
-                    retry: { Task { await load() } }
-                )
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        MatrixNativeVibeHero(
-                            space: space,
-                            rooms: rooms,
-                            permissions: permissions
-                        )
-                        if !events.isEmpty {
-                            MatrixNativeSectionLabel(title: "Events", count: events.count)
-                            ForEach(events.prefix(4)) { event in
-                                NavigationLink(value: AppRoute.event(event.slug)) {
-                                    VibeEventCardView(event: event)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        if !activeLounges.isEmpty {
-                            MatrixNativeSectionLabel(
-                                title: "Live lounges",
-                                count: activeLounges.count
-                            )
-                            ForEach(activeLounges) { room in
-                                NavigationLink {
-                                    MatrixNativeWaveRoomView(
-                                        room: room,
-                                        opensLiveLounge: true
-                                    )
-                                } label: {
-                                    MatrixNativeLiveLoungeRow(room: room)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        MatrixNativeSectionLabel(title: "Waves", count: rooms.count)
-
-                        if rooms.isEmpty {
-                            ContentUnavailableView {
-                                Label("No Waves", systemImage: "wave.3.right")
-                            } description: {
-                                Text("This Vibe does not have any visible rooms yet.")
-                            }
-                            .foregroundStyle(C.text)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 42)
-                        } else {
-                            ForEach(rooms) { room in
-                                if room.isNestedSpace {
-                                    NavigationLink {
-                                        MatrixNativeNestedSpaceView(room: room)
-                                    } label: {
-                                        MatrixNativeWaveRow(room: room)
-                                    }
-                                    .buttonStyle(.plain)
-                                } else {
-                                    NavigationLink {
-                                        MatrixNativeWaveRoomView(room: room)
-                                    } label: {
-                                        MatrixNativeWaveRow(room: room)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-                    }
-                    .padding(.horizontal, C.pagePad)
-                    .padding(.top, 12)
-                    .padding(.bottom, 110)
-                }
-                .refreshable { await load() }
+        VStack(spacing: 0) {
+            MediaverseUnderlineTabStrip(
+                items: Section.allCases.map {
+                    MediaverseTabItem(id: $0.rawValue, label: $0.rawValue)
+                },
+                selectedID: selectedSection.rawValue,
+                fillsWidth: true,
+                horizontalPadding: 0,
+                background: C.bg
+            ) { rawValue in
+                guard let section = Section(rawValue: rawValue) else { return }
+                select(section)
             }
+            .accessibilityLabel("Vibe navigation")
+
+            Group {
+                if isLoading, rooms.isEmpty {
+                    MatrixNativeLoadingView(title: "Loading Vibe")
+                } else if let errorMessage, rooms.isEmpty {
+                    MatrixNativeUnavailableView(
+                        title: "Vibe unavailable",
+                        message: errorMessage,
+                        retry: { Task { await load() } }
+                    )
+                } else {
+                    selectedSectionContent
+                }
+            }
+            .contentShape(Rectangle())
+            .simultaneousGesture(sectionSwipeGesture)
         }
         .background(C.bg.ignoresSafeArea())
         .navigationTitle(space.name)
@@ -657,37 +615,8 @@ private struct MatrixNativeVibeView: View {
         .toolbar {
             if permissions.mayOpenVibeManagement {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Section("Vibe settings") {
-                        if permissions.mayCreateWave {
-                            Button {
-                                showsCreateWave = true
-                            } label: {
-                                Label("Create Wave", systemImage: "plus.bubble")
-                            }
-                        }
-                        if permissions.isJoined {
-                            Button {
-                                showsCreateEvent = true
-                            } label: {
-                                Label("Create Event", systemImage: "calendar.badge.plus")
-                            }
-                        }
-                        if permissions.mayInviteMembers {
-                            Button {
-                                showsInvitations = true
-                            } label: {
-                                Label("Invite people", systemImage: "person.badge.plus")
-                            }
-                        }
-                        if permissions.isJoined {
-                            Button {
-                                showsAffiliations = true
-                            } label: {
-                                Label("Show & Channel affiliations", systemImage: "link")
-                            }
-                        }
-                        }
+                    Button {
+                        showsSettings = true
                     } label: {
                         Image(systemName: "gearshape")
                     }
@@ -730,6 +659,16 @@ private struct MatrixNativeVibeView: View {
                 vibeName: space.name
             )
         }
+        .sheet(isPresented: $showsSettings) {
+            MatrixNativeVibeSettingsView(
+                space: space,
+                permissions: permissions,
+                openAffiliations: {
+                    showsSettings = false
+                    showsAffiliations = true
+                }
+            )
+        }
         .task(id: space.id) { await load() }
         .task(id: "\(space.id):\(scenePhase)") {
             guard scenePhase == .active else { return }
@@ -750,6 +689,173 @@ private struct MatrixNativeVibeView: View {
         }
     }
 
+    @ViewBuilder
+    private var selectedSectionContent: some View {
+        switch selectedSection {
+        case .home:
+            homeContent
+        case .events:
+            eventsContent
+        case .members:
+            MatrixNativeVibeMembersTab(
+                space: space,
+                mayInviteMembers: permissions.mayInviteMembers,
+                invite: { showsInvitations = true }
+            )
+        case .info:
+            MatrixNativeVibeInfoTab(
+                space: space,
+                rooms: rooms,
+                permissions: permissions,
+                openAffiliations: { showsAffiliations = true }
+            )
+        }
+    }
+
+    private var homeContent: some View {
+        let activeLounges = rooms.filter {
+            !$0.isNestedSpace && $0.activeCallParticipantCount > 0
+        }
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                MatrixNativeVibeHero(
+                    space: space,
+                    rooms: rooms,
+                    permissions: permissions
+                )
+
+                if permissions.mayCreateWave
+                    || permissions.isJoined
+                    || permissions.mayInviteMembers {
+                    MatrixNativeVibeHomeActions(
+                        mayStartWave: permissions.mayCreateWave,
+                        mayCreateEvent: permissions.isJoined,
+                        mayInvite: permissions.mayInviteMembers,
+                        startWave: { showsCreateWave = true },
+                        createEvent: { showsCreateEvent = true },
+                        invite: { showsInvitations = true }
+                    )
+                }
+
+                if let event = events.first {
+                    MatrixNativeSectionLabel(title: "Next event", count: 1)
+                    NavigationLink(value: AppRoute.event(event.slug)) {
+                        VibeEventCardView(event: event)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if !activeLounges.isEmpty {
+                    MatrixNativeSectionLabel(
+                        title: "Live lounges",
+                        count: activeLounges.count
+                    )
+                    ForEach(activeLounges) { room in
+                        NavigationLink {
+                            MatrixNativeWaveRoomView(
+                                room: room,
+                                opensLiveLounge: true
+                            )
+                        } label: {
+                            MatrixNativeLiveLoungeRow(room: room)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                MatrixNativeSectionLabel(title: "Waves", count: rooms.count)
+                waveRows
+            }
+            .padding(.horizontal, C.pagePad)
+            .padding(.top, 12)
+            .padding(.bottom, 110)
+        }
+        .refreshable { await load() }
+    }
+
+    private var eventsContent: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                if events.isEmpty {
+                    ContentUnavailableView {
+                        Label("No events", systemImage: "calendar")
+                    } description: {
+                        Text("There are no visible events in this Vibe.")
+                    }
+                    .foregroundStyle(C.text)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 42)
+                } else {
+                    MatrixNativeSectionLabel(title: "Events", count: events.count)
+                    ForEach(events) { event in
+                        NavigationLink(value: AppRoute.event(event.slug)) {
+                            VibeEventCardView(event: event)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .padding(.horizontal, C.pagePad)
+            .padding(.top, 12)
+            .padding(.bottom, 110)
+        }
+        .refreshable { await load() }
+    }
+
+    @ViewBuilder
+    private var waveRows: some View {
+        if rooms.isEmpty {
+            ContentUnavailableView {
+                Label("No Waves", systemImage: "wave.3.right")
+            } description: {
+                Text("This Vibe does not have any visible rooms yet.")
+            }
+            .foregroundStyle(C.text)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 42)
+        } else {
+            ForEach(rooms) { room in
+                if room.isNestedSpace {
+                    NavigationLink {
+                        MatrixNativeNestedSpaceView(room: room)
+                    } label: {
+                        MatrixNativeWaveRow(room: room)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    NavigationLink {
+                        MatrixNativeWaveRoomView(room: room)
+                    } label: {
+                        MatrixNativeWaveRow(room: room)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private var sectionSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 48)
+            .onEnded { value in
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                guard abs(horizontal) > abs(vertical) * 1.25 else { return }
+                let sections = Section.allCases
+                guard let index = sections.firstIndex(of: selectedSection) else { return }
+                let nextIndex = horizontal < 0 ? index + 1 : index - 1
+                guard sections.indices.contains(nextIndex) else { return }
+                select(sections[nextIndex])
+            }
+    }
+
+    private func select(_ section: Section) {
+        guard selectedSection != section else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.easeOut(duration: 0.2)) {
+            selectedSection = section
+        }
+    }
+
     @MainActor
     private func load() async {
         isLoading = true
@@ -766,6 +872,293 @@ private struct MatrixNativeVibeView: View {
             errorMessage = MatrixNativeCopy.message(for: error)
         }
         isLoading = false
+    }
+}
+
+private struct MatrixNativeVibeHomeActions: View {
+    let mayStartWave: Bool
+    let mayCreateEvent: Bool
+    let mayInvite: Bool
+    let startWave: () -> Void
+    let createEvent: () -> Void
+    let invite: () -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                if mayInvite {
+                    action("Invite", systemImage: "person.badge.plus", action: invite)
+                }
+                if mayCreateEvent {
+                    action("Create event", systemImage: "calendar.badge.plus", action: createEvent)
+                }
+                if mayStartWave {
+                    action("Start a Wave", systemImage: "plus.bubble", action: startWave)
+                }
+            }
+        }
+        .accessibilityLabel("Vibe actions")
+    }
+
+    private func action(
+        _ title: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(C.text)
+                .padding(.horizontal, 14)
+                .frame(minHeight: 44)
+                .background(C.surface, in: Capsule())
+                .overlay(Capsule().stroke(C.borderSubtle))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct MatrixNativeVibeMembersTab: View {
+    let space: MatrixVibeSummary
+    let mayInviteMembers: Bool
+    let invite: () -> Void
+
+    @EnvironmentObject private var matrixSession: MatrixNativeSessionController
+    @State private var members: [MatrixNativeWaveMember] = []
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    MatrixNativeSectionLabel(title: "Members", count: members.count)
+                    Spacer()
+                    if mayInviteMembers {
+                        Button(action: invite) {
+                            Label("Invite", systemImage: "person.badge.plus")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(C.watch)
+                                .frame(minHeight: 44)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                if isLoading, members.isEmpty {
+                    ProgressView("Loading members…")
+                        .tint(C.watch)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 42)
+                } else if let errorMessage, members.isEmpty {
+                    MatrixNativeUnavailableView(
+                        title: "Members unavailable",
+                        message: errorMessage,
+                        retry: { Task { await load() } }
+                    )
+                } else if members.isEmpty {
+                    ContentUnavailableView {
+                        Label("No members", systemImage: "person.2.slash")
+                    } description: {
+                        Text("This Vibe does not have any visible members.")
+                    }
+                    .foregroundStyle(C.text)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 42)
+                } else {
+                    ForEach(members) { member in
+                        HStack(spacing: 12) {
+                            MatrixNativeAvatar(
+                                name: member.displayName,
+                                imageURL: member.avatarURL,
+                                size: 44
+                            )
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(member.displayName)
+                                    .font(.subheadline.bold())
+                                    .foregroundStyle(C.text)
+                                    .lineLimit(1)
+                                Text(memberDetail(member))
+                                    .font(.caption)
+                                    .foregroundStyle(C.textMuted)
+                            }
+                            Spacer()
+                        }
+                        .padding(12)
+                        .background(C.surface, in: RoundedRectangle(cornerRadius: C.cardRadius))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: C.cardRadius)
+                                .stroke(C.borderSubtle)
+                        )
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+            .padding(.horizontal, C.pagePad)
+            .padding(.top, 12)
+            .padding(.bottom, 110)
+        }
+        .refreshable { await load() }
+        .task(id: space.id) { await load() }
+    }
+
+    @MainActor
+    private func load() async {
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            members = try await matrixSession.waveMembers(roomID: space.id)
+            errorMessage = nil
+        } catch {
+            errorMessage = MatrixNativeCopy.message(for: error)
+        }
+    }
+
+    private func memberDetail(_ member: MatrixNativeWaveMember) -> String {
+        let currentUser = member.isCurrentUser ? "You · " : ""
+        return "\(currentUser)\(roleLabel(member.role)) · \(stateLabel(member.state))"
+    }
+
+    private func roleLabel(_ role: MatrixNativeWaveMemberRole) -> String {
+        switch role {
+        case .creator: "Creator"
+        case .administrator: "Administrator"
+        case .moderator: "Moderator"
+        case .member: "Member"
+        }
+    }
+
+    private func stateLabel(_ state: MatrixNativeWaveMemberState) -> String {
+        switch state {
+        case .joined: "Joined"
+        case .invited: "Invited"
+        case .banned: "Banned"
+        case .requested: "Requested"
+        }
+    }
+}
+
+private struct MatrixNativeVibeInfoTab: View {
+    let space: MatrixVibeSummary
+    let rooms: [MatrixWaveSummary]
+    let permissions: MatrixNativeSpacePermissionSnapshot
+    let openAffiliations: () -> Void
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 12) {
+                Text("About")
+                    .font(.headline)
+                    .foregroundStyle(C.text)
+                    .padding(.top, 6)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 12) {
+                        MatrixNativeAvatar(
+                            name: space.name,
+                            imageURL: space.avatarURL,
+                            size: 56
+                        )
+                        Text(space.name)
+                            .font(.title3.bold())
+                            .foregroundStyle(C.text)
+                        Spacer()
+                    }
+
+                    Text(space.topic?.isEmpty == false
+                         ? space.topic!
+                         : "A WeStreem community")
+                        .font(.body)
+                        .foregroundStyle(C.textMuted)
+
+                    Divider().overlay(C.borderSubtle)
+
+                    LabeledContent("Members", value: "\(space.joinedMemberCount)")
+                    LabeledContent(
+                        "Waves",
+                        value: "\(rooms.filter { !$0.isNestedSpace }.count)"
+                    )
+                    LabeledContent(
+                        "Groups",
+                        value: "\(rooms.filter(\.isNestedSpace).count)"
+                    )
+                }
+                .foregroundStyle(C.text)
+                .padding(16)
+                .background(C.surface, in: RoundedRectangle(cornerRadius: C.cardRadius))
+                .overlay(
+                    RoundedRectangle(cornerRadius: C.cardRadius)
+                        .stroke(C.borderSubtle)
+                )
+
+                if permissions.isJoined {
+                    Button(action: openAffiliations) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "link")
+                                .foregroundStyle(C.watch)
+                            Text("Show & Channel affiliations")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(C.text)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.bold())
+                                .foregroundStyle(C.textMuted)
+                        }
+                        .frame(minHeight: 44)
+                        .padding(.horizontal, 14)
+                        .background(C.surface, in: RoundedRectangle(cornerRadius: C.cardRadius))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: C.cardRadius)
+                                .stroke(C.borderSubtle)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, C.pagePad)
+            .padding(.top, 12)
+            .padding(.bottom, 110)
+        }
+    }
+}
+
+private struct MatrixNativeVibeSettingsView: View {
+    let space: MatrixVibeSummary
+    let permissions: MatrixNativeSpacePermissionSnapshot
+    let openAffiliations: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Vibe") {
+                    LabeledContent("Name", value: space.name)
+                    LabeledContent(
+                        "Membership",
+                        value: permissions.isJoined ? "Joined" : "Not joined"
+                    )
+                }
+                if permissions.isJoined {
+                    Section("Connections") {
+                        Button {
+                            dismiss()
+                            openAffiliations()
+                        } label: {
+                            Label("Show & Channel affiliations", systemImage: "link")
+                        }
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(C.bg)
+            .navigationTitle("Vibe settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
     }
 }
 
