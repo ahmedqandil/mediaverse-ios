@@ -8,9 +8,11 @@ import SwiftUI
 /// can be swapped for the equivalent `CompoundCoreTokens` / `Compound`
 /// semantic tokens without touching any consumers.
 ///
-/// Scope: Vibes UI (WaveRoom, ThreadPanel, MediaViews, WatchParty, LiveStage).
-/// Rest of the app continues to reference `C.pagePad`, `C.watch`, etc.
+/// Scope: every WeStreem product surface. Existing `C.*` aliases remain a
+/// compatibility bridge while screens migrate to these semantic roles.
 enum WestreemTokens {
+
+    static let contractVersion = "2026-08-05.1"
 
     // MARK: - Design System palette
     //

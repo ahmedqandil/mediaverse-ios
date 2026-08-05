@@ -3,6 +3,7 @@ set -eu
 
 root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 tokens="$root/Social/Vibes/DesignTokens.swift"
+manifest_test="$root/LogicTests/SourceContracts/WestreemGlobalTokenManifestSourceTests.sh"
 constants="$root/Constants.swift"
 plist="$root/Info.plist"
 project="$root/Mediaverse.xcodeproj/project.pbxproj"
@@ -63,6 +64,7 @@ for token in \
 done
 
 require 'static let body = "Manrope"' "$tokens" "body font token must name Manrope"
+require 'static let contractVersion = "2026-08-05.1"' "$tokens" "global token contract version must be frozen"
 require 'static let mono = "JetBrains Mono"' "$tokens" "mono font token must name JetBrains Mono"
 require 'static let bodyRegular = "Manrope-Regular"' "$tokens" "body font must use the bundled Manrope face"
 require 'static let monoMedium = "JetBrainsMonoRoman-Medium"' "$tokens" "mono font must use the bundled JetBrains Mono face"
@@ -121,3 +123,4 @@ for mapping in \
 done
 
 echo "WeStreem Design System iOS token source contract passed."
+sh "$manifest_test"

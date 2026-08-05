@@ -1,0 +1,67 @@
+{
+  "authority": {
+    "definition": "Streem Design System.html",
+    "excluded": [
+      "AI build brief.md"
+    ],
+    "implementationConstraints": "WeStreem Platform Spec.html"
+  },
+  "color": {
+    "actRow": "#0A1711",
+    "actionPrimary": "#00E676",
+    "actionPrimaryForeground": "#04150C",
+    "lineEdge": "#232B29",
+    "lineFrame": "#1E2724",
+    "lineHard": "#2C3531",
+    "lineSoft": "#131917",
+    "stateLater": "#B388FF",
+    "stateLive": "#FF3D8A",
+    "surfaceApp": "#06090B",
+    "surfaceCard": "#0E1312",
+    "surfacePanel": "#0B0F0E",
+    "surfaceRaisedEnd": "#121716",
+    "surfaceRaisedStart": "#1A201E",
+    "surfaceSelected": "#101614",
+    "surfaceSunken": "#0C110F",
+    "textBody": "#D6E2DD",
+    "textFaint": "#7A8A84",
+    "textPrimary": "#E7EFEB",
+    "textSecondary": "#A9B8B2"
+  },
+  "contractVersion": "2026-08-05.1",
+  "exceptions": [
+    "media-canvas",
+    "provider-brand",
+    "user-selected-color",
+    "data-visualization"
+  ],
+  "manifestHash": "b27439e8670567977c979c78b3f33b61e2a5bd3ecd742c74199f52e028aa6bc0",
+  "motion": {
+    "livePulse": "1.8s ease-in-out infinite",
+    "overlay": "240ms ease-out",
+    "panel": "200ms cubic-bezier(.2,.8,.2,1)",
+    "tap": "120ms ease-out"
+  },
+  "radius": {
+    "card": 16,
+    "chip": 12,
+    "control": 999,
+    "panel": 18,
+    "row": 14,
+    "sheet": 26
+  },
+  "schemaVersion": 1,
+  "scope": "all-westreem-product-surfaces",
+  "spacing": [
+    4,
+    8,
+    12,
+    16,
+    24,
+    32
+  ],
+  "typography": {
+    "body": "Manrope",
+    "mono": "JetBrains Mono"
+  }
+}
