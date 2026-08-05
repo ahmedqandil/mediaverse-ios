@@ -30,6 +30,7 @@ enum WestreemTokens {
         static let lineEdge = Color(hex: "#232B29")
         static let lineHard = Color(hex: "#2C3531")
         static let green = Color(hex: "#00E676")
+        static let greenSoft = Color(hex: "#8CF3BA")
         static let greenOn = Color(hex: "#04150C")
         static let greenDim = Color(hex: "#0E2A1D")
         static let actRow = Color(hex: "#0A1711")

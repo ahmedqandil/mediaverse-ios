@@ -49,6 +49,7 @@
 		E7100031301A000100000001 /* AffiliationReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7100032301A000100000001 /* AffiliationReviewView.swift */; };
 		0330DE777F7802F12B216F12 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1079593180F3AC1E7E78616 /* LoginView.swift */; };
 		F20208050000000000000001 /* WestreemEntryAuthSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20208050000000000000002 /* WestreemEntryAuthSurface.swift */; };
+		F20208050000000000000003 /* PulsePostingIdentitySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20208050000000000000004 /* PulsePostingIdentitySheet.swift */; };
 		0465594F090062B86606BD71 /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 244896868E339180BDFCBB1F /* ProfileView.swift */; };
 		074934FE7811BA935B449923 /* EpisodeWatchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A90D9B1C22E7B0B62BDCD3C6 /* EpisodeWatchView.swift */; };
 		080888BB0248C4C96764B4AA /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 347AEE7FBFC318EB5B2B800E /* Foundation.framework */; };
@@ -375,6 +376,7 @@
 		D1E2F3A4B5C6D7E8F9A0B1C2 /* PlaylistsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistsView.swift; sourceTree = "<group>"; };
 		E1079593180F3AC1E7E78616 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		F20208050000000000000002 /* WestreemEntryAuthSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WestreemEntryAuthSurface.swift; sourceTree = "<group>"; };
+		F20208050000000000000004 /* PulsePostingIdentitySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PulsePostingIdentitySheet.swift; sourceTree = "<group>"; };
 		E1F2A3B4C5D6E7F8A9B0C1D2 /* PlaylistDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistDetailView.swift; sourceTree = "<group>"; };
 		EEB4545B758A02DDDD67A09E /* ShowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowView.swift; sourceTree = "<group>"; };
 		FF3A0C2E8B174D5691ECA034 /* SaveToCollectionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SaveToCollectionSheet.swift; sourceTree = "<group>"; };
@@ -690,6 +692,7 @@
 				A4C0C014301A000100000001 /* AtmosphereViewModel.swift */,
 				A4C0C015301A000100000001 /* AtmosphereView.swift */,
 				A4C0C0B8301A000100000001 /* AtmoProfileViews.swift */,
+				F20208050000000000000004 /* PulsePostingIdentitySheet.swift */,
 			);
 			name = "Social Atmosphere";
 			path = Social/Atmosphere;
@@ -1038,6 +1041,7 @@
 				A4C0C007301A000100000001 /* RippleEngagementController.swift in Sources */,
 				A4C0C008301A000100000001 /* SocialDestinationViews.swift in Sources */,
 				A4C0C0A8301A000100000001 /* AtmoProfileViews.swift in Sources */,
+				F20208050000000000000003 /* PulsePostingIdentitySheet.swift in Sources */,
 				A4C0C009301A000100000001 /* EchoVibeSheet.swift in Sources */,
 				A4C0C00A301A000100000001 /* RippleComposer.swift in Sources */,
 				B5D1C002301A000100000001 /* RippleMediaUploadCoordinator.swift in Sources */,
