@@ -45,12 +45,18 @@ enum WestreemTokens {
         static let textFaint = Color(hex: "#5F6E69")
     }
 
-    // Font files are not bundled in this checkout yet. These names are kept
-    // as token metadata; existing semantic Font aliases remain system-backed
-    // until the approved font assets are added to the app target.
+    // Approved Design System fonts are bundled in Resources/Fonts under the
+    // SIL Open Font License. Use their registered PostScript names so every
+    // semantic token resolves deterministically on device and in extensions.
     enum FontFamily {
         static let body = "Manrope"
         static let mono = "JetBrains Mono"
+
+        static let bodyRegular = "Manrope-Regular"
+        static let bodyMedium = "Manrope-Medium"
+        static let bodySemibold = "Manrope-SemiBold"
+        static let bodyBold = "Manrope-Bold"
+        static let monoMedium = "JetBrainsMonoRoman-Medium"
     }
 
     // MARK: - Spacing scale
@@ -93,12 +99,13 @@ enum WestreemTokens {
     // `headingLGBold`, `bodyMD`, `bodySM`, `bodyXS`). Kept as SwiftUI `Font`
     // so consumers can drop the values in directly.
     enum Typography {
-        static let title: Font = .system(size: 22, weight: .bold, design: .default)
-        static let heading: Font = .system(size: 17, weight: .semibold, design: .default)
-        static let body: Font = .system(size: 15, weight: .regular, design: .default)
-        static let bodyEmphasized: Font = .system(size: 15, weight: .semibold, design: .default)
-        static let caption: Font = .system(size: 13, weight: .regular, design: .default)
-        static let small: Font = .system(size: 11, weight: .medium, design: .default)
+        static let title: Font = .custom(FontFamily.bodyBold, size: 22, relativeTo: .title2)
+        static let heading: Font = .custom(FontFamily.bodySemibold, size: 17, relativeTo: .headline)
+        static let body: Font = .custom(FontFamily.bodyRegular, size: 15, relativeTo: .body)
+        static let bodyEmphasized: Font = .custom(FontFamily.bodySemibold, size: 15, relativeTo: .body)
+        static let caption: Font = .custom(FontFamily.bodyRegular, size: 13, relativeTo: .caption)
+        static let small: Font = .custom(FontFamily.bodyMedium, size: 11, relativeTo: .caption2)
+        static let monoSmall: Font = .custom(FontFamily.monoMedium, size: 11, relativeTo: .caption2)
     }
 
     // MARK: - Corner radii

@@ -4,6 +4,10 @@ set -eu
 root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 tokens="$root/Social/Vibes/DesignTokens.swift"
 constants="$root/Constants.swift"
+plist="$root/Info.plist"
+project="$root/Mediaverse.xcodeproj/project.pbxproj"
+manrope="$root/Resources/Fonts/Manrope-Variable.ttf"
+jetbrains="$root/Resources/Fonts/JetBrainsMono-Variable.ttf"
 
 require() {
   grep -Fq -- "$1" "$2" || {
@@ -60,6 +64,28 @@ done
 
 require 'static let body = "Manrope"' "$tokens" "body font token must name Manrope"
 require 'static let mono = "JetBrains Mono"' "$tokens" "mono font token must name JetBrains Mono"
+require 'static let bodyRegular = "Manrope-Regular"' "$tokens" "body font must use the bundled Manrope face"
+require 'static let monoMedium = "JetBrainsMonoRoman-Medium"' "$tokens" "mono font must use the bundled JetBrains Mono face"
+require '.custom(FontFamily.bodyBold, size: 22, relativeTo: .title2)' "$tokens" "title token must use bundled Manrope"
+require '.custom(FontFamily.monoMedium, size: 11, relativeTo: .caption2)' "$tokens" "mono token must use bundled JetBrains Mono"
+
+test -f "$manrope" || { echo "FAIL: bundled Manrope font is missing" >&2; exit 1; }
+test -f "$jetbrains" || { echo "FAIL: bundled JetBrains Mono font is missing" >&2; exit 1; }
+require '<string>Manrope-Variable.ttf</string>' "$plist" "Info.plist must register Manrope"
+require '<string>JetBrainsMono-Variable.ttf</string>' "$plist" "Info.plist must register JetBrains Mono"
+require 'Manrope-Variable.ttf in Resources' "$project" "app target must bundle Manrope"
+require 'JetBrainsMono-Variable.ttf in Resources' "$project" "app target must bundle JetBrains Mono"
+require 'Manrope-OFL.txt in Resources' "$project" "app target must bundle the Manrope license"
+require 'JetBrainsMono-OFL.txt in Resources' "$project" "app target must bundle the JetBrains Mono license"
+
+test "$(shasum -a 256 "$manrope" | awk '{print $1}')" = "d0639be45d0af36e798172419d7bd173c4bd4f29e2b76cbb69db1d11bf8b0a40" || {
+  echo "FAIL: bundled Manrope asset differs from the approved source" >&2
+  exit 1
+}
+test "$(shasum -a 256 "$jetbrains" | awk '{print $1}')" = "48715a42ec242c21e9f02692891e147d022299a52e48d5e413e1a942193ffeda" || {
+  echo "FAIL: bundled JetBrains Mono asset differs from the approved source" >&2
+  exit 1
+}
 
 # Existing semantic consumers must resolve through the token layer, not repeat
 # platform-specific hex values in Constants.swift.

@@ -167,6 +167,10 @@
 		846789202FFD947500DED05E /* ViewersSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8467891F2FFD947500DED05E /* ViewersSheet.swift */; };
 		846789223014000100DED05E /* FaceParser.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = 846789213014000100DED05E /* FaceParser.mlpackage */; };
 		846789243014000100DED05E /* FaceParser-MIT.txt in Resources */ = {isa = PBXBuildFile; fileRef = 846789233014000100DED05E /* FaceParser-MIT.txt */; };
+		84F010010805000100000001 /* Manrope-Variable.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 84F010020805000100000001 /* Manrope-Variable.ttf */; };
+		84F010010805000100000002 /* JetBrainsMono-Variable.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 84F010020805000100000002 /* JetBrainsMono-Variable.ttf */; };
+		84F010010805000100000003 /* Manrope-OFL.txt in Resources */ = {isa = PBXBuildFile; fileRef = 84F010020805000100000003 /* Manrope-OFL.txt */; };
+		84F010010805000100000004 /* JetBrainsMono-OFL.txt in Resources */ = {isa = PBXBuildFile; fileRef = 84F010020805000100000004 /* JetBrainsMono-OFL.txt */; };
 		847E740630034085006C0861 /* AdServerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 847E740530034085006C0861 /* AdServerClient.swift */; };
 		847E741030034085006C0861 /* SGAIPlayback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 847E740F30034085006C0861 /* SGAIPlayback.swift */; };
 		84A9BD6865EADDEEF6EA2989 /* MicrodramasBrowseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 048C927F22ABD7E30850299B /* MicrodramasBrowseView.swift */; };
@@ -338,6 +342,10 @@
 		8467891F2FFD947500DED05E /* ViewersSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewersSheet.swift; sourceTree = "<group>"; };
 		846789213014000100DED05E /* FaceParser.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = Resources/ML/FaceParser.mlpackage; sourceTree = "<group>"; };
 		846789233014000100DED05E /* FaceParser-MIT.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = Resources/ThirdPartyLicenses/FaceParser-MIT.txt; sourceTree = "<group>"; };
+		84F010020805000100000001 /* Manrope-Variable.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = Resources/Fonts/Manrope-Variable.ttf; sourceTree = "<group>"; };
+		84F010020805000100000002 /* JetBrainsMono-Variable.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = Resources/Fonts/JetBrainsMono-Variable.ttf; sourceTree = "<group>"; };
+		84F010020805000100000003 /* Manrope-OFL.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = Resources/ThirdPartyLicenses/Manrope-OFL.txt; sourceTree = "<group>"; };
+		84F010020805000100000004 /* JetBrainsMono-OFL.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = Resources/ThirdPartyLicenses/JetBrainsMono-OFL.txt; sourceTree = "<group>"; };
 		847E740530034085006C0861 /* AdServerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdServerClient.swift; sourceTree = "<group>"; };
 		847E740F30034085006C0861 /* SGAIPlayback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SGAIPlayback.swift; sourceTree = "<group>"; };
 		84FC77F12FFA59E800681F7A /* UploadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadView.swift; sourceTree = "<group>"; };
@@ -636,6 +644,10 @@
 				84FC78092FFBCF8000681F7A /* AppIcon 2.swift */,
 				846789213014000100DED05E /* FaceParser.mlpackage */,
 				846789233014000100DED05E /* FaceParser-MIT.txt */,
+				84F010020805000100000001 /* Manrope-Variable.ttf */,
+				84F010020805000100000002 /* JetBrainsMono-Variable.ttf */,
+				84F010020805000100000003 /* Manrope-OFL.txt */,
+				84F010020805000100000004 /* JetBrainsMono-OFL.txt */,
 				0B8536557FEB21A0EFA66E4F /* Products */,
 				8467891B2FFD93FD00DED05E /* ViewModels */,
 				877E5A2E84907C5FB29F1CC6 /* Frameworks */,
@@ -943,6 +955,10 @@
 				84FC78042FFBAF2700681F7A /* Assets.xcassets in Resources */,
 				84FC78072FFBCE8700681F7A /* MediaverseIcons.xcassets in Resources */,
 				846789243014000100DED05E /* FaceParser-MIT.txt in Resources */,
+				84F010010805000100000001 /* Manrope-Variable.ttf in Resources */,
+				84F010010805000100000002 /* JetBrainsMono-Variable.ttf in Resources */,
+				84F010010805000100000003 /* Manrope-OFL.txt in Resources */,
+				84F010010805000100000004 /* JetBrainsMono-OFL.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
