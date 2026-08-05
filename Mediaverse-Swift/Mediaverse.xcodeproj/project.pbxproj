@@ -48,6 +48,7 @@
 		E50000000000000000000004 /* IncomingShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50000000000000000000015 /* IncomingShareSheet.swift */; };
 		E7100031301A000100000001 /* AffiliationReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7100032301A000100000001 /* AffiliationReviewView.swift */; };
 		0330DE777F7802F12B216F12 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1079593180F3AC1E7E78616 /* LoginView.swift */; };
+		F20208050000000000000001 /* WestreemEntryAuthSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20208050000000000000002 /* WestreemEntryAuthSurface.swift */; };
 		0465594F090062B86606BD71 /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 244896868E339180BDFCBB1F /* ProfileView.swift */; };
 		074934FE7811BA935B449923 /* EpisodeWatchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A90D9B1C22E7B0B62BDCD3C6 /* EpisodeWatchView.swift */; };
 		080888BB0248C4C96764B4AA /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 347AEE7FBFC318EB5B2B800E /* Foundation.framework */; };
@@ -373,6 +374,7 @@
 		C92C17EFE5EBABDB49E43085 /* AdSystemTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AdSystemTests.swift; sourceTree = "<group>"; };
 		D1E2F3A4B5C6D7E8F9A0B1C2 /* PlaylistsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistsView.swift; sourceTree = "<group>"; };
 		E1079593180F3AC1E7E78616 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
+		F20208050000000000000002 /* WestreemEntryAuthSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WestreemEntryAuthSurface.swift; sourceTree = "<group>"; };
 		E1F2A3B4C5D6E7F8A9B0C1D2 /* PlaylistDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistDetailView.swift; sourceTree = "<group>"; };
 		EEB4545B758A02DDDD67A09E /* ShowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowView.swift; sourceTree = "<group>"; };
 		FF3A0C2E8B174D5691ECA034 /* SaveToCollectionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SaveToCollectionSheet.swift; sourceTree = "<group>"; };
@@ -814,6 +816,7 @@
 			isa = PBXGroup;
 			children = (
 				E1079593180F3AC1E7E78616 /* LoginView.swift */,
+				F20208050000000000000002 /* WestreemEntryAuthSurface.swift */,
 				49D9342E9462482CB2A9CB1F /* SplashView.swift */,
 			);
 			path = Auth;
@@ -1064,6 +1067,7 @@
 				AFA2C1E357CC864F798C7402 /* UIKitHelpers.swift in Sources */,
 				F1B15869E5FAC82C49FF19E6 /* MainTabView.swift in Sources */,
 				0330DE777F7802F12B216F12 /* LoginView.swift in Sources */,
+				F20208050000000000000001 /* WestreemEntryAuthSurface.swift in Sources */,
 				8467890B2FFC394700DED05E /* StoryEffectCatalog.swift in Sources */,
 				9B3B4FBDDEDE4A3A3B2D1FBE /* SplashView.swift in Sources */,
 				6B778FFA6F88A2548DF07061 /* BrowseView.swift in Sources */,
