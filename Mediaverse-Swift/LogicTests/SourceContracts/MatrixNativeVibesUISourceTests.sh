@@ -7,6 +7,7 @@ media_view="$root/Social/Vibes/MatrixNativeMediaViews.swift"
 repository="$root/Social/Vibes/MatrixVibesRepositoryFoundation.swift"
 tabs="$root/Views/MainTabView.swift"
 app="$root/MediaverseApp.swift"
+tab_strip="$root/Utilities/MediaverseTabStrip.swift"
 
 grep -q 'struct MatrixNativeVibesRootView' "$view"
 grep -q 'MatrixNativeWaveRoomView' "$view"
@@ -52,6 +53,14 @@ grep -q 'Label("Echo to My Atmo", systemImage: "wave.3.right")' "$view"
 grep -q 'sourceType: "MATRIX_EVENT"' "$view"
 grep -q 'sourceId: "\\(roomID)|\\(eventID)"' "$view"
 grep -q 'WestreemAtmoV2Repository(' "$view"
+
+# Vibe Home/Events/Members/Info navigation uses the shared underline strip.
+# Every tab must expose a stable label/identifier and its selected state to
+# VoiceOver/UI automation; visual colour/underline is not the sole state cue.
+grep -q 'MediaverseUnderlineTabStrip(' "$view"
+grep -q 'accessibilityIdentifier("mediaverse-tab-\\(item.id)"' "$tab_strip"
+grep -q 'accessibilityLabel(item.label)' "$tab_strip"
+grep -q 'accessibilityAddTraits(isSelected(item) ? .isSelected : \[\])' "$tab_strip"
 
 if grep -Eq 'LegacySocialAPIAdapter|MatrixWaveClient|/api/fan-clubs|/api/fan-club-posts' "$view"; then
   echo "Matrix-native Vibes UI must not import or call the legacy community authority" >&2

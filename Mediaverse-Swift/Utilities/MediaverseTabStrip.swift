@@ -77,6 +77,13 @@ struct MediaverseUnderlineTabStrip: View {
                 .frame(maxWidth: fillsWidth ? .infinity : nil)
                 .buttonStyle(.plain)
                 .disabled(loadingID == item.id)
+                // Keep tab navigation individually discoverable and stable for
+                // VoiceOver/UI automation. The underline and text weight remain
+                // the visual selection cues; the selected trait exposes the same
+                // state to assistive technologies without relying on colour.
+                .accessibilityIdentifier("mediaverse-tab-\(item.id)")
+                .accessibilityLabel(item.label)
+                .accessibilityAddTraits(isSelected(item) ? .isSelected : [])
                 .id(item.id)
             }
 
