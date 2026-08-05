@@ -584,7 +584,7 @@ private struct MatrixNativeCombinedWavesView: View {
 
     private var waveFilterPicker: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+            HStack(spacing: 5) {
                 ForEach(WaveInboxFilter.allCases) { filter in
                     Button {
                         guard selectedFilter != filter else { return }
@@ -592,19 +592,11 @@ private struct MatrixNativeCombinedWavesView: View {
                         selectedFilter = filter
                     } label: {
                         Text(filter.rawValue)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(selectedFilter == filter ? C.watch : C.textMuted)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 7)
-                            .background(
-                                selectedFilter == filter ? C.watch.opacity(0.15) : C.surface,
-                                in: Capsule()
-                            )
-                            .overlay(Capsule().stroke(
-                                selectedFilter == filter ? C.watch.opacity(0.55) : C.borderSubtle
-                            ))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(WestreemPillButtonStyle(
+                        tone: selectedFilter == filter ? .primary : .secondary,
+                        density: .compact
+                    ))
                     .accessibilityAddTraits(selectedFilter == filter ? [.isSelected] : [])
                 }
             }

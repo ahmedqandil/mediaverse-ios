@@ -393,6 +393,109 @@ struct WestreemSecondaryButtonStyle: ButtonStyle {
     }
 }
 
+enum WestreemPillTone {
+    case primary
+    case secondary
+    case danger
+    case schedule
+}
+
+enum WestreemPillDensity {
+    case action
+    case compact
+}
+
+/// WeStreem Design System 04-C. Pills keep one invariant control shape while
+/// tone and density communicate hierarchy; no client-local gradients exist.
+struct WestreemPillButtonStyle: ButtonStyle {
+    let tone: WestreemPillTone
+    let density: WestreemPillDensity
+
+    init(tone: WestreemPillTone, density: WestreemPillDensity = .action) {
+        self.tone = tone
+        self.density = density
+    }
+
+    private var foreground: Color {
+        switch tone {
+        case .primary: WestreemTokens.Palette.greenOn
+        case .secondary:
+            density == .compact ? Color(hex: "#C2D0CB") : WestreemTokens.Palette.text
+        case .danger: WestreemTokens.Palette.pink
+        case .schedule: WestreemTokens.Palette.lavender
+        }
+    }
+
+    private var border: Color {
+        switch tone {
+        case .primary: .clear
+        case .secondary: WestreemTokens.Palette.lineHard
+        case .danger: Color(hex: "#5A1E3A")
+        case .schedule: Color(hex: "#453072")
+        }
+    }
+
+    private var borderWidth: CGFloat {
+        tone == .primary ? 0 : 1
+    }
+
+    private var font: Font {
+        if density == .compact {
+            return .system(size: 8, weight: .bold, design: .monospaced)
+        }
+        if tone == .schedule {
+            return .system(size: 10, weight: .regular, design: .monospaced)
+        }
+        return .system(size: 13, weight: tone == .primary ? .bold : .semibold)
+    }
+
+    private var horizontalPadding: CGFloat {
+        if density == .compact { return 8 }
+        return tone == .schedule ? 13 : 18
+    }
+
+    private var verticalPadding: CGFloat {
+        if density == .compact { return 0 }
+        return tone == .schedule ? 7 : 9
+    }
+
+    private var fill: AnyShapeStyle {
+        switch tone {
+        case .primary:
+            AnyShapeStyle(WestreemTokens.Palette.green)
+        case .secondary:
+            AnyShapeStyle(LinearGradient(
+                colors: [
+                    WestreemTokens.Palette.ink700,
+                    WestreemTokens.Palette.surfaceRaisedEnd,
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            ))
+        case .danger:
+            AnyShapeStyle(WestreemTokens.Palette.pinkDim)
+        case .schedule:
+            AnyShapeStyle(WestreemTokens.Palette.lavenderDim)
+        }
+    }
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(font)
+            .foregroundStyle(foreground)
+            .textCase(density == .compact ? .uppercase : nil)
+            .lineLimit(1)
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
+            .frame(height: density == .compact ? 24 : nil)
+            .background(fill, in: Capsule())
+            .overlay(Capsule().stroke(border, lineWidth: borderWidth))
+            .opacity(configuration.isPressed ? 0.82 : 1)
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .animation(WestreemTokens.Easing.fast, value: configuration.isPressed)
+    }
+}
+
 /// Horizontal rails announce gesture ownership so parent section pagers can
 /// yield while a carousel is being dragged.
 struct WestreemHorizontalScrollView<Content: View>: View {
