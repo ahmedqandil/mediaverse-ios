@@ -35,7 +35,9 @@ struct MatrixDirectRoomSummary: Identifiable, Equatable, Hashable, Sendable {
             membership: membership,
             isNestedSpace: false,
             isDirect: true,
-            isEncrypted: false
+            isEncrypted: false,
+            unreadCount: unreadCount,
+            lastActivity: lastActivity
         )
     }
 }

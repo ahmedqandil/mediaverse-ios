@@ -602,6 +602,9 @@ struct MatrixWaveSummary: Identifiable, Equatable, Hashable, Sendable {
     let isDirect: Bool
     let isEncrypted: Bool
     let unreadCount: UInt64
+    /// Matrix-Rust's latest cached event timestamp, used only for inbox ordering.
+    /// Nil means the SDK has no locally available activity for this room yet.
+    let lastActivity: Date?
     let activeCallParticipantCount: Int
     let activeCallIntent: MatrixNativeRtcIntent?
     let activeCallParticipants: [MatrixNativeLoungeParticipant]
@@ -617,6 +620,7 @@ struct MatrixWaveSummary: Identifiable, Equatable, Hashable, Sendable {
         isDirect: Bool = false,
         isEncrypted: Bool = false,
         unreadCount: UInt64 = 0,
+        lastActivity: Date? = nil,
         activeCallParticipantCount: Int = 0,
         activeCallIntent: MatrixNativeRtcIntent? = nil,
         activeCallParticipants: [MatrixNativeLoungeParticipant] = []
@@ -631,6 +635,7 @@ struct MatrixWaveSummary: Identifiable, Equatable, Hashable, Sendable {
         self.isDirect = isDirect
         self.isEncrypted = isEncrypted
         self.unreadCount = unreadCount
+        self.lastActivity = lastActivity
         self.activeCallParticipantCount = max(0, activeCallParticipantCount)
         self.activeCallIntent = activeCallIntent
         self.activeCallParticipants = Array(activeCallParticipants.prefix(3))
@@ -1586,6 +1591,7 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
         let base = MatrixWaveSummary(child)
         guard let matrixRoom else { return base }
         let info = try? await matrixRoom.roomInfo()
+        let lastActivity = await latestActivityDate(room: matrixRoom)
         let activeParticipantIDs = matrixRoom.hasActiveRoomCall()
             ? Set(matrixRoom.activeRoomCallParticipants())
             : []
@@ -1632,10 +1638,22 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
             isDirect: false,
             isEncrypted: await matrixRoom.isEncrypted(),
             unreadCount: info?.numUnreadNotifications ?? 0,
+            lastActivity: lastActivity,
             activeCallParticipantCount: activeParticipantIDs.count,
             activeCallIntent: intent,
             activeCallParticipants: activeParticipants
         )
+    }
+
+    private static func latestActivityDate(room: Room) async -> Date? {
+        switch await room.latestEvent() {
+        case let .remote(timestamp, _, _, _, _),
+             let .local(timestamp, _, _, _, _),
+             let .remoteInvite(timestamp, _, _):
+            return Date(timeIntervalSince1970: Double(timestamp) / 1_000)
+        case .none:
+            return nil
+        }
     }
 
     /// Refreshes lounge badges only from rooms already held by MatrixRustSDK.
@@ -1702,6 +1720,7 @@ actor MatrixRustSDKVibesProvider: MatrixVibesSDKProviding {
                     isNestedSpace: base.isNestedSpace,
                     isDirect: base.isDirect,
                     isEncrypted: base.isEncrypted,
+                    lastActivity: base.lastActivity,
                     activeCallParticipantCount: activeParticipantIDs.count,
                     activeCallIntent: intent,
                     activeCallParticipants: participants

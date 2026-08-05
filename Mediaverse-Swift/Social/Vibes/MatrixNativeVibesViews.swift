@@ -361,6 +361,32 @@ private struct MatrixNativeCombinedWavesView: View {
         case failed
     }
 
+    private enum WaveInboxItem: Identifiable {
+        case personal(MatrixDirectRoomSummary)
+        case community(MatrixWaveSummary)
+
+        var id: String {
+            switch self {
+            case let .personal(room): room.id
+            case let .community(room): room.id
+            }
+        }
+
+        var name: String {
+            switch self {
+            case let .personal(room): room.name
+            case let .community(room): room.name
+            }
+        }
+
+        var lastActivity: Date? {
+            switch self {
+            case let .personal(room): room.lastActivity
+            case let .community(room): room.lastActivity
+            }
+        }
+    }
+
     let spaces: [MatrixVibeSummary]
 
     @EnvironmentObject private var matrixSession: MatrixNativeSessionController
@@ -398,37 +424,32 @@ private struct MatrixNativeCombinedWavesView: View {
                             .padding(.top, 50)
                         }
 
-                        if !personalWaves.isEmpty {
+                        if !recencySortedItems.isEmpty {
                             MatrixNativeSectionLabel(
-                                title: "Personal Waves",
-                                count: personalWaves.count
+                                title: "Waves",
+                                count: recencySortedItems.count
                             )
-                            ForEach(personalWaves) { room in
-                                NavigationLink {
-                                    MatrixNativeWaveRoomView(room: room.timelineRoom)
-                                } label: {
-                                    MatrixDirectMessageRow(room: room)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-
-                        if !communityWaves.isEmpty {
-                            MatrixNativeSectionLabel(
-                                title: "Vibe Waves",
-                                count: communityWaves.count
-                            )
-                            ForEach(communityWaves) { room in
-                                NavigationLink {
-                                    if room.isNestedSpace {
-                                        MatrixNativeNestedSpaceView(room: room)
-                                    } else {
-                                        MatrixNativeWaveRoomView(room: room)
+                            ForEach(recencySortedItems) { item in
+                                switch item {
+                                case let .personal(room):
+                                    NavigationLink {
+                                        MatrixNativeWaveRoomView(room: room.timelineRoom)
+                                    } label: {
+                                        MatrixDirectMessageRow(room: room)
                                     }
-                                } label: {
-                                    MatrixNativeWaveRow(room: room)
+                                    .buttonStyle(.plain)
+                                case let .community(room):
+                                    NavigationLink {
+                                        if room.isNestedSpace {
+                                            MatrixNativeNestedSpaceView(room: room)
+                                        } else {
+                                            MatrixNativeWaveRoomView(room: room)
+                                        }
+                                    } label: {
+                                        MatrixNativeWaveRow(room: room)
+                                    }
+                                    .buttonStyle(.plain)
                                 }
-                                .buttonStyle(.plain)
                             }
                         }
 
@@ -494,14 +515,31 @@ private struct MatrixNativeCombinedWavesView: View {
                 uniquingKeysWith: { first, _ in first }
             ).values
         )
-        .sorted {
-            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
         let failures = communityFailures + loadedPersonalWaves.failures
         errorMessage = failures > 0
             ? "Some Waves could not synchronize. Pull to retry."
             : nil
         isLoading = false
+    }
+
+    private var recencySortedItems: [WaveInboxItem] {
+        let personalIDs = Set(personalWaves.map(\.id))
+        let items = personalWaves.map(WaveInboxItem.personal)
+            + communityWaves
+                .filter { !personalIDs.contains($0.id) }
+                .map(WaveInboxItem.community)
+        return items.sorted { left, right in
+            let leftDate = left.lastActivity ?? .distantPast
+            let rightDate = right.lastActivity ?? .distantPast
+            if leftDate != rightDate {
+                return leftDate > rightDate
+            }
+            let nameOrder = left.name.localizedCaseInsensitiveCompare(right.name)
+            if nameOrder != .orderedSame {
+                return nameOrder == .orderedAscending
+            }
+            return left.id < right.id
+        }
     }
 
     @MainActor

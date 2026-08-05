@@ -79,6 +79,35 @@ if printf '%s\n' "$home_content" | grep -Fq 'title: "Live lounges"'; then
   exit 1
 fi
 
+# The root Waves inbox is one Matrix-authoritative recency list. Personal and
+# community entries keep their existing destinations while sharing ordering.
+combined_content="$(sed -n '/private struct MatrixNativeCombinedWavesView/,/private struct MatrixNativeVibeView/p' "$view")"
+printf '%s\n' "$combined_content" | grep -Fq 'private enum WaveInboxItem'
+printf '%s\n' "$combined_content" | grep -Fq 'case personal(MatrixDirectRoomSummary)'
+printf '%s\n' "$combined_content" | grep -Fq 'case community(MatrixWaveSummary)'
+printf '%s\n' "$combined_content" | grep -Fq 'MatrixNativeSectionLabel('
+printf '%s\n' "$combined_content" | grep -Fq 'title: "Waves"'
+printf '%s\n' "$combined_content" | grep -Fq 'count: recencySortedItems.count'
+printf '%s\n' "$combined_content" | grep -Fq 'private var recencySortedItems'
+printf '%s\n' "$combined_content" | grep -Fq 'left.lastActivity ?? .distantPast'
+printf '%s\n' "$combined_content" | grep -Fq 'return left.id < right.id'
+printf '%s\n' "$combined_content" | grep -Fq 'MatrixNativeWaveRoomView(room: room.timelineRoom)'
+printf '%s\n' "$combined_content" | grep -Fq 'MatrixNativeNestedSpaceView(room: room)'
+printf '%s\n' "$combined_content" | grep -Fq 'MatrixNativeWaveRoomView(room: room)'
+grep -Fq 'let lastActivity: Date?' "$repository"
+grep -Fq 'private static func latestActivityDate(room: Room)' "$repository"
+grep -Fq 'let lastActivity = await latestActivityDate(room: matrixRoom)' "$repository"
+grep -Fq 'lastActivity: lastActivity' "$repository"
+grep -Fq 'lastActivity: lastActivity' "$root/Social/Vibes/MatrixNativeDirectNotificationFoundation.swift"
+if printf '%s\n' "$combined_content" | grep -Fq 'title: "Personal Waves"'; then
+  echo "Root Waves inbox must not split Personal Waves into a separate section" >&2
+  exit 1
+fi
+if printf '%s\n' "$combined_content" | grep -Fq 'title: "Vibe Waves"'; then
+  echo "Root Waves inbox must not split community Waves into a separate section" >&2
+  exit 1
+fi
+
 if grep -Eq 'LegacySocialAPIAdapter|MatrixWaveClient|/api/fan-clubs|/api/fan-club-posts' "$view"; then
   echo "Matrix-native Vibes UI must not import or call the legacy community authority" >&2
   exit 1
