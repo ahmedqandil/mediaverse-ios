@@ -496,6 +496,38 @@ struct WestreemPillButtonStyle: ButtonStyle {
     }
 }
 
+/// Design System 04-B compact row. iOS is always touch density, so it keeps
+/// the 56-point target; Web alone contracts to 44px for a fine pointer.
+private struct WestreemAdaptiveRowModifier: ViewModifier {
+    let isLive: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .frame(minHeight: 56)
+            .background(isLive
+                ? WestreemTokens.Palette.actRow
+                : WestreemTokens.Palette.ink950)
+            .overlay(alignment: .leading) {
+                if isLive {
+                    Rectangle()
+                        .fill(WestreemTokens.Palette.green)
+                        .frame(width: 3)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(WestreemTokens.Palette.lineSoft)
+                    .frame(height: 1)
+            }
+    }
+}
+
+extension View {
+    func westreemAdaptiveRow(isLive: Bool = false) -> some View {
+        modifier(WestreemAdaptiveRowModifier(isLive: isLive))
+    }
+}
+
 /// Horizontal rails announce gesture ownership so parent section pagers can
 /// yield while a carousel is being dragged.
 struct WestreemHorizontalScrollView<Content: View>: View {

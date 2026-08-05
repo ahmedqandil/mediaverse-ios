@@ -1009,7 +1009,7 @@ private struct MatrixNativeVibeView: View {
                 NavigationLink {
                     MatrixNativeWaveRoomView(room: room, opensLiveLounge: true)
                 } label: {
-                    MatrixNativeLiveLoungeRow(room: room)
+                    MatrixNativeWaveRow(room: room)
                 }
                 .buttonStyle(.plain)
             }
@@ -7271,55 +7271,52 @@ private struct MatrixNativeWaveRow: View {
     let room: MatrixWaveSummary
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: room.isNestedSpace ? "folder" : "number")
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(C.watch)
-                .frame(width: 38, height: 38)
-                .background(C.watch.opacity(0.10), in: RoundedRectangle(cornerRadius: 11))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(room.name).font(.headline).foregroundStyle(C.text)
-                if let topic = room.topic, !topic.isEmpty {
-                    Text(topic).font(.caption).foregroundStyle(C.textMuted).lineLimit(2)
-                } else {
-                    Text(room.isNestedSpace ? "Nested Vibe" : "Wave room")
-                        .font(.caption).foregroundStyle(C.textMuted)
-                }
-            }
-            Spacer()
+        HStack(spacing: 11) {
+            Image(systemName: room.activeCallParticipantCount > 0
+                ? (room.activeCallIntent == .video ? "video.fill" : "waveform")
+                : (room.isNestedSpace ? "folder" : "number"))
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(room.activeCallParticipantCount > 0
+                    ? WestreemTokens.Palette.green
+                    : WestreemTokens.Palette.textFaint)
+                .frame(width: 14)
+            Text(room.name)
+                .font(.system(size: 13, weight: room.activeCallParticipantCount > 0 ? .bold : .semibold))
+                .foregroundStyle(room.activeCallParticipantCount > 0
+                    ? WestreemTokens.Palette.text
+                    : WestreemTokens.Palette.muted)
+                .lineLimit(1)
+            Spacer(minLength: 0)
             if room.activeCallParticipantCount > 0 {
-                Label(
-                    "Live \(room.activeCallParticipantCount)",
-                    systemImage: room.activeCallIntent == .video
-                        ? "video.fill"
-                        : "waveform"
-                )
-                .font(.caption2.bold())
-                .foregroundStyle(C.watch)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(C.watch.opacity(0.12), in: Capsule())
-            }
-            if room.unreadCount > 0 {
+                Text("LIVE · \(room.activeCallParticipantCount)")
+                    .font(.system(size: 9, weight: .regular, design: .monospaced))
+                    .foregroundStyle(WestreemTokens.Palette.green)
+            } else if room.unreadCount > 0 {
                 Text(room.unreadCount > 99 ? "99+" : "\(room.unreadCount)")
-                    .font(.caption2.bold())
-                    .foregroundStyle(Color.white)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(C.watch, in: Capsule())
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(WestreemTokens.Palette.pinkOn)
+                    .padding(.horizontal, 5)
+                    .frame(minWidth: 18, minHeight: 18)
+                    .background(WestreemTokens.Palette.pink, in: Capsule())
                     .accessibilityLabel(
                         room.unreadCount == 1
                             ? "1 unread message"
                             : "\(room.unreadCount) unread messages"
                     )
             }
-            Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(C.textTertiary)
         }
-        .padding(12)
-        .background(C.surface, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(C.borderSubtle))
+        .padding(.horizontal, 13)
+        .westreemAdaptiveRow(isLive: room.activeCallParticipantCount > 0)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+        .accessibilityLabel([
+            room.name,
+            room.topic,
+            room.activeCallParticipantCount > 0
+                ? "Live with \(room.activeCallParticipantCount)"
+                : nil,
+            room.unreadCount > 0 ? "\(room.unreadCount) unread" : nil,
+        ].compactMap { $0 }.joined(separator: ", "))
     }
 }
 
