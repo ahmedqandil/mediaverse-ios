@@ -12,6 +12,33 @@ import SwiftUI
 /// Rest of the app continues to reference `C.pagePad`, `C.watch`, etc.
 enum WestreemTokens {
 
+    // MARK: - Design System palette
+    //
+    // These are the exact v1 values from the WeStreem Design System. Keep
+    // semantic aliases in Constants.swift pointed here so platform surfaces
+    // cannot drift by retyping hex values at call sites.
+    enum Palette {
+        static let ink950 = Color(hex: "#070A09")
+        static let ink900 = Color(hex: "#0B0F0E")
+        static let ink800 = Color(hex: "#0E1211")
+        static let ink700 = Color(hex: "#151A18")
+        static let lineSoft = Color(hex: "#1B2320")
+        static let lineHard = Color(hex: "#2A332F")
+        static let green = Color(hex: "#00E676")
+        static let pink = Color(hex: "#FF3D8A")
+        static let lavender = Color(hex: "#B388FF")
+        static let text = Color(hex: "#E7EFEB")
+        static let muted = Color(hex: "#7E8F89")
+    }
+
+    // Font files are not bundled in this checkout yet. These names are kept
+    // as token metadata; existing semantic Font aliases remain system-backed
+    // until the approved font assets are added to the app target.
+    enum FontFamily {
+        static let body = "Manrope"
+        static let mono = "JetBrains Mono"
+    }
+
     // MARK: - Spacing scale
     //
     // Matches Compound's `spacing` scale (`x4`, `x8`, `x12`, `x16`, `x24`,
@@ -63,8 +90,13 @@ enum WestreemTokens {
     // MARK: - Corner radii
 
     enum Radius {
-        /// Compound `borderRadius200`. Used by cards & pills.
-        static let card: CGFloat = 12
+        static let small: CGFloat = 8
+        static let control: CGFloat = 10
+        static let large: CGFloat = 14
+        static let full: CGFloat = 999
+
+        /// Design System large radius for content cards.
+        static let card: CGFloat = large
         /// Compound `borderRadius400`. Used by sheets & prominent surfaces.
         static let sheet: CGFloat = 16
         /// Compound `borderRadius600` — full pill for chips & QR frame.
