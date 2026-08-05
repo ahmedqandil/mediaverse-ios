@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
-/// Root page container: Home · Videos · Shorts · Discover · Vibes
+/// Root page container: Vibes · Videos · Shorts · Discover
 /// All watch/channel/show/microdrama screens are PUSHED on the relevant NavigationStack.
 /// On iOS 26 the tab bar adopts Liquid Glass automatically — UITabBar.appearance()
 /// is skipped on that OS to avoid fighting the compositor.
@@ -14,8 +14,8 @@ struct MainTabView: View {
     @EnvironmentObject private var platformConfig: PlatformConfigManager
     @AppStorage("playerMuted") private var isMuted: Bool = false
     @StateObject private var shortsPlaybackManager = ShortsPlaybackManager()
-    @State private var selectedTab: AppTab = .home
-    @State private var lastContentTab: AppTab = .home
+    @State private var selectedTab: AppTab = .myVibes
+    @State private var lastContentTab: AppTab = .myVibes
     @State private var homePath: [AppRoute] = []
     @State private var videosPath: [AppRoute] = []
     @State private var explorePath: [AppRoute] = []
@@ -42,7 +42,7 @@ struct MainTabView: View {
     private let socialFeatures = SocialFeatureConfiguration.runtime()
 
     private var vibesTabTitle: String {
-        socialFeatures.matrixNativeVibesEnabled ? "Vibes" : "My Vibes"
+        "Vibes"
     }
 
     enum AppTab: Int, Hashable {
@@ -421,43 +421,39 @@ struct MainTabView: View {
             .tabItem { appTabLabel(vibesTabTitle, icon: "users", fallback: "person.3") }
             .tag(AppTab.myVibes)
 
-            if platformConfig.isEnabled("videos", aspect: .nav) {
-                NavigationStack(path: $videosPath) {
-                    Group {
-                        if platformConfig.isEnabled("videos", aspect: .page) {
-                            HomeView(headerStyle: .videos)
-                        } else {
-                            PlatformSectionUnavailableView(item: platformConfig.browseItem(id: "videos"))
-                        }
+            NavigationStack(path: $videosPath) {
+                Group {
+                    if platformConfig.isEnabled("videos", aspect: .page) {
+                        HomeView(headerStyle: .videos)
+                    } else {
+                        PlatformSectionUnavailableView(item: platformConfig.browseItem(id: "videos"))
                     }
-                        .navigationDestination(for: AppRoute.self) { route in
-                            routeDestination(route)
-                        }
                 }
-                .ignoresSafeArea(edges: .bottom)
-                .toolbar(.hidden, for: .tabBar)
-                .tabItem { appTabLabel("Videos", icon: "play", fallback: "play.rectangle") }
-                .tag(AppTab.videos)
+                .navigationDestination(for: AppRoute.self) { route in
+                    routeDestination(route)
+                }
             }
+            .ignoresSafeArea(edges: .bottom)
+            .toolbar(.hidden, for: .tabBar)
+            .tabItem { appTabLabel("Videos", icon: "play", fallback: "play.rectangle") }
+            .tag(AppTab.videos)
 
-            if platformConfig.isEnabled("shorts", aspect: .nav) {
-                NavigationStack(path: $shortsPath) {
-                    Group {
-                        if platformConfig.isEnabled("shorts", aspect: .page) {
-                            ShortsView(isRootActive: selectedTab == .shorts, playbackManager: shortsPlaybackManager)
-                        } else {
-                            PlatformSectionUnavailableView(item: platformConfig.browseItem(id: "shorts"))
-                        }
+            NavigationStack(path: $shortsPath) {
+                Group {
+                    if platformConfig.isEnabled("shorts", aspect: .page) {
+                        ShortsView(isRootActive: selectedTab == .shorts, playbackManager: shortsPlaybackManager)
+                    } else {
+                        PlatformSectionUnavailableView(item: platformConfig.browseItem(id: "shorts"))
                     }
-                        .navigationDestination(for: AppRoute.self) { route in
-                            routeDestination(route)
-                        }
                 }
-                .ignoresSafeArea(edges: .bottom)
-                .toolbar(.hidden, for: .tabBar)
-                .tabItem { appTabLabel("Shorts", icon: "short", fallback: "play.rectangle.on.rectangle") }
-                .tag(AppTab.shorts)
+                .navigationDestination(for: AppRoute.self) { route in
+                    routeDestination(route)
+                }
             }
+            .ignoresSafeArea(edges: .bottom)
+            .toolbar(.hidden, for: .tabBar)
+            .tabItem { appTabLabel("Shorts", icon: "short", fallback: "play.rectangle.on.rectangle") }
+            .tag(AppTab.shorts)
 
             NavigationStack(path: $explorePath) {
                 BrowseView(isRootActive: selectedTab == .explore)
@@ -667,23 +663,12 @@ struct MainTabView: View {
                 Spacer(minLength: 0)
 
                 HStack(spacing: 0) {
-                    if platformConfig.isEnabled("atmosphere", aspect: .nav) {
-                        bottomTabButton(
-                            .home,
-                            title: "Home",
-                            icon: "home",
-                            fallback: "house"
-                        )
-                    }
-                    if platformConfig.isEnabled("vibes", aspect: .nav) {
-                        bottomTabButton(.myVibes, title: vibesTabTitle, icon: "users", fallback: "person.3")
-                    }
-                    if platformConfig.isEnabled("videos", aspect: .nav) {
-                        bottomTabButton(.videos, title: "Videos", icon: "play", fallback: "play.rectangle")
-                    }
-                    if platformConfig.isEnabled("shorts", aspect: .nav) {
-                        bottomTabButton(.shorts, title: "Shorts", icon: "short", fallback: "bolt")
-                    }
+                    // Design System 04-A: these four destinations are invariant.
+                    // Page availability is resolved inside each destination; it
+                    // must never reshape or reorder primary navigation.
+                    bottomTabButton(.myVibes, title: vibesTabTitle, icon: "users", fallback: "person.3")
+                    bottomTabButton(.videos, title: "Videos", icon: "play", fallback: "play.rectangle")
+                    bottomTabButton(.shorts, title: "Shorts", icon: "short", fallback: "bolt")
                     bottomTabButton(.explore, title: "Discover", icon: "explore", fallback: "safari")
                 }
                 .padding(.horizontal, 10)
@@ -772,6 +757,7 @@ struct MainTabView: View {
     }
 
     private func handleBottomTabTap(_ tab: AppTab) {
+        C.lightHaptic()
         if tab == .shorts {
             shortsPlaybackManager.prewarmInitialFeed(
                 isMuted: isMuted,
@@ -780,7 +766,7 @@ struct MainTabView: View {
             )
         }
         if selectedTab != tab {
-            withAnimation(.easeInOut(duration: 0.18)) {
+            withAnimation(WestreemTokens.Easing.fast) {
                 selectedTab = tab
             }
         } else {
@@ -798,17 +784,7 @@ struct MainTabView: View {
     }
 
     private func normalizeSelectedTabForPlatform() {
-        let available: [AppTab] = [
-            platformConfig.isEnabled("atmosphere", aspect: .nav)
-                && platformConfig.isEnabled("atmosphere", aspect: .page) ? .home : nil,
-            platformConfig.isEnabled("videos", aspect: .nav)
-                && platformConfig.isEnabled("videos", aspect: .page) ? .videos : nil,
-            platformConfig.isEnabled("shorts", aspect: .nav)
-                && platformConfig.isEnabled("shorts", aspect: .page) ? .shorts : nil,
-            .explore,
-            platformConfig.isEnabled("vibes", aspect: .nav)
-                && platformConfig.isEnabled("vibes", aspect: .page) ? .myVibes : nil,
-        ].compactMap { $0 }
+        let available: [AppTab] = [.myVibes, .videos, .shorts, .explore]
 
         let selectedAvailable: Bool
         switch selectedTab {
@@ -816,16 +792,13 @@ struct MainTabView: View {
             selectedAvailable = platformConfig.isEnabled("atmosphere", aspect: .nav)
                 && platformConfig.isEnabled("atmosphere", aspect: .page)
         case .videos:
-            selectedAvailable = platformConfig.isEnabled("videos", aspect: .nav)
-                && platformConfig.isEnabled("videos", aspect: .page)
+            selectedAvailable = true
         case .shorts:
-            selectedAvailable = platformConfig.isEnabled("shorts", aspect: .nav)
-                && platformConfig.isEnabled("shorts", aspect: .page)
+            selectedAvailable = true
         case .explore:
             selectedAvailable = true
         case .myVibes:
-            selectedAvailable = platformConfig.isEnabled("vibes", aspect: .nav)
-                && platformConfig.isEnabled("vibes", aspect: .page)
+            selectedAvailable = true
         }
         guard !selectedAvailable, let fallback = available.first else { return }
         selectedTab = fallback
